@@ -79,7 +79,8 @@ for _, file in ipairs({ "Bootstrap", "Locales", "Core", "Diagnostics", "Dialog",
 	chunk("Olympus", ns)
 end
 ns.db = { guilds = {}, log = {}, errors = {}, blocked = {}, demo = false, showMap = true,
-	chatWarned = { A = true, C = true, L = true } } -- (0.9.1: the channel warnings already accepted; their own tests ask)
+	chatWarned = { A = true, C = true, L = true }, -- (0.9.1: the channel warnings already accepted; their own tests ask)
+	treasurerShares = true } -- (0.9.3: the Treasurer said yes; the question has its own test)
 ns.me = "Tester-Realm"
 ns.realm = "Realm"
 -- (0.9.2: the King and the Treasurer are theirs on their realm group; here that is "Realm".)
@@ -8791,6 +8792,115 @@ test("0.9.2 hostile: no escape code from another player gets past the door, chat
 	-- Only Olympus's own errors are kept (the capture filter).
 	eq(ns.OwnError("Interface/AddOns/OtherAddon/Main.lua:3: boom", "Interface/AddOns/OtherAddon/Main.lua:3"), false)
 	eq(ns.OwnError("Interface/AddOns/Olympus/UI.lua:9: boom", ""), true)
+end)
+
+-- 0.9.3: the King's layer is his own share, never inferred from others on it
+test("0.9.3 hostile: the King's layer comes from his own announcement alone, not from the members on it", function()
+	WithUI(function() WithHop(function(w, H)
+		-- Olympus officers and members share their layer; the King shares nothing.
+		ns.Layers.Receive("Captain One-Realm", { mapID = 1453, zoneUID = 9, rank = 1, guild = "Olympus" })
+		ns.Layers.Receive("Member Two-Realm", { mapID = 1453, zoneUID = 9, rank = 5, guild = "Olympus" })
+		local k = H.King()
+		assert(k, "the King is online (the census says so)")
+		eq(k.zoneUID, nil, "his layer is not inferred from the others on it")
+		-- A share in his name from anyone else is not his.
+		ns.Layers.Receive("Asmongold-OtherRealm", { mapID = 1453, zoneUID = 9, rank = 0, guild = "Olympus" })
+		eq(H.King().zoneUID, nil, "a namesake's share is not his")
+		-- His own announcement (crown on) and its withdrawal.
+		ns.Layers.Receive("Asmongold-Realm", { mapID = 1453, zoneUID = 9, rank = 0, guild = "Olympus" })
+		eq(H.King().zoneUID, 9)
+		ns.Layers.Forget("Asmongold-Realm")
+		eq(H.King().zoneUID, nil, "withdrawn: gone at once")
+	end) end)
+end)
+
+-- 0.9.3: the Treasurer's yes
+test("0.9.3 the Treasurer shares his book and the bank only with his yes, and withdraws them at once", function()
+	local T = ns.Treasury
+	local saved = { me = ns.me, guild = GetGuildInfo, send = ns.Comm.Send, chunked = ns.Comm.SendChunked, show = ns.ShowDialog,
+		consent = ns.db.treasurerShares, report = ns.rdb.treasuryReport, bank = ns.rdb.bankReport, combat = InCombatLockdown, inst = IsInInstance }
+	local sent, dialogs = {}, {}
+	local ok, err = pcall(function()
+		T.Reset()
+		ns.me = "Pyralis Ashandar-Realm"
+		GetGuildInfo = function() return "OLYMPUS", "Treasurer", 2 end
+		InCombatLockdown, IsInInstance = function() return false end, function() return false end
+		ns.Comm.Send = function(dist, msg) sent[#sent + 1] = msg end
+		ns.Comm.SendChunked = function(msg) sent[#sent + 1] = msg end
+		ns.ShowDialog = function(which) dialogs[#dialogs + 1] = which end
+		ns.db.treasurerShares = nil
+		T.Share(true)
+		eq(#sent, 0, "no answer yet: nothing goes out")
+		eq(T.AskConsent(), true); eq(dialogs[1], "OLYMPUS_TREASURER_SHARE")
+		eq(T.AskConsent(), false, "once a session")
+		StaticPopupDialogs.OLYMPUS_TREASURER_SHARE.OnCancel(nil, nil, "override")
+		eq(ns.db.treasurerShares, nil, "pushed out or Escape: no answer")
+		StaticPopupDialogs.OLYMPUS_TREASURER_SHARE.OnAccept()
+		eq(ns.db.treasurerShares, true)
+		assert(sent[#sent] and sent[#sent]:find("^T8~OLYMPUS~"), tostring(sent[#sent]))
+		T.SetConsent(false)
+		eq(sent[#sent], "TX~OLYMPUS", "withdrawn at once")
+		local before = #sent
+		T.Share(true)
+		eq(#sent, before, "private: nothing more")
+		-- Receivers: his withdrawal clears his book and the bank; anyone else's is ignored.
+		ns.rdb.treasuryReport, ns.rdb.bankReport = { rank = {}, t = 1 }, { t = 1, tabs = {} }
+		T.HandleWithdraw("CHANNEL", "Faker Guy-Realm", "TX~OLYMPUS")
+		assert(ns.rdb.treasuryReport and ns.rdb.bankReport, "not the Treasurer: nothing")
+		T.HandleWithdraw("CHANNEL", "Pyralis Ashandar-Realm", "TX~OLYMPUS")
+		eq(ns.rdb.treasuryReport, nil); eq(ns.rdb.bankReport, nil)
+		-- Not the Treasurer: no question, no switch.
+		ns.me = "Someone Else-Realm"
+		T.Reset()
+		eq(T.AskConsent(), false)
+	end)
+	ns.me, GetGuildInfo, ns.Comm.Send, ns.Comm.SendChunked, ns.ShowDialog = saved.me, saved.guild, saved.send, saved.chunked, saved.show
+	ns.db.treasurerShares, ns.rdb.treasuryReport, ns.rdb.bankReport = saved.consent, saved.report, saved.bank
+	InCombatLockdown, IsInInstance = saved.combat, saved.inst
+	T.Reset()
+	if not ok then error(err, 0) end
+end)
+
+-- 0.9.3: admission and limits (issue #23)
+test("0.9.3 hostile: one sender's flood is dropped at the door, and unfinished pieces can't fill memory", function()
+	local C, Codec = ns.Comm, ns.Codec
+	C.ResetAdmission()
+	local now, passed = 1000, 0
+	for _ = 1, 200 do if C.Admit("Flood Guy-Realm", now) then passed = passed + 1 end end
+	eq(passed, C.ADMIT_BURST, "a burst, then nothing")
+	eq(C.Admit("Other Guy-Realm", now), true, "others are not affected")
+	eq(C.Admit("Flood Guy-Realm", now + 1), true, "the rate comes back")
+	C.ResetAdmission()
+	-- Pieces: a few open messages per sender, a ceiling in all.
+	local asm = Codec.NewAssembler()
+	for i = 1, 10 do Codec.Feed(asm, "Evil-Realm", ("C%d:1:30:x"):format(i), now) end
+	eq(asm.open, Codec.OPEN_PER_SENDER); eq(asm.refused, 10 - Codec.OPEN_PER_SENDER)
+	for k = 1, Codec.OPEN_MAX + 50 do Codec.Feed(asm, "S" .. k .. "-Realm", "C1:1:30:x", now) end
+	eq(asm.open, Codec.OPEN_MAX, "a ceiling in all")
+	-- Completed and expired pieces free their room.
+	local asm2 = Codec.NewAssembler()
+	eq(Codec.Feed(asm2, "Good-Realm", "C7:1:2:ab", now), nil)
+	eq(Codec.Feed(asm2, "Good-Realm", "C7:2:2:cd", now), "abcd"); eq(asm2.open, 0)
+	Codec.Feed(asm2, "Good-Realm", "C8:1:2:ab", now)
+	Codec.Gc(asm2, now + 61); eq(asm2.open, 0); eq(asm2.bySender["Good-Realm"], nil)
+end)
+
+test("0.9.3 a player can say no to Royal Inspections: the call is heard, nothing is inspected", function()
+	WithThrone(function(w, K)
+		local saved = { random = K.random, opt = ns.db.royalInspection }
+		local ok, err = pcall(function()
+			AsSoldier("Other")
+			if ns.Inspect.IsPatrolling() then ns.Inspect.SetPatrol(false) end
+			K.random = function() return 0 end -- in the sample
+			ns.db.royalInspection = false
+			K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", "T1~I~21~Olympus")
+			eq(ns.Inspect.IsPatrolling(), false, "said no: no patrol")
+		end)
+		K.random, ns.db.royalInspection = saved.random, saved.opt
+		if ns.Inspect.IsPatrolling() then ns.Inspect.SetPatrol(false) end
+		ns.Inspect.SetPace(nil)
+		if not ok then error(err, 0) end
+	end)
 end)
 
 print(("\n%d passed, %d failed"):format(passed, failed))

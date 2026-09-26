@@ -732,6 +732,18 @@ L.UNTABARDED_NOT_SHARED = "only the King sees it"
 L.ROLLCALL_ON = "The author's roll calls are answered: this addon's version, game client and channel state, nothing about your character. /oly rollcall off refuses them."
 L.ROLLCALL_OFF = "The author's roll calls and update notices are refused. /oly rollcall on answers them again."
 L.HELP_ROLLCALL = "  /oly rollcall on|off - answer the author's roll calls (version, client, channel state) or not"
+-- 0.9.3: treasurer
+L.TREASURER_ONLY = "Only the Treasurer can change this."
+L.TREASURER_SHARE_ASK = "You are the Treasurer of Olympus. Share the treasury book (balance, donations and who gave them, the ranking) and the guild bank (its gold and items)?\n\nThey go out on the Olympus channel, and every client on it receives them. %s The addon shows them to the King, and to the army only when he allows it. Change it any time with /oly treasurer on or off."
+L.TREASURER_SHARE_YES = "Share"
+L.TREASURER_SHARE_NO = "Keep private"
+L.TREASURER_SHARE_ON = "The treasury book and the guild bank are shared (the King sees them; the army only if he allows it). /oly treasurer off withdraws them."
+L.TREASURER_SHARE_OFF = "The treasury book and the guild bank are yours alone (withdrawn from every 0.9.3 screen). /oly treasurer on shares them."
+L.HELP_TREASURER = "  /oly treasurer on|off - the Treasurer shares his book and the guild bank, or not"
+-- 0.9.3: inspection opt-out
+L.INSPECTION_OPT_ON = "You take part in the King's Royal Inspection when your addon is in the sample: a 2-minute patrol of the players around you, reported to him. /oly inspection off says no."
+L.INSPECTION_OPT_OFF = "You don't take part in Royal Inspections: you still hear the King's call, and nothing is inspected or reported. /oly inspection on takes part again."
+L.HELP_INSPECTION = "  /oly inspection on|off - take part in the King's Royal Inspection, or not"
 if GetLocale and GetLocale() == "ptBR" then
 	L.THOUSANDS = "."
 	L.ARMY_TOTAL = "%s soldados"
@@ -1420,4 +1432,16 @@ if GetLocale and GetLocale() == "ptBR" then
 	L.ROLLCALL_ON = "As chamadas do autor são respondidas: versão do addon, cliente do jogo e estado do canal, nada sobre o seu personagem. /oly rollcall off recusa."
 	L.ROLLCALL_OFF = "As chamadas e avisos de atualização do autor são recusados. /oly rollcall on volta a responder."
 	L.HELP_ROLLCALL = "  /oly rollcall on|off - responder ou não às chamadas do autor (versão, cliente, estado do canal)"
+	-- 0.9.3: treasurer
+	L.TREASURER_ONLY = "Só o Tesoureiro pode mudar isso."
+	L.TREASURER_SHARE_ASK = "Você é o Tesoureiro da Olympus. Compartilhar o livro do tesouro (saldo, doações e quem doou, o ranking) e o banco da guilda (ouro e itens)?\n\nEles saem no canal Olympus, e todo cliente nele os recebe. %s O addon mostra ao Rei, e ao exército só quando ele permitir. Mude quando quiser com /oly treasurer on ou off."
+	L.TREASURER_SHARE_YES = "Compartilhar"
+	L.TREASURER_SHARE_NO = "Manter privado"
+	L.TREASURER_SHARE_ON = "O livro do tesouro e o banco da guilda estão compartilhados (o Rei vê; o exército só se ele permitir). /oly treasurer off retira."
+	L.TREASURER_SHARE_OFF = "O livro do tesouro e o banco da guilda são só seus (retirados de toda tela na 0.9.3). /oly treasurer on compartilha."
+	L.HELP_TREASURER = "  /oly treasurer on|off - o Tesoureiro compartilha ou não o livro e o banco da guilda"
+	-- 0.9.3: inspection opt-out
+	L.INSPECTION_OPT_ON = "Você participa da Inspeção Real do Rei quando seu addon cai na amostra: uma patrulha de 2 minutos nos jogadores ao seu redor, reportada a ele. /oly inspection off recusa."
+	L.INSPECTION_OPT_OFF = "Você não participa das Inspeções Reais: ainda ouve o chamado do Rei, e nada é inspecionado nem reportado. /oly inspection on volta a participar."
+	L.HELP_INSPECTION = "  /oly inspection on|off - participar ou não da Inspeção Real do Rei"
 end

@@ -86,7 +86,7 @@ function Bank.Read()
 end
 
 -- Only the real Treasurer's client sends (never the author's view).
-local function CanSend() return ns.IsMember() and ns.IsTreasurer(ns.me, GetGuildInfo("player")) end
+local function CanSend() return ns.Treasury and ns.Treasury.CanSend and ns.Treasury.CanSend() end -- his yes too (0.9.3)
 
 -- What one message may carry (the channel's pieces), a little short of it.
 local function Room() return (ns.Codec.CHUNK or 220) * (ns.Codec.MAX_CHUNKS or 30) - 40 end

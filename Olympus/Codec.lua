@@ -514,8 +514,12 @@ function Codec.Chunk(payload, id)
 	return out
 end
 
+-- Pieces waiting for the rest are bounded (0.9.3): a few open messages per sender and a few
+-- hundred in all, so nobody can fill memory with pieces that never complete.
+Codec.OPEN_PER_SENDER = 4
+Codec.OPEN_MAX = 400
 function Codec.NewAssembler()
-	return { buf = {} }
+	return { buf = {}, open = 0, bySender = {}, refused = 0 }
 end
 
 -- Returns the full payload once every chunk from this sender/id arrived.
@@ -527,7 +531,15 @@ function Codec.Feed(asm, sender, msg, now)
 	local key = sender .. "#" .. id
 	local e = asm.buf[key]
 	if not e or e.n ~= n then
-		e = { n = n, parts = {}, got = 0, t = now }
+		if not e then
+			local mine = asm.bySender[sender] or 0
+			if mine >= Codec.OPEN_PER_SENDER or asm.open >= Codec.OPEN_MAX then
+				asm.refused = asm.refused + 1
+				return nil
+			end
+			asm.bySender[sender], asm.open = mine + 1, asm.open + 1
+		end
+		e = { n = n, parts = {}, got = 0, t = now, sender = sender }
 		asm.buf[key] = e
 	end
 	if not e.parts[i] then
@@ -535,10 +547,19 @@ function Codec.Feed(asm, sender, msg, now)
 		e.got = e.got + 1
 	end
 	if e.got == n then
-		asm.buf[key] = nil
+		Codec.Close(asm, key)
 		return table.concat(e.parts)
 	end
 	return nil
+end
+
+function Codec.Close(asm, key)
+	local e = asm.buf[key]
+	if not e then return end
+	asm.buf[key] = nil
+	asm.open = math.max(0, asm.open - 1)
+	local left = (asm.bySender[e.sender] or 1) - 1
+	asm.bySender[e.sender] = left > 0 and left or nil
 end
 
 -- Drops assemblies older than 60 s and returns how many were incomplete, with a sample
@@ -549,7 +570,7 @@ function Codec.Gc(asm, now)
 		if now - e.t > 60 then
 			dropped = dropped + 1
 			sample = sample or ("%s %d/%d"):format(k, e.got, e.n)
-			asm.buf[k] = nil
+			Codec.Close(asm, k)
 		end
 	end
 	return dropped, sample

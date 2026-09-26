@@ -926,6 +926,37 @@ Comm.Handle("Q1", function(dist, sender, text)
 	end)
 end)
 
+-- Admission (0.9.3): one sender gets ADMIT_BURST messages at once and ADMIT_RATE a second
+-- after that, whatever they are (a census report is 30 pieces at most, every 3 minutes); past
+-- it their messages are dropped unread. At most ADMIT_SENDERS senders are tracked (the ones
+-- quiet for a minute are forgotten first), so the table itself stays small.
+Comm.ADMIT_BURST = 60
+Comm.ADMIT_RATE = 2
+Comm.ADMIT_SENDERS = 3000
+local admit, admitCount = {}, 0
+function Comm.Admit(sender, now)
+	local b = admit[sender]
+	if not b then
+		if admitCount >= Comm.ADMIT_SENDERS then
+			for name, x in pairs(admit) do
+				if now - x.t > 60 then admit[name], admitCount = nil, admitCount - 1 end
+			end
+			if admitCount >= Comm.ADMIT_SENDERS then stats.admitted = (stats.admitted or 0) + 1 return false end
+		end
+		b = { tokens = Comm.ADMIT_BURST, t = now }
+		admit[sender], admitCount = b, admitCount + 1
+	end
+	b.tokens = math.min(Comm.ADMIT_BURST, b.tokens + (now - b.t) * Comm.ADMIT_RATE)
+	b.t = now
+	if b.tokens < 1 then
+		stats.throttled = (stats.throttled or 0) + 1
+		return false
+	end
+	b.tokens = b.tokens - 1
+	return true
+end
+function Comm.ResetAdmission() wipe(admit); admitCount = 0 end
+
 local function OnAddonMessage(prefix, text, dist, sender, target, zoneChannelID, localID, channelName)
 	if prefix ~= ns.PREFIX then return end
 	if type(sender) ~= "string" or sender == "" or type(text) ~= "string" then return end
@@ -967,6 +998,7 @@ local function OnAddonMessage(prefix, text, dist, sender, target, zoneChannelID,
 	end
 	if not ns.IsMember() then return end -- outside an Olympus guild the addon hears nothing
 	if ns.db.blocked[sender:lower()] then return end
+	if not Comm.Admit(sender, ns.Now()) then return end
 	stats.recv = stats.recv + 1
 	local kind = (dist == "CHANNEL" and "ch:" or "g:") .. (text:match("^C%w+:") and "chunk" or text:sub(1, 2))
 	Count(stats.byType, kind) -- (unknown prefixes fold into "other": a flood of them stays small)

@@ -498,7 +498,12 @@ local function OnInspect(king, id)
 	local now = ns.Now()
 	if now - lastInspectSeen < King.INSPECT_GAP then return end
 	lastInspectSeen = now
-	-- Everyone hears the King's call; only a sample of the army patrols (and reports).
+	-- Everyone hears the King's call; only a sample of the army patrols (and reports), and never
+	-- a player who said no (/oly inspection off, 0.9.3).
+	if ns.db and ns.db.royalInspection == false then
+		ns.Log("inspection %d: not taking part (/oly inspection off)", id or 0)
+		return Warn(L.THRONE_INSPECT_WARN, true)
+	end
 	if King.random() > King.InspectShare() then
 		ns.Log("inspection %d: not in this sample (%.2f)", id or 0, King.InspectShare())
 		return Warn(L.THRONE_INSPECT_WARN, true)

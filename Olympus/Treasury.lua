@@ -482,8 +482,65 @@ end
 -- Sharing: the Treasurer's treasury, and everyone's copy of it
 ---------------------------------------------------------------------------
 
--- Only the real Treasurer's client sends (never the author's view).
-local function CanSend() return ns.IsMember() and ns.IsTreasurer(ns.me, GetGuildInfo("player")) end
+-- The Treasurer's yes (0.9.3): his book and the guild bank go out only once he chose to share
+-- them (ns.db.treasurerShares, nil until he answers). They go on the Olympus channel, where
+-- every client receives the bytes; the addon shows them to the King, and to the army only
+-- with the King's switches. Turned off, they are withdrawn (TX) from 0.9.3 screens at once.
+function Treasury.Consent() return ns.db and ns.db.treasurerShares end
+function Treasury.IsTreasurer() return ns.IsMember() and ns.IsTreasurer(ns.me, GetGuildInfo("player")) end
+
+-- Only the real Treasurer's client sends (never the author's view), and only with his yes.
+local function CanSend() return Treasury.IsTreasurer() and Treasury.Consent() == true end
+Treasury.CanSend = CanSend
+
+function Treasury.SetConsent(on)
+	if not Treasury.IsTreasurer() then return ns.Print(L.TREASURER_ONLY) end
+	ns.db.treasurerShares = on and true or false
+	ns.Print(on and L.TREASURER_SHARE_ON or L.TREASURER_SHARE_OFF)
+	if on then
+		Treasury.Share(true)
+		if ns.Bank and ns.Bank.Share then ns.Bank.Share(true) end
+	else
+		ns.Comm.Send("CHANNEL", "TX~" .. (GetGuildInfo("player") or ""), "treasury")
+	end
+	ns.Fire("TREASURY_CHANGED")
+end
+
+-- The Treasurer withdrew his book and the bank: gone from our screen (his word, his name).
+function Treasury.HandleWithdraw(dist, sender, text)
+	if dist ~= "CHANNEL" then return end
+	local guild = text:match("^TX~(.*)$")
+	if not guild or not ns.IsTreasurer(sender, guild) or not ns.IsKingGuild(guild) then return end
+	report = nil
+	if ns.rdb then ns.rdb.treasuryReport, ns.rdb.bankReport = nil, nil end
+	ns.Fire("TREASURY_CHANGED")
+	ns.Fire("DATA_CHANGED")
+end
+ns.Comm.Handle("TX", function(...) Treasury.HandleWithdraw(...) end)
+
+-- Asked once a session until he answers: what goes out and who reads it is in the question.
+local asked = false
+StaticPopupDialogs["OLYMPUS_TREASURER_SHARE"] = {
+	text = L.TREASURER_SHARE_ASK,
+	button1 = L.TREASURER_SHARE_YES,
+	button2 = L.TREASURER_SHARE_NO,
+	OnAccept = function() ns.SafeCall("treasurer share", Treasury.SetConsent, true) end,
+	OnCancel = function(_, _, reason)
+		if reason == "clicked" then ns.SafeCall("treasurer share", Treasury.SetConsent, false) end
+	end,
+	timeout = 0,
+	whileDead = true,
+	hideOnEscape = true,
+	noCancelOnEscape = true, -- Escape is no answer: asked again next session
+	preferredIndex = 3,
+}
+function Treasury.AskConsent()
+	if asked or not Treasury.IsTreasurer() or Treasury.Consent() ~= nil then return false end
+	if (InCombatLockdown and InCombatLockdown()) or (IsInInstance and IsInInstance()) then return false end
+	asked = true
+	ns.ShowDialog("OLYMPUS_TREASURER_SHARE", ns.Comm.Audience and ns.Comm.Audience() or "")
+	return true
+end
 
 local function Clean(name) return (tostring(name or ""):gsub("[~:,|%c]", "")) end
 
@@ -639,6 +696,9 @@ ns.King.Register("T", function(sender, id, rest)
 end)
 
 ns.On("LOGIN", function()
+	-- The Treasurer's question (his yes to sharing), once the guild is known; tried again later
+	-- while he is busy (combat, an instance).
+	ns.Every(60, "treasurer question", function() ns.SafeCall("treasurer question", Treasury.AskConsent) end)
 	-- The account's characters, for the Treasurer's gold between his own.
 	if ns.db and ns.me then
 		ns.db.myCharacters = ns.db.myCharacters or {}
@@ -979,6 +1039,7 @@ StaticPopupDialogs["OLYMPUS_TREASURY_OPENING"] = {
 -- Tests start from a clean state.
 function Treasury.Reset()
 	trade, mailOut, report, lastShare, sharePending, lastFlagsSent = nil, nil, nil, -math.huge, false, -math.huge
+	asked = false
 	wipe(pending)
 	lastMoney = nil
 	bookShown = Treasury.BOOK_SHOWN

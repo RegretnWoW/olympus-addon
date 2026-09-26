@@ -228,6 +228,11 @@ function ns.StatusText()
 		add("privacy: zone and layer %s  |  channel %s  |  chat warning accepted: %s",
 			ns.Layers and ns.Layers.SharingState and ns.Layers.SharingState() or "?", c.sealed and "sealed (key holders)" or "public (anyone)",
 			ch and ch.warned and #ch.warned > 0 and table.concat(ch.warned, ",") or "none")
+		if ns.Treasury and ns.Treasury.IsTreasurer and ns.Treasury.IsTreasurer() then
+			local v = ns.Treasury.Consent()
+			add("treasurer: book and bank %s (/oly treasurer on|off)", v == true and "shared" or (v == false and "private" or "not chosen (private)"))
+		end
+		add("royal inspection: %s (/oly inspection on|off)", ns.db.royalInspection == false and "not taking part" or "taking part when sampled")
 		add("author's roll call: %s (/oly rollcall on|off)", ns.Workshop and ns.Workshop.Answers and (ns.Workshop.Answers() and "answered" or "refused") or "?")
 	end
 	local n = 0

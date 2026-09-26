@@ -213,15 +213,18 @@ local function FireNow()
 	lastFire = ns.Now()
 	ns.Fire("LAYERS_CHANGED")
 end
+-- The last change still to show (0.9.3): a change that comes while a fire is queued is shown
+-- by it, even when an urgent fire went out in between.
+local changedAt = -math.huge
 local function FireSoon()
+	changedAt = ns.Now()
 	if fireQueued then return end
 	local wait = Layers.FIRE_GAP - (ns.Now() - lastFire)
 	if wait <= 0 then return FireNow() end
 	fireQueued = true
-	local queuedAt = ns.Now()
 	ns.After(wait, "layers changed", function()
 		fireQueued = false
-		if lastFire <= queuedAt then FireNow() end -- (a fire since then showed it already)
+		if lastFire <= changedAt then FireNow() end -- (a fire since the last change showed it already)
 	end)
 end
 
