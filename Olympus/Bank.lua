@@ -23,11 +23,14 @@ Bank.SHARE_GAP = 120       -- the Treasurer's client sends a changed bank this o
 Bank.SHARE_REPEAT = 1800   -- and repeats it for late logins
 Bank.REPORT_KEPT = 14 * 86400
 Bank.SETTLE = 1.5          -- seconds after the last slot change before the bank is read
+Bank.SETTLE_MAX = 6        -- ...but a bank that keeps changing is read this long after the first
 
 local open = false
 local queried = {}
 local lastShare, lastSent = -math.huge, nil
 local readPending = false
+local firstChange, lastChange = 0, 0 -- the slot changes waiting to be read (GetTime)
+local sharePending = false
 
 -- (A tab's name ends at the first ";": only the message's separators and escapes go.)
 local function Clean(s, n) return ns.Cut((tostring(s or ""):gsub("[~;|%c]", " ")), n) end
@@ -75,7 +78,7 @@ function Bank.Read()
 					end
 				end
 			end
-			snap.tabs[#snap.tabs + 1] = { name = Clean(name ~= "" and name or tostring(tab), 30), icon = icon, items = items }
+			snap.tabs[#snap.tabs + 1] = { name = Clean(name ~= "" and name or tostring(tab), 30), icon = icon, items = items, i = tab }
 		end
 	end
 	if #snap.tabs == 0 then return nil end
@@ -123,18 +126,29 @@ function Bank.Share(force)
 	local msg = Bank.Message(snap)
 	if not msg then return false end
 	if not force and msg == lastSent and now - lastShare < Bank.SHARE_REPEAT then return false end
-	if not force and now - lastShare < Bank.SHARE_GAP then return false end
+	if not force and now - lastShare < Bank.SHARE_GAP then
+		-- Changed within the gap: sent once it is over (the snapshot as it is then).
+		if not sharePending then
+			sharePending = true
+			ns.After(Bank.SHARE_GAP - (now - lastShare) + 1, "bank share", function()
+				sharePending = false
+				Bank.Share()
+			end)
+		end
+		return false
+	end
 	lastShare, lastSent = now, msg
 	if #msg <= 250 then ns.Comm.Send("CHANNEL", msg, "bank") else ns.Comm.SendChunked(msg) end
 	return true
 end
 
--- The Treasurer's snapshot (from him alone, in the King's guild, the census confirming him).
+-- The Treasurer's snapshot (from him alone, by his name, speaking for the King's guild: no
+-- census vote, which forged ones could turn against him).
 function Bank.HandleReport(dist, sender, text)
 	if dist ~= "CHANNEL" then return end
 	local guild, when, money, rest = text:match("^T9~([^~]*)~(%d+)~(%d+)~(.*)$")
 	if not guild or not ns.IsKingGuild(guild) then return end
-	if not ns.IsTreasurer(sender, guild) or not ns.Data.KnownRank(sender, guild, true) then return end
+	if not ns.IsTreasurer(sender, guild) then return end
 	local now = ns.Now()
 	local r = { t = math.min(tonumber(when) or now, now), guild = guild, by = ns.FullName(sender), money = math.min(tonumber(money) or 0, 2147483647), tabs = {} }
 	local total = 0
@@ -163,20 +177,50 @@ function Bank.HandleReport(dist, sender, text)
 end
 ns.Comm.Handle("T9", function(...) Bank.HandleReport(...) end)
 
+-- A tab asked for whose slots never arrived reads empty, just like a tab that is: an empty
+-- read never replaces the items the last snapshot of that tab held (same guild, same tab),
+-- unless the tab is the one on screen (the game loaded it, the player sees it empty), or that
+-- tab was already kept once (empty twice in a row: it is). The kept tab is marked `kept`.
+function Bank.Keep(snap, prev)
+	if not snap or type(prev) ~= "table" or prev.guild ~= snap.guild or type(prev.tabs) ~= "table" then return snap end
+	local shown = type(GetCurrentGuildBankTab) == "function" and tonumber((GetCurrentGuildBankTab())) or nil
+	for k, tab in ipairs(snap.tabs) do
+		if #tab.items == 0 and tab.i ~= shown then
+			for _, old in ipairs(prev.tabs) do
+				local same = (old.i and old.i == tab.i) or (not old.i and old.name == tab.name)
+				if same and type(old.items) == "table" and #old.items > 0 and not old.kept then
+					snap.tabs[k] = { name = tab.name, icon = tab.icon, i = tab.i, items = old.items, kept = true }
+					break
+				end
+			end
+		end
+	end
+	return snap
+end
+
+local function ReadNow()
+	if not open and not HasBank() then return end
+	local snap = Bank.Keep(Bank.Read(), ns.rdb.bank)
+	if not snap then return end
+	ns.rdb.bank = snap
+	ns.Fire("TREASURY_CHANGED")
+	Bank.Share()
+end
+
 -- The bank open: every tab we may see is asked for (the game loads the one shown alone), and
--- once the slots settle the snapshot is taken (and sent, the Treasurer's).
+-- once the slots settle (SETTLE after the last change, SETTLE_MAX after the first at most) the
+-- snapshot is taken (and sent, the Treasurer's).
 local function Settle()
+	lastChange = GetTime()
 	if readPending then return end
-	readPending = true
-	ns.After(Bank.SETTLE, "bank read", function()
+	readPending, firstChange = true, lastChange
+	local function Check()
+		local wait = math.min(lastChange + Bank.SETTLE, firstChange + Bank.SETTLE_MAX) - GetTime()
+		if wait > 0.05 then return ns.After(wait, "bank read", Check) end
 		readPending = false
-		if not open and not HasBank() then return end
-		local snap = Bank.Read()
-		if not snap then return end
-		ns.rdb.bank = snap
-		ns.Fire("TREASURY_CHANGED")
-		Bank.Share()
-	end)
+		ReadNow()
+	end
+	ns.After(Bank.SETTLE, "bank read", Check)
 end
 
 function Bank.Opened()
@@ -219,6 +263,7 @@ end)
 -- Tests start from a clean state.
 function Bank.Reset()
 	open, readPending, lastShare, lastSent = false, false, -math.huge, nil
+	firstChange, lastChange, sharePending = 0, 0, false
 	wipe(queried)
 	if ns.rdb then ns.rdb.bank, ns.rdb.bankReport = nil, nil end
 end

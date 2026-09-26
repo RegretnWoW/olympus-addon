@@ -78,7 +78,8 @@ for _, file in ipairs({ "Bootstrap", "Locales", "Core", "Diagnostics", "Dialog",
 	local chunk = assert(loadfile(ADDON_DIR .. file .. ".lua"))
 	chunk("Olympus", ns)
 end
-ns.db = { guilds = {}, log = {}, errors = {}, blocked = {}, demo = false, showMap = true }
+ns.db = { guilds = {}, log = {}, errors = {}, blocked = {}, demo = false, showMap = true,
+	chatWarned = { A = true, C = true, L = true } } -- (0.9.1: the channel warnings already accepted; their own tests ask)
 ns.me = "Tester-Realm"
 ns.realm = "Realm"
 ns.rdb = { guilds = {} }
@@ -348,6 +349,7 @@ end)
 test("Throne: only the King sees it and his commands are checked; Lords answer him alone", function()
 	local K = ns.King
 	local savedGuild, savedPopup, savedSend, savedWhisper, savedDev = GetGuildInfo, StaticPopup_Show, ns.Comm.Send, ns.Comm.Whisper, ns.devThrone
+	local savedMe = ns.me
 	local sent, whispered, popups = {}, {}, {}
 	local ok, err = pcall(function()
 		K.Reset()
@@ -363,8 +365,9 @@ test("Throne: only the King sees it and his commands are checked; Lords answer h
 		K.Summon()
 		eq(#sent, 0, "a preview sends nothing")
 		ns.devThrone = nil
-		-- The King: guild master of <Olympus>.
+		-- The King: guild master of <Olympus>, the character the addon knows as him (ns.KING_CHARACTER).
 		GetGuildInfo = function() return "Olympus", "King", 0 end
+		ns.me = "Asmongold Asmongler-Realm"
 		eq(K.IsKing(), true); eq(K.Visible(), true)
 		K.Reset() -- the Throne opens on the letter until the King has read it
 		local savedRead = ns.db.throneLetterRead
@@ -385,14 +388,16 @@ test("Throne: only the King sees it and his commands are checked; Lords answer h
 		local id = tonumber(sent[1]:match("T1~S~(%d+)"))
 		-- An officer of another guild gets the summons, and answers the King alone.
 		GetGuildInfo = function() return "Olympus II", "Officer", 1 end
-		ns.rdb.guilds = { ["Olympus"] = Vouched({ total = 1000, online = 90, zones = {}, t = os.time(), leader = "Asmon", realm = "Realm" }, "W1-Realm", "W2-Realm"),
+		ns.me = savedMe
+		ns.rdb.guilds = { ["Olympus"] = Vouched({ total = 1000, online = 90, zones = {}, t = os.time(), leader = "Asmongold Asmongler", realm = "Realm" }, "W1-Realm", "W2-Realm"),
 			["Olympus Zeus"] = Vouched({ total = 100, online = 9, zones = {}, t = os.time(), leader = "Zed", realm = "Realm" }, "W3-Realm", "W4-Realm") }
 		K.HandleCommand("CHANNEL", "Faker-Realm", "T1~S~7~Olympus")
 		eq(#popups, 0, "not the King: ignored")
-		K.HandleCommand("CHANNEL", "Asmon-Realm", "T1~S~7~Olympus")
+		K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", "T1~S~7~Olympus")
 		eq(#popups, 1, "our officer rank gets the summons"); eq(popups[1].name, "OLYMPUS_KING_SUMMON")
 		-- Back on the King's side: answers counted, checked against the census.
 		GetGuildInfo = function() return "Olympus", "King", 0 end
+		ns.me = "Asmongold Asmongler-Realm"
 		K.HandleAnswer("WHISPER", "Zed-Realm", ("T2~%d~P~Olympus Zeus"):format(id))
 		K.HandleAnswer("WHISPER", "Nobody-Realm", ("T2~%d~B~Olympus Zeus"):format(id))
 		K.HandleAnswer("WHISPER", "Late-Realm", "T2~1~P~Olympus Zeus")
@@ -427,13 +432,15 @@ test("Throne: only the King sees it and his commands are checked; Lords answer h
 		eq(K.ParseAgenda("30 Raid on Crossroads"), 30)
 		eq(K.ParseAgenda("Raid"), nil)
 		GetGuildInfo = savedGuild
-		K.HandleCommand("CHANNEL", "Asmon-Realm", "T1~A~9~Olympus~45~Stormwind City~Raid on Crossroads")
+		ns.me = savedMe
+		K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", "T1~A~9~Olympus~45~Stormwind City~Raid on Crossroads")
 		local a = K.Agenda()
 		eq(a.title, "Raid on Crossroads"); eq(a.zone, "Stormwind City")
-		K.HandleCommand("CHANNEL", "Asmon-Realm", "T1~X~9~Olympus")
+		K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", "T1~X~9~Olympus")
 		eq(K.Agenda(), nil, "cancelled")
 	end)
 	GetGuildInfo, StaticPopup_Show, ns.Comm.Send, ns.Comm.Whisper, ns.devThrone = savedGuild, savedPopup, savedSend, savedWhisper, savedDev
+	ns.me = savedMe
 	K.Reset()
 	ns.rdb.guilds = {}
 	if not ok then error(err, 0) end
@@ -3122,12 +3129,11 @@ test("sending is gated with a clear answer", function()
 		AsRank(1, function() eq(select(2, Chan.Send("C", "hi", 100)), "ready") end)
 		eq(#sent, 0)
 	end, false)
-	ns.db.chatNoticeShown = nil
 	WithLane(function(sent)
 		AsRank(1, function(printed)
 			local ok, why = Chan.Send("C", "reunir em " .. ITEM, 100)
 			eq(ok, true); eq(why, "ok")
-			eq(printed[#printed], ns.L.CHAN_NOTICE, "not-encrypted notice, once")
+			eq(#printed, 0, "no notice after the line: the warning comes before the first one (0.9.1)")
 		end)
 		eq(#sent, 1)
 		eq(sent[1]:sub(1, 16), "M1~C~Olympus II~")
@@ -3135,7 +3141,6 @@ test("sending is gated with a clear answer", function()
 		eq(#CHAT_LINES, 1, "local echo")
 		assert(CHAT_LINES[1]:find("[Captains]", 1, true) and CHAT_LINES[1]:find(ITEM, 1, true), CHAT_LINES[1])
 	end)
-	eq(ns.db.chatNoticeShown, true)
 end)
 
 test("sender ranks are verified on receipt, never taken from the message", function()
@@ -3318,8 +3323,8 @@ test("a report never vouches for its own sender", function()
 		eq(ns.rdb.guilds["Olympus Zeus"].conflict, true, "an added officer is a conflict")
 		eq(Line("Grunt", "C", "Olympus Zeus"), "unverified")
 		-- The same on <Olympus>, whose officers are Lords.
-		eq(Report("Olympus", "King", "Duke:1:0", "Herald-Realm"), true)
-		eq(Report("Olympus", "King", "Duke:1:0,Peon:1:0", "Peon-Realm"), true)
+		eq(Report("Olympus", "Asmongold Asmongler", "Duke:1:0", "Herald-Realm"), true)
+		eq(Report("Olympus", "Asmongold Asmongler", "Duke:1:0,Peon:1:0", "Peon-Realm"), true)
 		eq(Line("Peon", "L", "Olympus"), "unverified")
 		-- An elected reporter who leads the guild: proven by the report someone else sent before.
 		eq(Report("Olympus Ares", "Ares", "", "Squire-Realm"), true)
@@ -3346,42 +3351,42 @@ test("ranks come from the picture most senders agree on; forgers can't move it",
 	ns.Now = function() return clock end
 	local ok, err = pcall(function()
 		-- <Olympus> as its reporter and runner-up send it.
-		eq(Report("Olympus", "King", "Duke:1:0", "Crier-Realm"), true)
-		eq(Report("Olympus", "King", "Duke:1:0", "Clerk-Realm"), true)
+		eq(Report("Olympus", "Asmongold Asmongler", "Duke:1:0", "Crier-Realm"), true)
+		eq(Report("Olympus", "Asmongold Asmongler", "Duke:1:0", "Clerk-Realm"), true)
 		eq(D.KnownRank("Duke-Realm", "Olympus"), 1, "two senders name the officer")
-		eq(D.KnownRank("King-Realm", "Olympus"), 0, "and the King")
+		eq(D.KnownRank("Asmongold Asmongler-Realm", "Olympus"), 0, "and the King")
 		-- One outsider copies the report (fine), then adds an accomplice: one vote against two.
 		-- The row everyone sees stays the majority's (the forged report is a vote, not the row).
 		clock = clock + 60
-		eq(Report("Olympus", "King", "Duke:1:0", "Aaa-Realm"), true)
+		eq(Report("Olympus", "Asmongold Asmongler", "Duke:1:0", "Aaa-Realm"), true)
 		clock = clock + 1
-		eq(Report("Olympus", "King", "Duke:1:0,Bbb:1:0", "Aaa-Realm"), false, "against the majority: not the row")
+		eq(Report("Olympus", "Asmongold Asmongler", "Duke:1:0,Bbb:1:0", "Aaa-Realm"), false, "against the majority: not the row")
 		eq(D.KnownRank("Bbb-Realm", "Olympus"), nil, "the copy-then-add trick gives nothing")
 		eq(D.KnownRank("Duke-Realm", "Olympus"), 1, "and costs the real officers nothing")
 		eq(ns.rdb.guilds.Olympus.outvoted, true, "the minority report is noted"); eq(ns.rdb.guilds.Olympus.conflict, nil)
 		eq(#ns.rdb.guilds.Olympus.officers, 1, "the row shows the majority's picture")
 		-- Its own report never makes a sender anything.
-		eq(Report("Olympus", "King", "Duke:1:0,Aaa:1:0", "Aaa-Realm"), false)
+		eq(Report("Olympus", "Asmongold Asmongler", "Duke:1:0,Aaa:1:0", "Aaa-Realm"), false)
 		eq(D.KnownRank("Aaa-Realm", "Olympus"), nil)
 		-- Two forgers against two reporters: contested, nobody's rank counts until it is settled.
-		eq(Report("Olympus", "King", "Duke:1:0,Aaa:1:0", "Ccc-Realm"), true, "a tie: no majority to hold the row")
+		eq(Report("Olympus", "Asmongold Asmongler", "Duke:1:0,Aaa:1:0", "Ccc-Realm"), true, "a tie: no majority to hold the row")
 		eq(ns.rdb.guilds.Olympus.conflict, true, "split senders show as a conflict")
 		eq(D.KnownRank("Aaa-Realm", "Olympus"), nil, "a tie is no majority")
 		eq(D.KnownRank("Duke-Realm", "Olympus"), 1, "contested: what both pictures agree on still counts")
 		-- Their votes expire when they stop; the real reporters' stay fresh.
 		clock = clock + 20 * 60
-		eq(Report("Olympus", "King", "Duke:1:0", "Crier-Realm"), true)
-		eq(Report("Olympus", "King", "Duke:1:0", "Clerk-Realm"), true)
+		eq(Report("Olympus", "Asmongold Asmongler", "Duke:1:0", "Crier-Realm"), true)
+		eq(Report("Olympus", "Asmongold Asmongler", "Duke:1:0", "Clerk-Realm"), true)
 		clock = clock + 11 * 60
-		eq(Report("Olympus", "King", "Duke:1:0", "Crier-Realm"), true)
+		eq(Report("Olympus", "Asmongold Asmongler", "Duke:1:0", "Crier-Realm"), true)
 		eq(D.KnownRank("Duke-Realm", "Olympus"), 1, "the forgers' votes are over 30 minutes old")
 		eq(D.KnownRank("Aaa-Realm", "Olympus"), nil)
 		-- A real promotion: split while only one of the two has reported it, then agreed.
-		eq(Report("Olympus", "King", "Duke:1:0,Earl:1:0", "Clerk-Realm"), true)
+		eq(Report("Olympus", "Asmongold Asmongler", "Duke:1:0,Earl:1:0", "Clerk-Realm"), true)
 		eq(D.KnownRank("Earl-Realm", "Olympus"), nil, "one sender so far")
 		eq(D.KnownRank("Duke-Realm", "Olympus"), 1, "the others keep their ranks meanwhile")
-		eq(D.KnownRank("King-Realm", "Olympus"), 0)
-		eq(Report("Olympus", "King", "Duke:1:0,Earl:1:0", "Crier-Realm"), true)
+		eq(D.KnownRank("Asmongold Asmongler-Realm", "Olympus"), 0)
+		eq(Report("Olympus", "Asmongold Asmongler", "Duke:1:0,Earl:1:0", "Crier-Realm"), true)
 		eq(D.KnownRank("Earl-Realm", "Olympus"), 1, "both reporters name him")
 		-- Another guild: an outsider swapping the leader for an accomplice gets no Lord.
 		eq(Report("Olympus Zeus", "Zeus", "", "Zclerk-Realm"), true)
@@ -3496,7 +3501,7 @@ test("guild names ignore case, so another spelling can't pass for a guild", func
 	ns.Roster.Scan()
 	ns.rdb.guilds = {}
 	local function Report(guild, officers, sender)
-		return ns.Data.Receive(Codec.DecodeReport("R2~" .. guild .. "~900~90~King~1~9~~~0,0,0,0,0,0,0~~" .. officers), sender)
+		return ns.Data.Receive(Codec.DecodeReport("R2~" .. guild .. "~900~90~Asmongold Asmongler~1~9~~~0,0,0,0,0,0,0~~" .. officers), sender)
 	end
 	AsRank(0, function()
 		eq(select(2, Chan.Receive("CHANNEL", "Mimic", Msg("A", "olympus ii", 1), 9500)), "forged", "our guild, other capitals")
@@ -3513,7 +3518,7 @@ test("guild names ignore case, so another spelling can't pass for a guild", func
 		eq(Report("Olympus", "Duke:1:0", "Herald3-Realm"), true)
 		eq(Report("OLYMPUS", "", "Forger2-Realm"), false, "outvoted")
 		eq(ns.rdb.guilds.OLYMPUS, nil); eq(ns.rdb.guilds.Olympus.conflict, nil)
-		eq(ns.Data.KnownRank("King-Realm", "Olympus"), 0, "the King keeps his crown"); eq(ns.Data.KnownRank("King-Realm", "OLYMPUS"), 0, "in any spelling")
+		eq(ns.Data.KnownRank("Asmongold Asmongler-Realm", "Olympus"), 0, "the King keeps his crown"); eq(ns.Data.KnownRank("Asmongold Asmongler-Realm", "OLYMPUS"), 0, "in any spelling")
 	end)
 	ns.rdb.guilds = {}
 end)
@@ -3670,7 +3675,7 @@ test("chat lines arrive through CHAT_MSG_ADDON_LOGGED, without our echo or block
 	cns.RegisterEvent = function(event, fn) events[event] = events[event] or {}; table.insert(events[event], fn) end
 	cns.On = function(name, fn) if name == "LOGIN" then table.insert(login, fn) end end
 	cns.After, cns.Every = function() end, function() end
-	local slash = { SlashCmdList.OLYMPUSALL, SlashCmdList.OLYMPUSCAPTAINS, SlashCmdList.OLYMPUSLORDS }
+	local slash = { SlashCmdList.OLYMPUSALL, SlashCmdList.OLYMPUSCAPTAINS, SlashCmdList.OLYMPUSLORDS, StaticPopupDialogs.OLYMPUS_CHAT_PRIVACY }
 	C_ChatInfo = { RegisterAddonMessagePrefix = function() end }
 	ns.db.chatMute = nil
 	local ok, err = pcall(function()
@@ -3697,6 +3702,7 @@ test("chat lines arrive through CHAT_MSG_ADDON_LOGGED, without our echo or block
 		end)
 	end)
 	SlashCmdList.OLYMPUSALL, SlashCmdList.OLYMPUSCAPTAINS, SlashCmdList.OLYMPUSLORDS = slash[1], slash[2], slash[3]
+	StaticPopupDialogs.OLYMPUS_CHAT_PRIVACY = slash[4] -- (0.9.1: Channels.lua's warning, bound to the real module)
 	C_ChatInfo = nil
 	if not ok then error(err, 0) end
 end)
@@ -5009,20 +5015,21 @@ test("layer hop: the King's line needs a report nobody disputes, and never one r
 		H.AskKing()
 		ns.Print = savedPrint
 		eq(said, ns.L.HOP_KING_CHECKING:format("Asmond"), "not 'offline': still being confirmed")
-		ns.rdb.guilds = { ["Olympus"] = Vouched({ total = 1, online = 1, zones = {}, t = os.time(), leader = "Asmon", leaderOnline = true }, "W1-Realm", "W2-Realm") }
+		ns.rdb.guilds = { ["Olympus"] = Vouched({ total = 1, online = 1, zones = {}, t = os.time(), leader = "Asmongold Asmongler", leaderOnline = true }, "W1-Realm", "W2-Realm") }
 		eq(H.King().name, "Asmond")
 		-- One report is enough for the line while nobody disagrees (the Crown's powers need two).
-		ns.rdb.guilds = { ["Olympus"] = Vouched({ total = 1, online = 1, zones = {}, t = os.time(), leader = "Asmon", leaderOnline = true }, "W1-Realm") }
+		ns.rdb.guilds = { ["Olympus"] = Vouched({ total = 1, online = 1, zones = {}, t = os.time(), leader = "Asmongold Asmongler", leaderOnline = true }, "W1-Realm") }
 		eq(H.King().name, "Asmond", "one reporter")
 		eq(H.King(true), nil, "not strictly: 'For Olympus!' does not invite on its own for him")
-		eq(ns.Data.KnownRank("Asmon-Realm", "Olympus"), nil, "but no Crown powers from one")
+		eq(ns.Data.KnownRank("Asmongold Asmongler-Realm", "Olympus"), nil, "but no Crown powers from one")
 		-- Right after login a lone report proves nothing: the real ones have not come yet.
 		local loginAt = ns.Comm.loginAt
 		ns.Comm.loginAt = ns.Now() - 10
 		eq(H.King(), nil, "just logged in")
 		ns.Comm.loginAt = loginAt
-		-- An attacker's report naming himself: alone right after login, nothing; against the real
-		-- reporter, a tie: nobody.
+		-- An attacker's report naming himself: alone right after login, nothing. (0.9.1: against
+		-- the real reporter it no longer even ties: a report naming anyone but the King the addon
+		-- knows by name counts for nothing, GitHub issue #18.)
 		ns.rdb.guilds = {}
 		local r = { guild = "Olympus", total = 900, online = 90, leader = "Atk", leaderOnline = true, users = 1, zones = {}, officers = {},
 			ranks = {}, top = {}, faction = "Alliance" }
@@ -5030,10 +5037,10 @@ test("layer hop: the King's line needs a report nobody disputes, and never one r
 		ns.Data.Receive(r, "Atk-Realm")
 		eq(H.King(), nil, "a lone forged report at login")
 		ns.Comm.loginAt = loginAt
-		local real = { guild = "Olympus", total = 1000, online = 200, leader = "Asmon", leaderOnline = true, users = 5, zones = {}, officers = {},
+		local real = { guild = "Olympus", total = 1000, online = 200, leader = "Asmongold Asmongler", leaderOnline = true, users = 5, zones = {}, officers = {},
 			ranks = {}, top = {}, faction = "Alliance" }
 		ns.Data.Receive(real, "Honest-Realm")
-		eq(H.King(), nil, "forged against real: a tie, nobody")
+		eq(H.King() and H.King().name, "Asmond", "forged against real: the forged report counted for nothing")
 		-- A same-named character on another realm can't vouch for itself.
 		ns.rdb.guilds = { ["Olympus"] = Vouched({ total = 1, online = 1, zones = {}, t = os.time(), leader = "Atk", leaderOnline = true }, "Atk-Elsewhere") }
 		eq(H.King(), nil, "its own vote from another realm")
@@ -5083,8 +5090,12 @@ test("layer hop: the King's layer line tops the Census and the Realm only while 
 		-- The King himself never gets the line, nor requests.
 		ns.rdb.guilds["Olympus"].leaderOnline = true
 		GetGuildInfo = function() return "Olympus", "King", 0 end
-		eq(H.KingLine(), nil, "the King's own window")
-		eq(H.CanHelp(1453, 9), false, "the King is never asked")
+		local savedMe = ns.me
+		ns.me = "Asmongold Asmongler-Realm" -- (the character the addon knows as the King)
+		local line, help = H.KingLine(), H.CanHelp(1453, 9)
+		ns.me = savedMe
+		eq(line, nil, "the King's own window")
+		eq(help, false, "the King is never asked")
 		ns.rdb.guilds = {}
 	end)
 end)
@@ -5196,7 +5207,10 @@ test("layer hop: alone on the King's layer, a window asks whether the addon may 
 			eq(f:IsShown(), false, "another layer")
 			w.see(9)
 			GetGuildInfo = function() return "Olympus", "King", 0 end
+			local savedMe = ns.me
+			ns.me = "Asmongold Asmongler-Realm" -- (the character the addon knows as the King)
 			H.CheckKingPrompt()
+			ns.me = savedMe
 			eq(f:IsShown(), false, "the King")
 			H.prompt = nil
 		end)
@@ -5205,10 +5219,11 @@ end)
 
 test("Throne: the King's map button fits its label, says whether he is shown, and changes at once", function()
 	WithUI(function()
-		local savedGuild, savedSend, savedPos = GetGuildInfo, ns.Comm.Send, C_Map.GetPlayerMapPosition
+		local savedGuild, savedSend, savedPos, savedMe = GetGuildInfo, ns.Comm.Send, C_Map.GetPlayerMapPosition, ns.me
 		local ok, err = pcall(function()
 			ns.db.throneLocation = nil
 			GetGuildInfo = function() return "Olympus", "King", 0 end
+			ns.me = "Asmongold Asmongler-Realm"
 			ns.Comm.Send = function() end
 			C_Map.GetPlayerMapPosition = function() return { GetXY = function() return 0.42, 0.51 end } end
 			local w, UI = ForeverWorld(true)
@@ -5249,7 +5264,7 @@ test("Throne: the King's map button fits its label, says whether he is shown, an
 			b:Click()
 			eq(ns.db.throneLocation, false)
 		end)
-		GetGuildInfo, ns.Comm.Send, C_Map.GetPlayerMapPosition = savedGuild, savedSend, savedPos
+		GetGuildInfo, ns.Comm.Send, C_Map.GetPlayerMapPosition, ns.me = savedGuild, savedSend, savedPos, savedMe
 		ns.db.throneLocation = nil
 		ns.King.Reset()
 		if not ok then error(err, 0) end
@@ -5258,11 +5273,12 @@ end)
 
 test("Treasury: the King's three switches say on hover who sees each part (hidden: only he and the Treasurer)", function()
 	WithUI(function()
-		local savedGuild, savedSend, savedSplit = GetGuildInfo, ns.Comm.Send, ns.splitNames
+		local savedGuild, savedSend, savedSplit, savedMe = GetGuildInfo, ns.Comm.Send, ns.splitNames, ns.me
 		local ok, err = pcall(function()
 			ns.rdb.treasuryFlags = nil
 			ns.splitNames = true -- Forever: a Treasurer's name (first and surname) can be there
 			GetGuildInfo = function() return "Olympus", "King", 0 end
+			ns.me = "Asmongold Asmongler-Realm"
 			ns.Comm.Send = function() end
 			local w, UI = ForeverWorld(true)
 			CommunitiesFrame:Show(); w.buttons[1]:Click()
@@ -5285,7 +5301,7 @@ test("Treasury: the King's three switches say on hover who sees each part (hidde
 				eq(switches[i]:GetFontString():IsTruncated(), false, switches[i]:GetText())
 			end
 		end)
-		GetGuildInfo, ns.Comm.Send, ns.splitNames = savedGuild, savedSend, savedSplit
+		GetGuildInfo, ns.Comm.Send, ns.splitNames, ns.me = savedGuild, savedSend, savedSplit, savedMe
 		ns.rdb.treasuryFlags = nil
 		ns.Treasury.Reset()
 		if not ok then error(err, 0) end
@@ -5295,6 +5311,7 @@ end)
 test("Throne: the King shows himself on the map with a button, everyone checks it is him", function()
 	local K = ns.King
 	local savedGuild, savedSend, savedNow, savedPos, savedMap = GetGuildInfo, ns.Comm.Send, ns.Now, C_Map.GetPlayerMapPosition, C_Map.GetBestMapForUnit
+	local savedMe = ns.me
 	local sent, clock = {}, 2000000
 	local ok, err = pcall(function()
 		K.Reset()
@@ -5309,33 +5326,37 @@ test("Throne: the King shows himself on the map with a button, everyone checks i
 		eq(#sent, 0); eq(K.SharingLocation(), false, "off by default")
 		-- The King turns it on: his position goes out on the channel.
 		GetGuildInfo = function() return "Olympus", "King", 0 end
+		ns.me = "Asmongold Asmongler-Realm"
 		K.ToggleLocation()
 		eq(K.SharingLocation(), true)
 		assert(sent[1]:find("^CHANNEL T1~P~%d+~Olympus~1453~420~510$"), sent[1])
 		local id = sent[1]:match("T1~P~(%d+)")
 		-- Everyone else: only the King's own message draws the crown.
 		GetGuildInfo = function() return "Olympus II", "Member", 3 end
-		ns.rdb.guilds = { ["Olympus"] = Vouched({ total = 1000, online = 90, zones = {}, t = os.time(), leader = "Asmon", realm = "Realm" }, "W1-Realm", "W2-Realm") }
+		ns.me = savedMe
+		ns.rdb.guilds = { ["Olympus"] = Vouched({ total = 1000, online = 90, zones = {}, t = os.time(), leader = "Asmongold Asmongler", realm = "Realm" }, "W1-Realm", "W2-Realm") }
 		K.HandleCommand("CHANNEL", "Faker-Realm", ("T1~P~%s~Olympus~100~100~100"):format(id))
 		eq(K.Location(), nil, "not the King: no crown")
-		K.HandleCommand("CHANNEL", "Asmon-Realm", ("T1~P~%s~Olympus~1453~420~510"):format(id))
+		K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", ("T1~P~%s~Olympus~1453~420~510"):format(id))
 		local at = K.Location()
 		eq(at.mapID, 1453); eq(at.x, 0.42); eq(at.y, 0.51); eq(at.name, "Asmond")
-		K.HandleCommand("CHANNEL", "Asmon-Realm", ("T1~P~%s~Olympus~1453~2000~5"):format(id))
+		K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", ("T1~P~%s~Olympus~1453~2000~5"):format(id))
 		eq(K.Location().x, 0.42, "off the map: ignored")
 		-- No news for a while: the crown goes away on its own.
 		clock = clock + K.LOCATION_EXPIRE + 1
 		eq(K.Location(), nil, "expired")
 		-- He hides it again: gone at once.
-		K.HandleCommand("CHANNEL", "Asmon-Realm", ("T1~P~%s~Olympus~1453~420~510"):format(id))
-		K.HandleCommand("CHANNEL", "Asmon-Realm", ("T1~Q~%s~Olympus"):format(id))
+		K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", ("T1~P~%s~Olympus~1453~420~510"):format(id))
+		K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", ("T1~Q~%s~Olympus"):format(id))
 		eq(K.Location(), nil, "hidden")
 		GetGuildInfo = function() return "Olympus", "King", 0 end
+		ns.me = "Asmongold Asmongler-Realm"
 		K.ToggleLocation()
 		eq(K.SharingLocation(), false)
 		assert(sent[#sent]:find("^CHANNEL T1~Q~%d+~Olympus$"), sent[#sent])
 	end)
 	GetGuildInfo, ns.Comm.Send, ns.Now, C_Map.GetPlayerMapPosition, C_Map.GetBestMapForUnit = savedGuild, savedSend, savedNow, savedPos, savedMap
+	ns.me = savedMe
 	ns.db.throneLocation = nil
 	ns.rdb.guilds = {}
 	K.Reset()
@@ -5686,7 +5707,7 @@ local function WithThrone(fn)
 		ns.Vox.after = function(seconds, _, f) w.timers[#w.timers + 1] = { at = w.clock + seconds, fn = f } end
 		RaidNotice_AddMessage = nil
 		ns.db.voxOff = nil
-		ns.rdb.guilds = { ["Olympus"] = Vouched({ total = 1000, online = 90, zones = {}, t = w.clock, leader = "Asmon", realm = "Realm",
+		ns.rdb.guilds = { ["Olympus"] = Vouched({ total = 1000, online = 90, zones = {}, t = w.clock, leader = "Asmongold Asmongler", realm = "Realm",
 				officers = { { name = "Pyralis Ashandar", online = true, days = 0 } } }, "W1-Realm", "W2-Realm"),
 			["Olympus Zeus"] = Vouched({ total = 100, online = 9, zones = {}, t = w.clock, leader = "Zed", realm = "Realm" }, "W3-Realm", "W4-Realm"),
 			["Olympus II"] = Vouched({ total = 300, online = 3, zones = {}, t = w.clock, leader = "Ceo", realm = "Realm" }, "W5-Realm", "W6-Realm") }
@@ -5704,7 +5725,7 @@ local function RunTimers(w)
 	w.timers = {}
 	for _, t in ipairs(due) do if t.at <= w.clock then t.fn() else w.timers[#w.timers + 1] = t end end
 end
-local function AsKing() GetGuildInfo = function() return "Olympus", "King", 0 end; ns.me = "Asmon-Realm" end
+local function AsKing() GetGuildInfo = function() return "Olympus", "King", 0 end; ns.me = "Asmongold Asmongler-Realm" end
 local function AsLord() GetGuildInfo = function() return "Olympus Zeus", "Lord", 0 end; ns.me = "Zed-Realm" end
 local function AsCaptain() GetGuildInfo = function() return "Olympus II", "Officer", 1 end; ns.me = "Cap-Realm" end
 local function AsSoldier(name) GetGuildInfo = function() return "Olympus II", "Member", 3 end; ns.me = (name or "Soldier") .. "-Realm" end
@@ -5734,7 +5755,7 @@ test("Hands of the King: he names them, they use the tools he lends them, nothin
 		-- The Hand's client: the Throne opens, his tools work.
 		AsSoldier("Helper")
 		eq(K.Visible(), false)
-		K.HandleCommand("CHANNEL", "Asmon-Realm", list)
+		K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", list)
 		eq(K.IsHand(), true); eq(K.Visible(), true); eq(K.CanCommand(), true)
 		assert(Printed(w, "named you a Hand"), "told")
 		local lines, _, detail = K.Build()
@@ -5749,7 +5770,7 @@ test("Hands of the King: he names them, they use the tools he lends them, nothin
 		AsSoldier("Other")
 		K.HandleCommand("CHANNEL", "Faker-Realm", "T1~H~1~Olympus~Faker-Realm")
 		eq(K.Authorized("A", "Faker-Realm", "Olympus II"), false, "not named by the King")
-		K.HandleCommand("CHANNEL", "Asmon-Realm", list)
+		K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", list)
 		K.HandleCommand("CHANNEL", "Helper-Realm", "T1~A~4~Olympus II~600~Stormwind City~Raid at dawn")
 		eq(K.Agenda() and K.Agenda().title, "Raid at dawn", "a Hand sets the agenda")
 		-- Never what is the King's alone: naming Hands, writs, pardons, the court.
@@ -5810,7 +5831,7 @@ test("Vox Populi: pick one or several, a chart of the results, the winner worked
 			AsSoldier("Voter")
 			K.HandleCommand("CHANNEL", "Faker-Realm", "T1~V~9~Olympus~60~M~Fake?~A~B")
 			eq(select(3, V.State()), nil, "not the King: no window")
-			K.HandleCommand("CHANNEL", "Asmon-Realm", msg)
+			K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", msg)
 			local f = V.Frame()
 			assert(f and f:IsShown(), "the window")
 			eq(f.title:GetText(), ns.L.VOX_ASKS:format("Asmond"))
@@ -5822,7 +5843,7 @@ test("Vox Populi: pick one or several, a chart of the results, the winner worked
 			f.vote:Click()
 			f.vote:Click()
 			eq(#w.whispered, 1, "one vote")
-			eq(w.whispered[1].to, "Asmon-Realm"); eq(w.whispered[1].msg, ("Y1~%d~13~Olympus II"):format(id)); eq(w.whispered[1].urgent, true)
+			eq(w.whispered[1].to, "Asmongold Asmongler-Realm"); eq(w.whispered[1].msg, ("Y1~%d~13~Olympus II"):format(id)); eq(w.whispered[1].urgent, true)
 			eq(f.vote:IsShown(), false, "voted")
 			-- The King counts: one vote each, answers that exist, Olympus only.
 			AsKing()
@@ -5854,7 +5875,7 @@ test("Vox Populi: pick one or several, a chart of the results, the winner worked
 			-- The soldier's window: the chart, the verdict, his picks still checked.
 			AsSoldier("Voter")
 			f.live = nil
-			K.HandleCommand("CHANNEL", "Asmon-Realm", ("T1~E~%d~Olympus~4~3~1~2"):format(id))
+			K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", ("T1~E~%d~Olympus~4~3~1~2"):format(id))
 			local shown = select(3, V.State())
 			eq(shown.voters, 4); eq(shown.counts[1], 3)
 			eq(f.rows[1].bar:IsShown(), true); eq(f.rows[1].check:GetChecked(), true)
@@ -5863,7 +5884,7 @@ test("Vox Populi: pick one or several, a chart of the results, the winner worked
 			-- Pick one: a second click moves the pick.
 			V.Reset(); AsKing(); K.AddHand("Helper"); K.SendHands(true); local list = LastSent(w)
 			AsSoldier("Voter")
-			K.HandleCommand("CHANNEL", "Asmon-Realm", list)
+			K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", list)
 			K.HandleCommand("CHANNEL", "Helper-Realm", "T1~V~88~Olympus II~30~1~Pizza?~Yes~No")
 			eq(f.title:GetText(), ns.L.VOX_ASKS_HAND:format("Helper"))
 			f.rows[1].check:Click(); f.rows[2].check:Click()
@@ -5895,7 +5916,7 @@ test("Hold Court: the King opens it, players in his zone ask, he calls them one 
 		AsSoldier()
 		K.HandleCommand("CHANNEL", "Faker-Realm", "T1~C~5~Olympus~1453~Stormwind City")
 		eq(C.Current(), nil, "only the King holds court")
-		K.HandleCommand("CHANNEL", "Asmon-Realm", open)
+		K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", open)
 		assert(Printed(w, "holds court in Stormwind City"), "told once")
 		local census = ns.Views.Build("census")
 		assert(census[1].text:find("holds court in Stormwind City", 1, true), census[1].text)
@@ -5903,7 +5924,7 @@ test("Hold Court: the King opens it, players in his zone ask, he calls them one 
 		eq(C.Line(), nil, "another zone: no line")
 		map = 1453
 		C.Line().onClick()
-		eq(w.whispered[1].to, "Asmon-Realm"); eq(w.whispered[1].msg, ("T4~%d~Olympus II"):format(id))
+		eq(w.whispered[1].to, "Asmongold Asmongler-Realm"); eq(w.whispered[1].msg, ("T4~%d~Olympus II"):format(id))
 		C.Seek()
 		eq(#w.whispered, 1, "one request"); eq(C.Line().right:find(ns.L.COURT_STATE_ASKED, 1, true) ~= nil, true)
 		-- The King's queue: Olympus names only, once each.
@@ -5934,17 +5955,17 @@ test("Hold Court: the King opens it, players in his zone ask, he calls them one 
 		AsSoldier()
 		C.HandleCall("WHISPER", "Faker-Realm", ("T5~%d"):format(id))
 		eq(#w.popups, 0)
-		C.HandleCall("WHISPER", "Asmon-Realm", ("T5~%d"):format(id))
+		C.HandleCall("WHISPER", "Asmongold Asmongler-Realm", ("T5~%d"):format(id))
 		eq(w.popups[1].name, "OLYMPUS_COURT_CALLED")
 		assert(C.Line().right:find(ns.L.COURT_STATE_CALLED, 1, true), "called")
 		-- Closed: the line goes.
 		AsKing(); C.Toggle()
 		assert(LastSent(w):find(("^T1~Z~%d~Olympus$"):format(id)), LastSent(w))
 		AsSoldier()
-		K.HandleCommand("CHANNEL", "Asmon-Realm", LastSent(w))
+		K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", LastSent(w))
 		eq(C.Current(), nil)
 		-- Not repeated for a while (he logged off): over.
-		K.HandleCommand("CHANNEL", "Asmon-Realm", open)
+		K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", open)
 		w.clock = w.clock + C.EXPIRE + 1
 		eq(C.Current(), nil)
 	end)
@@ -6038,10 +6059,10 @@ test("The Treasury: the Treasurer's book (not his gold), the King's three switch
 			AsKing(); K.AddHand("Helper"); K.SendHands(true); local list = LastSent(w)
 			ns.rdb.treasuryFlags = nil
 			AsSoldier()
-			K.HandleCommand("CHANNEL", "Asmon-Realm", list)
+			K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", list)
 			K.HandleCommand("CHANNEL", "Helper-Realm", "T1~T~9~Olympus II~111~" .. (w.clock + 5))
 			eq(T.Shows("balance"), false, "not a Hand's switch")
-			K.HandleCommand("CHANNEL", "Asmon-Realm", flags)
+			K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", flags)
 			eq(T.Shows("balance"), true); eq(T.Shows("ranking"), false); eq(T.Shows("book"), false)
 			eq(T.Visible(), true, "the tab appears")
 			page = Texts((T.Build()))
@@ -6051,16 +6072,16 @@ test("The Treasury: the Treasurer's book (not his gold), the King's three switch
 			assert(not page:find("Crafter", 1, true), "the book stays closed")
 			assert(T.RealmText():find("117g", 1, true), "under the Treasurer in the Realm")
 			-- The King shows the ranking and the book too.
-			K.HandleCommand("CHANNEL", "Asmon-Realm", "T1~T~10~Olympus~111~" .. (w.clock + 10))
+			K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", "T1~T~10~Olympus~111~" .. (w.clock + 10))
 			T.Show("book"); page = Texts((T.Build()))
 			assert(page:find("Crafter", 1, true), "the book: " .. page)
 			T.Show("summary"); page = Texts((T.Build()))
 			assert(page:find("1. Trader", 1, true), page)
 			-- He hides it all: the tab goes.
-			K.HandleCommand("CHANNEL", "Asmon-Realm", "T1~T~11~Olympus~000~" .. (w.clock + 20))
+			K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", "T1~T~11~Olympus~000~" .. (w.clock + 20))
 			eq(T.Visible(), false)
 			-- An older word of his (repeated late) does not undo it.
-			K.HandleCommand("CHANNEL", "Asmon-Realm", "T1~T~12~Olympus~111~" .. (w.clock + 15))
+			K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", "T1~T~12~Olympus~111~" .. (w.clock + 15))
 			eq(T.Visible(), false)
 		end)
 		GetInboxHeaderInfo, GetInboxInvoiceInfo, GetTargetTradeMoney, GetPlayerTradeMoney, GetTradePlayerItemInfo,
@@ -6187,7 +6208,7 @@ test("Treasury review fixes: the week survives the update, the King's word reach
 			-- The King's word, dated, reaches a soldier through the Treasurer's treasury.
 			AsKing(); T.SetFlag("balance", true)
 			local at = w.clock
-			AsTreasurer(); K.HandleCommand("CHANNEL", "Asmon-Realm", LastSent(w))
+			AsTreasurer(); K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", LastSent(w))
 			local savedChunked = ns.Comm.SendChunked
 			ns.Comm.SendChunked = function(msg) w.sent[#w.sent + 1] = { dist = "CHANNEL", msg = msg, chunked = true } end
 			T.Share(true)
@@ -6199,7 +6220,7 @@ test("Treasury review fixes: the week survives the update, the King's word reach
 			T.HandleReport("CHANNEL", "Pyralis Ashandar-Realm", report)
 			eq(T.Shows("balance"), true, "never met the King, has his word")
 			-- A newer word of his is not undone by the Treasurer repeating the older one.
-			K.HandleCommand("CHANNEL", "Asmon-Realm", "T1~T~5~Olympus~000~" .. (at + 60))
+			K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", "T1~T~5~Olympus~000~" .. (at + 60))
 			T.HandleReport("CHANNEL", "Pyralis Ashandar-Realm", report)
 			eq(T.Shows("balance"), false)
 			-- Two clicks of his in one second: the second word still reaches the army.
@@ -6207,12 +6228,12 @@ test("Treasury review fixes: the week survives the update, the King's word reach
 			T.SetFlag("ranking", true); local first = LastSent(w)
 			T.SetFlag("ranking", false); local second = LastSent(w)
 			AsSoldier(); ns.rdb.treasuryFlags = nil
-			K.HandleCommand("CHANNEL", "Asmon-Realm", first); eq(T.Shows("ranking"), true)
-			K.HandleCommand("CHANNEL", "Asmon-Realm", second); eq(T.Shows("ranking"), false, "the newer word, same second")
+			K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", first); eq(T.Shows("ranking"), true)
+			K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", second); eq(T.Shows("ranking"), false, "the newer word, same second")
 			-- The Treasurer is told what the King shows, and told again when it changes.
 			AsTreasurer(); ns.rdb.treasuryFlags = { balance = true, at = at }
 			assert(T.WhoSees():find(ns.L.TREASURY_PART_BALANCE, 1, true), T.WhoSees())
-			K.HandleCommand("CHANNEL", "Asmon-Realm", "T1~T~6~Olympus~101~" .. (at + 900 - 300))
+			K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", "T1~T~6~Olympus~101~" .. (at + 900 - 300))
 			assert(Printed(w, ns.L.TREASURY_PART_BOOK), "told the King now shows the book")
 			-- The way back from the book names what the viewer finds there.
 			AsSoldier(); ns.rdb.treasuryFlags = { book = true, at = at }
@@ -6412,7 +6433,7 @@ test("gamepad UI: the King's summons in our dialog; a layer invite is the player
 				AsKing(); K.Summon()
 				local id = tonumber(LastSent(w):match("T1~S~(%d+)"))
 				AsLord()
-				K.HandleCommand("CHANNEL", "Asmon-Realm", ("T1~S~%d~Olympus"):format(id))
+				K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", ("T1~S~%d~Olympus"):format(id))
 				eq(#w.popups, 0, "not the game's popup"); eq(#game.shown, 0)
 				local f = ns.Dialog.Find("OLYMPUS_KING_SUMMON")
 				assert(f and f:IsShown(), "our dialog")
@@ -6529,7 +6550,7 @@ test("Royal Writs to the whole army: every member gets the parchment, nobody ack
 			local id = tonumber(msg:match("T1~W~(%d+)"))
 			-- A soldier gets it, on parchment, without the acknowledge button.
 			AsSoldier()
-			K.HandleCommand("CHANNEL", "Asmon-Realm", msg)
+			K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", msg)
 			local got = ns.Acts.WritLines()
 			assert(Texts(got):find(ns.L.WRIT_TO_EVERYONE, 1, true), Texts(got))
 			eq(OlympusWritFrame:IsShown(), true); eq(OlympusWritFrame.ack.shown, false, "no 'As you command' for the army")
@@ -6568,12 +6589,12 @@ test("the King's Agenda arrives as a popup with the appointment, once per agenda
 	WithThrone(function(w, K)
 		AsSoldier()
 		K.Reset()
-		K.HandleCommand("CHANNEL", "Asmon-Realm", "T1~A~77~Olympus~1800~The Crossroads~Raid on the Crossroads")
+		K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", "T1~A~77~Olympus~1800~The Crossroads~Raid on the Crossroads")
 		local p = w.popups[#w.popups]
 		eq(p.name, "OLYMPUS_AGENDA_CALL")
 		eq(p.a, ns.L.THRONE_AGENDA_POPUP:format(ns.KING_NAME, "Raid on the Crossroads", 30, "The Crossroads"))
 		local n = #w.popups
-		K.HandleCommand("CHANNEL", "Asmon-Realm", "T1~A~77~Olympus~1790~The Crossroads~Raid on the Crossroads")
+		K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", "T1~A~77~Olympus~1790~The Crossroads~Raid on the Crossroads")
 		eq(#w.popups, n, "a resend: no second popup")
 		eq(StaticPopupDialogs.OLYMPUS_AGENDA_CALL.timeout, 120)
 	end)
@@ -6714,32 +6735,32 @@ test("Royal Writs: the King writes to his Lords, each can acknowledge, nobody el
 			local id = tonumber(msg:match("T1~W~(%d+)"))
 			-- A Lord: on parchment, one click acknowledges.
 			AsLord()
-			K.HandleCommand("CHANNEL", "Asmon-Realm", msg)
+			K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", msg)
 			eq(#ns.rdb.writs, 1)
 			local f = OlympusWritFrame
 			assert(f:IsShown(), "the writ")
 			eq(f.body:GetText(), "Muster at dawn cffff0000 in Goldshire")
 			eq(f.sign:GetText(), ns.L.WRIT_SIGNED:format("Asmond"))
 			f.ack:Click()
-			eq(w.whispered[1].to, "Asmon-Realm"); eq(w.whispered[1].msg, ("T6~%d~Olympus Zeus"):format(id))
+			eq(w.whispered[1].to, "Asmongold Asmongler-Realm"); eq(w.whispered[1].msg, ("T6~%d~Olympus Zeus"):format(id))
 			local decrees = Texts(ns.Views.Build("decrees"))
 			assert(decrees:find(ns.L.WRITS, 1, true) and decrees:find("Muster at dawn", 1, true), decrees)
 			-- A Captain reads the writs to Lords and Captains only; a soldier none.
 			ns.rdb.writs = nil; A.Reset()
 			AsCaptain()
-			K.HandleCommand("CHANNEL", "Asmon-Realm", msg)
+			K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", msg)
 			eq(ns.rdb.writs, nil, "for the Lords")
-			K.HandleCommand("CHANNEL", "Asmon-Realm", "T1~W~12~Olympus~C~Hold the bridge")
+			K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", "T1~W~12~Olympus~C~Hold the bridge")
 			eq(#ns.rdb.writs, 1, "for Lords and Captains")
 			A.Reset(); ns.rdb.writs = nil
 			AsSoldier()
-			K.HandleCommand("CHANNEL", "Asmon-Realm", "T1~W~13~Olympus~C~Hold the bridge")
+			K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", "T1~W~13~Olympus~C~Hold the bridge")
 			eq(ns.rdb.writs, nil)
 			assert(not Texts(ns.Views.Build("decrees")):find(ns.L.WRITS, 1, true), "no section for a soldier")
 			-- A Hand's writ is no writ.
 			AsKing(); K.AddHand("Helper"); K.SendHands(true); local list = LastSent(w)
 			AsLord(); A.Reset()
-			K.HandleCommand("CHANNEL", "Asmon-Realm", list)
+			K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", list)
 			K.HandleCommand("CHANNEL", "Helper-Realm", "T1~W~14~Olympus II~L~Obey me")
 			eq(ns.rdb.writs, nil, "a Hand writes no writ")
 			-- The King counts who acknowledged: once each.
@@ -6765,9 +6786,9 @@ test("Open the Gates and the Royal Pardon: the King's word in the Realm and on t
 		AsSoldier()
 		K.HandleCommand("CHANNEL", "Faker-Realm", "T1~G~3~Olympus~7200~Olympus Faker")
 		eq(A.Gates(), nil, "not the King nor a Hand")
-		K.HandleCommand("CHANNEL", "Asmon-Realm", "T1~G~3~Olympus~7200~Horde Heroes")
+		K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", "T1~G~3~Olympus~7200~Horde Heroes")
 		eq(A.Gates(), nil, "an Olympus guild only")
-		K.HandleCommand("CHANNEL", "Asmon-Realm", msg)
+		K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", msg)
 		eq(A.Gates().guild, "Olympus Zeus")
 		assert(Printed(w, "Asmond opened the gates of <Olympus Zeus>"), "told")
 		local realm = Texts(ns.Views.RealmLines())
@@ -6775,23 +6796,23 @@ test("Open the Gates and the Royal Pardon: the King's word in the Realm and on t
 		-- A Hand may open them; only the opener or the King closes them.
 		AsKing(); K.AddHand("Helper"); K.AddHand("Other"); K.SendHands(true); local list = LastSent(w)
 		AsSoldier()
-		K.HandleCommand("CHANNEL", "Asmon-Realm", list)
+		K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", list)
 		K.HandleCommand("CHANNEL", "Helper-Realm", "T1~G~4~Olympus II~7200~Olympus II")
 		eq(A.Gates().guild, "Olympus II")
 		K.HandleCommand("CHANNEL", "Other-Realm", "T1~G~4~Olympus II~0~")
 		eq(A.Gates().guild, "Olympus II", "another Hand can't close them")
-		K.HandleCommand("CHANNEL", "Asmon-Realm", "T1~G~4~Olympus~0~")
+		K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", "T1~G~4~Olympus~0~")
 		eq(A.Gates(), nil, "the King can")
 		K.HandleCommand("CHANNEL", "Helper-Realm", "T1~G~5~Olympus II~7200~Olympus II")
 		w.clock = w.clock + A.GATES_TIME + 1
 		eq(A.Gates(), nil, "two hours at most")
 		-- (A census as fresh as the clock: two hours on, the old one no longer names the King.)
-		ns.rdb.guilds = { ["Olympus"] = Vouched({ total = 1000, online = 90, zones = {}, t = w.clock, leader = "Asmon", realm = "Realm" }, "W1-Realm", "W2-Realm") }
+		ns.rdb.guilds = { ["Olympus"] = Vouched({ total = 1000, online = 90, zones = {}, t = w.clock, leader = "Asmongold Asmongler", realm = "Realm" }, "W1-Realm", "W2-Realm") }
 		-- The pardon: off the Wall for everyone, the King's alone.
 		ns.Inspect.shame = { by = "Asmon", list = { { name = "Naked", guild = "Olympus II" }, { name = "Pirate", guild = "Olympus II" } }, t = w.clock }
 		K.HandleCommand("CHANNEL", "Helper-Realm", "T1~F~6~Olympus II~Naked")
 		eq(#ns.Inspect.shame.list, 2, "not a Hand's to give")
-		K.HandleCommand("CHANNEL", "Asmon-Realm", "T1~F~6~Olympus~Naked")
+		K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", "T1~F~6~Olympus~Naked")
 		eq(#ns.Inspect.shame.list, 1); eq(ns.Inspect.shame.list[1].name, "Pirate")
 		assert(Printed(w, "By royal pardon of Asmond, Naked leaves the Wall of Shame"), "told")
 		-- A list published later does not bring the name back (for a week).
@@ -6820,23 +6841,23 @@ test("Throne review fixes: the King sees his Hands' acts, one question at a time
 			eq(#w.popups, popups, "no roll call popup for the King")
 			-- Another Hand can't close gates a Hand opened: told so, nothing sent.
 			AsSoldier("Other2"); A.Reset()
-			K.HandleCommand("CHANNEL", "Asmon-Realm", list)
+			K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", list)
 			K.HandleCommand("CHANNEL", "Helper-Realm", "T1~G~33~Olympus II~7200~Olympus Zeus")
 			local sent = #w.sent
 			A.CloseGates()
 			eq(#w.sent, sent); assert(Printed(w, ns.L.GATES_ONLY_OPENER), "told")
 			-- Vox: a Hand's question does not replace the King's; the King's replaces a Hand's.
 			V.Reset(); AsSoldier("Voter")
-			K.HandleCommand("CHANNEL", "Asmon-Realm", list)
+			K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", list)
 			K.HandleCommand("CHANNEL", "Helper-Realm", "T1~V~41~Olympus II~60~1~Pizza?~Yes~No")
 			eq(select(3, V.State()).id, 41)
-			K.HandleCommand("CHANNEL", "Asmon-Realm", "T1~V~42~Olympus~60~1~Raid?~Yes~No")
+			K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", "T1~V~42~Olympus~60~1~Raid?~Yes~No")
 			eq(select(3, V.State()).id, 42, "the King's question comes first")
 			K.HandleCommand("CHANNEL", "Helper-Realm", "T1~V~43~Olympus II~60~1~Tacos?~Yes~No")
 			eq(select(3, V.State()).id, 42, "a Hand's waits for the King's")
 			-- The window comes back when questions are turned on again.
 			V.Reset(); ns.db.voxOff = true
-			K.HandleCommand("CHANNEL", "Asmon-Realm", "T1~V~44~Olympus~60~1~Raid again?~Yes~No")
+			K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", "T1~V~44~Olympus~60~1~Raid again?~Yes~No")
 			eq(V.Frame() and V.Frame():IsShown() or false, false)
 			V.SetOff(false)
 			assert(V.Frame():IsShown(), "the window to vote")
@@ -6853,7 +6874,7 @@ test("Throne review fixes: the King sees his Hands' acts, one question at a time
 			AsSoldier()
 			ns.rdb.pardons = nil
 			ns.Inspect.shame = { by = "Asmon", list = { { name = "Naked" }, { name = "Pirate" }, { name = "Honest" } }, t = w.clock }
-			K.HandleCommand("CHANNEL", "Asmon-Realm", "T1~F~9~Olympus~Naked,Pirate")
+			K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", "T1~F~9~Olympus~Naked,Pirate")
 			eq(#ns.Inspect.shame.list, 1); eq(ns.Inspect.shame.list[1].name, "Honest")
 			-- A Wall of Shame name carries no codes.
 			local decoded = ns.Codec.DecodeShame("S1~Olympus~0~Bad|cffff0000Guy:Olympus II,Good:Olympus II")
@@ -6864,8 +6885,8 @@ test("Throne review fixes: the King sees his Hands' acts, one question at a time
 			C_Map.GetMapInfo = function() return { mapType = 3 } end
 			GetRealZoneText = function() return "Stormwind City" end
 			C.Reset()
-			K.HandleCommand("CHANNEL", "Asmon-Realm", "T1~C~51~Olympus~1453~Stormwind City")
-			C.HandleCall("WHISPER", "Asmon-Realm", "T5~51")
+			K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", "T1~C~51~Olympus~1453~Stormwind City")
+			C.HandleCall("WHISPER", "Asmongold Asmongler-Realm", "T5~51")
 			assert(C.Current().calledAt, "called")
 		end)
 	end)
@@ -6883,15 +6904,15 @@ test("Round 2 fixes: shares add up to 100, the King is never shut out, a trade i
 			-- A Hand's short question just over: the King's, 10 s later, still reaches everyone.
 			AsKing(); K.AddHand("Helper"); K.SendHands(true); local list = LastSent(w)
 			AsSoldier("Voter")
-			K.HandleCommand("CHANNEL", "Asmon-Realm", list)
+			K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", list)
 			K.HandleCommand("CHANNEL", "Helper-Realm", "T1~V~51~Olympus II~30~1~Pizza?~Yes~No")
 			w.clock = w.clock + 31
 			K.HandleCommand("CHANNEL", "Helper-Realm", "T1~E~51~Olympus II~2~1~1")
 			w.clock = w.clock + 10
-			K.HandleCommand("CHANNEL", "Asmon-Realm", "T1~V~52~Olympus~60~1~Raid?~Yes~No")
+			K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", "T1~V~52~Olympus~60~1~Raid?~Yes~No")
 			eq(select(3, V.State()).id, 52, "the King's question")
 			-- The same asker again within SHOW_GAP: not shown.
-			K.HandleCommand("CHANNEL", "Asmon-Realm", "T1~V~53~Olympus~60~1~Again?~Yes~No")
+			K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", "T1~V~53~Olympus~60~1~Again?~Yes~No")
 			eq(select(3, V.State()).id, 52)
 			-- A trade opened right after another closed is still counted.
 			local saved = { GetTargetTradeMoney, UnitFullName, ERR_TRADE_COMPLETE, ns.After }
@@ -7065,6 +7086,1562 @@ test("chat: our own line comes back from the channel once, whatever form the ser
 	GetGuildInfo, ns.realm = saved.guild, saved.realm
 	if not ok then error(err, 0) end
 end)
+
+-- 0.9.1: king-trust (GitHub issue #18: a majority vote could make an outsider the King)
+test("#18: outsiders on the channel can't crown one of their own, and the King's commands always count", function()
+	WithThrone(function(w, K)
+		local D, savedLogin = ns.Data, ns.Comm.loginAt
+		local ok, err = pcall(function()
+			ns.Comm.loginAt = w.clock - 3600 -- long after login: the old census rules let two senders crown
+			local KING = "Asmongold Asmongler-Realm"
+			local function Report(leader, officers, sender)
+				return D.Receive(Codec.DecodeReport("R2~Olympus~900~90~" .. leader .. "~1~1~~~0,0,0,0,0,0,0~~" .. officers), sender)
+			end
+			local KINDS = { "S", "I", "A", "X", "H", "W", "G", "F", "C", "Z", "V", "E", "T" }
+			local function Obeyed(sender)
+				for _, kind in ipairs(KINDS) do
+					if K.Authorized(kind, sender, "Olympus") then return kind end
+				end
+				return nil
+			end
+			AsSoldier()
+			-- Two, then three characters outside <Olympus> report it with the first as its leader,
+			-- and nobody of <Olympus> has reported for 15 minutes (the issue's case).
+			ns.rdb.guilds = {}
+			eq(Report("Atk", "", "Atk-Realm"), false, "a report naming another leader of <Olympus>: nothing")
+			eq(Report("Atk", "", "Accomplice-Realm"), false)
+			eq(Report("Atk", "Accomplice:1:0", "Third-Realm"), false)
+			eq(ns.rdb.guilds.Olympus, nil, "no row: nobody else heads <Olympus> on anyone's screen")
+			eq(D.KnownRank("Atk-Realm", "Olympus"), nil, "no rank from the census")
+			eq(Obeyed("Atk-Realm"), nil, "none of the King's commands")
+			K.HandleCommand("CHANNEL", "Atk-Realm", "T1~A~5~Olympus~600~Stormwind City~Forged raid")
+			eq(K.Agenda(), nil, "his agenda goes nowhere")
+			K.HandleCommand("CHANNEL", "Atk-Realm", "T1~H~6~Olympus~Accomplice-Realm")
+			eq(K.Authorized("A", "Accomplice-Realm", "Olympus II"), false, "nor do his Hands")
+			-- The King himself, with no report of his guild at all: obeyed, for his guild only.
+			for _, kind in ipairs(KINDS) do eq(K.Authorized(kind, KING, "Olympus"), true, kind) end
+			eq(K.Authorized("S", KING, "Olympus II"), false, "speaking for another guild")
+			-- The real reporter and runner-up, then three outsiders against them: the forged
+			-- reports count for nothing, not even as votes.
+			eq(Report("Asmongold Asmongler", "Duke:1:0", "Crier-Realm"), true)
+			eq(Report("Asmongold Asmongler", "Duke:1:0", "Clerk-Realm"), true)
+			for _, atk in ipairs({ "Atk-Realm", "Accomplice-Realm", "Third-Realm" }) do
+				eq(Report("Atk", "Accomplice:1:0", atk), false, atk)
+			end
+			eq(ns.rdb.guilds.Olympus.leader, "Asmongold Asmongler", "the row keeps the King")
+			eq(ns.rdb.guilds.Olympus.vouch["Atk-Realm"], nil, "no vote")
+			eq(D.KnownRank(KING, "Olympus"), 0); eq(D.KnownRank("Atk-Realm", "Olympus"), nil)
+			eq(D.KnownRank("Duke-Realm", "Olympus"), 1, "the real officers keep theirs")
+			eq(Obeyed("Atk-Realm"), nil)
+			K.HandleCommand("CHANNEL", KING, "T1~A~7~Olympus~600~Stormwind City~Raid at dawn")
+			eq(K.Agenda() and K.Agenda().title, "Raid at dawn", "the King's agenda")
+			-- Even a census the forgers had won (kept from an older version, or heard by a copy
+			-- of the addon without the check) makes nobody King: his name does.
+			ns.rdb.guilds = { ["Olympus"] = Vouched({ total = 900, online = 90, zones = {}, t = w.clock, leader = "Atk", realm = "Realm" },
+				"Accomplice-Realm", "Third-Realm", "Fourth-Realm") }
+			eq(D.KnownRank("Atk-Realm", "Olympus"), 0, "the census says Atk")
+			eq(Obeyed("Atk-Realm"), nil, "his commands still count for nothing")
+			K.HandleCommand("CHANNEL", KING, "T1~X~7~Olympus")
+			eq(K.Agenda(), nil, "the King's cancel counts")
+			-- His Hands are his alone to name.
+			K.HandleCommand("CHANNEL", KING, "T1~H~8~Olympus~Helper-Realm")
+			eq(K.Authorized("A", "Helper-Realm", "Olympus II"), true, "the King's Hand")
+			eq(K.Authorized("A", "Accomplice-Realm", "Olympus II"), false)
+		end)
+		ns.Comm.loginAt = savedLogin
+		if not ok then error(err, 0) end
+	end)
+end)
+
+test("#18: an officer of <Olympus> the census names is of the Crown like any Lord, never the King", function()
+	WithThrone(function(w, K)
+		local D, savedLogin = ns.Data, ns.Comm.loginAt
+		local ok, err = pcall(function()
+			ns.Comm.loginAt = w.clock - 3600
+			local function Report(officers, sender)
+				return D.Receive(Codec.DecodeReport("R2~Olympus~900~90~Asmongold Asmongler~1~1~~~0,0,0,0,0,0,0~~" .. officers), sender)
+			end
+			AsSoldier()
+			ns.rdb.guilds = {}
+			eq(Report("Duke:1:0", "Crier-Realm"), true)
+			eq(Report("Duke:1:0", "Clerk-Realm"), true)
+			-- Three outsiders keep the King at its head and add one of their own as an officer.
+			for _, s in ipairs({ "Atk-Realm", "Accomplice-Realm", "Third-Realm" }) do Report("Atk:1:0", s) end
+			eq(D.KnownRank("Asmongold Asmongler-Realm", "Olympus"), 0, "every picture names the King")
+			-- The officers of <Olympus> are of the Crown: [Lords] and the Crown's decrees, what every
+			-- guild master of an Olympus guild has. Nothing of the King's.
+			eq(ns.Channels.LevelOf("Olympus", 1), ns.Channels.LevelOf("Olympus Zeus", 0))
+			for _, kind in ipairs({ "S", "I", "A", "X", "H", "W", "G", "F", "C", "Z", "V", "E", "T", "P", "Q" }) do
+				eq(K.Authorized(kind, "Atk-Realm", "Olympus"), false, kind)
+			end
+		end)
+		ns.Comm.loginAt = savedLogin
+		if not ok then error(err, 0) end
+	end)
+end)
+
+test("#18: the Horde, with no King named yet: the census King commands nothing, his crown still shows", function()
+	WithThrone(function(w, K)
+		local savedFaction, savedLogin = ns.faction, ns.Comm.loginAt
+		local ok, err = pcall(function()
+			ns.faction = "Horde"
+			ns.Comm.loginAt = w.clock - 3600
+			ns.rdb.guilds = { ["Olympus"] = Vouched({ total = 300, online = 30, zones = {}, t = w.clock, leader = "Hordeking", realm = "Realm" },
+				"W1-Realm", "W2-Realm") }
+			eq(ns.Data.KnownRank("Hordeking-Realm", "Olympus"), 0, "the census knows him")
+			AsSoldier()
+			for _, kind in ipairs({ "S", "I", "A", "X", "H", "W", "G", "F", "C", "Z", "V", "E", "T" }) do
+				eq(K.Authorized(kind, "Hordeking-Realm", "Olympus"), false, kind)
+			end
+			K.HandleCommand("CHANNEL", "Hordeking-Realm", "T1~A~5~Olympus~600~Orgrimmar~Raid")
+			eq(K.Agenda(), nil, "no agenda")
+			K.HandleCommand("CHANNEL", "Hordeking-Realm", "T1~H~6~Olympus~Helper-Realm")
+			eq(K.Authorized("A", "Helper-Realm", "Olympus II"), false, "no Hands")
+			-- What only shows: his crown on the map, and his name on the lines.
+			eq(K.FromKing("Hordeking-Realm", "Olympus"), true)
+			K.HandleCommand("CHANNEL", "Hordeking-Realm", "T1~P~3~Olympus~1453~420~510")
+			eq(K.Location() and K.Location().mapID, 1453, "his crown")
+			eq(K.Authorized("P", "Other-Realm", "Olympus"), false, "nobody else's")
+			eq(K.Authorized("S", "Asmongold Asmongler-Realm", "Olympus"), false, "the Alliance's King is none here")
+			eq(ns.KingCharacter(), nil)
+			eq(ns.Data.OtherKing("Olympus", "Anyone"), false, "no King named to check the reports against")
+			-- His own client still has the Throne (his crown on the map works).
+			GetGuildInfo = function() return "Olympus", "King", 0 end
+			ns.me = "Hordeking-Realm"
+			eq(K.IsKing(), true)
+		end)
+		ns.faction, ns.Comm.loginAt = savedFaction, savedLogin
+		if not ok then error(err, 0) end
+	end)
+end)
+
+test("#18: the Treasurer by his name alone: forged votes can't silence his treasury or his bank", function()
+	WithThrone(function(w, K)
+		local T, B = ns.Treasury, ns.Bank
+		ns.rdb.bankReport = nil
+		AsSoldier()
+		-- A census the forgers won: nobody names him an officer of <Olympus> now.
+		ns.rdb.guilds = { ["Olympus"] = Vouched({ total = 900, online = 90, zones = {}, t = w.clock, leader = "Asmongold Asmongler", realm = "Realm" },
+			"Atk-Realm", "Accomplice-Realm", "Third-Realm") }
+		eq(ns.Data.KnownRank("Pyralis Ashandar-Realm", "Olympus", true), nil, "the census doesn't name him")
+		T.HandleReport("CHANNEL", "Faker-Realm", "T8~Olympus~500~100~0~5~1~-~Giver:100~")
+		eq(T.Report(), nil, "not the Treasurer")
+		T.HandleReport("CHANNEL", "Pyralis Ashandar-Realm", "T8~Olympus II~500~100~0~5~1~-~Giver:100~")
+		eq(T.Report(), nil, "not for the King's guild")
+		T.HandleReport("CHANNEL", "Pyralis Ashandar-Realm", "T8~Olympus~500~100~0~5~1~-~Giver:100~")
+		eq(T.Report() and T.Report().balance, 500, "his treasury")
+		local bank = ("T9~Olympus~%d~1234~Main;2589x200"):format(w.clock)
+		B.HandleReport("CHANNEL", "Faker-Realm", bank)
+		eq(B.Report(), nil, "not the Treasurer")
+		B.HandleReport("CHANNEL", "Pyralis Ashandar-Realm", bank)
+		eq(B.Report() and B.Report().money, 1234, "his bank")
+		ns.rdb.bankReport = nil
+	end)
+end)
+
+test("#18: the King's own client: guild master of <Olympus> and the character the addon knows", function()
+	WithThrone(function(w, K)
+		AsKing()
+		eq(K.IsKing(), true); eq(K.Visible(), true)
+		-- Another guild master of <Olympus> (the guild changed hands): no Throne, nothing sent.
+		ns.me = "Usurper-Realm"
+		eq(K.IsKing(), false); eq(K.Visible(), false)
+		K.Summon(); K.AddHand("Helper")
+		eq(#w.sent, 0, "nothing sent")
+		eq(#K.Hands(), 0)
+		-- His name without the guild master's rank: not the King either.
+		GetGuildInfo = function() return "Olympus", "Knight", 1 end
+		ns.me = "Asmongold Asmongler-Realm"
+		eq(K.IsKing(), false)
+		-- His name, whatever realm of the group it carries; nobody else's.
+		eq(ns.IsKingCharacter("Asmongold Asmongler-ClassicBetaPvP2"), true)
+		eq(ns.IsKingCharacter("Asmongold Asmongler"), true)
+		eq(ns.IsKingCharacter("Asmongold-Realm"), false); eq(ns.IsKingCharacter("Asmongold Asmongler2"), false)
+		eq(ns.IsKingCharacter(nil), false)
+	end)
+end)
+
+test("#18: rows of <Olympus> naming another leader go at login; refused reports are logged readably", function()
+	local D = ns.Data
+	local saved = { rdb = ns.rdb, log = ns.db.log, Now = ns.Now, capture = ns.CaptureError }
+	local captured
+	local ok, err = pcall(function()
+		local clock = os.time()
+		ns.Now = function() return clock end
+		ns.CaptureError = function(where, e) captured = captured or (where .. ": " .. tostring(e)) end
+		ns.db.log = {}
+		local function Logged(text)
+			for _, l in ipairs(ns.db.log) do if l:find(text, 1, true) then return true end end
+			return false
+		end
+		ns.rdb = { guilds = {}, seen = {} }
+		-- A sender tied to one guild claims another: the log says which (it was the bare format).
+		eq(D.ClaimGuild("Drifter-Realm", "Olympus Zeus"), true)
+		eq(D.Receive(Codec.DecodeReport("R2~Olympus Ares~50~5~Ares~1~1~~~0,0,0,0,0,0,0~~"), "Drifter-Realm"), false)
+		assert(Logged("ignored Drifter-Realm: already reported Olympus Zeus, now claims Olympus Ares"), table.concat(ns.db.log, "\n"))
+		-- A report of <Olympus> (any spelling) naming someone else: refused, and said why.
+		eq(D.Receive(Codec.DecodeReport("R2~OLYMPUS~50~5~Atk~1~1~~~0,0,0,0,0,0,0~~"), "Atk-Realm"), false)
+		assert(Logged("ignored OLYMPUS from Atk-Realm: names Atk its leader, not the King"), table.concat(ns.db.log, "\n"))
+		-- Rows kept from before this version: <Olympus> naming someone else goes at login...
+		ns.rdb = { seen = {}, guilds = {
+			["Olympus"] = { total = 900, online = 90, zones = {}, t = clock - 60, leader = "Atk" },
+			["Olympus Zeus"] = { total = 100, online = 9, zones = {}, t = clock - 60, leader = "Zed" } } }
+		CoreFire("INIT")
+		eq(ns.rdb.guilds.Olympus, nil, "a forged King's row")
+		eq(ns.rdb.guilds["Olympus Zeus"].leader, "Zed", "other guilds stay")
+		assert(Logged("dropped guild Olympus: names Atk its leader, not the King"), table.concat(ns.db.log, "\n"))
+		-- ...the King's stays, and so does ours, from our own roster (the server's word).
+		ns.rdb = { seen = {}, guilds = { ["Olympus"] = { total = 900, online = 90, zones = {}, t = clock - 60, leader = "Asmongold Asmongler" } } }
+		CoreFire("INIT")
+		eq(ns.rdb.guilds.Olympus and ns.rdb.guilds.Olympus.leader, "Asmongold Asmongler")
+		ns.rdb = { seen = {}, guilds = { ["Olympus"] = { total = 900, online = 90, zones = {}, t = clock - 60, leader = "Other", mine = true } } }
+		CoreFire("INIT")
+		eq(ns.rdb.guilds.Olympus and ns.rdb.guilds.Olympus.leader, "Other", "our own roster's")
+	end)
+	ns.rdb, ns.db.log, ns.Now, ns.CaptureError = saved.rdb, saved.log, saved.Now, saved.capture
+	if not ok then error(err, 0) end
+	eq(captured, nil, "no error at login")
+end)
+
+-- 0.9.1: scale
+test("0.9.1 census requests at scale: the reporter's answer is its next report sent early, never one more", function()
+	local savedChannel, savedGuilds = GetChannelName, ns.rdb.guilds
+	local ok, err = pcall(function()
+		GetChannelName = function() return 5 end
+		local cns, Deliver = FreshComm()
+		local C = cns.Comm
+		C.loginAt = cns.clock - 1000
+		C.JoinChannel()
+		cns.After = function(_, _, fn) fn() end
+		local sent, broadcast = {}, C.Broadcast
+		C.Broadcast = function(r) sent[#sent + 1] = cns.clock; broadcast(r) end
+		local ours = { guild = MY_GUILD, total = 1000, online = 300, zones = {} }
+		local start = cns.clock
+		-- Someone logs in every 10 seconds and asks the channel; our roster scan runs every minute.
+		for t = 0, 1790, 10 do
+			cns.clock = start + t
+			if t % 60 == 0 then C.MaybeBroadcast(ours) end
+			Deliver("CHANNEL", "Newbie" .. t, "Q1~")
+		end
+		eq(C.isReporter, true)
+		assert(#sent <= math.floor(1800 / 170) + 2, "one report per 170 s, answers included: " .. #sent)
+		assert(#sent >= 9, "the requests are still answered: " .. #sent)
+		for i = 2, #sent do assert(sent[i] - sent[i - 1] >= 45, "two reports within 45 s") end
+		eq(C.Stats().answered >= 8, true, "answered")
+	end)
+	GetChannelName, C_ChatInfo, ns.rdb.guilds = savedChannel, nil, savedGuilds
+	if not ok then error(err, 0) end
+end)
+
+test("0.9.1 census requests at scale: the runner-up still reports once every 10 minutes", function()
+	local savedChannel, savedGuilds = GetChannelName, ns.rdb.guilds
+	local ok, err = pcall(function()
+		GetChannelName = function() return 5 end
+		local cns, Deliver, Report = FreshComm()
+		local C = cns.Comm
+		C.loginAt = cns.clock - 1000
+		C.JoinChannel()
+		cns.After = function(_, _, fn) fn() end
+		local sent, broadcast = {}, C.Broadcast
+		C.Broadcast = function(r) sent[#sent + 1] = cns.clock; broadcast(r) end
+		local ours = { guild = MY_GUILD, total = 1000, online = 300, zones = {} }
+		local start = cns.clock
+		for t = 0, 1790, 10 do
+			cns.clock = start + t
+			if t % 60 == 0 then
+				-- Abe, first in the election, says hello and reports: we back him.
+				Deliver("GUILD", "Abe", "H1~0.7.11~Realm~p")
+				Report("Abe", { guild = MY_GUILD, total = 1000, online = 300, zones = {} })
+				C.MaybeBroadcast(ours)
+			end
+			Deliver("CHANNEL", "Newbie" .. t, "Q1~")
+		end
+		eq(C.isRunnerUp, true)
+		assert(#sent <= math.floor(1800 / 600) + 1, "one report per 600 s, answers included: " .. #sent)
+		assert(#sent >= 2, "a request is still answered: " .. #sent)
+	end)
+	GetChannelName, C_ChatInfo, ns.rdb.guilds = savedChannel, nil, savedGuilds
+	if not ok then error(err, 0) end
+end)
+
+test("0.9.1 census requests: no second ask once a report came", function()
+	local savedChannel, savedGuilds = GetChannelName, ns.rdb.guilds
+	local ok, err = pcall(function()
+		GetChannelName = function() return 5 end
+		for _, heard in ipairs({ true, false }) do
+			local cns, _, Report = FreshComm()
+			local C = cns.Comm
+			C.JoinChannel()
+			local timers = {}
+			cns.After = function(_, _, fn) timers[#timers + 1] = fn end
+			C.AskCensus()
+			eq(C.Stats().asked, 1)
+			if heard then Report("Farguy", { guild = "Olympus IV", total = 50, online = 5, zones = {} }) end
+			cns.clock = cns.clock + 65
+			for _, fn in ipairs(timers) do fn() end
+			eq(C.Stats().asked, heard and 1 or 2, heard and "a report came: not asked again" or "nothing heard: asked again")
+		end
+	end)
+	GetChannelName, C_ChatInfo, ns.rdb.guilds = savedChannel, nil, savedGuilds
+	if not ok then error(err, 0) end
+end)
+
+test("0.9.1 layer hop: an ask that finds nobody waits longer each time (20, 60, 180 s), the usual wait again after a hop", function()
+	WithHop(function(w, H)
+		local printed, savedPrint = {}, ns.Print
+		ns.Print = function(m) printed[#printed + 1] = tostring(m) end
+		local ok, err = pcall(function()
+			w.see(7)
+			local function Nobody(wait)
+				local before = #w.sent
+				H.Ask(1453, 8, "far")
+				eq(#w.sent, before + 1, "asked")
+				w.clock = w.clock + H.NOBODY
+				H.Tick()
+				eq(H.State().phase, "done")
+				eq(printed[#printed], ns.L.HOP_NOBODY_WAIT:format(wait))
+				eq(H.WaitLeft(), wait)
+				-- A click before the wait is over: nothing sent, the seconds left.
+				w.clock = w.clock + wait - 1
+				H.Ask(1453, 8, "far")
+				eq(#w.sent, before + 1, "not yet"); eq(printed[#printed], ns.L.HOP_WAIT:format(1))
+				w.clock = w.clock + 1
+			end
+			Nobody(20)
+			Nobody(60)
+			Nobody(180)
+			Nobody(180) -- (at most)
+			-- Forgotten after a quiet while.
+			w.clock = w.clock + H.BACKOFF_RESET + 1
+			eq(H.WaitLeft(), 0)
+			-- Someone offered and said no: no invite came, the same wait.
+			H.Ask(1453, 8, "far")
+			H.HandleOffer("WHISPER", "Aaa-Realm", "LO~1~0~0")
+			w.clock = w.clock + H.WINDOW
+			H.Tick()
+			H.HandleNo("WHISPER", "Aaa-Realm", "LN~1")
+			eq(H.State().phase, "done"); eq(printed[#printed], ns.L.HOP_GAVE_UP_WAIT:format(20))
+			-- The next ask gets us in a group: the count starts over.
+			w.clock = w.clock + 20
+			H.Ask(1453, 8, "far")
+			H.HandleOffer("WHISPER", "Bbb-Realm", "LO~1~0~0")
+			w.clock = w.clock + H.WINDOW
+			H.Tick()
+			w.group, w.party.party1 = 2, "Bbb"
+			H.OnInvite("Bbb")
+			H.OnRoster()
+			eq(H.State().phase, "joined")
+			w.group, w.party.party1 = 0, nil
+			H.OnRoster()
+			w.clock = w.clock + H.ASK_GAP
+			Nobody(20)
+		end)
+		ns.Print = savedPrint
+		if not ok then error(err, 0) end
+	end)
+end)
+
+test("0.9.1 layer hop: when a crowd asks for one layer at once, our ask goes out a few seconds later", function()
+	WithHop(function(w, H)
+		local printed, savedPrint = {}, ns.Print
+		ns.Print = function(m) printed[#printed + 1] = tostring(m) end
+		local ok, err = pcall(function()
+			w.see(7)
+			-- Eleven askers for layer 8 (one of them twice: counted once), one for layer 9.
+			for i = 1, 11 do H.HandleAsk("CHANNEL", "Crowd" .. i .. "-Realm", ("LQ~%d~1453~8"):format(100 + i)) end
+			H.HandleAsk("CHANNEL", "Crowd1-Realm", "LQ~200~1453~8")
+			H.HandleAsk("CHANNEL", "Lone-Realm", "LQ~201~1453~9")
+			eq(H.Crowd(1453, 8, w.clock), 11); eq(H.Crowd(1453, 9, w.clock), 1)
+			local before = #w.sent
+			H.Ask(1453, 8, "busy")
+			eq(#w.sent, before, "a crowd: not at once"); eq(H.State().phase, "queued")
+			eq(printed[#printed], ns.L.HOP_CROWDED:format(5))
+			H.Ask(1453, 8, "busy")
+			eq(printed[#printed], ns.L.HOP_BUSY, "one ask at a time, waiting or not")
+			w.clock = w.clock + 4
+			H.Tick()
+			eq(#w.sent, before)
+			w.clock = w.clock + 1
+			H.Tick()
+			eq(w.sent[#w.sent], "CHANNEL LQ~1~1453~8"); eq(H.State().phase, "asking")
+			eq(printed[#printed], ns.L.HOP_ASKING:format("busy"))
+			-- The crowd's asks are forgotten after BRAKE_WINDOW.
+			w.clock = w.clock + H.BRAKE_WINDOW + 1
+			H.Tick()
+			eq(H.Crowd(1453, 8, w.clock), 0)
+			-- Ten askers are no crowd: sent at once (once that ask found nobody and its wait is over).
+			w.clock = w.clock + H.NOBODY
+			H.Tick()
+			eq(H.State().phase, "done")
+			w.clock = w.clock + H.BACKOFF[1]
+			for i = 1, 10 do H.HandleAsk("CHANNEL", "Few" .. i .. "-Realm", ("LQ~%d~1453~9"):format(300 + i)) end
+			before = #w.sent
+			H.Ask(1453, 9, "few")
+			eq(#w.sent, before + 1, "not a crowd")
+		end)
+		ns.Print = savedPrint
+		if not ok then error(err, 0) end
+	end)
+end)
+
+test("0.9.1 layers: our zone's and the King's announcements redraw at once, the rest at most every 5 s", function()
+	local saved = { Fire = ns.Fire, After = ns.After, Now = ns.Now, map = C_Map.GetBestMapForUnit, guilds = ns.rdb.guilds }
+	local fired, timers, clock = 0, {}, 5000000
+	local ok, err = pcall(function()
+		ns.Layers.Reset()
+		ns.Fire = function(name) if name == "LAYERS_CHANGED" then fired = fired + 1 end end
+		ns.After = function(sec, _, fn) timers[#timers + 1] = { at = clock + sec, fn = fn } end
+		ns.Now = function() return clock end
+		C_Map.GetBestMapForUnit = function() return 1453 end
+		ns.rdb.guilds = { ["Olympus"] = Vouched({ total = 1000, online = 1, zones = {}, t = clock, leader = "Kingy" }, "W1-Realm", "W2-Realm") }
+		local function Run()
+			local due = timers
+			timers = {}
+			for _, t in ipairs(due) do if t.at <= clock then t.fn() else timers[#timers + 1] = t end end
+		end
+		ns.Layers.Receive("Here-Realm", { mapID = 1453, zoneUID = 7, rank = 4, guild = "Olympus II" })
+		eq(fired, 1, "our zone: at once")
+		ns.Layers.Receive("Far1-Realm", { mapID = 1429, zoneUID = 3, rank = 4, guild = "Olympus II" })
+		ns.Layers.Receive("Far2-Realm", { mapID = 1436, zoneUID = 4, rank = 4, guild = "Olympus II" })
+		ns.Layers.Receive("Far3-Realm", { mapID = 1436, zoneUID = 4, rank = 4, guild = "Olympus II" })
+		eq(fired, 1, "other zones: not at once"); eq(#timers, 1, "one redraw waits for all of them")
+		clock = clock + ns.Layers.FIRE_GAP
+		Run()
+		eq(fired, 2, "one redraw for the three")
+		-- A player leaving our zone changes its list: at once.
+		ns.Layers.Receive("Here-Realm", { mapID = 1429, zoneUID = 3, rank = 4, guild = "Olympus II" })
+		eq(fired, 3)
+		-- The King's own announcement, from anywhere: at once (his line tops the Census).
+		clock = clock + 1
+		ns.Layers.Receive("Kingy-Realm", { mapID = 1436, zoneUID = 4, rank = 0, guild = "Olympus" })
+		eq(fired, 4)
+		-- Anyone else of his guild, far away: waits.
+		ns.Layers.Receive("Far4-Realm", { mapID = 1436, zoneUID = 4, rank = 4, guild = "Olympus" })
+		eq(fired, 4); eq(#timers, 1)
+		-- A redraw at once meanwhile showed it already: the waiting one is not needed.
+		clock = clock + 1
+		ns.Layers.Receive("Here2-Realm", { mapID = 1453, zoneUID = 7, rank = 4, guild = "Olympus II" })
+		eq(fired, 5)
+		clock = clock + ns.Layers.FIRE_GAP
+		Run()
+		eq(fired, 5, "nothing new to show")
+	end)
+	ns.Fire, ns.After, ns.Now, C_Map.GetBestMapForUnit, ns.rdb.guilds = saved.Fire, saved.After, saved.Now, saved.map, saved.guilds
+	ns.Layers.Reset()
+	if not ok then error(err, 0) end
+end)
+
+test("0.9.1 tabards: two weeks and 2000 players kept, marked and caught ones first; the page lists 200", function()
+	local I = ns.Inspect
+	local saved = { rdb = ns.rdb, inspect = ns.rdb.inspect, Now = ns.Now, Print = ns.Print, alert = ns.PlayAlert, capture = ns.CaptureError }
+	local ok, err = pcall(function()
+		local now, day = 7000000, 86400
+		ns.Now = function() return now end
+		ns.Print, ns.PlayAlert = function() end, function() end
+		local players = {}
+		ns.rdb.inspect = { players = players, guildMarks = {} }
+		players["Stale"] = { name = "Stale", status = "NONE", t = now - 15 * day }
+		players["OldMark"] = { name = "OldMark", status = "GUILD", t = now - 30 * day, marked = true }
+		players["Fresh"] = { name = "Fresh", status = "GUILD", t = now - 13 * day }
+		players["Broken"] = "not a player"
+		I.Prune()
+		eq(players["Stale"], nil, "older than two weeks: gone"); eq(players["Broken"], nil)
+		eq(players["OldMark"].marked, true, "a mark by hand stays"); eq(players["Fresh"].status, "GUILD")
+		-- More than MAX_PLAYERS: a new player recorded trims the store, the ones that matter first.
+		for i = 1, 2050 do players["G" .. i] = { name = "G" .. i, status = "GUILD", t = now - i } end
+		for i = 1, 60 do players["N" .. i] = { name = "N" .. i, status = i % 2 == 0 and "NONE" or "OTHER", t = now - 10 * day } end
+		I.Record("Newcomer", "Olympus II", "MAGE", 60, 5976, true)
+		local n = 0
+		for _ in pairs(players) do n = n + 1 end
+		eq(n, I.MAX_PLAYERS)
+		eq(players["N60"].status, "NONE", "caught without the colors: kept"); eq(players["N59"].status, "OTHER")
+		eq(players["OldMark"].marked, true); eq(players["Newcomer"].status, "GUILD", "the newest kept")
+		eq(players["G1"].status, "GUILD"); eq(players["G2050"], nil, "the oldest checks went"); eq(players["Fresh"], nil)
+		-- The Tabards page: the first 200, marked and caught ones on top, the rest counted.
+		local rows, more, first = 0, false, nil
+		for _, l in ipairs(ns.Views.Build("heraldry")) do
+			if l.cols then rows = rows + 1; first = first or l end
+			if l.text and l.text:find(ns.L.AND_MORE:format(I.MAX_PLAYERS - ns.Views.INSPECT_ROWS), 1, true) then more = true end
+		end
+		eq(rows, ns.Views.INSPECT_ROWS); eq(more, true); eq(first.key, "OldMark")
+		-- At login too (INIT).
+		local captured
+		ns.CaptureError = function(where, e) captured = captured or (where .. ": " .. tostring(e)) end
+		ns.rdb = { guilds = {}, inspect = { players = { Stale = { name = "Stale", status = "NONE", t = now - 15 * day },
+			Kept = { name = "Kept", status = "NONE", t = now - day } }, guildMarks = {} } }
+		local R = ns.rdb
+		CoreFire("INIT")
+		ns.rdb = saved.rdb
+		eq(captured, nil, "error caught")
+		eq(R.inspect.players.Stale, nil); eq(R.inspect.players.Kept.status, "NONE")
+	end)
+	ns.rdb = saved.rdb
+	ns.rdb.inspect, ns.Now, ns.Print, ns.PlayAlert, ns.CaptureError = saved.inspect, saved.Now, saved.Print, saved.alert, saved.capture
+	if not ok then error(err, 0) end
+end)
+
+test("0.9.1 Wall of Shame: rate-limited like the decrees, and the same wall again changes nothing", function()
+	WithThrone(function(w, K)
+		local I = ns.Inspect
+		local saved = { from = I.SHAME_FROM, inspect = ns.rdb.inspect, alert = ns.PlayAlert, fire = ns.Fire, chunked = ns.Comm.SendChunked }
+		local ok, err = pcall(function()
+			I.SHAME_FROM = 0
+			I.ResetShame()
+			local alerts, redraws, sent = 0, 0, 0
+			ns.PlayAlert = function() alerts = alerts + 1 end
+			ns.Fire = function(name) if name == "INSPECT_CHANGED" then redraws = redraws + 1 end end
+			ns.Comm.SendChunked = function() sent = sent + 1 end
+			-- Seven guild masters the census confirms.
+			for i = 1, 7 do
+				ns.rdb.guilds["Olympus " .. i] = Vouched({ total = 50, online = 5, zones = {}, t = w.clock, leader = "Lord" .. i, realm = "Realm" }, "W1-Realm", "W2-Realm")
+			end
+			AsSoldier()
+			local function S1(i, names)
+				local list = {}
+				for _, nm in ipairs(names) do list[#list + 1] = { name = nm, guild = "Olympus II" } end
+				return ns.Codec.EncodeShame("Olympus " .. i, 0, list)
+			end
+			I.HandleShame("CHANNEL", "Lord1-Realm", S1(1, { "Naked", "Pirate" }))
+			eq(#I.Shame().list, 2); eq(alerts, 1); eq(redraws, 1)
+			-- The same sender within a minute: ignored, whatever it says.
+			I.HandleShame("CHANNEL", "Lord1-Realm", S1(1, { "Other" }))
+			eq(I.Shame().list[1].name, "Naked"); eq(alerts, 1)
+			-- Someone else with the same wall (in another order): nothing to show again.
+			I.HandleShame("CHANNEL", "Lord2-Realm", S1(2, { "Pirate", "Naked" }))
+			eq(alerts, 1, "no second alert"); eq(redraws, 1, "no redraw"); eq(I.Shame().by, "Lord1")
+			-- All of them at once: SHAME_PER_MINUTE walls a minute at most.
+			for i = 3, 7 do I.HandleShame("CHANNEL", "Lord" .. i .. "-Realm", S1(i, { "Guy" .. i })) end
+			eq(alerts, 5, "the seventh within the minute is dropped"); eq(I.Shame().list[1].name, "Guy6")
+			w.clock = w.clock + 61
+			I.HandleShame("CHANNEL", "Lord7-Realm", S1(7, { "Guy7" }))
+			eq(alerts, 6, "a minute later"); eq(I.Shame().list[1].name, "Guy7")
+			-- The Crown publishes once a minute; the same wall again is sent, and only a line here.
+			AsKing()
+			ns.rdb.inspect = { players = { Naked = { name = "Naked", guild = "Olympus II", status = "NONE", t = w.clock } }, guildMarks = {} }
+			I.ResetShame()
+			alerts = 0
+			I.PublishShame()
+			eq(sent, 1); eq(alerts, 1)
+			I.PublishShame()
+			eq(sent, 1, "not again within a minute"); assert(Printed(w, ns.L.SHAME_COOLDOWN:format(60)), "told how long")
+			w.clock = w.clock + I.SHAME_COOLDOWN
+			local lines = #w.printed
+			I.PublishShame()
+			eq(sent, 2, "a minute later: sent again (for those who logged in since)")
+			eq(alerts, 1, "the same wall: no alert on our screen either")
+			eq(w.printed[lines + 1], "|cffff4040" .. ns.L.SHAME_PUBLISHED:format(1, "Asmongold Asmongler") .. "|r")
+		end)
+		I.SHAME_FROM, ns.rdb.inspect, ns.PlayAlert, ns.Fire, ns.Comm.SendChunked = saved.from, saved.inspect, saved.alert, saved.fire, saved.chunked
+		I.ResetShame()
+		if not ok then error(err, 0) end
+	end)
+end)
+
+test("0.9.1 guild bank: read once the slots settle, a tab that never arrived keeps its items, a change within the gap is sent later", function()
+	WithThrone(function(w, K)
+		local B = ns.Bank
+		local saved = { GetNumGuildBankTabs, GetGuildBankTabInfo, GetGuildBankItemInfo, GetGuildBankItemLink, GetGuildBankMoney,
+			QueryGuildBankTab, GetCurrentGuildBankTab, GetTime, ns.After }
+		local ok, err = pcall(function()
+			B.Reset()
+			AsTreasurer()
+			local gt, timers = 100, {}
+			GetTime = function() return gt end
+			ns.After = function(sec, _, fn) timers[#timers + 1] = { at = gt + sec, fn = fn } end
+			local function Run()
+				local due = timers
+				timers = {}
+				for _, t in ipairs(due) do if t.at <= gt + 1e-6 then t.fn() else timers[#timers + 1] = t end end
+			end
+			local function Sent()
+				local n = 0
+				for _, s in ipairs(w.sent) do if s.msg:find("^T9~") then n = n + 1 end end
+				return n
+			end
+			GetNumGuildBankTabs = function() return 2 end
+			GetGuildBankTabInfo = function(tab) return ({ "Consumables", "Materials" })[tab], "icon" .. tab, true end
+			local slots = { [1] = { [1] = { "tex1", 20, 929 } }, [2] = {} }
+			GetGuildBankItemInfo = function(tab, slot) local s = slots[tab] and slots[tab][slot]; if s then return s[1], s[2] end end
+			GetGuildBankItemLink = function(tab, slot) local s = slots[tab] and slots[tab][slot]; return s and ("|Hitem:" .. s[3] .. ":0|h[x]|h") end
+			GetGuildBankMoney = function() return 500 end
+			QueryGuildBankTab = function() end
+			GetCurrentGuildBankTab = function() return 1 end
+			-- Opened: tab 1 (on screen) is there, tab 2 still on its way.
+			B.Opened()
+			gt = gt + 1; B.Changed()
+			gt = gt + 0.5; Run()
+			eq(ns.rdb.bank, nil, "not read 1.5 s after the first change: another came since")
+			slots[2] = { [3] = { "tex3", 200, 2589 } }
+			gt = gt + 0.5; B.Changed()
+			gt = gt + 1; Run()
+			eq(ns.rdb.bank, nil)
+			gt = gt + 0.5; Run()
+			local snap = ns.rdb.bank
+			eq(#snap.tabs, 2); eq(snap.tabs[2].items[1].id, 2589, "read once the last change settled: tab 2 is in")
+			eq(Sent(), 1, "the Treasurer's client sends it")
+			-- A bank that keeps changing is still read, SETTLE_MAX after the first change.
+			for _ = 1, 20 do gt = gt + 0.5; B.Changed(); Run() end
+			assert(ns.rdb.bank ~= snap, "read while it kept changing")
+			gt = gt + 10; Run(); Run()
+			-- Opened again: tab 2's slots never arrive (it reads empty), tab 1 is on screen.
+			slots[2] = {}
+			B.Opened(); gt = gt + B.SETTLE; Run()
+			eq(ns.rdb.bank.tabs[2].items[1].id, 2589, "a tab that never arrived keeps its last items"); eq(ns.rdb.bank.tabs[2].kept, true)
+			-- Empty the next time too: then it is.
+			B.Opened(); gt = gt + B.SETTLE; Run()
+			eq(#ns.rdb.bank.tabs[2].items, 0, "empty twice in a row: empty")
+			-- The tab on screen reads empty: the player sees it empty.
+			slots[1] = {}
+			B.Opened(); gt = gt + B.SETTLE; Run()
+			eq(#ns.rdb.bank.tabs[1].items, 0)
+			-- Another guild's bank says nothing about ours; a 0.9.0 snapshot (no tab numbers) by the tab's name.
+			local other = { guild = "Olympus II", tabs = { { i = 2, name = "Materials", items = { { id = 1, n = 1, s = 1 } } } } }
+			eq(#B.Keep({ guild = "Olympus", tabs = { { i = 2, name = "Materials", items = {} } } }, other).tabs[1].items, 0)
+			local old = { guild = "Olympus", tabs = { { name = "Materials", items = { { id = 7, n = 1, s = 1 } } } } }
+			eq(B.Keep({ guild = "Olympus", tabs = { { i = 2, name = "Materials", items = {} } } }, old).tabs[1].items[1].id, 7)
+			-- Every read since the first came within SHARE_GAP: the latest goes out once it is over.
+			eq(Sent(), 1)
+			w.clock = w.clock + B.SHARE_GAP + 1
+			gt = gt + B.SHARE_GAP + 1
+			Run()
+			eq(Sent(), 2, "sent once the gap is over"); eq(LastSent(w), B.Message(ns.rdb.bank), "the bank as it is then")
+		end)
+		GetNumGuildBankTabs, GetGuildBankTabInfo, GetGuildBankItemInfo, GetGuildBankItemLink, GetGuildBankMoney = saved[1], saved[2], saved[3], saved[4], saved[5]
+		QueryGuildBankTab, GetCurrentGuildBankTab, GetTime, ns.After = saved[6], saved[7], saved[8], saved[9]
+		B.Reset()
+		if not ok then error(err, 0) end
+	end)
+end)
+
+test("0.9.1 the agenda popup names a Hand as the Hand, the King by the army's name for him", function()
+	WithThrone(function(w, K)
+		AsKing()
+		K.AddHand("Helper")
+		K.SendHands(true)
+		local list = LastSent(w)
+		AsSoldier("Other")
+		K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", list)
+		K.HandleCommand("CHANNEL", "Helper-Realm", "T1~A~4~Olympus II~600~Stormwind City~Raid at dawn")
+		local p = w.popups[#w.popups]
+		eq(p.name, "OLYMPUS_AGENDA_CALL")
+		eq(p.a, ns.L.THRONE_AGENDA_POPUP_HAND:format("Helper", "Raid at dawn", 10, "Stormwind City"))
+		w.clock = w.clock + K.AGENDA_GAP
+		K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", "T1~A~5~Olympus~1800~The Crossroads~Raid on the Crossroads")
+		eq(w.popups[#w.popups].a, ns.L.THRONE_AGENDA_POPUP:format(ns.KING_NAME, "Raid on the Crossroads", 30, "The Crossroads"))
+	end)
+end)
+
+-- 0.9.1: channel-owner
+-- Comm.lua in a namespace of its own, with a clock the test moves and timers that wait for it.
+-- The channel's notices come through the real events, in the client's argument order:
+-- CHAT_MSG_CHANNEL_NOTICE(_USER)(notice, player, language, "5. OlympusNet", second player,
+-- flags, zone channel id, channel number, "OlympusNet", ...).
+do
+	local NOTICE, USER = "CHAT_MSG_CHANNEL_NOTICE", "CHAT_MSG_CHANNEL_NOTICE_USER"
+
+	local function OwnerComm()
+		local events, login, timers, printed = {}, {}, {}, {}
+		local cns = setmetatable({}, { __index = ns })
+		cns.RegisterEvent = function(event, fn) events[event] = events[event] or {}; table.insert(events[event], fn) end
+		cns.On = function(name, fn) if name == "LOGIN" then table.insert(login, fn) end end
+		cns.clock = 100000
+		cns.Now = function() return cns.clock end
+		cns.After = function(delay, _, fn) timers[#timers + 1] = { at = cns.clock + (delay or 0), fn = fn } end
+		cns.Every = function() end
+		cns.Print = function(msg) printed[#printed + 1] = tostring(msg) end
+		assert(loadfile(ADDON_DIR .. "Comm.lua"))("Olympus", cns)
+		for _, fn in ipairs(login) do fn() end
+		local w = { cns = cns, C = cns.Comm, events = events, printed = printed }
+		-- A notice about `channel` (default: the one we joined), through the event it comes by.
+		function w.Notice(event, notice, player, player2, channel)
+			channel = channel or w.C.ChannelName()
+			for _, fn in ipairs(events[event] or {}) do
+				fn(notice, player or "", "", "5. " .. channel, player2 or "", "", 0, 5, channel, 0, 0, "", 0, false, false, false, false)
+			end
+		end
+		-- Moves the clock, then runs the timers due (and those they set that are due too).
+		function w.Wait(seconds)
+			cns.clock = cns.clock + seconds
+			for _ = 1, 100 do
+				local due
+				for i, t in ipairs(timers) do if t.at <= cns.clock then due = i break end end
+				if not due then return end
+				table.remove(timers, due).fn()
+			end
+			error("timers keep setting timers")
+		end
+		return w
+	end
+
+	-- The channel functions an owner has, recorded ("password OlympusNet,"); all restored after.
+	local function WithMocks(fn)
+		local saved = { GetChannelName, JoinChannelByName, LeaveChannelByName, SetChannelPassword, ChannelUnban, ChannelModerate,
+			ChannelUnmute, GetGuildInfo, ns.rdb.realmKey, ns.Roster.byName, issecretvalue, C_ChatInfo }
+		local calls = {}
+		local function Rec(what) return function(...) calls[#calls + 1] = what .. " " .. table.concat({ ... }, ",") end end
+		local ok, err = pcall(function()
+			C_ChatInfo = { RegisterAddonMessagePrefix = function() end }
+			GetChannelName = function() return 5 end
+			JoinChannelByName, LeaveChannelByName = Rec("join"), Rec("leave")
+			SetChannelPassword, ChannelUnban, ChannelModerate, ChannelUnmute = Rec("password"), Rec("unban"), Rec("moderate"), Rec("unmute")
+			fn(calls)
+		end)
+		GetChannelName, JoinChannelByName, LeaveChannelByName, SetChannelPassword, ChannelUnban, ChannelModerate,
+			ChannelUnmute, GetGuildInfo, ns.rdb.realmKey, ns.Roster.byName, issecretvalue, C_ChatInfo = unpack(saved, 1, 12)
+		if not ok then error(err, 0) end
+	end
+
+	local function Sorted(calls, from)
+		local out = {}
+		for i = from or 1, #calls do out[#out + 1] = calls[i] end
+		table.sort(out)
+		return table.concat(out, "; ")
+	end
+
+	test("channel owner: our channel's notices are followed, logged and in /oly status; another channel's are not", function()
+		WithMocks(function(calls)
+			local w = OwnerComm()
+			w.C.JoinChannel()
+			eq(w.C.ChannelName(), "OlympusNet")
+			w.Notice(NOTICE, "YOU_JOINED")
+			w.Notice(USER, "OWNER_CHANGED", "Bob", nil, "General - Elwynn Forest")
+			w.Notice(USER, "OWNER_CHANGED", "Bob", nil, "OlympusNetH")
+			w.Notice(NOTICE, "WRONG_PASSWORD", nil, nil, "MyOwnChannel")
+			eq(w.C.GuardStats().owner, nil, "another channel's owner is not ours")
+			eq(w.C.GuardStats().locked, nil, "nor its password")
+			w.Notice(USER, "OWNER_CHANGED", "Bob")
+			local st = w.C.GuardStats()
+			eq(st.owner, "Bob"); eq(st.role, "member"); eq(st.watched, true)
+			w.Notice(USER, "PASSWORD_CHANGED", "Bob")
+			w.Notice(USER, "PLAYER_BANNED", "Pyralis Ashandar", "Bob")
+			w.Notice(USER, "PLAYER_KICKED", "Carl", "Bob")
+			w.Notice(USER, "MODERATION_ON", "Bob")
+			w.Notice(USER, "ANNOUNCEMENTS_ON", "Bob")
+			w.Notice(USER, "UNSET_VOICE", "Dan")
+			w.Notice(USER, "SET_MODERATOR", "Bobsfriend")
+			st = w.C.GuardStats()
+			eq(st.seen.owner, 1); eq(st.seen.password, 1); eq(st.seen.ban, 1); eq(st.seen.kick, 1); eq(st.seen.mute, 1); eq(st.seen.moderator, 1)
+			eq(st.moderation, "on"); eq(st.announce, "on"); eq(st.password, true); eq(st.banned, 1); eq(st.muted, 1)
+			-- The name in whatever case the server keeps it.
+			w.Notice(USER, "OWNER_CHANGED", "Eve", nil, "olympusnet")
+			eq(w.C.GuardStats().owner, "Eve")
+			-- Forever's secret values (chat lockdown): nothing is read from them.
+			issecretvalue = function(v) return v == "Secret" end
+			w.Notice(USER, "OWNER_CHANGED", "Secret")
+			eq(w.C.GuardStats().owner, "Eve")
+			issecretvalue = nil
+			assert(table.concat(ns.db.log, "\n"):find("channel OlympusNet: PLAYER_BANNED Pyralis Ashandar by Bob", 1, true), "logged")
+			-- Not ours to fix: nothing is done, nothing is printed.
+			w.Wait(1000)
+			eq(#calls, 0, table.concat(calls, "; ")); eq(#w.printed, 0)
+			local savedComm = ns.Comm
+			ns.Comm = w.C
+			local ok, text = pcall(ns.StatusText)
+			ns.Comm = savedComm
+			assert(ok, text)
+			for _, want in ipairs({ "channel owner: Eve (", "|  me: member  |  watched: true",
+				"channel seen: ban=1 kick=1 moderation=1 moderator=1 mute=1 owner=2 password=1  |  moderation=on announce=on",
+				"channel undo: password=true banned=1 muted=1  |  locked: no" }) do
+				assert(text:find(want, 1, true), want .. "\n" .. text)
+			end
+		end)
+	end)
+
+	test("channel owner: handed the channel, the player is told once a session, in one line", function()
+		WithMocks(function()
+			local w = OwnerComm()
+			w.C.JoinChannel()
+			w.Notice(NOTICE, "YOU_JOINED")
+			-- An owner's two notices: the moderator's seat, then the channel.
+			w.Notice(USER, "SET_MODERATOR", "Tester")
+			w.Notice(USER, "OWNER_CHANGED", "Tester")
+			eq(w.C.GuardStats().role, "owner")
+			w.Wait(2)
+			eq(#w.printed, 1, "one line")
+			assert(w.printed[1]:find(ns.L.CHANNEL_OWNER_YOU:format("OlympusNet"), 1, true), w.printed[1])
+			for _, want in ipairs({ "never uses", "/password", "/ban", "/owner" }) do assert(ns.L.CHANNEL_OWNER_YOU:find(want, 1, true), want) end
+			-- Given away and handed back: not told again this session.
+			w.Notice(USER, "OWNER_CHANGED", "Bob")
+			w.Notice(USER, "UNSET_MODERATOR", "Tester")
+			eq(w.C.GuardStats().role, "member")
+			w.Notice(USER, "OWNER_CHANGED", "Tester")
+			w.Wait(2)
+			eq(#w.printed, 1, "once a session")
+			-- A moderator's seat alone: its own line, once.
+			local m = OwnerComm()
+			m.C.JoinChannel()
+			m.Notice(USER, "SET_MODERATOR", "Tester")
+			m.Wait(2)
+			eq(#m.printed, 1)
+			assert(m.printed[1]:find(ns.L.CHANNEL_MODERATOR_YOU:format("OlympusNet"), 1, true), m.printed[1])
+			m.Notice(USER, "UNSET_MODERATOR", "Tester")
+			m.Notice(USER, "SET_MODERATOR", "Tester")
+			m.Wait(2)
+			eq(#m.printed, 1)
+			-- Someone else handed the channel: nothing for us.
+			local o = OwnerComm()
+			o.C.JoinChannel()
+			o.Notice(USER, "OWNER_CHANGED", "Bob")
+			o.Notice(USER, "SET_MODERATOR", "Bob")
+			o.Wait(2)
+			eq(#o.printed, 0)
+		end)
+	end)
+
+	test("channel owner: once the channel is ours it undoes the harm seen, rate-limited; never while it is not", function()
+		WithMocks(function(calls)
+			local w = OwnerComm()
+			w.C.JoinChannel()
+			w.Notice(NOTICE, "YOU_JOINED")
+			w.Notice(USER, "OWNER_CHANGED", "Troll")
+			w.Notice(USER, "SET_MODERATOR", "Troll")
+			-- Troll locks the channel while he holds it: not ours, nothing is done.
+			w.Notice(USER, "PASSWORD_CHANGED", "Troll")
+			w.Notice(USER, "PLAYER_BANNED", "Kingchar", "Troll")
+			w.Notice(USER, "MODERATION_ON", "Troll")
+			w.Notice(USER, "UNSET_SPEAK", "Mutey")
+			w.Wait(2)
+			eq(#calls, 0, table.concat(calls, "; "))
+			-- He logs off and WoW hands the channel to us: what he did is undone, once.
+			w.Notice(USER, "OWNER_CHANGED", "Tester")
+			w.Wait(2)
+			eq(Sorted(calls), "moderate OlympusNet; password OlympusNet,; unban OlympusNet,Asmongold Asmongler; unban OlympusNet,Kingchar; unban OlympusNet,Pyralis Ashandar; unmute OlympusNet,Mutey")
+			-- Troll (still a moderator) does it again at once: undone again, not before a minute.
+			wipe(calls)
+			w.Notice(USER, "PASSWORD_CHANGED", "Troll")
+			w.Notice(USER, "PLAYER_BANNED", "Kingchar", "Troll")
+			w.Wait(2)
+			eq(#calls, 0, "the same call not twice within a minute")
+			w.Wait(60)
+			eq(Sorted(calls), "password OlympusNet,; unban OlympusNet,Kingchar")
+			-- Our own heal's notices, and what is done from our own client, are not undone by us.
+			wipe(calls)
+			w.Notice(USER, "PASSWORD_CHANGED", "Tester")
+			w.Notice(USER, "PLAYER_UNBANNED", "Kingchar", "Tester")
+			w.Notice(USER, "MODERATION_OFF", "Tester")
+			w.Notice(USER, "PLAYER_BANNED", "Someone", "Tester")
+			w.Wait(120)
+			eq(#calls, 0, table.concat(calls, "; "))
+			-- Moderation is switched over: once for each time it was seen turned on, never back on.
+			w.Notice(USER, "MODERATION_ON", "Troll")
+			w.Wait(2)
+			eq(Sorted(calls), "moderate OlympusNet")
+			w.Notice(USER, "PLAYER_KICKED", "Carl", "Troll")
+			w.Wait(120)
+			eq(#calls, 1, "not switched again without seeing it on again")
+			-- The channel goes to someone else: nothing more from us.
+			w.Notice(USER, "OWNER_CHANGED", "Troll")
+			w.Notice(USER, "PASSWORD_CHANGED", "Troll")
+			w.Notice(USER, "PLAYER_BANNED", "Kingchar", "Troll")
+			w.Wait(120)
+			eq(#calls, 1, table.concat(calls, "; "))
+			-- Nor after we left the channel.
+			w.Notice(USER, "OWNER_CHANGED", "Tester")
+			w.Notice(NOTICE, "YOU_LEFT")
+			w.Wait(120)
+			eq(w.C.GuardStats().role, "member")
+			eq(#calls, 1, table.concat(calls, "; "))
+		end)
+	end)
+
+	test("channel owner: the Treasurer and the King (our roster in his guild, or a pinned character) are always let back in", function()
+		WithMocks(function(calls)
+			-- In the King's guild: his character from our own roster.
+			GetGuildInfo = function() return "Olympus", "Knight", 3 end
+			ns.Roster.byName = { ["Knight1-Realm"] = 3, ["Asmon-Realm"] = 0 }
+			local w = OwnerComm()
+			w.C.JoinChannel()
+			w.Notice(NOTICE, "YOU_JOINED")
+			w.Notice(USER, "OWNER_CHANGED", "Tester")
+			w.Wait(2)
+			eq(Sorted(calls), "unban OlympusNet,Asmon; unban OlympusNet,Asmongold Asmongler; unban OlympusNet,Pyralis Ashandar", "watched since joining: no password call")
+			-- Another guild: the character pinned in Core.lua when there is one, else the Treasurer alone.
+			GetGuildInfo = function() return MY_GUILD, "Hero", 3 end
+			wipe(calls)
+			local p = OwnerComm()
+			p.cns.KING_CHARACTER = "Kingchar"
+			p.C.JoinChannel()
+			p.Notice(NOTICE, "YOU_JOINED")
+			p.Notice(USER, "SET_MODERATOR", "Tester")
+			p.Wait(2)
+			eq(Sorted(calls), "unban OlympusNet,Kingchar; unban OlympusNet,Pyralis Ashandar")
+			wipe(calls)
+			local n = OwnerComm()
+			n.C.JoinChannel()
+			n.Notice(NOTICE, "YOU_JOINED")
+			n.Notice(USER, "OWNER_CHANGED", "Tester")
+			n.Wait(2)
+			eq(Sorted(calls), "unban OlympusNet,Asmongold Asmongler; unban OlympusNet,Pyralis Ashandar", "the pinned King is always known")
+		end)
+	end)
+
+	test("channel owner: handed the public channel without having watched it since joining, its password is cleared", function()
+		WithMocks(function(calls)
+			-- After a /reload we are still on the channel, but saw nothing that came before it.
+			local w = OwnerComm()
+			w.C.JoinChannel()
+			w.Notice(USER, "OWNER_CHANGED", "Tester")
+			w.Wait(2)
+			assert(Sorted(calls):find("password OlympusNet,", 1, true), Sorted(calls))
+			-- Watched since we joined: every change would have reached us, none was made.
+			wipe(calls)
+			local v = OwnerComm()
+			v.C.JoinChannel()
+			v.Notice(NOTICE, "YOU_JOINED")
+			v.Notice(USER, "OWNER_CHANGED", "Tester")
+			v.Wait(2)
+			assert(not Sorted(calls):find("password", 1, true), Sorted(calls))
+		end)
+	end)
+
+	test("channel owner: the sealed channel gets its key back, never cleared; nothing on a keyless-vs-sealed mismatch", function()
+		WithMocks(function(calls)
+			ns.rdb.realmKey = "sekrit-key"
+			local w = OwnerComm()
+			local sealed = w.C.ChannelSpec()
+			assert(sealed:find("^Oly") and sealed ~= "OlympusNet", sealed)
+			w.C.JoinChannel()
+			eq(w.C.ChannelName(), sealed)
+			w.Notice(NOTICE, "YOU_JOINED")
+			w.Notice(USER, "OWNER_CHANGED", "Tester")
+			w.Wait(2)
+			assert(not Sorted(calls):find("password", 1, true), "watched: its password is the key already")
+			w.Notice(USER, "PASSWORD_CHANGED", "Troll")
+			w.Wait(2)
+			eq(calls[#calls], "password " .. sealed .. ",sekrit-key", "set back to the key")
+			-- The public channel's notices mean nothing while we are on the sealed one.
+			local n = #calls
+			w.Notice(USER, "OWNER_CHANGED", "Tester", nil, "OlympusNet")
+			w.Notice(USER, "PASSWORD_CHANGED", "Troll", nil, "OlympusNet")
+			w.Wait(120)
+			eq(#calls, n, Sorted(calls, n + 1))
+			-- Owner of the public channel when the key arrives (not moved over yet): no call on either.
+			ns.rdb.realmKey = nil
+			local p = OwnerComm()
+			p.C.JoinChannel()
+			eq(p.C.ChannelName(), "OlympusNet")
+			p.Notice(USER, "OWNER_CHANGED", "Tester")
+			p.Notice(USER, "PASSWORD_CHANGED", "Troll")
+			p.Notice(USER, "PLAYER_BANNED", "Kingchar", "Troll")
+			ns.rdb.realmKey = "sekrit-key"
+			p.Wait(2)
+			eq(#calls, n, "the public channel's record is not the sealed channel's: " .. Sorted(calls, n + 1))
+		end)
+	end)
+
+	test("channel owner: should the game refuse one of these calls to addons, healing stops for the session", function()
+		WithMocks(function(calls)
+			local w = OwnerComm()
+			w.C.JoinChannel()
+			-- Refused inside the first call, as the game does: the rest of that pass is not made.
+			SetChannelPassword = function()
+				calls[#calls + 1] = "password"
+				for _, fn in ipairs(w.events.ADDON_ACTION_FORBIDDEN) do fn("Olympus", "SetChannelPassword()") end
+			end
+			w.Notice(USER, "PLAYER_BANNED", "Kingchar", "Troll")
+			w.Notice(USER, "OWNER_CHANGED", "Tester")
+			w.Wait(2)
+			eq(Sorted(calls), "password")
+			w.Notice(USER, "PLAYER_BANNED", "Kingchar", "Troll")
+			w.Wait(120)
+			eq(Sorted(calls), "password", "nothing more this session")
+			-- Another addon's refusal changes nothing here.
+			local o = OwnerComm()
+			o.C.JoinChannel()
+			for _, fn in ipairs(o.events.ADDON_ACTION_BLOCKED) do fn("OtherAddon", "SetChannelPassword()") end
+			o.Notice(NOTICE, "YOU_JOINED")
+			o.Notice(USER, "OWNER_CHANGED", "Tester")
+			o.Wait(2)
+			eq(Sorted(calls), "password; unban OlympusNet,Asmongold Asmongler; unban OlympusNet,Pyralis Ashandar")
+		end)
+	end)
+
+	test("channel owner: locked out (password or ban), tried again after 1, 2, 5, then every 10 minutes; told once", function()
+		WithMocks(function(calls)
+			local id = 0
+			GetChannelName = function() return id end
+			local w = OwnerComm()
+			local C = w.C
+			local function Joins()
+				local n = 0
+				for _, c in ipairs(calls) do
+					if c:find("^join") then
+						n = n + 1
+						eq(c, "join OlympusNet", "always the same channel: no other name to flee to")
+					end
+				end
+				return n
+			end
+			C.JoinChannel()
+			eq(Joins(), 1)
+			-- The server's answer: a wrong password, and Blizzard's password prompt for the same try.
+			w.Notice(NOTICE, "WRONG_PASSWORD")
+			for _, fn in ipairs(w.events.CHANNEL_PASSWORD_REQUEST) do fn("OlympusNet") end
+			eq(#w.printed, 1, "told once")
+			assert(w.printed[1]:find(ns.L.CHANNEL_LOCKED:format("OlympusNet"), 1, true), w.printed[1])
+			eq(C.GuardStats().locked.tries, 1, "one failed join, however many notices")
+			local joins = 1
+			for i, gap in ipairs({ 60, 120, 300, 600, 600 }) do
+				w.cns.clock = w.cns.clock + gap - 1
+				C.JoinChannel() -- the housekeeping ticker, every minute
+				eq(Joins(), joins, "not before " .. gap .. "s")
+				w.cns.clock = w.cns.clock + 1
+				C.JoinChannel()
+				joins = joins + 1
+				eq(Joins(), joins, "again after " .. gap .. "s")
+				w.Notice(NOTICE, i % 2 == 0 and "WRONG_PASSWORD" or "BANNED")
+			end
+			eq(#w.printed, 1, "still told once")
+			local lock = C.GuardStats().locked
+			eq(lock.tries, 6); eq(lock.nextIn, 600)
+			-- An honest owner opens it: in at the next try, and the census is asked for again.
+			id = 5
+			w.Wait(600)
+			eq(C.GuardStats().locked, nil, "open again")
+			eq(C.ChannelReady(), true)
+			w.Wait(4)
+			eq(C.Stats().asked, 1, "census asked for once back in")
+		end)
+	end)
+end
+
+-- 0.9.1: privacy
+-- Issues #13 and #16: where a player is goes out only with their yes, and the channel's
+-- warning comes before the first line in each of its channels.
+
+-- Runs fn(w) reading our layer from NPCs in Stormwind (map 1453), every Comm.Send kept in
+-- w.sent; w.observe() reads a new layer, far enough in time to be announced at once.
+local function WithLayerWatch(fn)
+	local saved = { send = ns.Comm.Send, hello = ns.Comm.Hello, now = ns.Now, print = ns.Print, guid = UnitGUID,
+		map = C_Map.GetBestMapForUnit, guild = GetGuildInfo, me = ns.me, share = ns.db.shareLocation, crown = ns.db.throneLocation }
+	local w = { sent = {}, printed = {}, hellos = 0, clock = 3000000000, npc = 100 }
+	local ok, err = pcall(function()
+		ns.Comm.Send = function(dist, msg) w.sent[#w.sent + 1] = dist .. " " .. msg end
+		ns.Comm.Hello = function(force) if force then w.hellos = w.hellos + 1 end end
+		ns.Now = function() return w.clock end
+		ns.Print = function(m) w.printed[#w.printed + 1] = m end
+		C_Map.GetBestMapForUnit = function() return 1453 end
+		UnitGUID = function() return ("Creature-0-4619-0-%d-68-0000AAA1"):format(w.npc) end
+		w.observe = function()
+			w.clock, w.npc = w.clock + 1000, w.npc + 1
+			ns.Layers.Reset()
+			ns.Layers.Observe("target")
+		end
+		w.layers = function()
+			local n = 0
+			for _, m in ipairs(w.sent) do if m:find("^CHANNEL L1~") then n = n + 1 end end
+			return n
+		end
+		fn(w)
+	end)
+	ns.Comm.Send, ns.Comm.Hello, ns.Now, ns.Print, UnitGUID = saved.send, saved.hello, saved.now, saved.print, saved.guid
+	C_Map.GetBestMapForUnit, GetGuildInfo, ns.me = saved.map, saved.guild, saved.me
+	ns.db.shareLocation, ns.db.throneLocation = saved.share, saved.crown
+	ns.Layers.Reset()
+	if not ok then error(err, 0) end
+end
+
+test("0.9.1 privacy: a player who keeps it private still asks for hops and helps, told once what an ask says (#13)", function()
+	local savedShare, savedPrint = ns.db.shareLocation, ns.Print
+	local printed = {}
+	local function Hints()
+		local n = 0
+		for _, m in ipairs(printed) do if m == ns.L.HOP_PRIVATE_HINT then n = n + 1 end end
+		return n
+	end
+	local ok, err = pcall(function()
+		ns.Print = function(m) printed[#printed + 1] = m end
+		WithHop(function(w, H)
+			ns.db.shareLocation = nil -- never answered: private
+			GetGuildInfo = function() return "Olympus II", "Officer", 1 end
+			w.see(7)
+			for _, m in ipairs(w.sent) do assert(not m:find("L1~", 1, true), "no layer announced: " .. m) end
+			-- A helper who shares nothing answers an ask for their layer, to the asker alone.
+			H.HandleAsk("CHANNEL", "Asker-Realm", "LQ~42~1453~7")
+			eq(w.whispered[1], "Asker-Realm LO~42~0~0")
+			-- Asking still works: the ask names this zone and the layer wanted, and says so once.
+			H.Ask(1453, 8, "Kingy's layer")
+			eq(w.sent[#w.sent], "CHANNEL LQ~1~1453~8")
+			eq(Hints(), 1)
+			w.clock = w.clock + 30
+			H.Tick() -- nobody answered: done
+			H.Ask(1453, 8, "Kingy's layer")
+			eq(w.sent[#w.sent], "CHANNEL LQ~1~1453~8", "asked again")
+			eq(Hints(), 1, "once a session")
+		end)
+		WithHop(function(w, H)
+			ns.db.shareLocation = true
+			w.see(7)
+			H.Ask(1453, 8, "Kingy's layer")
+			eq(w.sent[#w.sent], "CHANNEL LQ~1~1453~8")
+			eq(Hints(), 1, "sharing: nothing to tell")
+		end)
+	end)
+	ns.db.shareLocation, ns.Print = savedShare, savedPrint
+	if not ok then error(err, 0) end
+end)
+
+test("0.9.1 privacy: no layer announcement without the player's yes, officers and the sample included (#13)", function()
+	WithLayerWatch(function(w)
+		-- An officer, never asked yet and after Keep private: the layer is read, and stays home.
+		GetGuildInfo = function() return "Olympus II", "Officer", 1 end
+		for _, answer in ipairs({ "unanswered", "private" }) do
+			ns.db.shareLocation = answer == "private" and false or nil
+			w.observe()
+			eq(ns.Layers.Mine().zoneUID, w.npc, "read, for this client alone")
+			eq(w.layers(), 0, "an officer, " .. answer)
+		end
+		-- A member of the 1 in 8 sample: the same.
+		GetGuildInfo = function() return "Olympus II", "Member", 3 end
+		for i = 1, 400 do
+			ns.me = "Sample" .. i .. "-Realm"
+			if ns.Layers.InSample() then break end
+		end
+		assert(ns.Layers.InSample(), "a sampled name")
+		w.observe()
+		eq(w.layers(), 0, "a sampled member")
+		-- Share: at once, and each new layer; the hello tells our reporter too.
+		GetGuildInfo = function() return "Olympus II", "Officer", 1 end
+		ns.Layers.SetSharing(true)
+		eq(ns.db.shareLocation, true); eq(w.printed[#w.printed], ns.L.LOCATION_ON); eq(w.hellos, 1)
+		eq(w.layers(), 1); eq(w.sent[#w.sent], ("CHANNEL L1~1453~%d~1~Olympus II"):format(w.npc))
+		w.observe()
+		eq(w.layers(), 2)
+		-- Off again: nothing more.
+		ns.Layers.SetSharing(false)
+		eq(ns.db.shareLocation, false); eq(w.printed[#w.printed], ns.L.LOCATION_OFF); eq(w.hellos, 2)
+		w.observe()
+		eq(w.layers(), 2)
+		-- The King: his crown on the map (the Throne) is his yes for his layer; without it, his
+		-- own answer like anyone's.
+		GetGuildInfo = function() return "Olympus", "King", 0 end
+		local me = ns.me
+		ns.me = "Asmongold Asmongler-Realm"
+		ns.db.throneLocation = true
+		w.observe()
+		ns.me = me
+		eq(w.layers(), 3); eq(w.sent[#w.sent], ("CHANNEL L1~1453~%d~0~Olympus"):format(w.npc))
+		ns.db.throneLocation = nil
+		w.observe()
+		eq(w.layers(), 3)
+	end)
+end)
+
+test("0.9.1 privacy: a report kept private names no zone at all, and 0.9.0's decoder reads it (#13)", function()
+	local r = ns.Roster.Scan()
+	assert(r.leaderZone and r.officers[1].zone and r.zones.m1453, "the roster knows where everyone is")
+	-- (Codec.DecodeReport is the decoder 0.9.0 ships, unchanged.)
+	local d = Codec.DecodeReport(Codec.EncodeReport(Codec.Shareable(r, false, nil)))
+	eq(next(d.zones), nil, "no members per zone"); eq(d.leaderZone, nil)
+	eq(#d.officers, #r.officers)
+	for i, o in ipairs(d.officers) do
+		eq(o.zone, nil, o.name); eq(o.name, r.officers[i].name); eq(o.level, r.officers[i].level)
+		eq(o.online, r.officers[i].online); eq(o.class, r.officers[i].class)
+	end
+	eq(d.total, 1000); eq(d.online, 300); eq(d.leader, "Member1"); eq(d.leaderLevel, r.leaderLevel)
+	eq(d.classes.WA, r.classes.WA); eq(d.levels[1], r.levels[1]); eq(d.top[1].name, r.top[1].name)
+	-- Our own window keeps the whole report.
+	eq(r.zones.m1453, 75); assert(r.leaderZone and r.officers[1].zone, "the local report untouched")
+	-- Shared: the counts, and the zones of those who share theirs (Member2), nobody else's.
+	local s = Codec.DecodeReport(Codec.EncodeReport(Codec.Shareable(r, true, function(name) return name == "Member2" end)))
+	eq(s.zones.m1453, 75); eq(s.leaderZone, nil, "the leader did not say yes")
+	for _, o in ipairs(s.officers) do eq(o.zone ~= nil, o.name == "Member2", o.name) end
+end)
+
+test("0.9.1 privacy: what our census sends follows our answer and our guildmates' hellos (#13)", function()
+	local savedChannel, savedShare = GetChannelName, ns.db.shareLocation
+	local ok, err = pcall(function()
+		local cns, Deliver = FreshComm()
+		local C = cns.Comm
+		GetChannelName = function() return 5 end
+		C.JoinChannel()
+		local sent = {}
+		C_ChatInfo.SendAddonMessage = function(_, msg, dist) sent[#sent + 1] = { dist = dist, msg = msg } end
+		-- The report that went out on the channel, put back together and decoded.
+		local function Sent()
+			for _ = 1, 40 do C.Pump() end
+			local asm, out = Codec.NewAssembler(), nil
+			for _, m in ipairs(sent) do
+				if m.dist == "CHANNEL" then out = Codec.Feed(asm, "Tester-Realm", m.msg, 0) or out end
+			end
+			sent = {}
+			return assert(out and Codec.DecodeReport(out), "a report went out")
+		end
+		local r = ns.Roster.Scan()
+		-- Member2 shares (their hello ends in z), Member3 does not, Member1 (the leader) has no addon.
+		Deliver("GUILD", "Member2", "H1~0.9.1~Realm~p~z")
+		Deliver("GUILD", "Member3", "H1~0.9.1~Realm~p")
+		eq(C.SharesZone("Member2"), true); eq(C.SharesZone("Member3"), false); eq(C.SharesZone("Member1"), false)
+		ns.db.shareLocation = nil
+		C.Broadcast(r)
+		local d = Sent()
+		eq(d.guild, MY_GUILD); eq(d.total, 1000); eq(d.leader, "Member1")
+		eq(next(d.zones), nil, "private: no members per zone"); eq(d.leaderZone, nil)
+		for _, o in ipairs(d.officers) do eq(o.zone, nil, o.name .. ": we keep ours, we name nobody's") end
+		ns.db.shareLocation = true
+		C.Broadcast(r)
+		d = Sent()
+		eq(d.zones.m1453, 75, "shared: the counts per zone")
+		eq(d.leaderZone, nil)
+		for _, o in ipairs(d.officers) do eq(o.zone ~= nil, o.name == "Member2", o.name) end
+		-- Our hello says we share; a hello without it (0.9.0, or a no since) reads as no.
+		C.Hello(true)
+		for _ = 1, 5 do C.Pump() end
+		eq(sent[#sent].msg, "H1~" .. ns.VERSION .. "~Realm~p~z")
+		Deliver("GUILD", "Member2", "H1~0.9.0~Realm~p")
+		eq(C.SharesZone("Member2"), false)
+		Deliver("GUILD", "Member3", "H1~0.9.1~Realm~p~z")
+		eq(C.SharesZone("Member3"), true)
+		cns.clock = cns.clock + 721
+		eq(C.SharesZone("Member3"), false, "not heard for 12 minutes: not counted")
+	end)
+	GetChannelName, C_ChatInfo, ns.db.shareLocation = savedChannel, nil, savedShare
+	if not ok then error(err, 0) end
+end)
+
+test("0.9.1 privacy: the zone and layer question is asked once, when it can be, and its answer kept (#13)", function()
+	local saved = { share = ns.db.shareLocation, combat = InCombatLockdown, instance = IsInInstance, key = ns.rdb.realmKey,
+		print = ns.Print, hello = ns.Comm.Hello, send = ns.Comm.Send, guild = GetGuildInfo }
+	local ok, err = pcall(function()
+		local printed = {}
+		ns.Print = function(m) printed[#printed + 1] = m end
+		ns.Comm.Hello, ns.Comm.Send = function() end, function() end
+		local d = StaticPopupDialogs.OLYMPUS_LOCATION_CHOICE
+		eq(d.text, ns.L.LOCATION_ASK); eq(d.button1, ns.L.LOCATION_SHARE); eq(d.button2, ns.L.LOCATION_KEEP)
+		-- It says what goes out, with whose name, to whom, and how to change it.
+		for _, words in ipairs({ "your zone", "your layer", "guild rank", "your guild", "your name", "Olympus channel",
+			"members per zone", "hop", "/oly location on", "/oly location off" }) do
+			assert(d.text:find(words, 1, true), words)
+		end
+		WithGamepadUI(false, function(game)
+			ns.db.shareLocation, ns.rdb.realmKey = nil, nil
+			ns.Layers.Reset()
+			InCombatLockdown = function() return true end
+			eq(ns.Layers.AskChoice(), false, "not in combat")
+			InCombatLockdown, IsInInstance = function() return false end, function() return true end
+			eq(ns.Layers.AskChoice(), false, "not in an instance")
+			IsInInstance = function() return false end
+			GetGuildInfo = function() return "House of Guedes", "Member", 3 end
+			eq(ns.Layers.AskChoice(), false, "outside Olympus the addon asks nothing")
+			GetGuildInfo = saved.guild
+			eq(#game.shown, 0)
+			eq(ns.Layers.AskChoice(), true)
+			eq(game.shown[1].which, "OLYMPUS_LOCATION_CHOICE"); eq(game.shown[1].a, ns.L.CHANNEL_PUBLIC, "no key: public, and it says so")
+			eq(ns.Layers.AskChoice(), false, "once a session"); eq(#game.shown, 1)
+			-- Pushed out by another window: no answer, asked again next session.
+			d.OnCancel(nil, nil, "override")
+			eq(ns.db.shareLocation, nil)
+			ns.Layers.Reset()
+			ns.rdb.realmKey = "secret"
+			eq(ns.Layers.AskChoice(), true)
+			eq(game.shown[2].a, ns.L.CHANNEL_SEALED, "sealed: the key's holders")
+			-- Keep private (or Escape): kept, never asked again.
+			d.OnCancel(nil, nil, "clicked")
+			eq(ns.db.shareLocation, false); eq(printed[#printed], ns.L.LOCATION_OFF)
+			ns.Layers.Reset()
+			eq(ns.Layers.AskChoice(), false, "answered: never again"); eq(#game.shown, 2)
+			-- Share: kept too.
+			ns.db.shareLocation = nil
+			d.OnAccept()
+			eq(ns.db.shareLocation, true); eq(printed[#printed], ns.L.LOCATION_ON)
+			ns.Layers.Reset()
+			eq(ns.Layers.AskChoice(), false)
+		end)
+		-- The gamepad UI: our own window, its buttons answer.
+		WithUI(function()
+			WithGamepadUI(true, function(game)
+				ns.db.shareLocation = nil
+				ns.Layers.Reset()
+				eq(ns.Layers.AskChoice(), true)
+				eq(#game.shown, 0, "never the game's popup")
+				local f = ns.Dialog.Find("OLYMPUS_LOCATION_CHOICE")
+				assert(f and f:IsShown(), "our window")
+				assert(f.text:GetText():find(ns.L.CHANNEL_SEALED, 1, true), f.text:GetText())
+				f.buttons[2]:Click()
+				eq(ns.db.shareLocation, false)
+			end)
+		end)
+		-- /oly location on | off, alone it says which; /oly status shows it.
+		SlashCmdList.OLYMPUS("location on"); eq(ns.db.shareLocation, true)
+		SlashCmdList.OLYMPUS("location off"); eq(ns.db.shareLocation, false)
+		SlashCmdList.OLYMPUS("location"); eq(printed[#printed], ns.L.LOCATION_OFF)
+		assert(ns.StatusText():find("privacy: zone and layer off  |  channel sealed", 1, true), "in /oly status")
+		ns.db.shareLocation = nil
+		assert(ns.StatusText():find("privacy: zone and layer not chosen (off)", 1, true))
+	end)
+	ns.db.shareLocation, InCombatLockdown, IsInInstance, ns.rdb.realmKey = saved.share, saved.combat, saved.instance, saved.key
+	ns.Print, ns.Comm.Hello, ns.Comm.Send, GetGuildInfo = saved.print, saved.hello, saved.send, saved.guild
+	ns.Layers.Reset()
+	if not ok then error(err, 0) end
+end)
+
+test("0.9.1 privacy: the first line in each channel waits for the player's OK (#16)", function()
+	local savedWarned, savedChat, savedTime, clock = ns.db.chatWarned, ns.rdb.chat, GetTime, 20000000
+	GetTime = function() return clock end
+	local ok, err = pcall(function()
+		ns.db.chatWarned = nil
+		local d = StaticPopupDialogs.OLYMPUS_CHAT_PRIVACY
+		eq(d.text, ns.L.CHAN_WARN_ASK); eq(d.button1, SEND_LABEL or "Send"); eq(d.button2, CANCEL or "Cancel")
+		WithGamepadUI(false, function(game)
+			WithLane(function(sent)
+				AsRank(3, function()
+					eq(select(2, Chan.Send("C", "hi")), "rank", "a line refused anyway never asks")
+				end)
+				AsRank(0, function(printed)
+					-- /olc: the line is held, the warning shown, nothing sent.
+					local okSend, why = Chan.Send("C", "the raid is at eight")
+					eq(okSend, false); eq(why, "confirm"); eq(#sent, 0)
+					eq(#game.shown, 1); eq(game.shown[1].which, "OLYMPUS_CHAT_PRIVACY"); eq(game.shown[1].a, "Captains")
+					eq(game.shown[1].b, ns.L.CHANNEL_PUBLIC, "who can join the channel")
+					eq(game.shown[1].data.text, "the raid is at eight")
+					-- Cancel: not sent, still to be asked; an answered window answers once.
+					d.OnCancel(nil, game.shown[1].data, "clicked")
+					eq(#sent, 0); eq(printed[#printed], ns.L.CHAN_WARN_NOT_SENT); eq(ns.db.chatWarned.C, nil)
+					d.OnAccept(nil, game.shown[1].data)
+					eq(#sent, 0)
+					-- Asked again; Send: the held line goes out, and [Captains] is warned for good.
+					clock = clock + 10
+					Chan.Send("C", "the raid is at eight")
+					eq(#game.shown, 2)
+					d.OnAccept(nil, game.shown[2].data)
+					eq(#sent, 1); assert(sent[1]:find("^M1~C~Olympus II~%d+~PA~the raid is at eight$"), sent[1])
+					eq(ns.db.chatWarned.C, true)
+					clock = clock + 10
+					eq((Chan.Send("C", "bring potions")), true, "not asked again")
+					eq(#sent, 2); eq(#game.shown, 2)
+					-- Each channel once: [Lords] and [Olympus] ask too.
+					clock = clock + 10
+					eq(select(2, Chan.Send("L", "lords only")), "confirm"); eq(game.shown[3].a, "Lords")
+					clock = clock + 10
+					eq(select(2, Chan.Send("A", "hello army")), "confirm"); eq(game.shown[4].a, "Olympus")
+					eq(#sent, 2)
+					for _, line in ipairs(printed) do assert(line ~= "CHAN_NOTICE", "no notice after a line any more") end
+				end)
+			end)
+		end)
+		-- The gamepad UI: our own window holds the line, and its Send sends it.
+		ns.db.chatWarned = nil
+		WithUI(function()
+			WithGamepadUI(true, function(game)
+				WithLane(function(sent)
+					AsRank(3, function()
+						clock = clock + 10
+						eq(select(2, Chan.Send("A", "for olympus")), "confirm")
+						eq(#game.shown, 0)
+						local f = ns.Dialog.Find("OLYMPUS_CHAT_PRIVACY")
+						assert(f and f:IsShown(), "our window")
+						assert(f.text:GetText():find("[Olympus] is not private", 1, true), f.text:GetText())
+						eq(f.data.text, "for olympus", "the line rides in the window")
+						f.buttons[1]:Click()
+						eq(#sent, 1); assert(sent[1]:find("~for olympus$"), sent[1])
+						eq(ns.db.chatWarned.A, true)
+					end)
+				end)
+			end)
+		end)
+	end)
+	GetTime, ns.db.chatWarned, ns.rdb.chat = savedTime, savedWarned, savedChat
+	if not ok then error(err, 0) end
+end)
+
+-- 0.9.1: chat
+do
+	-- The game's chat windows as GetChatWindowInfo tells them: 1 the main one, 2 the combat log
+	-- (docked), 3 unused, 4 "Olympus" docked behind another tab (hidden, so "not shown"), 5
+	-- "Officers" floating, 6-10 unused. fn(w, printed) runs with them, as a Lord of Olympus II.
+	local function WithWindows(fn)
+		local saved = { info = GetChatWindowInfo, fcf = FCF_GetChatWindowInfo, combat = IsCombatLog, num = NUM_CHAT_WINDOWS,
+			default = DEFAULT_CHAT_FRAME, lines = CHAT_LINES, windows = ns.db.chatWindows, chat = ns.rdb.chat, mute = ns.db.chatMute,
+			me = ns.me, frames = {} }
+		local w = {}
+		for i = 1, 10 do
+			saved.frames[i] = _G["ChatFrame" .. i]
+			w[i] = { name = "", shown = false, lines = {} }
+			w[i].AddMessage = function(self, text) self.lines[#self.lines + 1] = text end
+			_G["ChatFrame" .. i] = w[i]
+		end
+		w[1].name, w[1].shown = "General", true
+		w[2].name, w[2].isDocked = "Combat Log", true
+		w[3].name = "Voice"
+		w[4].name, w[4].isDocked = "Olympus", true
+		w[5].name, w[5].shown = "Officers", true
+		NUM_CHAT_WINDOWS = 10
+		GetChatWindowInfo = function(i)
+			local f = w[i]
+			return f.name, 14, 0, 0, 0, 1, f.shown, false, f.isDocked and 1 or nil, false
+		end
+		FCF_GetChatWindowInfo = nil
+		IsCombatLog = function(f) return f == w[2] end
+		DEFAULT_CHAT_FRAME = w[1]
+		ns.db.chatWindows, ns.rdb.chat, ns.db.chatMute, ns.me = nil, nil, nil, "Tester-Realm"
+		local ok, err = pcall(AsRank, 0, function(printed) fn(w, printed) end)
+		GetChatWindowInfo, FCF_GetChatWindowInfo, IsCombatLog, NUM_CHAT_WINDOWS = saved.info, saved.fcf, saved.combat, saved.num
+		DEFAULT_CHAT_FRAME, CHAT_LINES, ns.db.chatWindows, ns.rdb.chat, ns.db.chatMute = saved.default, saved.lines, saved.windows, saved.chat, saved.mute
+		ns.me = saved.me
+		for i = 1, 10 do _G["ChatFrame" .. i] = saved.frames[i] end
+		if not ok then error(err, 0) end
+	end
+	local function Count(list, what)
+		local n = 0
+		for _, l in ipairs(list) do if tostring(l):find(what, 1, true) then n = n + 1 end end
+		return n
+	end
+	local id = 5000
+
+	test("chat window: each channel's lines and our own echo go to the window chosen by its name (#14)", function()
+		WithWindows(function(w, printed)
+			eq(Chan.ChooseWindow("olympus"), true, "any case")
+			eq(ns.db.chatWindows["Tester-Realm"].A, "Olympus", "stored as the game names it")
+			eq(ns.db.chatWindows["Tester-Realm"].C, "Olympus"); eq(ns.db.chatWindows["Tester-Realm"].L, "Olympus")
+			eq(printed[#printed], ns.L.CHATWIN_SET:format("[Olympus], [Captains], [Lords]", '"Olympus"'))
+			eq(Count(w[4].lines, "[Lords]"), 1, "the choice is said in that window too")
+			eq(Chan.ChooseWindow("5 captains"), true, "by number, one channel")
+			eq(ns.db.chatWindows["Tester-Realm"].C, "Officers"); eq(ns.db.chatWindows["Tester-Realm"].A, "Olympus")
+			w[1].lines, w[4].lines, w[5].lines = {}, {}, {}
+			id = id + 1
+			eq((Chan.Receive("CHANNEL", "Member500", Msg("A", MY_GUILD, id, "to the olympus tab"), 3000000)), true)
+			eq((Chan.Receive("CHANNEL", "Member2", Msg("C", MY_GUILD, id, "to the officers window"), 3000001)), true)
+			eq((Chan.Receive("CHANNEL", "Member1", Msg("L", MY_GUILD, id, "lords to the olympus tab"), 3000002)), true)
+			eq(Count(w[4].lines, "to the olympus tab"), 2); eq(Count(w[5].lines, "to the officers window"), 1)
+			eq(#w[1].lines, 0, "nothing in the main window")
+			-- Our own line, shown when sent, lands with the others.
+			WithLane(function() ns.db.chatWarned = { A = true, C = true, L = true }; local ok, why = Chan.Send("A", "my own line", 1e12); eq(ok, true, tostring(why)) end)
+			eq(Count(w[4].lines, "my own line"), 1); eq(#w[1].lines, 0)
+			-- Through the slash command, and in /oly status.
+			SlashCmdList.OLYMPUS("chatwindow Officers lords")
+			eq(ns.db.chatWindows["Tester-Realm"].L, "Officers")
+			eq(Chan.WindowStatus(), '[Olympus] "Olympus", [Captains] "Officers", [Lords] "Officers"')
+			assert(ns.StatusText():find('chat windows: [Olympus] "Olympus"', 1, true), "in /oly status")
+			-- Per character, like the game's chat windows: another character's lines stay in the main window.
+			ns.me = "Other-Realm"
+			w[1].lines = {}
+			id = id + 1
+			eq((Chan.Receive("CHANNEL", "Member501", Msg("A", MY_GUILD, id, "other character"), 3000020)), true)
+			eq(Count(w[1].lines, "other character"), 1)
+		end)
+	end)
+
+	test("chat window: a window closed or renamed sends its lines to the main window, with one notice", function()
+		WithWindows(function(w, printed)
+			Chan.ChooseWindow("Olympus")
+			w[4].name = "Olympus 2" -- renamed
+			local n = #printed
+			for k = 1, 3 do
+				id = id + 1
+				eq((Chan.Receive("CHANNEL", "Member" .. (510 + k), Msg("A", MY_GUILD, id, "renamed " .. k), 3001000 + k * 2)), true)
+			end
+			eq(Count(w[1].lines, "renamed"), 3, "nothing lost: the main window has them")
+			eq(#printed, n + 1, "one notice"); eq(printed[#printed], ns.L.CHATWIN_GONE:format('"Olympus"'))
+			eq(ns.db.chatWindows["Tester-Realm"].A, "Olympus", "the choice is kept")
+			assert(Chan.WindowStatus():find('[Olympus] "Olympus" ' .. ns.L.CHATWIN_GONE_TAG, 1, true), Chan.WindowStatus())
+			w[4].name = "Olympus" -- back
+			id = id + 1
+			eq((Chan.Receive("CHANNEL", "Member520", Msg("A", MY_GUILD, id, "back again"), 3001020)), true)
+			eq(Count(w[4].lines, "back again"), 1); eq(#printed, n + 1)
+			w[4].isDocked, w[4].shown = nil, false -- closed
+			id = id + 1
+			eq((Chan.Receive("CHANNEL", "Member521", Msg("A", MY_GUILD, id, "closed now"), 3001030)), true)
+			eq(Count(w[1].lines, "closed now"), 1)
+			eq(#printed, n + 2, "gone again after it came back: one more notice")
+			-- An open window called the same (a tab made again) takes the lines back.
+			w[6].name, w[6].isDocked = "OLYMPUS", true
+			id = id + 1
+			eq((Chan.Receive("CHANNEL", "Member522", Msg("A", MY_GUILD, id, "new tab"), 3001040)), true)
+			eq(Count(w[6].lines, "new tab"), 1)
+			-- Our echo too, with the window closed.
+			w[6].isDocked = nil
+			w[1].lines = {}
+			WithLane(function() ns.db.chatWarned = { A = true, C = true, L = true }; local ok, why = Chan.Send("A", "echo to main", 1e12 + 100); eq(ok, true, tostring(why)) end)
+			eq(Count(w[1].lines, "echo to main"), 1)
+		end)
+	end)
+
+	test("chat window: main puts the lines back, unknown windows and the combat log are refused", function()
+		WithWindows(function(w, printed)
+			eq(Chan.ChooseWindow("Nope"), false)
+			eq(printed[#printed], ns.L.CHATWIN_NOT_FOUND:format('"Nope"', '1 "General", 4 "Olympus", 5 "Officers"', ns.L.CHATWIN_NEW))
+			eq(ns.db.chatWindows, nil, "nothing stored")
+			eq(Chan.ChooseWindow("6"), false, "a closed window"); eq(Chan.ChooseWindow("11"), false); eq(Chan.ChooseWindow("0"), false)
+			eq(Chan.ChooseWindow("2"), false); eq(printed[#printed], ns.L.CHATWIN_COMBATLOG)
+			eq(Chan.ChooseWindow("combat log"), false); eq(printed[#printed], ns.L.CHATWIN_COMBATLOG)
+			eq(Chan.ChooseWindow("1"), true, "the main window itself"); eq(ns.db.chatWindows, nil, "nothing to remember")
+			eq(Chan.ChooseWindow(""), false)
+			eq(printed[#printed - 1], ns.L.CHATWIN_NOW:format("[Olympus] " .. ns.L.CHATWIN_MAIN_NAME .. ", [Captains] "
+				.. ns.L.CHATWIN_MAIN_NAME .. ", [Lords] " .. ns.L.CHATWIN_MAIN_NAME))
+			eq(printed[#printed], ns.L.CHATWIN_USAGE)
+			-- The whole name first: a window may end with a channel's name.
+			w[5].name = "Olympus Lords"
+			eq(Chan.ChooseWindow("olympus lords"), true)
+			eq(ns.db.chatWindows["Tester-Realm"].A, "Olympus Lords"); eq(ns.db.chatWindows["Tester-Realm"].L, "Olympus Lords")
+			eq(Chan.ChooseWindow("Olympus all"), true); eq(ns.db.chatWindows["Tester-Realm"].C, "Olympus")
+			eq(Chan.ChooseWindow("main captains"), true)
+			eq(printed[#printed], ns.L.CHATWIN_MAIN:format("[Captains]"))
+			eq(ns.db.chatWindows["Tester-Realm"].C, nil); eq(ns.db.chatWindows["Tester-Realm"].A, "Olympus")
+			eq(Chan.ChooseWindow("main"), true)
+			eq(ns.db.chatWindows, nil, "nothing left")
+			-- The game without the chat window API, or with a broken one: the frame's own name and
+			-- dock (what FCF_SetWindowName and the dock set), else the main window, never an error.
+			eq(Chan.ChooseWindow("Olympus Lords"), true)
+			GetChatWindowInfo = nil
+			eq(select(3, Chan.FindWindow("Olympus")), "Olympus", "the frame's own name")
+			GetChatWindowInfo = function() error("broken") end
+			eq(select(2, Chan.FindWindow("Olympus")), 4, "docked")
+			-- Window 5 floats (shown, not docked): with nothing to say it is shown, the main window.
+			id = id + 1
+			eq((Chan.Receive("CHANNEL", "Member530", Msg("A", MY_GUILD, id, "no api"), 3002000)), true)
+			eq(Count(w[1].lines, "no api"), 1, "the main window")
+		end)
+	end)
+
+	test("flood guard: lines held back are told in one notice a minute, counted, and kept (#15)", function()
+		WithWindows(function(w, printed)
+			local stats0 = Chan.Stats().flood
+			local T = 4000000
+			Chan.FloodNotice(T - 1000) -- (whatever earlier tests held back)
+			local n = #printed
+			for i = 1, 70 do
+				local shown, why = Chan.Receive("CHANNEL", "Member" .. (600 + i), Msg("A", MY_GUILD, i, "busy " .. i), T + i * 0.5)
+				if i <= 60 then eq(shown, true, "line " .. i) else eq(why, "flood", "line " .. i) end
+			end
+			eq(#printed, n, "a few seconds to count the burst")
+			eq(Chan.FloodNotice(T + 40), false)
+			eq(Chan.FloodNotice(T + 40.5), true)
+			eq(#printed, n + 1, "one notice"); eq(printed[#printed], ns.L.CHAN_FLOOD_NOTICE:format("[Olympus] 10", Chan.HISTORY))
+			eq(Chan.FloodNotice(T + 200), false, "nothing more to tell")
+			-- Nothing held back is lost: the Realm tab's history has every line.
+			local h = Chan.History("A")
+			eq(#h, 70); eq(h[70].text, "busy 70")
+			-- More lines held within the minute wait for the next notice, in the window the channel shows in.
+			Chan.ChooseWindow("Olympus")
+			n = #printed
+			for i = 71, 75 do
+				eq(select(2, Chan.Receive("CHANNEL", "Member" .. (600 + i), Msg("A", MY_GUILD, i, "busy " .. i), T + 40 + i * 0.1)), "flood")
+			end
+			eq(Chan.FloodNotice(T + 100), false, "a minute after the last one")
+			Chan.Prune(T + 100.5) -- the housekeeping tells it when the timer did not
+			eq(Count(w[4].lines, ns.L.CHAN_FLOOD_NOTICE:format("[Olympus] 5", Chan.HISTORY)), 1)
+			eq(#printed, n, "not in the main window")
+			eq(Chan.Stats().flood - stats0, 15, "every line held is counted in a notice")
+			eq(#Chan.History("A"), 75)
+		end)
+	end)
+
+	test("the Realm tab shows every chat line the history keeps (#15)", function()
+		WithWindows(function()
+			for i = 1, 100 do
+				Chan.Receive("CHANNEL", "Member" .. (700 + i), Msg("A", MY_GUILD, i, "kept " .. i), 5000000 + i * 1.1)
+			end
+			eq(#Chan.History("A"), 100, "the history keeps 100 lines")
+			ns.Views.ShowChat("A")
+			local ok, lines = pcall(ns.Views.RealmLines)
+			ns.Views.ShowChat(nil)
+			assert(ok, lines)
+			local n = 0
+			for _, l in ipairs(lines) do if (l.text or ""):find("kept ", 1, true) then n = n + 1 end end
+			eq(n, 100, "lines kept but not shown were lost all the same")
+		end)
+	end)
+end
 
 print(("\n%d passed, %d failed"):format(passed, failed))
 os.exit(failed == 0 and 0 or 1)

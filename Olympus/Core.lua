@@ -2,7 +2,7 @@ local ADDON, ns = ...
 local L = ns.L
 
 ns.NAME = "Olympus"
-ns.VERSION = "0.9.0"
+ns.VERSION = "0.9.1"
 ns.PREFIX = "OLYMPUS"        -- addon message prefix (max 16 chars)
 ns.CHANNEL = "OlympusNet"    -- hidden chat channel shared by every Olympus guild (Alliance)
 ns.CHANNEL_HORDE = "OlympusNetH" -- the Horde's: the two factions never see each other's guilds
@@ -489,6 +489,19 @@ function ns.IsKingGuild(guild)
 	return want ~= nil and guild:lower() == want
 end
 
+-- The King himself, by his character's name, like the Treasurer: sender names are set by the
+-- server, so nobody else can speak as him, and no census vote (anyone on the channel can
+-- vote) can crown someone else or take the Crown from him. The Alliance's is the guild master
+-- of <OLYMPUS> as the census saw him on September 24, 2026 (a Forever name, one across the
+-- realm group). The Horde's is set here once it is known: until then nobody commands there
+-- (his position and his name on the lines still come from the census).
+ns.KING_CHARACTER = { Alliance = "Asmongold Asmongler", Horde = nil }
+function ns.KingCharacter() return ns.KING_CHARACTER[ns.faction or "Alliance"] end
+function ns.IsKingCharacter(name)
+	local pin = ns.KingCharacter()
+	return pin ~= nil and type(name) == "string" and ns.ShortName(name) == pin
+end
+
 -- The Crown: guild masters of any Olympus guild, and the officers of the King's guild.
 function ns.IsCrownRank(guild, rankIndex)
 	if not guild or not rankIndex then return false end
@@ -851,12 +864,14 @@ local function Help()
 	print(L.HELP_HOP)
 	print(L.HELP_LAYERHELP)
 	print(L.HELP_LAYERAUTO)
+	print(L.HELP_LOCATION)
 	print("  /oly decrees - decrees")
 	print("  /oly arms [text] | /oly muster [text] - decree (officers; 'test' = local preview)")
 	print(L.HELP_CHAN_ALL)
 	print(L.HELP_CHAN_CAPTAINS)
 	print(L.HELP_CHAN_LORDS)
 	print(L.HELP_CHAN_MUTE)
+	print(L.HELP_CHATWIN)
 	print(L.HELP_VOX)
 	print("  /oly mates - show/hide guildmates on map and minimap")
 	print("  /oly share - share/stop sharing your position with your guild")
@@ -917,6 +932,14 @@ SlashCmdList.OLYMPUS = function(input)
 			ns.Positions.SetEnabled(not ns.db.showMates)
 		elseif cmd == "share" then
 			ns.Positions.SetSharing(not ns.db.sharePosition)
+		elseif cmd == "location" then
+			-- Sharing zone and layer on the Olympus channel (Layers.Sharing); alone, says which.
+			local on = rest:lower()
+			if on == "on" or on == "off" then
+				ns.Layers.SetSharing(on == "on")
+			else
+				ns.Print(ns.Layers.Sharing() and L.LOCATION_ON or L.LOCATION_OFF)
+			end
 		elseif cmd == "officer" then
 			ns.Print(ns.L.OFFICER_FIXED)
 		elseif cmd == "demo" then
@@ -968,6 +991,8 @@ SlashCmdList.OLYMPUS = function(input)
 			ns.Channels.Send(ns.Channels.TierForWord(cmd), rest)
 		elseif cmd == "mute" then
 			ns.Channels.ToggleMute(rest)
+		elseif cmd == "chatwindow" then
+			ns.Channels.ChooseWindow(rest)
 		else
 			Help()
 		end

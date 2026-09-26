@@ -31,6 +31,11 @@ Hop.POPUP_TIME = 20     -- the helper's window
 Hop.ACCEPT_WAIT = 15    -- invite accepted, and no group this long after: next helper
 Hop.TRIES = 3           -- helpers asked in turn before giving up
 Hop.ASK_GAP = 20        -- one ask every 20 seconds
+Hop.BACKOFF = { 20, 60, 180 } -- after 1, 2, 3+ asks in a row that found nobody or got no invite:
+                        -- seconds from the last of them to the next ask
+Hop.BACKOFF_RESET = 600 -- ...forgotten after this long
+Hop.BRAKE_WINDOW = 10   -- asks heard for one layer in this many seconds...
+Hop.BRAKE_ASKS = 10     -- ...from more askers than this: our own ask waits a little
 Hop.JOIN_WAIT = 20      -- in the group this long without seeing the move: offer to leave anyway
 Hop.HELP_GAP = 60       -- the same asker is answered once a minute
 Hop.OFFER_GAP = 10      -- a helper offers once every 10 seconds at most
@@ -48,6 +53,9 @@ Hop.after = function(seconds, where, fn) ns.After(seconds, where, fn) end
 
 local ask             -- our own request in progress
 local lastAsk = -math.huge
+local fails, failedAt = 0, -math.huge -- our asks in a row that found nobody or got no invite
+-- Asks heard on the channel for BRAKE_WINDOW, per layer and asker: { ["mapID:zoneUID"] = { [short] = t } }.
+local heard = {}
 -- Askers are keyed by short name: the channel and whispers may not both carry the realm.
 local offered = {}    -- [id .. asker] = t: offers we sent (a request must match one)
 local answeredAt = {} -- [asker] = t
@@ -58,6 +66,7 @@ local stats = { asks = 0, offers = 0, requests = 0, invites = 0, noes = 0, joins
 local guests = {}     -- [short name] = { name, id, t, release }: players we invited for a hop
 local kingMode        -- this session's answer to the King's layer window: auto, manual or no
 local promptShown, lastPromptCheck = false, -math.huge
+local privateHinted = false -- told this session what an ask says while the player shares nothing
 
 local function Changed() ns.Fire("HOP_CHANGED") end
 
@@ -174,6 +183,7 @@ function Hop.HandleAsk(dist, sender, text)
 	sender = ns.FullName(sender)
 	local short = ns.ShortName(sender)
 	local now = ns.Now()
+	Hop.Hear(mapID, zoneUID, short, now)
 	if now - (answeredAt[short] or -math.huge) < Hop.HELP_GAP then return end
 	if now - lastOffer < Hop.OFFER_GAP then return end
 	if not Hop.CanHelp(mapID, zoneUID) then return end
@@ -280,6 +290,42 @@ local function Finish(message, fromPopup)
 	Changed()
 end
 
+-- Seconds before we may ask again: ASK_GAP after an ask, and after asks in a row that found
+-- nobody or got no invite, longer each time (BACKOFF), so a player clicking a layer where
+-- nobody can help doesn't ask the whole channel every 20 seconds.
+function Hop.WaitLeft(now)
+	now = now or ns.Now()
+	if fails > 0 and now - failedAt > Hop.BACKOFF_RESET then fails = 0 end
+	local left = Hop.ASK_GAP - (now - lastAsk)
+	if fails > 0 then left = math.max(left, Hop.BACKOFF[math.min(fails, #Hop.BACKOFF)] - (now - failedAt)) end
+	return math.max(0, left)
+end
+
+-- The ask ended with nobody (no offer at all) or no invite: the next one waits longer.
+local function Failed(nobody)
+	fails, failedAt = fails + 1, ns.Now()
+	Finish((nobody and L.HOP_NOBODY_WAIT or L.HOP_GAVE_UP_WAIT):format(math.ceil(Hop.WaitLeft())))
+end
+
+-- An ask heard on the channel (HandleAsk), counted once per asker.
+function Hop.Hear(mapID, zoneUID, short, now)
+	local key = mapID .. ":" .. zoneUID
+	local askers = heard[key] or {}
+	heard[key] = askers
+	local n = 0
+	for _ in pairs(askers) do n = n + 1 end
+	if n < Hop.BRAKE_ASKS * 4 or askers[short] then askers[short] = now end -- (enough to know it is a crowd)
+end
+
+-- How many asked for this layer in the last BRAKE_WINDOW.
+function Hop.Crowd(mapID, zoneUID, now)
+	local n = 0
+	for _, t in pairs(heard[mapID .. ":" .. zoneUID] or {}) do
+		if now - t <= Hop.BRAKE_WINDOW then n = n + 1 end
+	end
+	return n
+end
+
 -- Weighted draw: outside a group counts double, fewer recent invites counts more. Each asker
 -- draws on its own, so a crowd of askers spreads over the helpers.
 function Hop.Pick(offers, tried)
@@ -305,7 +351,7 @@ end
 function Hop.Next()
 	if not ask or ask.phase == "done" then return end
 	local o = ask.tries < Hop.TRIES and Hop.Pick(ask.offers, ask.tried)
-	if not o then return Finish(ask.tries == 0 and L.HOP_NOBODY or L.HOP_GAVE_UP) end
+	if not o then return Failed(ask.tries == 0) end
 	ask.tried[o.name] = true
 	ask.tries = ask.tries + 1
 	ask.helper, ask.phase, ask.asked = o.name, "requested", ns.Now()
@@ -325,7 +371,8 @@ function Hop.Ask(mapID, zoneUID, label)
 	if IsInGroup and IsInGroup() then return ns.Print(L.HOP_IN_GROUP) end
 	local now = ns.Now()
 	if ask and ask.phase ~= "done" then return ns.Print(L.HOP_BUSY) end
-	if now - lastAsk < Hop.ASK_GAP then return ns.Print(L.HOP_WAIT:format(math.ceil(Hop.ASK_GAP - (now - lastAsk)))) end
+	local wait = Hop.WaitLeft(now)
+	if wait > 0 then return ns.Print(L.HOP_WAIT:format(math.ceil(wait))) end
 	if not ns.Comm.ChannelReady() then return ns.Print(L.CHAN_NOT_READY) end
 	lastAsk = now
 	ask = {
@@ -334,10 +381,30 @@ function Hop.Ask(mapID, zoneUID, label)
 		from = mine and { mapID = mine.mapID, zoneUID = mine.zoneUID },
 	}
 	stats.asks = stats.asks + 1
+	-- A crowd is asking for this layer right now (the King just came online): its helpers are
+	-- busy answering them, so ours goes out a few seconds later, at a random moment (Tick).
+	if Hop.Crowd(mapID, zoneUID, now) > Hop.BRAKE_ASKS then
+		ask.phase, ask.sendAt = "queued", now + Hop.BRAKE_WINDOW * (0.5 + Hop.random())
+		ns.Print(L.HOP_CROWDED:format(math.ceil(ask.sendAt - now)))
+		return Changed()
+	end
+	Hop.SendAsk()
+end
+
+function Hop.SendAsk()
+	if not ask then return end
+	local now = ns.Now()
+	lastAsk, ask.t, ask.phase = now, now, "asking"
 	-- Ahead of the census traffic: someone waits for an invite (Comm.Send urgent).
-	ns.Comm.Send("CHANNEL", ("LQ~%d~%d~%d"):format(ask.id, mapID, zoneUID), nil, true)
+	ns.Comm.Send("CHANNEL", ("LQ~%d~%d~%d"):format(ask.id, ask.mapID, ask.zoneUID), nil, true)
+	-- Keeping zone and layer private (Layers.Sharing): the ask still names this zone and the
+	-- layer wanted, and layers are only known from the members who share theirs. Once a session.
+	if not ns.Layers.Sharing() and not privateHinted then
+		privateHinted = true
+		ns.Print(L.HOP_PRIVATE_HINT)
+	end
 	ns.Print(L.HOP_ASKING:format(ask.label))
-	ns.Log("hop: ask %d for map %d zoneUID %d", ask.id, mapID, zoneUID)
+	ns.Log("hop: ask %d for map %d zoneUID %d", ask.id, ask.mapID, ask.zoneUID)
 	Changed()
 end
 
@@ -483,6 +550,7 @@ function Hop.OnRoster()
 	if not helper and not named and (ask.phase == "accepted" or ask.invitedBy) then helper = ask.invitedBy or ask.helper end
 	if not helper then return Finish() end
 	ask.helper, ask.phase, ask.joined = helper, "joined", ns.Now()
+	fails = 0 -- someone could help: the usual wait again
 	stats.joins = stats.joins + 1
 	ns.Print(L.HOP_JOINED:format(ns.DisplayName(helper)))
 	Changed()
@@ -537,12 +605,20 @@ function Hop.Tick()
 		lastPromptCheck = now
 		Hop.CheckKingPrompt()
 	end
+	for key, askers in pairs(heard) do
+		for short, t in pairs(askers) do
+			if now - t > Hop.BRAKE_WINDOW then askers[short] = nil end
+		end
+		if not next(askers) then heard[key] = nil end
+	end
 	if not ask or ask.phase == "done" then return end
-	if ask.phase == "asking" then
+	if ask.phase == "queued" then
+		if now >= ask.sendAt then Hop.SendAsk() end
+	elseif ask.phase == "asking" then
 		if now - ask.t >= Hop.WINDOW and ask.count > 0 then
 			Hop.Next()
 		elseif now - ask.t >= Hop.NOBODY then
-			Finish(L.HOP_NOBODY)
+			Failed(true)
 		end
 	elseif ask.phase == "requested" then
 		if now - ask.asked >= Hop.WAIT then Hop.Next() end
@@ -807,7 +883,9 @@ end
 -- Tests start from a clean state.
 function Hop.Reset()
 	ask, pending, lastAsk = nil, nil, -math.huge
-	kingMode, promptShown, lastPromptCheck = nil, false, -math.huge
+	fails, failedAt = 0, -math.huge
+	wipe(heard)
+	kingMode, promptShown, lastPromptCheck, privateHinted = nil, false, -math.huge, false
 	lastOffer, declines, pausedUntil = -math.huge, 0, -math.huge
 	wipe(offered); wipe(answeredAt); wipe(recent); wipe(guests)
 	for k in pairs(stats) do stats[k] = 0 end

@@ -189,6 +189,15 @@ function ns.StatusText()
 		table.sort(types)
 		add("received by type: %s  |  incomplete reports: %d waiting, %d dropped", #types > 0 and table.concat(types, " ") or "none", c.pending or 0, c.partial or 0)
 		add("own echoes: %d  |  channel members: %s", c.echo or 0, tostring(ChannelMembers(c.channelName) or "unknown"))
+		-- Who holds the channel as last seen, our seat on it, and what its owners did (Comm.lua).
+		local o = c.guard
+		if o then
+			add("channel owner: %s (%s)  |  me: %s  |  watched: %s", tostring(o.owner or "unknown"),
+				o.ownerAt and ns.Ago(o.ownerAt) or "not seen", o.role, tostring(o.watched))
+			add("channel seen: %s  |  moderation=%s announce=%s", CountList(o.seen), tostring(o.moderation or "?"), tostring(o.announce or "?"))
+			add("channel undo: password=%s banned=%d muted=%d  |  locked: %s", tostring(o.password), o.banned, o.muted,
+				o.locked and ("%s, %d tries, next in %ds"):format(tostring(o.locked.why), o.locked.tries, o.locked.nextIn) or "no")
+		end
 		-- The chat channels by number: ours should come after the game's own (Comm.KeepLast).
 		local ok, list = pcall(function() return { GetChannelList() } end)
 		if ok and list and #list > 0 then
@@ -206,7 +215,12 @@ function ns.StatusText()
 			add("chat: sent=%d shown=%d hidden=%d lane=%d muted=%s drops bad=%d dup=%d rate=%d flood=%d forged=%d unverified=%d rank=%d",
 				ch.sent, ch.shown, ch.hidden, c.chatQueue or 0, #ch.muted > 0 and table.concat(ch.muted, ",") or "none",
 				ch.bad, ch.dup, ch.rate, ch.flood, ch.forged, ch.unverified, ch.rank)
+			if ns.Channels.WindowStatus then add("chat windows: %s", ns.Channels.WindowStatus()) end
 		end
+		-- What leaves this client about where the player is, and who reads the channel (0.9.1).
+		add("privacy: zone and layer %s  |  channel %s  |  chat warning accepted: %s",
+			ns.Layers and ns.Layers.SharingState and ns.Layers.SharingState() or "?", c.sealed and "sealed (key holders)" or "public (anyone)",
+			ch and ch.warned and #ch.warned > 0 and table.concat(ch.warned, ",") or "none")
 	end
 	local n = 0
 	for _ in pairs(ns.rdb.guilds) do n = n + 1 end

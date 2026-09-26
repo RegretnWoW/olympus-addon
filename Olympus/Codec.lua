@@ -15,6 +15,7 @@ local ADDON, ns = ...
 -- Chunk:   C<id>:<i>:<n>:<piece>   (addon messages are limited to 255 bytes)
 -- Hello:   H1~<version>~<realm>    (sent on GUILD so members with the addon find each other;
 --                                    older versions send no realm)
+--          ~<p|s>[~z]              (the channel, public or sealed; z: it shares its zone, 0.9.1)
 -- Chat:    M1~tier~guild~id~class~text   (tier A|C|L, id 0-9999 per part, class 2 letters or empty)
 
 local Codec = {}
@@ -198,6 +199,25 @@ function Codec.EncodeReport(r)
 		r.faction == "Horde" and "H" or "A",
 		encMap(r.versions, 12),
 	}, "~")
+end
+
+-- The report as it may leave this client (0.9.1): a copy, where people are only with their
+-- yes. counts: the members per zone (numbers only) stay; shares(name): true for a leader or
+-- officer whose zone may be named. Without either, no zone at all. The fields stay, empty,
+-- so every version decodes it (an empty zone reads as none).
+function Codec.Shareable(r, counts, shares)
+	local out = {}
+	for k, v in pairs(r) do out[k] = v end
+	if not counts then out.zones = {} end
+	if not (shares and r.leader and shares(r.leader)) then out.leaderZone = nil end
+	out.officers = {}
+	for i, o in ipairs(r.officers or {}) do
+		local copy = {}
+		for k, v in pairs(o) do copy[k] = v end
+		if not (shares and shares(o.name)) then copy.zone = nil end
+		out.officers[i] = copy
+	end
+	return out
 end
 
 -- Only version numbers ("0.8.2") and "?" as keys: nothing else reaches the author's tab.

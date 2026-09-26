@@ -2,11 +2,12 @@ local ADDON, ns = ...
 local L = ns.L
 
 -- The Throne: a tab for the King alone (the guild master of the guild named exactly
--- "Olympus" of his faction), and for the Hands he names. What he sends goes out on the
--- Olympus channel as T1 messages, and every client checks that the sender really is that
--- guild master (Data.KnownRank: his own guildmates from their roster, everyone else from the
--- census vote), or one of his Hands for the tools he lends them (HAND_MAY). Answers go back
--- to whoever asked, alone (T2, T3 as whispered addon messages).
+-- "Olympus" of his faction, and that very character where the addon knows him by name,
+-- ns.KING_CHARACTER), and for the Hands he names. What he sends goes out on the Olympus
+-- channel as T1 messages, and every client checks that the sender really is him (his name,
+-- which the server sets: never a census vote, which anyone on the channel can cast), or one
+-- of his Hands for the tools he lends them (HAND_MAY). Answers go back to whoever asked,
+-- alone (T2, T3 as whispered addon messages).
 --   T1~S~<id>~<guild>                      Summon the Lords (roll call)
 --   T1~I~<id>~<guild>                      Royal Inspection: every addon patrols 2 minutes
 --   T1~A~<id>~<guild>~<minutes>~<zone>~<title>   The King's Agenda (resent every 5 min)
@@ -69,10 +70,13 @@ end
 -- Who
 ---------------------------------------------------------------------------
 
+-- Where the King is pinned by name, another guild master of his guild is not him: nobody
+-- would obey the powers the Throne gave that character.
 function King.IsKing()
 	if not ns.IsMember() then return false end
 	local guild, _, rank = GetGuildInfo("player")
-	return ns.IsKingGuild(guild) and rank == 0
+	if not (ns.IsKingGuild(guild) and rank == 0) then return false end
+	return ns.KingCharacter() == nil or ns.IsKingCharacter(ns.me)
 end
 
 -- The author's test build (Dev.lua, never published) shows the tab without the powers:
@@ -88,9 +92,14 @@ function King.Preview()
 end
 function King.Visible() return King.IsKing() or King.IsHand() or King.Preview() end
 
--- soft: for his position (it only shows, Data.KnownRank); his commands need the full check.
+-- Where the King is pinned by name (ns.KING_CHARACTER): that character alone, speaking for
+-- the King's guild. No census vote can crown anyone else, nor silence him. Where he is not
+-- (the Horde, until his name is known) nobody's commands are obeyed; soft: what only shows
+-- (his position, his name on the lines) still comes from the census there (Data.KnownRank).
 local function KingSender(sender, guild, soft)
-	return ns.IsKingGuild(guild) and ns.Data.KnownRank(sender, guild, soft) == 0
+	if not ns.IsKingGuild(guild) then return false end
+	if ns.KingCharacter() then return ns.IsKingCharacter(sender) end
+	return soft == true and ns.Data.KnownRank(sender, guild, true) == 0
 end
 
 -- The page refreshes at most once a second, whatever arrives.
@@ -582,7 +591,7 @@ function King.Agenda()
 	return agenda
 end
 
-local function OnAgenda(king, id, rest)
+local function OnAgenda(king, id, rest, guild)
 	local seconds, zone, title = rest:match("^(%d+)~([^~]*)~(.*)$")
 	seconds = tonumber(seconds)
 	if not seconds or seconds < 30 or seconds > 720 * 60 or title == "" then return end
@@ -599,8 +608,11 @@ local function OnAgenda(king, id, rest)
 		lastAgendaWarn = now
 		local minutes = math.ceil(seconds / 60)
 		Warn(L.THRONE_AGENDA_SET:format(agenda.title, minutes, agenda.zone))
-		ns.ShowDialog("OLYMPUS_AGENDA_CALL", L.THRONE_AGENDA_POPUP:format(ns.KingName(king), agenda.title, minutes,
-			agenda.zone ~= "" and agenda.zone or "?"))
+		-- The King by the army's name for him; a Hand by theirs (as OnSummon).
+		local where = agenda.zone ~= "" and agenda.zone or "?"
+		local text = King.FromKing(king, guild) and L.THRONE_AGENDA_POPUP:format(ns.KingName(king), agenda.title, minutes, where)
+			or L.THRONE_AGENDA_POPUP_HAND:format(ns.DisplayName(king), agenda.title, minutes, where)
+		ns.ShowDialog("OLYMPUS_AGENDA_CALL", text)
 	end
 	Changed()
 end
@@ -658,6 +670,8 @@ function King.ToggleLocation()
 	ns.db.throneLocation = not King.SharingLocation()
 	if King.SharingLocation() then
 		ns.Print(L.THRONE_LOCATION_SHOWN)
+		-- His crown is his yes for his layer too (Layers.lua): the army asks to join him there.
+		ns.Print(L.THRONE_LOCATION_LAYER)
 		SendLocation(true)
 	else
 		ns.Print(L.THRONE_LOCATION_HIDDEN)
@@ -730,7 +744,10 @@ function King.HandleCommand(dist, sender, text)
 	if not kind then return end
 	if not King.Authorized(kind, sender, guild) then
 		-- Positions come every few seconds: not logged.
-		if kind ~= "P" then ns.Log("throne %s from %s ignored: not the King of %s nor his Hand", kind, sender, tostring(guild)) end
+		if kind ~= "P" then
+			ns.Log("throne %s from %s ignored: not the King of %s nor his Hand%s", kind, sender, tostring(guild),
+				ns.KingCharacter() and "" or " (no King named on this side: nobody commands)")
+		end
 		return
 	end
 	id = tonumber(id)
@@ -741,7 +758,7 @@ function King.HandleCommand(dist, sender, text)
 	elseif kind == "H" then OnHands(sender, rest)
 	elseif kinds[kind] then kinds[kind](sender, id, rest, guild)
 	elseif kind == "I" then OnInspect(sender, id)
-	elseif kind == "A" then OnAgenda(sender, id, rest)
+	elseif kind == "A" then OnAgenda(sender, id, rest, guild)
 	elseif kind == "P" then OnLocation(sender, rest)
 	elseif kind == "Q" then
 		-- Only whoever put the crown there takes it off.
@@ -771,6 +788,8 @@ ns.On("LOGIN", function()
 	-- The guild is not always known at login yet: checked when the note is due.
 	ns.After(20, "king location note", function()
 		if King.SharingLocation() and King.IsKing() then ns.Print(L.THRONE_LOCATION_SHOWN) end
+		-- A King no update has named yet (the Horde's): his commands reach nobody (KingSender).
+		if King.IsKing() and not ns.KingCharacter() then ns.Print(L.THRONE_NOT_NAMED) end
 	end)
 	ns.Every(60, "agenda", function()
 		local a = King.Agenda()

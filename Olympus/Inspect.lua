@@ -34,6 +34,37 @@ end
 
 local Source = Store
 
+-- Every player a patrol ever checked stays in the saved variables, and the Tabards tab draws a
+-- line for each: after a few weeks of patrols in a crowded capital that is thousands. Kept:
+-- the last MAX_AGE, and at most MAX_PLAYERS of them, the ones that matter first (marked by
+-- hand, then caught without the colors), then the newest. A mark by hand stays past MAX_AGE.
+Inspect.MAX_AGE = 14 * 86400
+Inspect.MAX_PLAYERS = 2000
+local function Keep(p)
+	if p.marked then return 1 end
+	if p.status == "NONE" or p.status == "OTHER" then return 2 end
+	return 3
+end
+function Inspect.Prune()
+	local players, now, n = Store().players, ns.Now(), 0
+	for name, p in pairs(players) do
+		if type(p) ~= "table" or (not p.marked and now - (tonumber(p.t) or 0) > Inspect.MAX_AGE) then
+			players[name] = nil
+		else
+			n = n + 1
+		end
+	end
+	if n <= Inspect.MAX_PLAYERS then return end
+	local list = {}
+	for name, p in pairs(players) do list[#list + 1] = { name = name, keep = Keep(p), t = tonumber(p.t) or 0 } end
+	table.sort(list, function(a, b)
+		if a.keep ~= b.keep then return a.keep < b.keep end
+		if a.t ~= b.t then return a.t > b.t end
+		return a.name < b.name
+	end)
+	for i = Inspect.MAX_PLAYERS + 1, #list do players[list[i].name] = nil end
+end
+
 -- itemID nil + some other gear visible = really no tabard. Nothing visible at all usually
 -- means the inspect data did not load, so we call it UNKNOWN instead of accusing anyone.
 function Inspect.Classify(tabardID, anyGearVisible)
@@ -88,6 +119,7 @@ function Inspect.Record(name, guild, classFile, level, tabardID, anyGear)
 		ns.Print(("|cffff4040%s|r <%s>: %s"):format(ns.ShortName(name), guild or "?", label))
 		ns.PlayAlert("soft")
 	end
+	if not previous then Inspect.Prune() end -- (only a new player makes the store grow)
 	ns.Fire("INSPECT_CHANGED")
 	return p
 end
@@ -331,26 +363,61 @@ function Inspect.ShameList()
 	return out
 end
 
+-- A wall is a raid warning and a loud alert on every screen, so like the decrees (Decree.lua)
+-- it is rate-limited on both ends: the Crown publishes once a minute, each sender is heard
+-- once a minute and all of them SHAME_PER_MINUTE times a minute, and a wall that names the
+-- same players as the one shown changes nothing (no alert, no redraw).
+Inspect.SHAME_COOLDOWN = 60
+Inspect.SHAME_PER_SENDER = 60
+Inspect.SHAME_PER_MINUTE = 6
+local lastShameSent = -math.huge
+local shameBySender = {}
+local shameRecent = {} -- when the walls we accepted arrived (flood guard)
+
 function Inspect.PublishShame()
 	if not Inspect.ShameOpen() then return end
 	if not ns.IsCrown() then
 		ns.Print(L.CROWN_ONLY)
 		return
 	end
+	local now = ns.Now()
+	if now - lastShameSent < Inspect.SHAME_COOLDOWN then
+		ns.Print(L.SHAME_COOLDOWN:format(math.ceil(Inspect.SHAME_COOLDOWN - (now - lastShameSent))))
+		return
+	end
+	Inspect.Prune() -- (the Royal Inspection just added what the patrols reported)
 	local list = Inspect.ShameList()
 	if #list == 0 then
 		ns.Print(L.DISCORD_INSPECT_CLEAN)
 		return
 	end
+	lastShameSent = now
 	local guild, _, rankIndex = GetGuildInfo("player")
 	ns.Comm.SendChunked(ns.Codec.EncodeShame(guild, rankIndex, list))
-	Inspect.ShowShame({ by = ns.DisplayName(ns.me), guild = guild, list = list, t = ns.Now() })
+	local by = ns.DisplayName(ns.me)
+	-- The same wall again (for those who logged in since): sent, and only a line here.
+	if not Inspect.ShowShame({ by = by, guild = guild, list = list, t = now }) then
+		ns.Print("|cffff4040" .. L.SHAME_PUBLISHED:format(#list, by) .. "|r")
+	end
 end
 
+-- The same players (and guilds) in any order.
+local function SameWall(a, b)
+	if not a or not b or #a.list ~= #b.list then return false end
+	local names = {}
+	for _, p in ipairs(a.list) do names[tostring(p.name) .. ":" .. tostring(p.guild)] = true end
+	for _, p in ipairs(b.list) do
+		if not names[tostring(p.name) .. ":" .. tostring(p.guild)] then return false end
+	end
+	return true
+end
+
+-- Shows a wall; false when it names the same players as the one shown (nothing happens).
 function Inspect.ShowShame(shame)
 	for i = #shame.list, 1, -1 do
 		if Pardoned(shame.list[i].name) then table.remove(shame.list, i) end
 	end
+	if SameWall(Inspect.shame, shame) then return false end
 	Inspect.shame = shame
 	local text = L.SHAME_PUBLISHED:format(#shame.list, shame.by)
 	ns.Print("|cffff4040" .. text .. "|r")
@@ -359,20 +426,35 @@ function Inspect.ShowShame(shame)
 	end
 	ns.PlayAlert("loud")
 	ns.Fire("INSPECT_CHANGED")
+	return true
 end
 
 function Inspect.Shame()
 	return Inspect.shame
 end
 
-ns.Comm.Handle("S1", function(dist, sender, text)
+function Inspect.HandleShame(dist, sender, text)
 	if dist ~= "CHANNEL" or not Inspect.ShameOpen() then return end
 	local s = ns.Codec.DecodeShame(text)
 	if not s or not ns.IsFederation(s.guild) then return end
 	local rank = ns.Data.KnownRank(sender, s.guild)
 	if not rank or not ns.IsCrownRank(s.guild, rank) then return end
-	Inspect.ShowShame({ by = ns.DisplayName(sender), guild = s.guild, list = s.list, t = ns.Now() })
-end)
+	local now = ns.Now()
+	if now - (shameBySender[sender] or -math.huge) < Inspect.SHAME_PER_SENDER then return end
+	for i = #shameRecent, 1, -1 do if now - shameRecent[i] > 60 then table.remove(shameRecent, i) end end
+	if #shameRecent >= Inspect.SHAME_PER_MINUTE then return end
+	shameBySender[sender] = now
+	shameRecent[#shameRecent + 1] = now
+	Inspect.ShowShame({ by = ns.DisplayName(sender), guild = s.guild, list = s.list, t = now })
+end
+ns.Comm.Handle("S1", function(...) Inspect.HandleShame(...) end)
+
+-- Tests start from a clean state.
+function Inspect.ResetShame()
+	lastShameSent = -math.huge
+	wipe(shameBySender); wipe(shameRecent)
+	Inspect.shame = nil
+end
 
 ---------------------------------------------------------------------------
 -- Wiring
@@ -390,7 +472,7 @@ local function OnTooltipUnit(tooltip)
 	if patrol then Enqueue(unit) end
 end
 
-ns.On("INIT", function() Store() end)
+ns.On("INIT", function() Inspect.Prune() end) -- (Prune makes the store too)
 
 ns.On("LOGIN", function()
 	ns.RegisterEvent("INSPECT_READY", OnInspectReady)

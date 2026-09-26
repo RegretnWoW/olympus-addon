@@ -539,9 +539,10 @@ function Treasury.HandleReport(dist, sender, text)
 	if dist ~= "CHANNEL" then return end
 	local guild, rest = text:match("^T8~([^~]*)~(.*)$")
 	if not guild then return end
-	-- The Treasurer himself: that name, in the guild OLYMPUS, confirmed there by the census
-	-- (or our roster, when OLYMPUS is our guild).
-	if not ns.IsTreasurer(sender, guild) or not ns.Data.KnownRank(sender, guild, true) then return end
+	-- The Treasurer himself: that name (the server sets it), speaking for the King's guild
+	-- OLYMPUS. No census vote is asked for: it proves nothing more about him, and forged votes
+	-- could have silenced him.
+	if not ns.IsTreasurer(sender, guild) or not ns.IsKingGuild(guild) then return end
 	local balance, allIn, allOut, week, donors, word, rank, book = rest:match("^(%-?%d+)~(%-?%d+)~(%-?%d+)~(%-?%d+)~(%d+)~([^~]*)~([^~]*)~(.*)$")
 	if not balance then return end
 	local function U(n) return math.max(0, Num(n)) end

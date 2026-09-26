@@ -32,10 +32,22 @@ function Data.Guild(name)
 	return key and ns.rdb.guilds[key] or nil
 end
 
+-- Where the King is pinned by name (ns.KING_CHARACTER), a report of his guild that names
+-- anyone else as its leader (or nobody) is not his guild's: forged, or out of date.
+function Data.OtherKing(guild, leader)
+	return ns.IsKingGuild(guild) and ns.KingCharacter() ~= nil and not ns.IsKingCharacter(leader)
+end
+
 ns.On("INIT", function()
 	local now = ns.Now()
 	for name, g in pairs(ns.rdb.guilds) do
-		if type(g) ~= "table" or now - (g.t or 0) > Data.KEEP then ns.rdb.guilds[name] = nil end
+		if type(g) ~= "table" or now - (g.t or 0) > Data.KEEP then
+			ns.rdb.guilds[name] = nil
+		elseif not g.mine and Data.OtherKing(name, g.leader) then
+			-- Kept from before the King was pinned: the next real report takes its place.
+			ns.Log("dropped guild %s: names %s its leader, not the King", name, tostring(g.leader))
+			ns.rdb.guilds[name] = nil
+		end
 	end
 	-- Kept by older versions: a report bigger than a guild can be (forged), and one guild under
 	-- two spellings (the newer one stays). Collected first: pairs() must not see removals twice.
@@ -210,8 +222,16 @@ function Data.Receive(r, sender)
 		ns.Log("ignored %s from %s: a %s guild", r.guild, who, tostring(r.faction))
 		return false
 	end
+	-- The King's guild is led by the King: where he is pinned by name, a report naming anyone
+	-- else at its head counts for nothing, not even as a vote. It can't replace the row
+	-- everyone sees, nor outvote the real reporters (GitHub issue #18).
+	if Data.OtherKing(r.guild, r.leader) then
+		ns.Log("ignored %s from %s: names %s its leader, not the King", r.guild, who, tostring(r.leader))
+		return false
+	end
 	if not Data.ClaimGuild(who, r.guild) then
-		ns.Log("ignored %s: already reported %s, now claims %s", who, senderGuild[who], r.guild)
+		local claimed = senderGuild[who]
+		ns.Log("ignored %s: already reported %s, now claims %s", who, claimed and claimed.guild or "?", r.guild)
 		return false
 	end
 	-- One guild whatever the case it is spelled in: the spelling already stored is its key, and

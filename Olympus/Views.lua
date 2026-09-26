@@ -530,7 +530,8 @@ local function ChatTiers()
 	return out
 end
 
-Views.CHAT_SHOWN = 60
+-- Every line the history keeps (Channels.HISTORY): lines kept but never shown were lost all the same.
+Views.CHAT_SHOWN = ns.Channels and ns.Channels.HISTORY or 100
 local function ChatLines()
 	local C = ns.Channels
 	local lines = { { text = Gold(L.CHATS_BACK), onClick = function() Views.ShowChat(nil) end, gapAfter = true } }
@@ -877,6 +878,8 @@ local STATUS_TEXT = {
 	YOUNG = function() return Grey(L.TABARD_YOUNG) end,
 }
 
+Views.INSPECT_ROWS = 200 -- inspected players listed on the Tabards page
+
 local function HeraldryLines()
 	local s = ns.Inspect.Summary()
 	-- The King (and his Hands): the Royal Inspection, and what the patrols reported (King.lua).
@@ -924,7 +927,11 @@ local function HeraldryLines()
 	if #s.guilds == 0 then lines[#lines + 1] = { text = Grey(L.INSPECT_EMPTY) } end
 	lines[#lines].gapAfter = true
 	lines[#lines + 1] = { header = true, text = L.INSPECTED_PLAYERS }
-	for _, p in ipairs(s.players) do
+	-- A line (and a frame) each: the first INSPECT_ROWS, marked and caught players first
+	-- (Inspect.Summary), the rest counted.
+	local rows = math.min(#s.players, Views.INSPECT_ROWS)
+	for i = 1, rows do
+		local p = s.players[i]
 		lines[#lines + 1] = {
 			key = p.name,
 			cols = {
@@ -949,6 +956,7 @@ local function HeraldryLines()
 			end,
 		}
 	end
+	if #s.players > rows then lines[#lines + 1] = { text = Grey(L.AND_MORE:format(#s.players - rows)) } end
 	return lines
 end
 
