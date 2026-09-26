@@ -744,6 +744,12 @@ L.HELP_TREASURER = "  /oly treasurer on|off - the Treasurer shares his book and 
 L.INSPECTION_OPT_ON = "You take part in the King's Royal Inspection when your addon is in the sample: a 2-minute patrol of the players around you, reported to him. /oly inspection off says no."
 L.INSPECTION_OPT_OFF = "You don't take part in Royal Inspections: you still hear the King's call, and nothing is inspected or reported. /oly inspection on takes part again."
 L.HELP_INSPECTION = "  /oly inspection on|off - take part in the King's Royal Inspection, or not"
+-- 0.9.5: issue reporter
+L.ISSUE_HIDE = "Hide"
+L.ISSUE_HIDE_TIP = "Hides Blizzard's Issue Reporter at every login. /oly issuereporter show brings it back."
+L.ISSUE_HIDDEN = "Blizzard's Issue Reporter is hidden, now and at every login. /oly issuereporter show brings it back."
+L.ISSUE_SHOWN = "Blizzard's Issue Reporter is shown again. /oly issuereporter hide hides it."
+L.HELP_ISSUE = "  /oly issuereporter hide|show - hide Blizzard's Issue Reporter box (beta clients) at every login, or show it"
 if GetLocale and GetLocale() == "ptBR" then
 	L.THOUSANDS = "."
 	L.ARMY_TOTAL = "%s soldados"
@@ -1444,4 +1450,10 @@ if GetLocale and GetLocale() == "ptBR" then
 	L.INSPECTION_OPT_ON = "Você participa da Inspeção Real do Rei quando seu addon cai na amostra: uma patrulha de 2 minutos nos jogadores ao seu redor, reportada a ele. /oly inspection off recusa."
 	L.INSPECTION_OPT_OFF = "Você não participa das Inspeções Reais: ainda ouve o chamado do Rei, e nada é inspecionado nem reportado. /oly inspection on volta a participar."
 	L.HELP_INSPECTION = "  /oly inspection on|off - participar ou não da Inspeção Real do Rei"
+	-- 0.9.5: issue reporter
+	L.ISSUE_HIDE = "Esconder"
+	L.ISSUE_HIDE_TIP = "Esconde o Issue Reporter da Blizzard em todo login. /oly issuereporter show traz de volta."
+	L.ISSUE_HIDDEN = "O Issue Reporter da Blizzard está escondido, agora e em todo login. /oly issuereporter show traz de volta."
+	L.ISSUE_SHOWN = "O Issue Reporter da Blizzard voltou. /oly issuereporter hide esconde."
+	L.HELP_ISSUE = "  /oly issuereporter hide|show - esconder o Issue Reporter da Blizzard (clientes beta) em todo login, ou mostrar"
 end

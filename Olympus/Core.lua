@@ -2,7 +2,7 @@ local ADDON, ns = ...
 local L = ns.L
 
 ns.NAME = "Olympus"
-ns.VERSION = "0.9.4"
+ns.VERSION = "0.9.5"
 ns.PREFIX = "OLYMPUS"        -- addon message prefix (max 16 chars)
 ns.CHANNEL = "OlympusNet"    -- hidden chat channel shared by every Olympus guild (Alliance)
 ns.CHANNEL_HORDE = "OlympusNetH" -- the Horde's: the two factions never see each other's guilds
@@ -910,6 +910,7 @@ local function Help()
 	print(L.HELP_ROLLCALL)
 	print(L.HELP_TREASURER)
 	print(L.HELP_INSPECTION)
+	print(L.HELP_ISSUE)
 	print("  /oly decrees - decrees")
 	print("  /oly arms [text] | /oly muster [text] - decree (officers; 'test' = local preview)")
 	print(L.HELP_CHAN_ALL)
@@ -977,6 +978,11 @@ SlashCmdList.OLYMPUS = function(input)
 			ns.Positions.SetEnabled(not ns.db.showMates)
 		elseif cmd == "share" then
 			ns.Positions.SetSharing(not ns.db.sharePosition)
+		elseif cmd == "issuereporter" then
+			-- Blizzard's Issue Reporter box (beta and PTR clients): hidden at every login, or not.
+			local how = rest:lower()
+			local hide = (how == "hide" or how == "off") and true or ((how == "show" or how == "on") and false or not ns.UI.IssueReporterHidden())
+			ns.UI.SetIssueReporterHidden(hide)
 		elseif cmd == "inspection" then
 			-- Taking part in the King's Royal Inspection (a patrol of 2 minutes that reports to him).
 			local on = rest:lower()

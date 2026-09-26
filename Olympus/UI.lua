@@ -316,8 +316,74 @@ end
 -- Blizzard's Issue Reporter (Blizzard_PTRFeedback, only on beta and PTR clients such as
 -- the Forever beta) is a small draggable box with a bug button under it, by default at the
 -- bottom centre of the screen: right over the buttons and tabs of our window at its
--- default place. It is Blizzard's, so it is never moved or hidden: our window steps up.
+-- default place. It is Blizzard's, so it is never moved: our window steps up. The player may
+-- hide it (0.9.5, off until they choose: its "Hide" button or /oly issuereporter), and it
+-- then stays hidden at every login. The idea and the first macro: Artz, of the guild.
 local ISSUE_GAP = 4
+
+local reporterHooked, hiddenByUs = false, false
+local function Reporter()
+	local r = _G.PTR_IssueReporter
+	if type(r) == "table" and r.Hide and r.Show and r.IsShown then return r end
+end
+-- (Never a protected frame in combat: the game would refuse it.)
+local function CanTouch(r)
+	return not (InCombatLockdown and InCombatLockdown() and r.IsProtected and r:IsProtected())
+end
+function UI.IssueReporterHidden() return ns.db and ns.db.hideIssueReporter == true end
+
+function UI.ApplyIssueReporter()
+	local r = Reporter()
+	if not r then return false end
+	if not reporterHooked and r.HookScript then
+		reporterHooked = true
+		-- Hooked, not replaced: Blizzard's own OnShow runs as always, then it goes away.
+		r:HookScript("OnShow", function(self)
+			if UI.IssueReporterHidden() and CanTouch(self) then
+				self:Hide()
+				hiddenByUs = true
+			end
+		end)
+		local ok, b = pcall(CreateFrame, "Button", nil, r, "UIPanelButtonTemplate")
+		if ok and b then
+			b:SetSize(48, 18)
+			b:SetText(L.ISSUE_HIDE)
+			b:SetPoint("BOTTOMRIGHT", r, "TOPRIGHT", 0, 2)
+			b:SetScript("OnClick", function() UI.SetIssueReporterHidden(true) end)
+			b:SetScript("OnEnter", function(self)
+				GameTooltip:SetOwner(self, "ANCHOR_TOP")
+				GameTooltip:AddLine(L.TITLE, 1, 0.82, 0)
+				GameTooltip:AddLine(L.ISSUE_HIDE_TIP, 1, 1, 1, true)
+				GameTooltip:Show()
+			end)
+			b:SetScript("OnLeave", function() GameTooltip:Hide() end)
+		end
+	end
+	if UI.IssueReporterHidden() then
+		if r:IsShown() and CanTouch(r) then
+			r:Hide()
+			hiddenByUs = true
+		end
+	elseif hiddenByUs and CanTouch(r) then
+		r:Show()
+		hiddenByUs = false
+	end
+	return true
+end
+
+function UI.SetIssueReporterHidden(on)
+	ns.db.hideIssueReporter = on and true or false
+	ns.Print(on and L.ISSUE_HIDDEN or L.ISSUE_SHOWN)
+	UI.ApplyIssueReporter()
+end
+function UI.ResetIssueReporter() reporterHooked, hiddenByUs = false, false end -- tests
+
+ns.On("LOGIN", function()
+	ns.After(2, "issue reporter", function() ns.SafeCall("issue reporter", UI.ApplyIssueReporter) end)
+	ns.RegisterEvent("ADDON_LOADED", function(name)
+		if name == "Blizzard_PTRFeedback" then ns.SafeCall("issue reporter", UI.ApplyIssueReporter) end
+	end)
+end)
 
 -- A region's rect in screen pixels, or nil if it is not laid out.
 local function ScreenRect(region)

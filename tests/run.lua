@@ -8945,5 +8945,45 @@ test("0.9.4 the Horde's King: Duskmonkey Boneback of <Mudhutters>, a guild of th
 	end)
 end)
 
+-- 0.9.5: Blizzard's Issue Reporter, hidden only if the player chooses
+test("0.9.5 the Issue Reporter: shown until the player hides it, then hidden at every show; back on request", function()
+	WithUI(function()
+		local uns = setmetatable({}, { __index = ns })
+		assert(loadfile(ADDON_DIR .. "UI.lua"))("Olympus", uns)
+		local UI = uns.UI
+		local saved = { r = PTR_IssueReporter, hide = ns.db.hideIssueReporter, combat = InCombatLockdown }
+		local ok, err = pcall(function()
+			local r = { shown = true, hooks = {} }
+			function r:IsShown() return self.shown end
+			function r:Hide() self.shown = false end
+			function r:Show() self.shown = true; for _, f in ipairs(self.hooks) do f(self) end end
+			function r:IsProtected() return false end
+			function r:HookScript(what, f) if what == "OnShow" then self.hooks[#self.hooks + 1] = f end end
+			PTR_IssueReporter = r
+			UI.ResetIssueReporter()
+			ns.db.hideIssueReporter = nil
+			eq(UI.ApplyIssueReporter(), true)
+			eq(r.shown, true, "not chosen: Blizzard's as always")
+			eq(#r.hooks, 1, "hooked, not replaced")
+			UI.SetIssueReporterHidden(true)
+			eq(r.shown, false, "hidden")
+			r:Show()
+			eq(r.shown, false, "and hidden again whenever the game shows it")
+			UI.SetIssueReporterHidden(false)
+			eq(r.shown, true, "back on request")
+			-- A protected frame in combat is never touched.
+			r.shown = true
+			ns.db.hideIssueReporter = true
+			function r:IsProtected() return true end
+			InCombatLockdown = function() return true end
+			UI.ApplyIssueReporter()
+			eq(r.shown, true, "combat: left alone")
+		end)
+		PTR_IssueReporter, ns.db.hideIssueReporter, InCombatLockdown = saved.r, saved.hide, saved.combat
+		UI.ResetIssueReporter()
+		if not ok then error(err, 0) end
+	end)
+end)
+
 print(("\n%d passed, %d failed"):format(passed, failed))
 os.exit(failed == 0 and 0 or 1)

@@ -513,6 +513,7 @@ Limits, stated honestly:
 | `/oly treasurer on\|off` | the Treasurer shares his book and the guild bank, or keeps them private |
 | `/oly rollcall on\|off` | answer the author's roll calls (version, client, channel state) or not |
 | `/oly inspection on\|off` | take part in the King's Royal Inspection when sampled (a 2-minute patrol reported to him), or not |
+| `/oly issuereporter hide\|show` | hide Blizzard's Issue Reporter box (beta clients) at every login, or show it again (also a "Hide" button on it) |
 | `/oly hop` | ask for an invite to the King's layer (while he is online) |
 | `/oly vox off` · `/oly vox on` | Vox Populi questions in chat only, or in a window |
 | `/oly layerhelp on` · `/oly layerhelp off` | get (or not) requests to invite players to your layer |
