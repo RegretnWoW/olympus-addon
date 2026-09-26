@@ -750,6 +750,8 @@ L.ISSUE_HIDE_TIP = "Hides Blizzard's Issue Reporter at every login. /oly issuere
 L.ISSUE_HIDDEN = "Blizzard's Issue Reporter is hidden, now and at every login. /oly issuereporter show brings it back."
 L.ISSUE_SHOWN = "Blizzard's Issue Reporter is shown again. /oly issuereporter hide hides it."
 L.HELP_ISSUE = "  /oly issuereporter hide|show - hide Blizzard's Issue Reporter box (beta clients) at every login, or show it"
+-- 0.9.6: treasury
+L.TREASURY_IN_ALL = "(%s in all)"
 if GetLocale and GetLocale() == "ptBR" then
 	L.THOUSANDS = "."
 	L.ARMY_TOTAL = "%s soldados"
@@ -1456,4 +1458,6 @@ if GetLocale and GetLocale() == "ptBR" then
 	L.ISSUE_HIDDEN = "O Issue Reporter da Blizzard está escondido, agora e em todo login. /oly issuereporter show traz de volta."
 	L.ISSUE_SHOWN = "O Issue Reporter da Blizzard voltou. /oly issuereporter hide esconde."
 	L.HELP_ISSUE = "  /oly issuereporter hide|show - esconder o Issue Reporter da Blizzard (clientes beta) em todo login, ou mostrar"
+	-- 0.9.6: treasury
+	L.TREASURY_IN_ALL = "(%s no total)"
 end

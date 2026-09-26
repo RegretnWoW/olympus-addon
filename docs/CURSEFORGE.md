@@ -504,6 +504,19 @@ only once he answers, and you are told when he got it.
 Type `/oly bug` (or press **Report a bug**), copy the text and open an issue on [GitHub](https://github.com/dnl-gentile/olympus-addon/issues). Errors are
 also saved in `WTF/Account/<ACCOUNT>/SavedVariables/Olympus.lua`.
 
+## Credits
+
+- **Asmongold** and his team (Daily Dose of Asmongold, Max, Heuto, Fernmelder and the High
+  Council), for making Olympus the army's addon and for the ideas.
+- **Security reviews:** Konig, bjess9 (jess), lordjumper and Fadirstave, who read the code and
+  showed what an attacker could do.
+- **Code and ideas:** RoyLeviGit (Olympus chats in their own chat window), Artz (hiding the
+  Issue Reporter), bjess9 (CI and the shared checks).
+- **Reports from the field:** Riukensei and PartyRockAce (the gamepad UI), Ignitheus (whispers
+  to Forever names), Pyralis Ashandar, the Treasurer (the treasury and the guild bank), and the
+  player who told us WoW had handed him the channel.
+- Everyone who reported a bug, tested in game or asked for a feature.
+
 ## License
 
 MIT. A fan project, not affiliated with Blizzard Entertainment, Asmongold or the

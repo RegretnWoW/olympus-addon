@@ -2,7 +2,7 @@ local ADDON, ns = ...
 local L = ns.L
 
 ns.NAME = "Olympus"
-ns.VERSION = "0.9.5"
+ns.VERSION = "0.9.6"
 ns.PREFIX = "OLYMPUS"        -- addon message prefix (max 16 chars)
 ns.CHANNEL = "OlympusNet"    -- hidden chat channel shared by every Olympus guild (Alliance)
 ns.CHANNEL_HORDE = "OlympusNetH" -- the Horde's: the two factions never see each other's guilds
@@ -542,6 +542,44 @@ function ns.LearnKingRealm(sender)
 	ns.Log("the Horde's King is on %s (learned from his first message)", realm)
 end
 
+-- The High Council (0.9.6): the Olympus moderators, by character name on the King's realm group
+-- (names taken on other realms, launch realms included, are nobody's until this list is updated).
+-- Shown with a skull and their own colour in the Olympus chats.
+-- Their names are not written here (the code is public and the names would be sniped on the
+-- launch realms): only a fingerprint of each (ns.CouncilHash), which the addon compares.
+ns.HIGH_COUNCIL = {
+	"3d02krdc", "el8w4yrn", "qdtuv3zv", "a8okb2md", "9fa7sbyl", "2zk0ivuu", "colro058", "3sfisy1g", "cugbpla9", "nd54v0z3",
+}
+ns.HIGH_COUNCIL_REALM = "ClassicBetaPvP"
+ns.HIGH_COUNCIL_ICON = "|TInterface\\TargetingFrame\\UI-RaidTargetingIcon_8:0|t"
+ns.HIGH_COUNCIL_COLOR = "ffb048f8"
+function ns.CouncilHash(name)
+	local text = "olympus-council:" .. tostring(name or ""):lower()
+	local h1, h2 = 5381, 52711
+	for i = 1, #text do
+		local c = text:byte(i)
+		h1 = (h1 * 33 + c) % 2147483647
+		h2 = (h2 * 31 + c * 7) % 2147483647
+	end
+	local digits, out, n = "0123456789abcdefghijklmnopqrstuvwxyz", "", h1 * 1000 + (h2 % 1000)
+	for _ = 1, 8 do
+		local d = n % 36
+		out = digits:sub(d + 1, d + 1) .. out
+		n = math.floor(n / 36)
+	end
+	return out
+end
+local council, councilFrom
+function ns.IsHighCouncillor(name)
+	if type(name) ~= "string" then return false end
+	if councilFrom ~= ns.HIGH_COUNCIL then
+		council, councilFrom = {}, ns.HIGH_COUNCIL
+		for _, h in ipairs(ns.HIGH_COUNCIL) do council[h] = true end
+	end
+	if not council[ns.CouncilHash(ns.ShortName(name))] then return false end
+	return OfGroup(name, ns.HIGH_COUNCIL_REALM)
+end
+
 -- The Crown: guild masters of any Olympus guild, and the officers of the King's guild.
 function ns.IsCrownRank(guild, rankIndex)
 	if not guild or not rankIndex then return false end
@@ -832,6 +870,21 @@ end
 -- The addon's popups (its StaticPopupDialogs entries): with mouse and keyboard the game's own,
 -- as always; with the gamepad UI Olympus's (Dialog.lua), because there the game's popups
 -- break when an addon opens one (the "blocked" loop that freezes the game).
+-- Escape closes our windows (UISpecialFrames), except with Blizzard's gamepad UI on: its menus
+-- close every window on that list, ours with them, while the player is using it (0.9.6). There
+-- they close with their own X.
+function ns.EscapeCloses(name)
+	if type(name) ~= "string" or not UISpecialFrames then return end
+	for i, n in ipairs(UISpecialFrames) do
+		if n == name then
+			-- Switched to the gamepad UI since: off the list (checked each time it shows).
+			if ns.GamepadUI() then table.remove(UISpecialFrames, i) end
+			return
+		end
+	end
+	if not ns.GamepadUI() then table.insert(UISpecialFrames, name) end
+end
+
 function ns.ShowDialog(which, a, b, data)
 	ns.Log("dialog %s (%s)", tostring(which), ns.GamepadUI() and "olympus window, gamepad UI" or "game popup")
 	if ns.GamepadUI() then

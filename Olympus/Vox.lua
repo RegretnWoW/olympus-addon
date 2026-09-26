@@ -388,7 +388,7 @@ local function MakeFrame()
 		elapsed = 0
 		ns.SafeCall("vox tick", Vox.Refresh)
 	end)
-	if UISpecialFrames then table.insert(UISpecialFrames, "OlympusVoxFrame") end
+	ns.EscapeCloses("OlympusVoxFrame")
 	return f
 end
 
@@ -730,7 +730,7 @@ local function MakeComposer()
 	f.cancel:SetPoint("RIGHT", f.ask, "LEFT", -8, 0)
 	f.cancel:SetText(CANCEL or "Cancel")
 	f.cancel:SetScript("OnClick", function() f:Hide() end)
-	if UISpecialFrames then table.insert(UISpecialFrames, "OlympusVoxAskFrame") end
+	ns.EscapeCloses("OlympusVoxAskFrame")
 	return f
 end
 

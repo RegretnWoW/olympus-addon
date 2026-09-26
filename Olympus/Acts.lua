@@ -94,7 +94,7 @@ local function MakeWritFrame()
 	f.close = CreateFrame("Button", nil, f, "UIPanelCloseButton")
 	f.close:SetPoint("TOPRIGHT", -4, -4)
 	f.close:SetScript("OnClick", function() f:Hide() end)
-	if UISpecialFrames then table.insert(UISpecialFrames, "OlympusWritFrame") end
+	ns.EscapeCloses("OlympusWritFrame")
 	return f
 end
 

@@ -831,7 +831,7 @@ local function MakePrompt()
 	f:SetScript("OnHide", function(self)
 		if not self.answered then kingMode = kingMode or "manual" end
 	end)
-	if UISpecialFrames then table.insert(UISpecialFrames, "OlympusKingLayerPrompt") end
+	ns.EscapeCloses("OlympusKingLayerPrompt")
 	return f
 end
 

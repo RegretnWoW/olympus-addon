@@ -242,7 +242,14 @@ function Treasury.Record(name, copper, how, out, o)
 			local say = e.kind == "sale" and L.TREASURY_SALE or e.kind == "own" and L.TREASURY_OWN or L.TREASURY_PURCHASE
 			ns.Print(say:format(who, Treasury.Coins(copper)))
 		else
-			ns.Print((out and L.TREASURY_PAID or L.TREASURY_DONATION):format(who, Treasury.Coins(copper)))
+			local line = (out and L.TREASURY_PAID or L.TREASURY_DONATION):format(who, Treasury.Coins(copper))
+			-- A donation says what the donor gave in all, this one included (0.9.6, the Treasurer's idea).
+			if not out then
+				for _, g in ipairs(Treasury.Totals().ranking) do
+					if g.name == who then line = line .. " " .. L.TREASURY_IN_ALL:format(Treasury.Coins(g.money)) break end
+				end
+			end
+			ns.Print(line)
 			if not out then ns.PlayAlert("soft") end
 		end
 	end

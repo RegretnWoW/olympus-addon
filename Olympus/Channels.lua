@@ -133,6 +133,8 @@ function Channels.FormatLine(tier, sender, guild, class, text)
 	local file = class and ns.CLASS_FILES[class]
 	local color = file and RAID_CLASS_COLORS and RAID_CLASS_COLORS[file]
 	if color and color.colorStr then name = "|c" .. color.colorStr .. name .. "|r" end
+	-- The High Council (the moderators, Core.lua): a skull and their colour.
+	if ns.IsHighCouncillor(sender) then name = ns.HIGH_COUNCIL_ICON .. "|c" .. ns.HIGH_COUNCIL_COLOR .. ns.DisplayName(sender) .. "|r" end
 	return "[" .. Label(tier) .. "] |Hplayer:" .. (ns.TellName(sender) or "?") .. "|h[" .. name .. "]|h <"
 		.. tostring(guild or "?"):gsub("|", "||") .. ">: " .. Codec.SanitizeChat(text)
 end
