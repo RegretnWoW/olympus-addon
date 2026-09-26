@@ -2,7 +2,7 @@ local ADDON, ns = ...
 local L = ns.L
 
 ns.NAME = "Olympus"
-ns.VERSION = "0.9.1"
+ns.VERSION = "0.9.2"
 ns.PREFIX = "OLYMPUS"        -- addon message prefix (max 16 chars)
 ns.CHANNEL = "OlympusNet"    -- hidden chat channel shared by every Olympus guild (Alliance)
 ns.CHANNEL_HORDE = "OlympusNetH" -- the Horde's: the two factions never see each other's guilds
@@ -464,12 +464,21 @@ ns.KING_NAME = "Asmond"
 -- and a surname, unique across the realm group; no Classic realm allows a space in a name.
 ns.AUTHOR = "Faladoriel Skylance"
 ns.AUTHOR_REALM = "ClassicBetaPvP" -- his realm group, where only he carries that name
+-- A name of the realm group of `realm` (a name without a realm is ours). Forever's names are
+-- one across a realm group only: the same name on another group is someone else.
+local function OfGroup(name, realm)
+	local own = ns.RealmOf(ns.FullName(name)) or ns.realm or ns.CurrentRealm()
+	return ns.GroupOf(own) == ns.GroupOf(realm)
+end
 -- The Treasurer of Olympus, chosen by Asmongold's chat on September 23, 2026: exactly this
--- character, in the guild named Olympus. Look-alikes in other guilds exist: both must match.
+-- character, in the guild named Olympus. Look-alikes in other guilds exist: both must match,
+-- and his realm group (Forever's PvP realms), where only he carries that name.
 ns.TREASURER = "Pyralis Ashandar"
+ns.TREASURER_REALM = "ClassicBetaPvP"
 ns.COIN = "|TInterface\\MoneyFrame\\UI-GoldIcon:0|t "
 function ns.IsTreasurer(name, guild)
 	return type(name) == "string" and type(guild) == "string" and ns.ShortName(name) == ns.TREASURER and guild:lower() == "olympus"
+		and OfGroup(name, ns.TREASURER_REALM)
 end
 -- The King's name on the lines and the crown: the army's name for him on the Alliance side,
 -- his character's on the Horde (whose <Olympus> has a guild master of its own).
@@ -494,12 +503,19 @@ end
 -- vote) can crown someone else or take the Crown from him. The Alliance's is the guild master
 -- of <OLYMPUS> as the census saw him on September 24, 2026 (a Forever name, one across the
 -- realm group). The Horde's is set here once it is known: until then nobody commands there
--- (his position and his name on the lines still come from the census).
+-- (his position and his name on the lines still come from the census). His name is his on his
+-- realm group alone (ns.KING_REALM's): anywhere else (Forever's other realms, Classic Era,
+-- Anniversary) there is no King by name either, like the Horde's, and a namesake on another
+-- group is not him.
 ns.KING_CHARACTER = { Alliance = "Asmongold Asmongler", Horde = nil }
-function ns.KingCharacter() return ns.KING_CHARACTER[ns.faction or "Alliance"] end
+ns.KING_REALM = "ClassicBetaPvP"
+function ns.KingCharacter()
+	if ns.GroupOf(ns.realm or ns.CurrentRealm()) ~= ns.GroupOf(ns.KING_REALM) then return nil end
+	return ns.KING_CHARACTER[ns.faction or "Alliance"]
+end
 function ns.IsKingCharacter(name)
 	local pin = ns.KingCharacter()
-	return pin ~= nil and type(name) == "string" and ns.ShortName(name) == pin
+	return pin ~= nil and type(name) == "string" and ns.ShortName(name) == pin and OfGroup(name, ns.KING_REALM)
 end
 
 -- The Crown: guild masters of any Olympus guild, and the officers of the King's guild.
@@ -865,6 +881,7 @@ local function Help()
 	print(L.HELP_LAYERHELP)
 	print(L.HELP_LAYERAUTO)
 	print(L.HELP_LOCATION)
+	print(L.HELP_ROLLCALL)
 	print("  /oly decrees - decrees")
 	print("  /oly arms [text] | /oly muster [text] - decree (officers; 'test' = local preview)")
 	print(L.HELP_CHAN_ALL)
@@ -932,6 +949,14 @@ SlashCmdList.OLYMPUS = function(input)
 			ns.Positions.SetEnabled(not ns.db.showMates)
 		elseif cmd == "share" then
 			ns.Positions.SetSharing(not ns.db.sharePosition)
+		elseif cmd == "rollcall" then
+			-- The author's roll calls and update notices (Workshop.lua): answered, or not.
+			local on = rest:lower()
+			if on == "on" or on == "off" then
+				ns.Workshop.SetAnswers(on == "on")
+			else
+				ns.Print(ns.Workshop.Answers() and L.ROLLCALL_ON or L.ROLLCALL_OFF)
+			end
 		elseif cmd == "location" then
 			-- Sharing zone and layer on the Olympus channel (Layers.Sharing); alone, says which.
 			local on = rest:lower()

@@ -65,5 +65,6 @@ function Zones.NameForKey(key)
 		local info = C_Map.GetMapInfo(id)
 		return info and info.name or key
 	end
-	return (key or "?"):sub(2)
+	-- A zone a report named as text: shown as plain text, whatever it carries (0.9.2).
+	return ns.Codec.Plain((key or "?"):sub(2))
 end

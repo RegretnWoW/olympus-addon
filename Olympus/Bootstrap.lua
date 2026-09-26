@@ -8,10 +8,24 @@ local ADDON, ns = ...
 
 ns.earlyErrors = {}
 
--- Every error seen this session (any addon or Blizzard file), deduplicated. Kept in the
--- SavedVariables so we can see errors our own frames cause inside Blizzard code.
+-- The errors of Olympus's own files seen this session, deduplicated (0.9.2: nothing of any
+-- other addon's). Kept in the SavedVariables so we can see errors our own frames cause
+-- inside Blizzard code: the message names a Blizzard file then, the stack ours.
 ns.allErrors = {}
 local index = {}
+local others, nOthers = {}, 0 -- the other addons' errors seen, 200 at most
+
+-- Ours: the message names one of our files, or a line of the stack does. Not this handler's
+-- own line, which tops every stack it reads (the culprit comes below it).
+local OURS = "AddOns[\\/]Olympus[\\/]"
+local HANDLER = "AddOns[\\/]Olympus[\\/]Bootstrap%.lua"
+function ns.OwnError(msg, stack)
+	if tostring(msg or ""):find(OURS) then return true end
+	for line in tostring(stack or ""):gmatch("[^\n]+") do
+		if line:find(OURS) and not line:find(HANDLER) then return true end
+	end
+	return false
+end
 
 -- Not with Blizzard's gamepad UI on (WoW: Forever): every error would then run the game's
 -- error window from this handler, which the game blocks there (see Dialog.lua).
@@ -23,6 +37,8 @@ local function GamepadUI()
 	return ok and style == gamepad
 end
 
+-- Every error still goes on to the handler that was there before, as it came, whatever this
+-- one makes of it (a tail call: that handler reads the same stack as without us).
 local previous = not GamepadUI() and geterrorhandler()
 if previous then seterrorhandler(function(err, ...)
 	local ok = pcall(function()
@@ -31,12 +47,22 @@ if previous then seterrorhandler(function(err, ...)
 		local e = index[key]
 		if e then
 			e.count = e.count + 1
+		elseif others[key] then
+			return
 		elseif #ns.allErrors < 40 then
-			e = { msg = msg, count = 1, stack = debugstack and debugstack(3, 10, 0) or "", t = date and date("%H:%M:%S") }
+			local stack = debugstack and debugstack(3, 10, 0) or ""
+			-- Another addon's (or Blizzard's, with none of our files in it): not ours to keep.
+			-- One that names another addon's file is known at once when it repeats (its stack
+			-- is not read again); Blizzard's are read again, our calls may cause them next time.
+			if not ns.OwnError(msg, stack) then
+				if nOthers < 200 and msg:find("AddOns[\\/]") then others[key], nOthers = true, nOthers + 1 end
+				return
+			end
+			e = { msg = msg, count = 1, stack = stack, t = date and date("%H:%M:%S") }
 			index[key] = e
 			ns.allErrors[#ns.allErrors + 1] = e
 		end
-		if msg:find("AddOns[\\/]Olympus[\\/]") then
+		if msg:find(OURS) then
 			if ns.CaptureError and ns.db then
 				ns.CaptureError("global", msg)
 			elseif #ns.earlyErrors < 20 then

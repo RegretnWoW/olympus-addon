@@ -928,7 +928,14 @@ end)
 
 local function OnAddonMessage(prefix, text, dist, sender, target, zoneChannelID, localID, channelName)
 	if prefix ~= ns.PREFIX then return end
-	if type(sender) ~= "string" or sender == "" then return end
+	if type(sender) ~= "string" or sender == "" or type(text) ~= "string" then return end
+	-- Nothing another player sends reaches a screen, a tooltip, the map, a popup or a copy box
+	-- with an escape code in it (0.9.2): every message but a chat line loses its "|" and its
+	-- control bytes here, before the pieces are put together or any handler reads it (a census
+	-- report, a layer, a decree, the King's word, a hello...). No message of ours needs either
+	-- (a bug report travels with its pipes as "!" and its line breaks as "\n"). A chat line
+	-- keeps the links Codec.SanitizeChat allows, and nothing else (Channels.lua).
+	if text:sub(1, 3) ~= "M1~" then text = Codec.Plain(text) end
 	-- Only our channel counts: an outsider in any other channel we sit in could otherwise
 	-- reach us there, past the sealed channel. Clients that don't give the number pass.
 	if dist == "CHANNEL" then

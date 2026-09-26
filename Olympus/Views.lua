@@ -24,7 +24,12 @@ local function Red(s) return "|cffff4040" .. s .. "|r" end
 local function Gold(s) return "|cffffd200" .. s .. "|r" end
 Views.Green, Views.Grey, Views.Red, Views.Gold = Green, Grey, Red, Gold
 
+-- Names and guilds from other players' reports: shown as plain text, whatever they carry
+-- (0.9.2; Comm.lua already strips every escape code from what arrives).
+local Plain = ns.Codec.Plain
+
 local function ClassColored(name, classFile)
+	name = Plain(name)
 	local c = classFile and RAID_CLASS_COLORS and RAID_CLASS_COLORS[classFile]
 	return c and ("|c%s%s|r"):format(c.colorStr, name) or name
 end
@@ -306,10 +311,10 @@ end
 local function GuildTooltip(e)
 	return function(tt)
 		local g = e.g
-		tt:AddLine("<" .. e.name .. ">", 0.25, 1, 0.25)
+		tt:AddLine("<" .. Plain(e.name) .. ">", 0.25, 1, 0.25)
 		tt:AddDoubleLine(L.COL_MEMBERS, ns.FormatNumber(g.total), 1, 0.82, 0, 1, 1, 1)
 		tt:AddDoubleLine(L.COL_ONLINE, ns.FormatNumber(g.online), 1, 0.82, 0, 1, 1, 1)
-		tt:AddDoubleLine(L.LORD, g.leader or "?", 1, 0.82, 0, 1, 1, 1)
+		tt:AddDoubleLine(L.LORD, Plain(g.leader or "?"), 1, 0.82, 0, 1, 1, 1)
 		tt:AddDoubleLine(L.VACANCIES, ns.FormatNumber(math.max(0, 1000 - (g.total or 0))), 1, 0.82, 0, 1, 1, 1)
 		if g.avgLevel and g.avgLevel > 0 then tt:AddDoubleLine(L.AVG_LEVEL, ("%.1f"):format(g.avgLevel), 1, 0.82, 0, 1, 1, 1) end
 		tt:AddDoubleLine(L.INACTIVE_30, ns.FormatNumber(g.inactive30 or 0), 1, 0.82, 0, 1, 1, 1)
@@ -403,9 +408,9 @@ local function CensusLines(s)
 	end)
 	for _, e in ipairs(guilds) do
 		local g = e.g
-		local leader = g.leader and ((g.leaderOnline and "|cff40ff40" or "|cff9d9d9d") .. g.leader .. "|r") or Grey("?")
+		local leader = g.leader and ((g.leaderOnline and "|cff40ff40" or "|cff9d9d9d") .. Plain(g.leader) .. "|r") or Grey("?")
 		lines[#lines + 1] = {
-			cols = { e.name, ns.FormatNumber(g.total), Green(ns.FormatNumber(g.online)), leader },
+			cols = { Plain(e.name), ns.FormatNumber(g.total), Green(ns.FormatNumber(g.online)), leader },
 			dim = not e.fresh,
 			tooltip = GuildTooltip(e),
 			onClick = function()
@@ -576,7 +581,7 @@ local function ChatLines()
 				if ChatFrame_SendTell then ChatFrame_SendTell(ns.TellName(e.sender) or who) end
 			end or nil,
 			tooltip = function(tt)
-				tt:AddLine(who .. "  <" .. tostring(e.guild or "?") .. ">", 1, 0.82, 0)
+				tt:AddLine(who .. "  <" .. Plain(e.guild or "?") .. ">", 1, 0.82, 0)
 				tt:AddLine(ns.Codec.SanitizeChat(e.text), 1, 1, 1, true)
 				if not e.mine then tt:AddLine(L.CHATS_LINE_TIP:format(who), 0.6, 0.6, 0.6) end
 			end,
@@ -602,7 +607,7 @@ local function RealmLines(s)
 	if king then
 		lines[#lines + 1] = {
 			header = true,
-			text = CROWN .. L.KING .. ": " .. Gold(king.g.leader or "?"),
+			text = CROWN .. L.KING .. ": " .. Gold(Plain(king.g.leader or "?")),
 			right = Presence(king.g.leaderOnline, king.g.leaderDays),
 			tooltip = GuildTooltip(king),
 		}
@@ -617,7 +622,7 @@ local function RealmLines(s)
 				rank = L.CAPTAIN, online = t.online, days = t.days }
 			lines[#lines + 1] = {
 				key = t.name,
-				text = ns.COIN .. L.TREASURER .. ": " .. Gold(t.name),
+				text = ns.COIN .. L.TREASURER .. ": " .. Gold(Plain(t.name)),
 				right = Presence(t.online, t.days),
 				onClick = function() ns.UI.ShowPerson(person) end,
 			}
@@ -643,7 +648,7 @@ local function RealmLines(s)
 		local g = e.g
 		local open = expanded[e.name]
 		lines[#lines + 1] = {
-			text = (open and "[-] " or "[+] ") .. Green("<" .. e.name .. ">") .. " " .. (g.leader or "?"),
+			text = (open and "[-] " or "[+] ") .. Green("<" .. Plain(e.name) .. ">") .. " " .. Plain(g.leader or "?"),
 			right = Presence(g.leaderOnline, g.leaderDays),
 			onClick = function()
 				expanded[e.name] = not expanded[e.name] or nil
@@ -716,7 +721,7 @@ local function RealmLines(s)
 			if #members == 0 then lines[#lines + 1] = { indent = 2, text = Grey(fromWho and L.MEMBERS_NONE_SEEN or L.MEMBERS_NONE) } end
 			lines[#lines + 1] = { indent = 1, text = Gold(L.RANKS) }
 			for i, rank in ipairs(g.ranks or {}) do
-				lines[#lines + 1] = { indent = 2, text = ("%d. %s"):format(i, rank.name), right = ns.FormatNumber(rank.count) }
+				lines[#lines + 1] = { indent = 2, text = ("%d. %s"):format(i, Plain(rank.name)), right = ns.FormatNumber(rank.count) }
 			end
 			if #(g.ranks or {}) == 0 then lines[#lines + 1] = { indent = 2, text = Grey(L.NONE_REPORTED) } end
 			lines[#lines + 1] = { indent = 1, text = Grey(L.INACTIVE_LINE:format(g.inactive7 or 0, g.inactive30 or 0)), gapAfter = true }
@@ -739,7 +744,7 @@ local function RealmLines(s)
 		local p = racers[i]
 		lines[#lines + 1] = {
 			key = p.name,
-			text = ("%d. %s  %s"):format(i, ClassColored(p.name, p.class and ns.CLASS_FILES[p.class]), Grey("<" .. p.guild .. ">")),
+			text = ("%d. %s  %s"):format(i, ClassColored(p.name, p.class and ns.CLASS_FILES[p.class]), Grey("<" .. Plain(p.guild) .. ">")),
 			right = Gold(L.LEVEL_N:format(p.level)),
 			onClick = function() ns.UI.ShowPerson({ name = p.name, realm = p.realm, class = p.class, level = p.level, guild = p.guild }) end,
 		}
@@ -885,7 +890,13 @@ local function HeraldryLines()
 	-- The King (and his Hands): the Royal Inspection, and what the patrols reported (King.lua).
 	local lines = {}
 	for _, l in ipairs(ns.King and ns.King.InspectionLines and ns.King.InspectionLines() or {}) do lines[#lines + 1] = l end
+	-- The untabarded: the King sees his own list (and whether the army sees it); everyone else
+	-- sees it only while he shares it.
+	local king = ns.King and (ns.King.IsKing() or ns.King.Preview())
 	local shame = ns.Inspect.Shame()
+	if king then
+		shame = { list = ns.Inspect.ShameList(), mine = true }
+	end
 	if not ns.Inspect.ShameOpen() then
 		-- Closed until the tabard rule is in force (Inspect.lua): a countdown.
 		local left = ns.Inspect.ShameOpensIn()
@@ -893,13 +904,13 @@ local function HeraldryLines()
 		lines[#lines + 1] = { header = true, text = Red(L.WALL_OF_SHAME), right = Grey(L.SHAME_OPENS:format(wait)) }
 		lines[#lines].gapAfter = true
 	elseif not (shame and #shame.list > 0) then
-		-- Always there, so everyone knows it exists: empty until the Crown publishes one.
-		lines[#lines + 1] = { header = true, text = Red(L.WALL_OF_SHAME), right = Grey(L.SHAME_EMPTY) }
+		lines[#lines + 1] = { header = true, text = Red(L.WALL_OF_SHAME), right = Grey(king and L.SHAME_EMPTY or L.UNTABARDED_NOT_SHARED) }
 		lines[#lines].gapAfter = true
 	else
-		lines[#lines + 1] = { header = true, text = Red(L.WALL_OF_SHAME), right = Grey(L.PUBLISHED_BY:format(shame.by, ns.Ago(shame.t))) }
+		local right = shame.mine and (ns.King.SharingUntabarded() and L.UNTABARDED_SHARED or L.UNTABARDED_ONLY_KING)
+			or L.PUBLISHED_BY:format(shame.by, ns.Ago(shame.t))
+		lines[#lines + 1] = { header = true, text = Red(L.WALL_OF_SHAME), right = Grey(right) }
 		-- The King pardons with a click (Acts.lua); anyone else opens the person.
-		local king = ns.King and (ns.King.IsKing() or ns.King.Preview())
 		for i = 1, math.min(12, #shame.list) do
 			local p = shame.list[i]
 			local pardon = king and ns.King.CleanName(p.name) ~= nil
@@ -1003,7 +1014,8 @@ function Views.RecruitLines()
 				onClick = function() ns.ShowDialog("OLYMPUS_RECRUIT", p.name, p.guild, p) end,
 				tooltip = R.replied[p.name] and function(tt)
 					tt:AddLine(ns.ShortName(p.name), 1, 0.82, 0)
-					tt:AddLine('"' .. R.replied[p.name] .. '"', 1, 1, 1, true)
+					-- (A whisper: its links stay, like a chat line's; no other escape code, 0.9.2.)
+					tt:AddLine('"' .. ns.Codec.SanitizeChat(R.replied[p.name]) .. '"', 1, 1, 1, true)
 				end or nil,
 			}
 		end

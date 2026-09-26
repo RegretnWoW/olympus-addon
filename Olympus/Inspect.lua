@@ -21,6 +21,9 @@ Inspect.STATUS_ORDER = STATUS_ORDER
 local patrol = false
 local queue, queued = {}, {}
 local pending -- { guid, unit, at }
+-- During a Royal Inspection: at most one request every `pace` seconds (King.INSPECT_PACE).
+local pace, lastRequest = nil, -math.huge
+function Inspect.SetPace(seconds) pace = seconds end
 Inspect.stats = { requests = 0, ready = 0, timeouts = 0 }
 
 -- Kept per realm (ns.rdb): the players of one realm say nothing about another one.
@@ -77,7 +80,7 @@ function Inspect.IsPatrolling() return patrol end
 -- Everyone inspected on this realm group (the Throne's Royal Inspection reads it).
 function Inspect.Players() return Store().players end
 
--- A player another addon reported during a Royal Inspection (King.PublishShame): kept like
+-- A player another addon reported during a Royal Inspection (King.lua): kept like
 -- our own inspections, so the usual Wall of Shame can publish them.
 -- One key per player in the store: "Name" for our realm, "Name-Realm" for another, whatever
 -- the name came from (a unit, a report, what 0.8.1 saved). On Forever, "First Surname".
@@ -163,6 +166,7 @@ local function Pump()
 	end
 	if InCombatLockdown() then return end
 	if InspectFrame and InspectFrame:IsShown() then return end -- the player is inspecting by hand
+	if pace and GetTime() - lastRequest < pace then return end
 	if patrol then ScanNearby() end
 	while #queue > 0 do
 		local item = table.remove(queue, 1)
@@ -170,6 +174,7 @@ local function Pump()
 		local unit = item.unit
 		if UnitGUID(unit) == item.guid and CanInspect(unit) and CheckInteractDistance(unit, 1) then
 			pending = { guid = item.guid, unit = unit, at = GetTime() }
+			lastRequest = GetTime()
 			Inspect.stats.requests = Inspect.stats.requests + 1
 			NotifyInspect(unit)
 			return
@@ -338,11 +343,13 @@ function Inspect.TooltipLine(name)
 end
 
 ---------------------------------------------------------------------------
--- Wall of Shame: the Crown publishes the list of players caught without the colors,
--- every Olympus member with the addon sees it (chat, raid warning, Heraldry tab).
+-- Untabarded (0.9.2; the "Wall of Shame" before): the players the Royal Inspection found
+-- without the colors. The King's alone: his page lists them, and only he can let the army see
+-- the list (King.lua, a switch like the Treasury's), in the Tabards tab and nowhere else. No
+-- raid warning, no chat line, no sound, for anyone; turned off, it leaves every screen.
+-- Nobody else publishes one any more: walls from older versions (S1) are ignored.
 -- Closed until the tabard rule is in force, midnight in Texas (where Asmongold is) between
--- September 24 and 25, 2026: nothing published, lists sent by older versions ignored, and
--- the Tabards page counts down to it.
+-- September 24 and 25, 2026: the Tabards page counts down to it.
 ---------------------------------------------------------------------------
 
 Inspect.SHAME_FROM = 1790312400 -- 2026-09-25 00:00 CDT (05:00 UTC)
@@ -350,9 +357,10 @@ local function ServerNow() return (GetServerTime and GetServerTime()) or time() 
 function Inspect.ShameOpen() return ServerNow() >= Inspect.SHAME_FROM end
 function Inspect.ShameOpensIn() return math.max(0, Inspect.SHAME_FROM - ServerNow()) end
 
--- Pardoned by the King (Acts.lua): off every list for a week, ours and the ones we receive.
+-- Pardoned by the King (Acts.lua): off every list for a week, his and the one he shares.
 local function Pardoned(name) return ns.Acts and ns.Acts.Pardoned and ns.Acts.Pardoned(name) == true end
 
+-- The King's list: what his own patrol and the Royal Inspection's reports found.
 function Inspect.ShameList()
 	local out = {}
 	for _, p in ipairs(Inspect.Summary().players) do
@@ -363,46 +371,12 @@ function Inspect.ShameList()
 	return out
 end
 
--- A wall is a raid warning and a loud alert on every screen, so like the decrees (Decree.lua)
--- it is rate-limited on both ends: the Crown publishes once a minute, each sender is heard
--- once a minute and all of them SHAME_PER_MINUTE times a minute, and a wall that names the
--- same players as the one shown changes nothing (no alert, no redraw).
-Inspect.SHAME_COOLDOWN = 60
-Inspect.SHAME_PER_SENDER = 60
-Inspect.SHAME_PER_MINUTE = 6
-local lastShameSent = -math.huge
-local shameBySender = {}
-local shameRecent = {} -- when the walls we accepted arrived (flood guard)
+-- A list the King shares lasts while he keeps repeating it (King.UNTABARDED_EVERY).
+Inspect.SHARED_FRESH = 20 * 60
 
-function Inspect.PublishShame()
-	if not Inspect.ShameOpen() then return end
-	if not ns.IsCrown() then
-		ns.Print(L.CROWN_ONLY)
-		return
-	end
-	local now = ns.Now()
-	if now - lastShameSent < Inspect.SHAME_COOLDOWN then
-		ns.Print(L.SHAME_COOLDOWN:format(math.ceil(Inspect.SHAME_COOLDOWN - (now - lastShameSent))))
-		return
-	end
-	Inspect.Prune() -- (the Royal Inspection just added what the patrols reported)
-	local list = Inspect.ShameList()
-	if #list == 0 then
-		ns.Print(L.DISCORD_INSPECT_CLEAN)
-		return
-	end
-	lastShameSent = now
-	local guild, _, rankIndex = GetGuildInfo("player")
-	ns.Comm.SendChunked(ns.Codec.EncodeShame(guild, rankIndex, list))
-	local by = ns.DisplayName(ns.me)
-	-- The same wall again (for those who logged in since): sent, and only a line here.
-	if not Inspect.ShowShame({ by = by, guild = guild, list = list, t = now }) then
-		ns.Print("|cffff4040" .. L.SHAME_PUBLISHED:format(#list, by) .. "|r")
-	end
-end
-
--- The same players (and guilds) in any order.
-local function SameWall(a, b)
+-- The list the King lets the army see, or nil to take it off. Quietly: the Tabards tab only.
+-- false when it names the same players as the one shown (nothing to redraw).
+local function SameList(a, b)
 	if not a or not b or #a.list ~= #b.list then return false end
 	local names = {}
 	for _, p in ipairs(a.list) do names[tostring(p.name) .. ":" .. tostring(p.guild)] = true end
@@ -411,48 +385,40 @@ local function SameWall(a, b)
 	end
 	return true
 end
-
--- Shows a wall; false when it names the same players as the one shown (nothing happens).
 function Inspect.ShowShame(shame)
+	if not shame then
+		if not Inspect.shame then return false end
+		Inspect.shame = nil
+		ns.Fire("INSPECT_CHANGED")
+		return true
+	end
 	for i = #shame.list, 1, -1 do
 		if Pardoned(shame.list[i].name) then table.remove(shame.list, i) end
 	end
-	if SameWall(Inspect.shame, shame) then return false end
+	local same = SameList(Inspect.shame, shame)
 	Inspect.shame = shame
-	local text = L.SHAME_PUBLISHED:format(#shame.list, shame.by)
-	ns.Print("|cffff4040" .. text .. "|r")
-	if RaidNotice_AddMessage and RaidWarningFrame then
-		RaidNotice_AddMessage(RaidWarningFrame, text, ChatTypeInfo and ChatTypeInfo["RAID_WARNING"] or { r = 1, g = 0.3, b = 0.1 })
-	end
-	ns.PlayAlert("loud")
+	if same then return false end
 	ns.Fire("INSPECT_CHANGED")
 	return true
 end
 
 function Inspect.Shame()
-	return Inspect.shame
+	local s = Inspect.shame
+	if s and ns.Now() - (s.t or 0) > Inspect.SHARED_FRESH then
+		Inspect.shame = nil
+		return nil
+	end
+	return s
 end
 
+-- Walls from versions before 0.9.2 (any Lord could publish one, with a raid warning): ignored.
 function Inspect.HandleShame(dist, sender, text)
-	if dist ~= "CHANNEL" or not Inspect.ShameOpen() then return end
-	local s = ns.Codec.DecodeShame(text)
-	if not s or not ns.IsFederation(s.guild) then return end
-	local rank = ns.Data.KnownRank(sender, s.guild)
-	if not rank or not ns.IsCrownRank(s.guild, rank) then return end
-	local now = ns.Now()
-	if now - (shameBySender[sender] or -math.huge) < Inspect.SHAME_PER_SENDER then return end
-	for i = #shameRecent, 1, -1 do if now - shameRecent[i] > 60 then table.remove(shameRecent, i) end end
-	if #shameRecent >= Inspect.SHAME_PER_MINUTE then return end
-	shameBySender[sender] = now
-	shameRecent[#shameRecent + 1] = now
-	Inspect.ShowShame({ by = ns.DisplayName(sender), guild = s.guild, list = s.list, t = now })
+	ns.Log("ignored a wall of shame from %s (0.9.2: only the King's list, quietly)", tostring(sender))
 end
 ns.Comm.Handle("S1", function(...) Inspect.HandleShame(...) end)
 
 -- Tests start from a clean state.
 function Inspect.ResetShame()
-	lastShameSent = -math.huge
-	wipe(shameBySender); wipe(shameRecent)
 	Inspect.shame = nil
 end
 

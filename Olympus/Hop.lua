@@ -133,6 +133,8 @@ end
 -- everybody wants, and his screen is on stream.
 function Hop.CanHelp(mapID, zoneUID)
 	if ns.db.layerHelp == false or not ns.IsMember() then return false end
+	-- An offer tells the asker we are on that layer: only for players who share theirs (0.9.2).
+	if not ns.Layers.Sharing() then return false end
 	if ns.King and ns.King.IsKing and ns.King.IsKing() then return false end
 	local mine = ns.Layers.Mine()
 	if not mine or mine.mapID ~= mapID or mine.zoneUID ~= zoneUID then return false end
@@ -187,7 +189,12 @@ function Hop.HandleAsk(dist, sender, text)
 	if now - (answeredAt[short] or -math.huge) < Hop.HELP_GAP then return end
 	if now - lastOffer < Hop.OFFER_GAP then return end
 	if not Hop.CanHelp(mapID, zoneUID) then return end
-	if Hop.random() > Hop.Chance(mapID, zoneUID) then return end
+	-- Few announce their layer since sharing is a choice (0.9.1), so Chance can think a busy
+	-- layer empty: with several askers at once, each ask takes a share of the helpers, not all.
+	local chance = Hop.Chance(mapID, zoneUID)
+	local asking = Hop.Crowd(mapID, zoneUID, now)
+	if asking > 1 then chance = math.min(chance, math.max(1 / asking, 0.1)) end
+	if Hop.random() > chance then return end
 	answeredAt[short] = now
 	offered[id .. short] = now
 	lastOffer = now
@@ -303,7 +310,9 @@ end
 
 -- The ask ended with nobody (no offer at all) or no invite: the next one waits longer.
 local function Failed(nobody)
-	fails, failedAt = fails + 1, ns.Now()
+	-- Nobody free because a crowd asks for that layer too: not ours to wait longer for.
+	local crowded = ask and Hop.Crowd(ask.mapID, ask.zoneUID, ns.Now()) > Hop.BRAKE_ASKS
+	if not crowded then fails, failedAt = fails + 1, ns.Now() end
 	Finish((nobody and L.HOP_NOBODY_WAIT or L.HOP_GAVE_UP_WAIT):format(math.ceil(Hop.WaitLeft())))
 end
 

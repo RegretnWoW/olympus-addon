@@ -188,10 +188,13 @@ end
 function Dialog.Show(which, a, b, data)
 	local def = Def(which)
 	if not def then return nil end
-	-- The same one up already: this one takes its place (as the game does).
+	-- The same one up already: this one takes its place, and it is told so like the game's
+	-- tells it (OnCancel "override", 0.9.2): a line held by the first is not lost silently.
 	local old = Dialog.Find(which)
 	if old then
 		old.closing = "replaced"
+		local cancel = old.def and old.def.OnCancel
+		if cancel then pcall(cancel, old, old.data, "override") end
 		old:Hide()
 	end
 	local f = Free()

@@ -82,6 +82,8 @@ ns.db = { guilds = {}, log = {}, errors = {}, blocked = {}, demo = false, showMa
 	chatWarned = { A = true, C = true, L = true } } -- (0.9.1: the channel warnings already accepted; their own tests ask)
 ns.me = "Tester-Realm"
 ns.realm = "Realm"
+-- (0.9.2: the King and the Treasurer are theirs on their realm group; here that is "Realm".)
+ns.KING_REALM, ns.TREASURER_REALM = "Realm", "Realm"
 ns.rdb = { guilds = {} }
 local CoreFire = ns.Fire -- the real one, for the tests that need INIT
 function ns.Fire() end
@@ -2451,9 +2453,14 @@ local function WithWho(fn)
 	ns.rdb.guilds, ns.rdb.seen, ns.Recruit.found = {}, {}, {}
 	ns.Who.Reset()
 	ns.Who.lastSend, ns.Who.lastPlain = 0, 0
+	-- (These tests click faster than 0.9.2's once a minute: theirs is the old pace; the minute
+	-- has its own test.)
+	local autoGap = ns.Who.AUTO_GAP
+	ns.Who.lastAuto, ns.Who.AUTO_GAP = -math.huge, ns.Who.COOLDOWN
 	local ok, err = pcall(fn, server)
 	ns.Who.Reset()
 	ns.Who.lastSend, ns.Who.lastPlain = 0, 0
+	ns.Who.lastAuto, ns.Who.AUTO_GAP = -math.huge, autoGap
 	C_Timer.After, GetTime, ns.Print, ns.CaptureError = saved.After, saved.GetTime, saved.Print, saved.CaptureError
 	ns.rdb.guilds, ns.rdb.seen, ns.Recruit.found = saved.guilds, saved.seen, saved.found
 	for _, name in ipairs(WHO_GLOBALS) do _G[name] = nil end
@@ -2549,8 +2556,6 @@ test("Wall of Shame: closed with a countdown until midnight in Texas, then open"
 	I.SHAME_FROM = time() + 3600
 	eq(I.ShameOpen(), false)
 	assert(I.ShameOpensIn() > 3500)
-	I.ShowShame = function() error("closed: nothing shown") end
-	I.PublishShame() -- nothing, not even the Crown check
 	I.SHAME_FROM = time() - 1
 	eq(I.ShameOpen(), true)
 	I.SHAME_FROM, I.ShowShame = from, show
@@ -4294,7 +4299,7 @@ test("hello: guild peers say their realm, older versions count as old", function
 		local cns, Deliver = FreshComm()
 		Deliver("GUILD", "Abe-ClassicBetaPvP2", "H1~0.7.11~ClassicBetaPvP2")
 		Deliver("GUILD", "Bob", "H1~0.7.10")
-		Deliver("GUILD", "Cy", "H1~0.7.11~Bad|cffRealm")
+		Deliver("GUILD", "Cy", "H1~0.7.11~Bad Realm!") -- (0.9.2: a "|" never gets this far, see Comm)
 		local st = cns.Comm.Stats()
 		eq(st.peers, 3); eq(st.peerRealms.ClassicBetaPvP2, 1); eq(st.peerRealms.old, 2, "no realm, or not a realm")
 		eq(st.raw.g.bare, 2, "counted as sent, before our realm is added"); eq(st.raw.g.ClassicBetaPvP2, 1)
@@ -4638,8 +4643,11 @@ local function WithHop(fn)
 			w.npc = zoneUID or w.npc
 			for k = 1, 2 do w.spawn = k; ns.Layers.Observe("target") end
 		end
+		-- (0.9.2: helpers are players who share their layer; the private ones have their own test.)
+		if ns.db.shareLocation == nil then ns.db.shareLocation = true end
 		fn(w, H)
 	end)
+	ns.db.shareLocation = nil
 	for _, n in ipairs(names) do _G[n] = saved[n] end
 	ns.Comm.Send, ns.Comm.Whisper, ns.Comm.ChannelReady, ns.Now = savedSend, savedWhisper, savedReady, savedNow
 	H.random, H.after, C_Map.GetBestMapForUnit, H.OFFER_GAP = savedRandom, savedAfter, savedMap, savedGap
@@ -5454,7 +5462,9 @@ test("Workshop roll call: only the author asks, each addon answers once with wha
 		W.HandleRoll("CHANNEL", AUTHOR_FULL, "V1~7~100")
 		eq(w.whispered[1].to, AUTHOR_FULL)
 		local msg = w.whispered[1].msg
-		assert(msg:find(("^V2~7~%s~Olympus II~Forever~[^~]*~c[a-z]*~0~17~MA$"):format(ns.VERSION:gsub("%.", "%%."))), msg)
+		-- (0.9.2: version, client and channel state only; the character's guild, level and class,
+		-- the window style and the error count no longer go out.)
+		assert(msg:find(("^V2~7~%s~~Forever~~c[crk]*~0~0~$"):format(ns.VERSION:gsub("%.", "%%."))), msg)
 		W.HandleRoll("CHANNEL", AUTHOR_FULL, "V1~8~100")
 		eq(#w.whispered, 1, "once per ROLL_GAP")
 		eq(W.AuthorOnline(), true, "a roll call says the author is online")
@@ -5464,6 +5474,22 @@ test("Workshop roll call: only the author asks, each addon answers once with wha
 		W.HandleRoll("CHANNEL", AUTHOR_FULL, "V1~9~10")
 		eq(#w.whispered, 1, "drew 100 > 10: no answer")
 		eq(W.Share(3000), 10); eq(W.Share(200), 100); eq(W.Share(100000), 5)
+		-- /oly rollcall off: no answer, no update notice (0.9.2).
+		W.Reset()
+		W.random = function(a, b) if a then return a end return 0 end
+		local before = #w.whispered
+		W.SetAnswers(false)
+		W.HandleRoll("CHANNEL", AUTHOR_FULL, "V1~11~100")
+		eq(#w.whispered, before, "refused")
+		local shown = ns.ShowDialog
+		local popups = 0
+		ns.ShowDialog = function() popups = popups + 1 end
+		W.HandleUpdate("WHISPER", AUTHOR_FULL, "V3~99.0.0")
+		ns.ShowDialog = shown
+		eq(popups, 0, "no update notice either")
+		W.SetAnswers(true)
+		W.HandleRoll("CHANNEL", AUTHOR_FULL, "V1~12~100")
+		eq(#w.whispered, before + 1, "answered again")
 	end)
 end)
 
@@ -5643,6 +5669,9 @@ test("tabard store: one key per player, whatever the name came from", function()
 end)
 
 test("Treasurer: exactly Pyralis Ashandar of OLYMPUS, under the King and beside his name", function()
+	local realm, treasurerRealm = ns.realm, ns.TREASURER_REALM
+	ns.realm, ns.TREASURER_REALM = "ClassicBetaPvP", "ClassicBetaPvP"
+	local ok, err = pcall(function()
 	eq(ns.IsTreasurer("Pyralis Ashandar-ClassicBetaPvP", "OLYMPUS"), true)
 	eq(ns.IsTreasurer("Pyralis Ashandar", "Olympus"), true)
 	eq(ns.IsTreasurer("Pyrelis Ashandar", "OLYMPUS"), false, "a look-alike name")
@@ -5674,6 +5703,9 @@ test("Treasurer: exactly Pyralis Ashandar of OLYMPUS, under the King and beside 
 		ns.Views.ExpandAll(false)
 	end)
 	ns.rdb.guilds = saved
+	if not ok then error(err, 0) end
+	end)
+	ns.realm, ns.TREASURER_REALM = realm, treasurerRealm
 	if not ok then error(err, 0) end
 end)
 
@@ -7254,8 +7286,12 @@ test("#18: the King's own client: guild master of <Olympus> and the character th
 		ns.me = "Asmongold Asmongler-Realm"
 		eq(K.IsKing(), false)
 		-- His name, whatever realm of the group it carries; nobody else's.
-		eq(ns.IsKingCharacter("Asmongold Asmongler-ClassicBetaPvP2"), true)
-		eq(ns.IsKingCharacter("Asmongold Asmongler"), true)
+		local realm, kingRealm = ns.realm, ns.KING_REALM
+		ns.realm, ns.KING_REALM = "ClassicBetaPvP", "ClassicBetaPvP"
+		local both = ns.IsKingCharacter("Asmongold Asmongler-ClassicBetaPvP2") and ns.IsKingCharacter("Asmongold Asmongler")
+		local other = ns.IsKingCharacter("Asmongold Asmongler-ClassicBetaPvE")
+		ns.realm, ns.KING_REALM = realm, kingRealm
+		eq(both, true, "PvP and PvP 2 are one group"); eq(other, false, "a namesake on another realm group is not him")
 		eq(ns.IsKingCharacter("Asmongold-Realm"), false); eq(ns.IsKingCharacter("Asmongold Asmongler2"), false)
 		eq(ns.IsKingCharacter(nil), false)
 	end)
@@ -7580,58 +7616,49 @@ test("0.9.1 tabards: two weeks and 2000 players kept, marked and caught ones fir
 	if not ok then error(err, 0) end
 end)
 
-test("0.9.1 Wall of Shame: rate-limited like the decrees, and the same wall again changes nothing", function()
+test("0.9.2 untabarded: the King's list, the army sees it only while he lets it, quietly; nobody else publishes", function()
 	WithThrone(function(w, K)
 		local I = ns.Inspect
-		local saved = { from = I.SHAME_FROM, inspect = ns.rdb.inspect, alert = ns.PlayAlert, fire = ns.Fire, chunked = ns.Comm.SendChunked }
+		local saved = { from = I.SHAME_FROM, alert = ns.PlayAlert, raid = RaidNotice_AddMessage, share = ns.db.kingUntabarded, me = ns.me, guild = GetGuildInfo }
 		local ok, err = pcall(function()
 			I.SHAME_FROM = 0
 			I.ResetShame()
-			local alerts, redraws, sent = 0, 0, 0
+			local alerts = 0
 			ns.PlayAlert = function() alerts = alerts + 1 end
-			ns.Fire = function(name) if name == "INSPECT_CHANGED" then redraws = redraws + 1 end end
-			ns.Comm.SendChunked = function() sent = sent + 1 end
-			-- Seven guild masters the census confirms.
-			for i = 1, 7 do
-				ns.rdb.guilds["Olympus " .. i] = Vouched({ total = 50, online = 5, zones = {}, t = w.clock, leader = "Lord" .. i, realm = "Realm" }, "W1-Realm", "W2-Realm")
-			end
-			AsSoldier()
-			local function S1(i, names)
-				local list = {}
-				for _, nm in ipairs(names) do list[#list + 1] = { name = nm, guild = "Olympus II" } end
-				return ns.Codec.EncodeShame("Olympus " .. i, 0, list)
-			end
-			I.HandleShame("CHANNEL", "Lord1-Realm", S1(1, { "Naked", "Pirate" }))
-			eq(#I.Shame().list, 2); eq(alerts, 1); eq(redraws, 1)
-			-- The same sender within a minute: ignored, whatever it says.
-			I.HandleShame("CHANNEL", "Lord1-Realm", S1(1, { "Other" }))
-			eq(I.Shame().list[1].name, "Naked"); eq(alerts, 1)
-			-- Someone else with the same wall (in another order): nothing to show again.
-			I.HandleShame("CHANNEL", "Lord2-Realm", S1(2, { "Pirate", "Naked" }))
-			eq(alerts, 1, "no second alert"); eq(redraws, 1, "no redraw"); eq(I.Shame().by, "Lord1")
-			-- All of them at once: SHAME_PER_MINUTE walls a minute at most.
-			for i = 3, 7 do I.HandleShame("CHANNEL", "Lord" .. i .. "-Realm", S1(i, { "Guy" .. i })) end
-			eq(alerts, 5, "the seventh within the minute is dropped"); eq(I.Shame().list[1].name, "Guy6")
-			w.clock = w.clock + 61
-			I.HandleShame("CHANNEL", "Lord7-Realm", S1(7, { "Guy7" }))
-			eq(alerts, 6, "a minute later"); eq(I.Shame().list[1].name, "Guy7")
-			-- The Crown publishes once a minute; the same wall again is sent, and only a line here.
+			RaidNotice_AddMessage = function() alerts = alerts + 1 end
+			AsSoldier("Other")
+			-- A wall from a 0.9.1 Lord (S1): ignored, whoever sends it.
+			I.HandleShame("CHANNEL", "Lord1-Realm", ns.Codec.EncodeShame("Olympus II", 0, { { name = "Naked", guild = "Olympus II" } }))
+			eq(I.Shame(), nil, "no more walls from Lords")
+			-- Hostile: someone else sends the King's kind, with a guild name that says Olympus.
+			K.HandleCommand("CHANNEL", "Faker Guy-Realm", "T1~U~5~Olympus~1~Victim:Olympus II")
+			eq(I.Shame(), nil, "not the King: nothing shown")
+			-- The King's list: shown in the Tabards tab only, no alert, no sound, no line.
+			local printed = #w.printed
+			K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", "T1~U~6~Olympus~1~Naked:Olympus II,Pirate:Olympus II")
+			eq(#I.Shame().list, 2); eq(alerts, 0, "no alert, no sound"); eq(#w.printed, printed, "no chat line")
+			K.HandleCommand("CHANNEL", "Faker Guy-Realm", "T1~U~7~Olympus~0")
+			eq(#I.Shame().list, 2, "only the King takes it off")
+			K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", "T1~U~8~Olympus~0")
+			eq(I.Shame(), nil, "off: it leaves the screen")
+			-- A list he stopped repeating leaves too.
+			K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", "T1~U~9~Olympus~1~Naked:Olympus II")
+			w.clock = w.clock + I.SHARED_FRESH + 1
+			eq(I.Shame(), nil, "not repeated: gone")
+			-- The King's switch: off until he turns it on; on sends the list, off takes it back.
 			AsKing()
-			ns.rdb.inspect = { players = { Naked = { name = "Naked", guild = "Olympus II", status = "NONE", t = w.clock } }, guildMarks = {} }
-			I.ResetShame()
-			alerts = 0
-			I.PublishShame()
-			eq(sent, 1); eq(alerts, 1)
-			I.PublishShame()
-			eq(sent, 1, "not again within a minute"); assert(Printed(w, ns.L.SHAME_COOLDOWN:format(60)), "told how long")
-			w.clock = w.clock + I.SHAME_COOLDOWN
-			local lines = #w.printed
-			I.PublishShame()
-			eq(sent, 2, "a minute later: sent again (for those who logged in since)")
-			eq(alerts, 1, "the same wall: no alert on our screen either")
-			eq(w.printed[lines + 1], "|cffff4040" .. ns.L.SHAME_PUBLISHED:format(1, "Asmongold Asmongler") .. "|r")
+			ns.db.kingUntabarded = nil
+			eq(K.SharingUntabarded(), false)
+			local before = #w.sent
+			K.ToggleUntabarded()
+			eq(K.SharingUntabarded(), true); eq(#w.sent, before + 1)
+			assert(LastSent(w):find("^T1~U~%d+~Olympus~1~"), LastSent(w))
+			K.ToggleUntabarded()
+			eq(K.SharingUntabarded(), false)
+			assert(LastSent(w):find("^T1~U~%d+~Olympus~0$"), LastSent(w))
+			eq(alerts, 0)
 		end)
-		I.SHAME_FROM, ns.rdb.inspect, ns.PlayAlert, ns.Fire, ns.Comm.SendChunked = saved.from, saved.inspect, saved.alert, saved.fire, saved.chunked
+		I.SHAME_FROM, ns.PlayAlert, RaidNotice_AddMessage, ns.db.kingUntabarded, ns.me, GetGuildInfo = saved.from, saved.alert, saved.raid, saved.share, saved.me, saved.guild
 		I.ResetShame()
 		if not ok then error(err, 0) end
 	end)
@@ -7686,8 +7713,13 @@ test("0.9.1 guild bank: read once the slots settle, a tab that never arrived kee
 			-- Opened again: tab 2's slots never arrive (it reads empty), tab 1 is on screen.
 			slots[2] = {}
 			B.Opened(); gt = gt + B.SETTLE; Run()
-			eq(ns.rdb.bank.tabs[2].items[1].id, 2589, "a tab that never arrived keeps its last items"); eq(ns.rdb.bank.tabs[2].kept, true)
-			-- Empty the next time too: then it is.
+			eq(ns.rdb.bank.tabs[2].items[1].id, 2589, "a tab that never arrived keeps its last items"); assert(ns.rdb.bank.tabs[2].kept)
+			-- Read again in the same visit (a deposit): still kept (0.9.2).
+			B.Changed(); gt = gt + B.SETTLE; Run()
+			eq(ns.rdb.bank.tabs[2].items[1].id, 2589, "the same visit keeps it again")
+			B.Closed(); gt = gt + B.SETTLE; Run()
+			eq(ns.rdb.bank.tabs[2].items[1].id, 2589, "and on closing")
+			-- Empty the next visit too: then it is.
 			B.Opened(); gt = gt + B.SETTLE; Run()
 			eq(#ns.rdb.bank.tabs[2].items, 0, "empty twice in a row: empty")
 			-- The tab on screen reads empty: the player sees it empty.
@@ -8156,9 +8188,10 @@ test("0.9.1 privacy: a player who keeps it private still asks for hops and helps
 			GetGuildInfo = function() return "Olympus II", "Officer", 1 end
 			w.see(7)
 			for _, m in ipairs(w.sent) do assert(not m:find("L1~", 1, true), "no layer announced: " .. m) end
-			-- A helper who shares nothing answers an ask for their layer, to the asker alone.
+			-- A player who shares nothing does not help either (0.9.2): an offer would tell the
+			-- asker, anyone on the channel, where they are.
 			H.HandleAsk("CHANNEL", "Asker-Realm", "LQ~42~1453~7")
-			eq(w.whispered[1], "Asker-Realm LO~42~0~0")
+			eq(w.whispered[1], nil, "private: no offer")
 			-- Asking still works: the ask names this zone and the layer wanted, and says so once.
 			H.Ask(1453, 8, "Kingy's layer")
 			eq(w.sent[#w.sent], "CHANNEL LQ~1~1453~8")
@@ -8642,6 +8675,123 @@ do
 		end)
 	end)
 end
+
+-- 0.9.2: inspection load
+test("0.9.2 Royal Inspection: a realm-wide budget, once every 30 minutes, a paced sample of the army", function()
+	WithThrone(function(w, K)
+		local saved = { random = K.random, summary = ns.Data.Summary }
+		local ok, err = pcall(function()
+			eq(K.INSPECT_GAP, 1800); eq(K.INSPECT_BUDGET * K.INSPECT_PACE, 100, "100 clients at once, 20 requests a second")
+			local users = 3000
+			ns.Data.Summary = function() return { guilds = { { fresh = true, g = { users = users } }, { fresh = false, g = { users = 9999 } } } } end
+			eq(K.AddonsOnline(), 3000, "fresh reports only")
+			eq(K.InspectShare(), 100 / 3000)
+			users = 40
+			eq(K.InspectShare(), 1, "a small army: everyone")
+			users = 3000
+			-- Not in the sample: the call is heard, no patrol.
+			AsSoldier("Other")
+			if ns.Inspect.IsPatrolling() then ns.Inspect.SetPatrol(false) end
+			K.random = function() return 0.5 end
+			K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", "T1~I~11~Olympus")
+			eq(ns.Inspect.IsPatrolling(), false, "not in this sample")
+			-- A second call within 30 minutes (King or Hand): nothing, even for the sample.
+			K.random = function() return 0 end
+			w.clock = w.clock + 600
+			K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", "T1~I~12~Olympus")
+			eq(ns.Inspect.IsPatrolling(), false, "within 30 minutes")
+			w.clock = w.clock + 1201
+			K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", "T1~I~13~Olympus")
+			eq(ns.Inspect.IsPatrolling(), true, "in the sample, 30 minutes later")
+		end)
+		K.random, ns.Data.Summary = saved.random, saved.summary
+		if ns.Inspect.IsPatrolling() then ns.Inspect.SetPatrol(false) end
+		ns.Inspect.SetPace(nil)
+		if not ok then error(err, 0) end
+	end)
+end)
+
+test("0.9.2 who: the quiet search on a click goes once a minute at most", function()
+	eq(ns.Who.AUTO_GAP, 60)
+end)
+
+-- 0.9.2: hostile layer payloads (a community reviewer's list: spoofed, relayed, guest offer)
+test("0.9.2 hostile: a spoofed share, a relayed share and a guest offer are all rejected", function()
+	WithHop(function(w, H)
+		local L = ns.Layers
+		local function OnLayer(zoneUID)
+			for _, layer in ipairs(L.ForMap(1453)) do if layer.zoneUID == zoneUID then return layer.count end end
+			return 0
+		end
+		-- Spoofed: an announcement that says "Olympus" from someone who is not the King's
+		-- character does not become the King's layer.
+		local king = H.King()
+		L.Receive("Faker Guy-Realm", { mapID = 1453, zoneUID = 99, rank = 0, guild = "Olympus" })
+		local after = H.King()
+		assert(not (after and after.zoneUID == 99), "a spoofed share is not the King's layer")
+		eq(after and after.zoneUID, king and king.zoneUID, "the King's layer did not move")
+		-- A namesake on another realm group is not him either.
+		eq(ns.IsKingCharacter("Asmongold Asmongler-ClassicBetaPvE"), false)
+		-- Relayed: a share counts for its sender alone, and nobody can withdraw someone else's.
+		L.Receive("Real Guy-Realm", { mapID = 1453, zoneUID = 5, rank = 9, guild = "Olympus II" })
+		eq(OnLayer(5), 1)
+		L.Forget("Relay Guy-Realm") -- an L0 from another sender
+		eq(OnLayer(5), 1, "a withdrawal from someone else changes nothing")
+		L.Forget("Real Guy-Realm") -- his own
+		eq(OnLayer(5), 0, "his own withdrawal: gone at once")
+		-- Guest offers: no ask of ours, an offer for another ask, an offer on the channel.
+		H.HandleOffer("WHISPER", "Guest-Realm", "LO~42~0~0")
+		eq(H.State(), nil, "no ask: nothing")
+		w.see(7)
+		H.Ask(1453, 8, "busy")
+		local id = H.State().id
+		H.HandleOffer("WHISPER", "Guest-Realm", ("LO~%d~0~0"):format(id + 1))
+		H.HandleOffer("CHANNEL", "Guest-Realm", ("LO~%d~0~0"):format(id))
+		eq(H.State().count, 0, "only whispers for our live ask")
+		for i = 1, H.MAX_OFFERS + 5 do H.HandleOffer("WHISPER", "Guest" .. i .. "-Realm", ("LO~%d~0~0"):format(id)) end
+		eq(H.State().count, H.MAX_OFFERS, "capped per ask")
+		-- A request from someone we never offered to: no window on our screen.
+		local popups = #w.popups
+		H.HandleRequest("WHISPER", "Stranger-Realm", "LR~42")
+		eq(#w.popups, popups, "no unsolicited invite window")
+		eq(#w.whispered, 0, "and no answer to them")
+	end)
+end)
+
+-- 0.9.2: sanitize
+test("0.9.2 hostile: no escape code from another player gets past the door, chat keeps safe links only, no Discord pings", function()
+	local ok, err = pcall(function()
+		local cns, Deliver = FreshComm()
+		local got = {}
+		cns.Comm.Handle("ZZ", function(dist, sender, text) got[#got + 1] = text end)
+		local evil = "ZZ~Olympus|TInterface\\Icons\\INV_Misc_QuestionMark:64|t~|cffff0000Red|r~|Hitem:19019|h[Fake]|h~line\nbreak"
+		Deliver("GUILD", "Evil Guy-Realm", evil)
+		eq(#got, 1)
+		assert(not got[1]:find("[|%c]"), got[1])
+		-- A forged census report: nothing it names carries a code into the census.
+		local r = ns.Codec.DecodeReport(ns.Codec.Plain(ns.Codec.EncodeReport({ guild = "Olympus|cffff0000X|r", total = 10, online = 1,
+			leader = "Bad|TInterface\\x:0|tGuy", zones = { ["m1453"] = 1 } })))
+		assert(r and not r.guild:find("|", 1, true) and not r.leader:find("|", 1, true), "report stripped")
+	end)
+	if not ok then error(err, 0) end
+	-- Chat: an item link the game makes passes; a malformed or foreign one is plain text.
+	local C = ns.Codec
+	local good = "|cff1eff00|Hitem:19019::::::::60::|h[Thunderfury]|h|r"
+	eq(C.SanitizeChat("look " .. good), "look " .. good)
+	-- (A "|" shown as text is written "||": only an unescaped one is a code.)
+	local function Live(x) return (x:gsub("||", "")):find("|", 1, true) ~= nil end
+	eq(Live(C.SanitizeChat("|Hitem:abc|h[x]|h")), false, "bad item data")
+	eq(Live(C.SanitizeChat("|Hurl:evil|h[click]|h")), false, "foreign link type")
+	eq(Live(C.SanitizeChat("|TInterface\\x:0|t hi")), false, "texture")
+	-- Copy text for Discord pings nobody.
+	local text = C.NoMentions("@everyone look <@123> <#456> @here")
+	assert(not text:find("@everyone", 1, true) and not text:find("@here", 1, true) and not text:find("<@1", 1, true)
+		and not text:find("<#4", 1, true), text)
+	eq(C.NoMentions(text), text, "idempotent")
+	-- Only Olympus's own errors are kept (the capture filter).
+	eq(ns.OwnError("Interface/AddOns/OtherAddon/Main.lua:3: boom", "Interface/AddOns/OtherAddon/Main.lua:3"), false)
+	eq(ns.OwnError("Interface/AddOns/Olympus/UI.lua:9: boom", ""), true)
+end)
 
 print(("\n%d passed, %d failed"):format(passed, failed))
 os.exit(failed == 0 and 0 or 1)

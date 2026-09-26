@@ -23,7 +23,7 @@ looks like Blizzard's Guild window and docks right next to it.
 ---
 
 **Horde too.** Olympus guilds on the Horde side use the same addon. The factions can't see
-each other's guilds, so each one gets its own census, channels, decrees and Wall of Shame: the
+each other's guilds, so each one gets its own census, channels, decrees and untabarded list: the
 addon picks yours from your character. On the Horde, the Crown is every Horde Olympus guild
 master and the officers of the Horde guild named exactly "Olympus", if there is one.
 
@@ -175,9 +175,12 @@ court takes him there. Each of his tools lives where it belongs:
   "Present, my King" or "Busy". While the roll call is fresh, each Lord and Captain in the
   tree carries a ready-check mark: present, busy, or not answered yet.
 - **Royal Inspection** (on top of the Tabards tab): a raid warning for the whole army ("wear
-  your tabard!"), then every soldier with the addon patrols the players around them for 2
-  minutes and reports to the King: how many were checked, the percentage in colors, per
-  guild, and who was caught, ready to go on the Wall of Shame.
+  your tabard!"), then a sample of the soldiers with the addon patrols the players around them
+  for 2 minutes and reports to the King: how many were checked, the percentage in colors, per
+  guild, and who was caught, on his untabarded list. It stays within a budget for the realm:
+  once every 30 minutes at most (whoever calls it), each patrol inspects one player every 5
+  seconds at most, and the sample is sized from the addons online so the whole realm sends
+  about 20 inspect requests a second (100 patrols at once; everyone while the army is that small).
 - **Vox Populi** (a tab of its own): the King asks the army a question with two to six
   answers, to pick one or to pick several, open for 30 seconds to 5 minutes. Everyone with
   the addon gets a window with check boxes and a countdown; each vote goes to the King alone.
@@ -190,8 +193,8 @@ court takes him there. Each of his tools lives where it belongs:
   everything on the channel, anyone on it can read the bytes.)
 - **Open the Gates** (in the Realm tab, Recruiting): the King picks the guild new recruits
   should join for the next two hours; everyone sees it on top of Recruiting.
-- **Royal Pardon** (on the Wall of Shame): a click takes a name off the wall, for everyone,
-  for a week.
+- **Royal Pardon** (on the untabarded list): a click takes a name off it, for everyone, for a
+  week.
 - **Hands of the King** (a button next to his map button): players he names use the roll
   call, the inspection, the agenda, Vox Populi and the gates in his name. Never the court,
   writs, pardons or his crown on the map. Their addons learn the list from his, and it ends
@@ -237,16 +240,18 @@ for the King, and for every member once the King shows the army something of it.
   soldiers on top of his window. (The channel can be read by anyone on it: the buttons choose
   what the addon shows, they don't make the numbers secret.)
 
-### Tabards: tabard inspection and the Wall of Shame
+### Tabards: tabard inspection and the untabarded list
 - **Patrol**: walk through the crowd and the addon inspects nearby Olympus members level 15
   and up, one by one (about 28 yards). Younger players are never flagged. It records who wears a tabard, who wears the wrong one and who
   wears none. Players it could not see properly are never accused.
 - **Mark** a player (with a note: `/oly mark complained about the rule`) or a whole guild.
 - Per guild: *"5 of 20 with problems"*.
-- **Wall of Shame**: the Crown publishes the list, and every Olympus member with the addon sees
-  it on the Tabards page; click a name to whisper them. It opens when the tabard rule starts
-  (midnight, Texas time, September 25) and counts down until then. Players under level 15
-  are exempt: never flagged, never listed.
+- **Untabarded** (the "Wall of Shame" before 0.9.2): the players the Royal Inspection found
+  without the colors are on the King's list, which only he sees. He alone can let the army see
+  it (a switch on the Throne, off by default): then it shows on the Tabards page, quietly (no
+  raid warning, no chat line, no sound), and it leaves every screen when he turns it off or
+  stops repeating it. Nobody else can publish one. Players under level 15 are exempt: never
+  flagged, never listed.
 - Hover any player in the world to see their last inspection in the tooltip.
 
 ### World map
@@ -333,11 +338,11 @@ tracking. Your name is on every message (the game adds it). What goes where:
 | Zones in that census: members per zone (numbers only), a leader's or officer's zone | everyone on the Olympus channel | only if the member sending it shares their zone and layer; a leader's or officer's zone only if they share theirs too |
 | Your zone, layer, guild rank and guild (layer announcements) | everyone on the Olympus channel | only if you share: officers and one member in eight announce, every 10 minutes and when their layer changes |
 | A layer hop ask: the zone you are in and the layer you want | everyone on the Olympus channel | when you ask to hop |
-| An answer to an ask for your layer | the asker alone (a whisper) | while layer help is on (`/oly layerhelp off` stops it) |
+| An answer to an ask for your layer (it tells the asker you are on it) | the asker alone (a whisper) | only if you share your zone and layer, while layer help is on (`/oly layerhelp off` stops it) |
 | [Olympus], [Captains] and [Lords] lines | everyone on the Olympus channel, all three | when you write one |
 | Hello: addon version, realm, public or sealed channel, whether you share your zone | your guild | every minute or so |
 | Your position as a dot on the map | your guild | only with `/oly share` (off by default) |
-| The King's crown on the map, and with it his layer | everyone on the Olympus channel | only while the King turns it on (Throne tab) |
+| The King's crown on the map, and with it his zone and layer | everyone on the Olympus channel | only while the King turns it on (Throne tab), whatever he answered to the question |
 
 Decrees and the King's calls go out when someone sends one (a decree carries its sender's
 position on the map).
@@ -349,6 +354,11 @@ your addon sends for your guild names nobody's zone and counts nobody per zone. 
 turns both on. Change it any time with `/oly location on` or `/oly location off`; `/oly status`
 shows it. Layers and hops work better the more members share. Versions before
 0.9.1 still send all of it: update.
+
+**How long it lasts.** A layer you announced shows on other screens for up to 21 minutes
+after your last announcement. Turning sharing off (or the King hiding his crown) withdraws it
+at once from 0.9.2 clients; older ones keep it until it expires. Your location is always your
+own message: nothing relays another player's zone or layer, and nobody can withdraw yours.
 
 **Public or sealed channel.** Without a realm key the Olympus channel ("OlympusNet", the
 Horde's "OlympusNetH") is public: anyone can join it by name and read everything on it with a
@@ -368,12 +378,13 @@ the addon says so and waits for **Send** (**Cancel** sends nothing), once per ch
 to keep the addon healthy. It reads the install counts every guild report already carries,
 plus the addon versions of each guild's users. On demand he can ask for a roll call: each
 addon online (a share of them when the army is large) answers, by addon whisper to him only,
-with its version, game client, window style, whether it joined the channel, whether it is
-its guild's reporter, whether the channel is sealed with a key, whether the map library loaded
-and the map markers are on, how many errors it caught this session, and the character's
-guild, level and class. No position, no chat, nothing else. He can also ask a player on an old version to update: a fixed window
-with the two version numbers and nothing else. Only his character can do either: every
-addon checks the sender's name, which nobody else can carry.
+with its version, game client, and whether it joined the channel, is its guild's reporter and
+has the channel sealed with a key. Nothing about the character (no guild, level or class), no
+position, no chat, nothing else. He can also ask a player on an old version to update: a fixed
+window with the two version numbers and nothing else. Only his character on his realm group
+can do either: every addon checks the sender's name, which nobody else can carry. `/oly
+rollcall off` refuses both. The addon's error catcher keeps only Olympus's own errors (for
+`/oly bug`), never another addon's.
 
 The addon is plain Lua running on each player's computer, so anyone can edit their own
 copy. No addon can prevent that. What this one does is make an edited copy useless:
@@ -384,6 +395,8 @@ copy. No addon can prevent that. What this one does is make an edited copy usele
   - **The King and the Treasurer are known by name**, not by vote: only their characters can
     send their commands and the treasury. A report of `<Olympus>` naming anyone else as its
     leader counts for nothing, not even as a vote, so outsiders can't crown one of their own.
+    Their names count on their realm group only (Forever's PvP realms): a namesake anywhere
+    else is someone else, and there is no King there.
   - A decree counts only if the sender really is the Lord or a Captain of that guild,
     according to that guild's own roster report, or our own roster for our own guild.
     The rank written inside the message is ignored.
@@ -409,6 +422,12 @@ copy. No addon can prevent that. What this one does is make an edited copy usele
 - **Sealed channel** (`/oly key`): outsiders can't find the channel or join it.
 - **Validation**: every number is range checked, names are length limited, and malformed
   messages are dropped. Decrees are rate limited per sender and in total.
+- **No escape codes from anyone** (0.9.2): every message from another player loses its "|"
+  codes (colours, textures, links) and control bytes before anything reads it, so nobody can
+  put a texture, a fake link or a fake line on your screen. Chat keeps only item, spell and
+  quest links shaped the way the game makes them. Text the addon builds for Discord pings
+  nobody. The offline tests send hostile messages for each of these rules and check they
+  are refused.
 - **Channels**: [Captains]/[Lords] lines count only if the sender's rank is verified like
   decrees; everyone else can use [Olympus] only. Sent with Blizzard's logged addon-message
   function (lines sent any other way are dropped); rate limited per sender and per channel, and

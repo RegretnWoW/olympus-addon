@@ -34,6 +34,8 @@ Who.SETTLE = 1     -- the answer announced again within this is still ours (see 
 Who.LATE = 30      -- a search given up may still be answered until then (see Release)
 Who.ROUND_TTL = 15 * 60 -- a round older than this starts over (like a report, Data.FRESH)
 Who.AUTO_AGAIN = 5 * 60 -- a complete round older than this is searched again by Auto
+Who.AUTO_GAP = 60      -- the quiet search on a click in our window: once a minute at most (0.9.2)
+Who.lastAuto = -math.huge
 Who.MAX = 50       -- players per answer, MAX_WHOS_FROM_SERVER
 Who.BRACKETS = 5   -- level ranges searched after a capped answer
 Who.QUERY = 'g-"Olympus"'
@@ -322,7 +324,10 @@ function Who.Auto()
 		if Who.SearchGuild(guild) then return true end
 	end
 	if sweep.done and sweep.variant >= #Who.VARIANTS and sweep.started and now - sweep.started < Who.AUTO_AGAIN then return false end
-	return Who.Search(true)
+	if now - Who.lastAuto < Who.AUTO_GAP then return false end
+	local sent = Who.Search(true)
+	if sent then Who.lastAuto = now end
+	return sent
 end
 
 -- A search of the player's own, the Who button of our person panel: nothing is silenced,

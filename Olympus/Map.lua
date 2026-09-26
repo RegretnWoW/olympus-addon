@@ -31,7 +31,8 @@ local function PinEnter(self)
 	for name, n in pairs(self.guilds or {}) do list[#list + 1] = { name, n } end
 	table.sort(list, function(a, b) return a[2] > b[2] end)
 	for i = 1, math.min(10, #list) do
-		GameTooltip:AddDoubleLine(list[i][1], ns.FormatNumber(list[i][2]), 0.8, 0.8, 0.8, 1, 1, 1)
+		-- (Guilds from other players' reports: plain text, whatever they carry, 0.9.2.)
+		GameTooltip:AddDoubleLine(ns.Codec.Plain(list[i][1]), ns.FormatNumber(list[i][2]), 0.8, 0.8, 0.8, 1, 1, 1)
 	end
 	GameTooltip:Show()
 end

@@ -164,12 +164,19 @@ function Workshop.Flags()
 	return table.concat(f)
 end
 
+-- What a roll call gets (0.9.2): the addon's version, the game client, and the channel's state
+-- (joined, our guild's reporter, sealed). Nothing about the character: no guild, level or class,
+-- no window style, no error count (those fields stay, empty, for the author's older version).
 local function Answer(id)
-	local level = UnitLevel and UnitLevel("player") or 0
-	local class = UnitClass and select(2, UnitClass("player"))
-	local window = ns.UI and ns.UI.Style and ns.UI.Style() or "?"
-	return ("V2~%d~%s~%s~%s~%s~%s~%d~%d~%s"):format(id, Clean(ns.VERSION, 12), Clean(GetGuildInfo("player") or "", 40),
-		Workshop.Client(), Clean(window, 8), Workshop.Flags(), #(ns.allErrors or {}), level or 0, ns.Roster.ClassCode(class))
+	local flags = Workshop.Flags():gsub("[^crk]", "")
+	return ("V2~%d~%s~~%s~~%s~0~0~"):format(id, Clean(ns.VERSION, 12), Workshop.Client(), flags)
+end
+
+-- A player can refuse the author's roll calls and update notices: /oly rollcall off (0.9.2).
+function Workshop.Answers() return not (ns.db and ns.db.rollCall == false) end
+function Workshop.SetAnswers(on)
+	ns.db.rollCall = on and true or false
+	ns.Print(on and L.ROLLCALL_ON or L.ROLLCALL_OFF)
 end
 
 ---------------------------------------------------------------------------
@@ -212,7 +219,7 @@ function Workshop.RollCall()
 end
 
 function Workshop.HandleRoll(dist, sender, text)
-	if dist ~= "CHANNEL" or not IsAuthorName(sender) or Workshop.IsAuthor() then return end
+	if dist ~= "CHANNEL" or not IsAuthorName(sender) or Workshop.IsAuthor() or not Workshop.Answers() then return end
 	local id, share = text:match("^V1~(%d+)~(%d+)$")
 	id, share = tonumber(id), tonumber(share)
 	if not id or not share then return end
@@ -277,7 +284,7 @@ function Workshop.AskOutdated()
 end
 
 function Workshop.HandleUpdate(dist, sender, text)
-	if dist ~= "WHISPER" or not IsAuthorName(sender) then return end
+	if dist ~= "WHISPER" or not IsAuthorName(sender) or not Workshop.Answers() then return end
 	local latest = text:match("^V3~(%d+%.%d+%.%d+)$")
 	if not latest or not Workshop.Newer(latest, ns.VERSION) then return end
 	local now = ns.Now()

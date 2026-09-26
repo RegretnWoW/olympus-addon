@@ -201,9 +201,7 @@ local DETAIL_BUTTONS = {
 		{ "WRIT_BTN", function() ns.Acts.WritPrompt() end, shown = KingOnly },
 	},
 }
--- The Wall of Shame's button once it opens (Inspect.ShameOpen).
-table.insert(DETAIL_BUTTONS.heraldry, 1, { "SHAME_BTN", function() ns.Inspect.PublishShame() end,
-	shown = function() return ns.Inspect.ShameOpen() end })
+-- (0.9.2: no "Publish shame" button any more: the untabarded list is the King's, Throne tab.)
 
 -- Buttons that come and go (def.shown): only the ones shown, in order.
 local function Shown(defs)
@@ -1487,17 +1485,20 @@ function UI.ShowPerson(p)
 	f.person = p
 	local file = p.class and ns.CLASS_FILES[p.class] or p.class
 	local color = file and RAID_CLASS_COLORS and RAID_CLASS_COLORS[file]
-	f.name:SetText(color and ("|c%s%s|r"):format(color.colorStr, p.name) or p.name)
+	-- The name, guild and rank may come from other players' reports: plain text, whatever
+	-- they carry (0.9.2; Comm.lua already strips every escape code from what arrives).
+	local name, guild = ns.Codec.Plain(p.name), p.guild and ns.Codec.Plain(p.guild)
+	f.name:SetText(color and ("|c%s%s|r"):format(color.colorStr, name) or name)
 	FitText(f.name, f.nameRoom or (f:GetWidth() - 28), f.nameFonts or { "GameFontNormalLarge", "GameFontNormal" })
 	if f.guild then
-		f.guild:SetText(p.guild and ("<" .. p.guild .. ">") or "")
+		f.guild:SetText(guild and ("<" .. guild .. ">") or "")
 	elseif f.TitleText then
-		f.TitleText:SetText(p.guild and ("<" .. p.guild .. ">") or L.TITLE)
+		f.TitleText:SetText(guild and ("<" .. guild .. ">") or L.TITLE)
 	end
 	local className = (file and LOCALIZED_CLASS_NAMES_MALE and LOCALIZED_CLASS_NAMES_MALE[file]) or ""
 	local rows = {}
 	if p.level or className ~= "" then rows[#rows + 1] = (p.level and (L.LEVEL_N:format(p.level) .. " ") or "") .. className end
-	if p.rank then rows[#rows + 1] = "|cffffd200" .. p.rank .. "|r" end
+	if p.rank then rows[#rows + 1] = "|cffffd200" .. ns.Codec.Plain(p.rank) .. "|r" end
 	if ns.IsTreasurer(p.name, p.guild) then rows[#rows + 1] = "|cffffd200" .. ns.COIN .. L.TREASURER_TITLE .. "|r" end
 	if p.online then
 		rows[#rows + 1] = "|cff40ff40" .. L.ONLINE_NOW .. "|r" .. (p.zone and ("  -  " .. ns.Zones.NameForKey(p.zone)) or "")
@@ -1618,7 +1619,10 @@ function UI.ShowBugReport()
 end
 
 -- action: an optional { label, fn } button at the bottom (fn returns true once done).
+-- What is copied goes to Discord, and names in it come from other players: it pings nobody
+-- (0.9.2, Codec.NoMentions).
 function UI.ShowCopy(title, text, action)
+	text = ns.Codec.NoMentions(text)
 	if not copyFrame then
 		local f = CreateFrame("Frame", "OlympusCopyFrame", UIParent, "BasicFrameTemplateWithInset")
 		f:SetSize(520, 340)

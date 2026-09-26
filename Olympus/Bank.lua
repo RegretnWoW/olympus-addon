@@ -181,6 +181,10 @@ ns.Comm.Handle("T9", function(...) Bank.HandleReport(...) end)
 -- read never replaces the items the last snapshot of that tab held (same guild, same tab),
 -- unless the tab is the one on screen (the game loaded it, the player sees it empty), or that
 -- tab was already kept once (empty twice in a row: it is). The kept tab is marked `kept`.
+-- Each opening of the bank is a visit (0.9.2): a tab kept in this visit is kept again in it,
+-- however many reads it takes; only a later visit that reads it empty again empties it (a tab
+-- kept by 0.9.1, `kept == true`, counts as kept in an earlier visit).
+local visit = 0
 function Bank.Keep(snap, prev)
 	if not snap or type(prev) ~= "table" or prev.guild ~= snap.guild or type(prev.tabs) ~= "table" then return snap end
 	local shown = type(GetCurrentGuildBankTab) == "function" and tonumber((GetCurrentGuildBankTab())) or nil
@@ -188,8 +192,8 @@ function Bank.Keep(snap, prev)
 		if #tab.items == 0 and tab.i ~= shown then
 			for _, old in ipairs(prev.tabs) do
 				local same = (old.i and old.i == tab.i) or (not old.i and old.name == tab.name)
-				if same and type(old.items) == "table" and #old.items > 0 and not old.kept then
-					snap.tabs[k] = { name = tab.name, icon = tab.icon, i = tab.i, items = old.items, kept = true }
+				if same and type(old.items) == "table" and #old.items > 0 and (not old.kept or old.kept == visit) then
+					snap.tabs[k] = { name = tab.name, icon = tab.icon, i = tab.i, items = old.items, kept = visit }
 					break
 				end
 			end
@@ -226,6 +230,7 @@ end
 function Bank.Opened()
 	if not HasBank() or not ns.IsMember() then return end
 	open = true
+	visit = math.max(ns.Now(), visit + 1) -- (a number no earlier visit has: kept tabs carry theirs)
 	wipe(queried)
 	local n = tonumber(GetNumGuildBankTabs()) or 0
 	for tab = 1, math.min(n, Bank.MAX_TABS) do

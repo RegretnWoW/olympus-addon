@@ -53,7 +53,14 @@ end
 ns.On("INIT", function()
 	for _, e in ipairs(ns.earlyErrors or {}) do ns.CaptureError("load", e[1]) end
 	ns.earlyErrors = {}
-	ns.db.allErrors = ns.allErrors -- same table: errors seen later this session are saved too
+	-- Only Olympus's own errors are kept (0.9.2, Bootstrap.lua): the saved list of an older
+	-- version, with every other addon's in it, is replaced, and nothing of theirs stays.
+	local all = ns.allErrors or {}
+	for i = #all, 1, -1 do
+		local e = all[i]
+		if type(e) ~= "table" or not (ns.OwnError and ns.OwnError(e.msg, e.stack)) then table.remove(all, i) end
+	end
+	ns.allErrors, ns.db.allErrors = all, all -- same table: errors seen later this session are saved too
 end)
 
 -- Blocked protected calls (taint) are not Lua errors, so log them separately.
@@ -221,6 +228,7 @@ function ns.StatusText()
 		add("privacy: zone and layer %s  |  channel %s  |  chat warning accepted: %s",
 			ns.Layers and ns.Layers.SharingState and ns.Layers.SharingState() or "?", c.sealed and "sealed (key holders)" or "public (anyone)",
 			ch and ch.warned and #ch.warned > 0 and table.concat(ch.warned, ",") or "none")
+		add("author's roll call: %s (/oly rollcall on|off)", ns.Workshop and ns.Workshop.Answers and (ns.Workshop.Answers() and "answered" or "refused") or "?")
 	end
 	local n = 0
 	for _ in pairs(ns.rdb.guilds) do n = n + 1 end

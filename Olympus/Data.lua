@@ -43,6 +43,12 @@ ns.On("INIT", function()
 	for name, g in pairs(ns.rdb.guilds) do
 		if type(g) ~= "table" or now - (g.t or 0) > Data.KEEP then
 			ns.rdb.guilds[name] = nil
+		elseif ns.Codec.Dirty(name) or ns.Codec.Dirty(g) then
+			-- Kept by versions before 0.9.2, which let escape codes (colours, textures, links)
+			-- and control bytes in from the channel: the guild's next report (stripped now,
+			-- Comm.lua) takes its place, and ours comes back from the roster.
+			ns.Log("dropped guild %s: escape codes in its report", ns.Codec.Plain(name))
+			ns.rdb.guilds[name] = nil
 		elseif not g.mine and Data.OtherKing(name, g.leader) then
 			-- Kept from before the King was pinned: the next real report takes its place.
 			ns.Log("dropped guild %s: names %s its leader, not the King", name, tostring(g.leader))

@@ -348,18 +348,38 @@ end
 Codec.CHAT_MAX = 250
 Codec.CHAT_PARTS = 3
 Codec.CHAT_TIERS = { A = true, C = true, L = true }
-local LINK_TYPES = { item = true, spell = true, enchant = true, quest = true, achievement = true }
+-- (0.9.2: no achievement links, which none of our clients has, and whose data is not numbers.)
+local LINK_TYPES = { item = true, spell = true, enchant = true, quest = true }
+
+-- A link's data as the game writes it for these types (0.9.2): an id from 1, then at most 31
+-- more fields, each empty or a whole number ("19019::::::::60::" or "5:-1"), 120 bytes at
+-- most. Anything else (letters, an empty or zero id, a field the size of a novel) could be a
+-- malformed link made to break the client's tooltip, and is shown as plain text.
+local function LinkData(data)
+	if #data > 120 then return false end
+	local n = 0
+	for field in (data .. ":"):gmatch("([^:]*):") do
+		n = n + 1
+		if n == 1 and not field:find("^[1-9]%d?%d?%d?%d?%d?%d?%d?%d?$") then return false end
+		if n > 32 or #field > 11 or not (field == "" or field:find("^%-?%d+$")) then return false end
+	end
+	return true
+end
 
 -- Length of a link we let through that starts at i, or nil: an optional colour (Classic
--- |cAARRGGBB or Mainline |cnNAME:), |Htype:data|h[text]|h with a whitelisted type, and |r
--- when it was coloured. Shift-clicked items and spells look exactly like this. A control byte
--- in the text (a newline that fakes a second chat line) means it is not a link we keep.
+-- |cAARRGGBB or Mainline |cnNAME:), |Htype:data|h[text]|h with a whitelisted type and data
+-- (LinkData), and |r when it was coloured. Shift-clicked items and spells look exactly like
+-- this. A control byte in the text (a newline that fakes a second chat line) means it is not
+-- a link we keep, and so does an empty name, a bracket in it, or one past 100 bytes.
 local function LinkAt(s, i)
 	local j = i
 	local color = s:match("^|c%x%x%x%x%x%x%x%x", j) or s:match("^|cn[%w_]+:", j)
-	if color then j = j + #color end
-	local kind, data, text = s:match("^|H(%a+):([%w:%-%.]*)|h%[([^|%]%c]*)%]|h", j)
-	if not kind or not LINK_TYPES[kind] then return nil end
+	if color then
+		if #color > 40 then return nil end
+		j = j + #color
+	end
+	local kind, data, text = s:match("^|H(%a+):([^|]*)|h%[([^|%[%]%c]*)%]|h", j)
+	if not kind or not LINK_TYPES[kind] or not LinkData(data) or text == "" or #text > 100 then return nil end
 	j = j + #kind + #data + #text + 9 -- "|H" ":" "|h[" "]|h"
 	if color then
 		if s:sub(j, j + 1) ~= "|r" then return nil end
@@ -396,6 +416,35 @@ function Codec.SanitizeChat(s)
 	-- Runs of spaces become one: padding could push a fake "[Lords] [Asmond] ..." to the start
 	-- of a wrapped line.
 	return (table.concat(out):gsub("%s%s+", " "):gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
+-- Any other text from another player, as it may be shown (0.9.2): no "|" at all (every escape
+-- code starts with one: colours, textures, atlases, links) and no control bytes. Comm runs
+-- every message but a chat line through it before anything reads it; a chat line keeps the
+-- links SanitizeChat allows.
+function Codec.Plain(s)
+	return (tostring(s or ""):gsub("[|%c]", ""))
+end
+
+-- For what versions before 0.9.2 kept, which let escape codes in: does a stored value carry
+-- one (or a control byte) in any string, key or table inside it?
+function Codec.Dirty(v, depth)
+	if type(v) == "string" then return v:find("[|%c]") ~= nil end
+	depth = depth or 0
+	if type(v) ~= "table" or depth > 6 then return false end
+	for k, x in pairs(v) do
+		if Codec.Dirty(k, depth + 1) or Codec.Dirty(x, depth + 1) then return true end
+	end
+	return false
+end
+
+-- Text pasted into Discord (the copy box) pings nobody (0.9.2): a zero-width space after every
+-- "@" (@everyone, @here, @name, <@id>, <@&role>) and inside "<#" (a channel). Discord shows the
+-- text as written and reads no mention in it. Idempotent.
+local ZWSP = "\226\128\139"
+function Codec.NoMentions(s)
+	s = tostring(s or ""):gsub("@" .. ZWSP, "@"):gsub("<" .. ZWSP .. "#", "<#")
+	return (s:gsub("@", "@" .. ZWSP):gsub("<#", "<" .. ZWSP .. "#"))
 end
 
 -- Room for the text in one message: CHAT_MAX minus "M1~", the tier, 4 separators, a 4 digit id,
