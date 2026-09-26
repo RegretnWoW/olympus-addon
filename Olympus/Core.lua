@@ -2,7 +2,7 @@ local ADDON, ns = ...
 local L = ns.L
 
 ns.NAME = "Olympus"
-ns.VERSION = "0.9.6"
+ns.VERSION = "0.9.7"
 ns.PREFIX = "OLYMPUS"        -- addon message prefix (max 16 chars)
 ns.CHANNEL = "OlympusNet"    -- hidden chat channel shared by every Olympus guild (Alliance)
 ns.CHANNEL_HORDE = "OlympusNetH" -- the Horde's: the two factions never see each other's guilds
@@ -459,7 +459,7 @@ ns.CAPTAIN_RANK = 1
 
 -- What the army calls the King on the lines and the crown made for him (Hop.lua, King.lua),
 -- whatever his character's name in the census.
-ns.KING_NAME = "Asmond"
+ns.KING_NAME = "Asmon"
 -- The addon's author (Workshop.lua): his character on Forever. Names there are a first name
 -- and a surname, unique across the realm group; no Classic realm allows a space in a name.
 ns.AUTHOR = "Faladoriel Skylance"

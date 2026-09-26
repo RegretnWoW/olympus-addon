@@ -120,7 +120,7 @@ end
 local function IsKingView() return ns.King.IsKing() or ns.King.Preview() end
 
 -- The King's switches: what the army sees (every client keeps the King's last word). The
--- author's Asmond's view keeps its own, on his screen only: the real King's word stays as it is.
+-- author's Asmon's view keeps its own, on his screen only: the real King's word stays as it is.
 local FLAGS = { "balance", "ranking", "book" }
 function Treasury.Flags()
 	local f
@@ -658,7 +658,7 @@ function Treasury.SendFlags(force)
 	ns.Comm.Send("CHANNEL", ("T1~T~%d~%s~%s~%d"):format(ns.King.NewId(), GetGuildInfo("player") or "", FlagDigits(f), math.floor(f.at)), "treasuryflags")
 end
 
--- The King's switch (the author's Asmond's view: its own switches, on his screen only).
+-- The King's switch (the author's Asmon's view: its own switches, on his screen only).
 function Treasury.SetFlag(what, on)
 	if not IsKingView() then return ns.Print(L.THRONE_ONLY_KING) end
 	local f = {}

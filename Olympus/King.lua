@@ -88,7 +88,7 @@ function King.IsKing()
 end
 
 -- The author's test build (Dev.lua, never published) shows the tab without the powers:
--- nothing it does reaches anyone. The author turns this "Asmond's view" on and off from the
+-- nothing it does reaches anyone. The author turns this "Asmon's view" on and off from the
 -- Workshop (ns.db.devKingView).
 function King.Preview()
 	if King.IsKing() then return false end
@@ -971,7 +971,7 @@ end
 ---------------------------------------------------------------------------
 -- Where the King's calls show: the roll call in the Realm tab (next to the Lords it calls),
 -- the Royal Inspection in the Tabards tab. Plain rows (not the parchment), for the King and
--- his Hands (and the author's Asmond's view).
+-- his Hands (and the author's Asmon's view).
 ---------------------------------------------------------------------------
 
 local function Grey(s) return "|cff9d9d9d" .. s .. "|r" end
@@ -1190,7 +1190,7 @@ end
 
 function King.State() return { summon = summon, inspect = inspect, agenda = agenda, inspecting = inspecting } end
 
--- The author's Workshop: Asmond's view on or off (the Throne, Vox Populi, the King's calls in
+-- The author's Workshop: Asmon's view on or off (the Throne, Vox Populi, the King's calls in
 -- the Realm and the Tabards), to see and try them. Nothing the view does reaches anyone.
 function King.SetDevView(on)
 	ns.db.devKingView = on and true or false

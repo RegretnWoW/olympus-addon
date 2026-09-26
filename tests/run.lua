@@ -782,7 +782,7 @@ end)
 test("realm view lists king, lords, captains and level race", function()
 	ns.rdb.guilds = SampleGuilds()
 	local lines = ns.Views.RealmLines()
-	assert(lines[1].text:find("Asmond Layer", 1, true), "the King is online: his layer line comes first")
+	assert(lines[1].text:find("Asmon Layer", 1, true), "the King is online: his layer line comes first")
 	assert(lines[2].text:find("King") and lines[2].text:find("Asmongold"), lines[2].text)
 	local sawRace = false
 	for _, l in ipairs(lines) do if l.text == "Level race" then sawRace = true end end
@@ -2081,7 +2081,7 @@ test("HD window: eight side tabs are one too many, the Workshop hangs from the l
 		UI.Refresh()
 		eq(ws:IsShown(), true); eq(ws.points[1][2], Tab("heraldry")); eq(Anchor(ws), "TOPLEFT nil BOTTOMLEFT 0 -20")
 		eq(ws.onLeft or false, false); eq(main.clampInsets[1], 0)
-		-- Asmond view: the Throne, Vox Populi and the Treasury make eight.
+		-- Asmon view: the Throne, Vox Populi and the Treasury make eight.
 		K.Visible, V.Visible, T.Visible = Yes, Yes, Yes
 		UI.Refresh()
 		eq(Anchor(ws), "BOTTOMRIGHT OlympusFrameHD BOTTOMLEFT 0 46"); eq(ws:GetNumPoints(), 1)
@@ -2096,7 +2096,7 @@ test("HD window: eight side tabs are one too many, the Workshop hangs from the l
 		ws:Fire("OnEnter"); eq(GameTooltip.owner, ws); eq(GameTooltip.ownerAnchor, "ANCHOR_LEFT")
 		right[1]:Fire("OnEnter"); eq(GameTooltip.ownerAnchor, "ANCHOR_RIGHT")
 		ws:Click(); eq(main.tab, "workshop"); eq(ws:GetChecked(), true)
-		-- Asmond view off: back under the others, its art as it was.
+		-- Asmon view off: back under the others, its art as it was.
 		K.Visible, V.Visible, T.Visible = saved[1], saved[2], saved[3]
 		UI.Refresh()
 		eq(ws.onLeft, false); eq(Anchor(ws), "TOPLEFT nil BOTTOMLEFT 0 -20"); eq(ws.points[1][2], Tab("heraldry"))
@@ -2888,7 +2888,7 @@ test("census: /who sightings for every Olympus guild we can see, never a report"
 		eq(#s.seen, 3, "seen and not reported"); eq(s.seen[1].name, "OLYMPUS VII")
 		eq(s.seen[2].name, "OLYMPUS LXIX"); eq(s.seen[3].name, "OLYMPUS XXL")
 		local realm = ns.Views.RealmLines()
-		eq(realm[1].text:find("Asmond Layer", 1, true) ~= nil, true, "the King's layer line comes first")
+		eq(realm[1].text:find("Asmon Layer", 1, true) ~= nil, true, "the King's layer line comes first")
 		eq(realm[2].text:find("Asmongold", 1, true) ~= nil, true, "the King is a reported guild's")
 		for _, l in ipairs(realm) do
 			assert(not (l.text or ""):find("OLYMPUS", 1, true), "in the Realm tree: " .. tostring(l.text))
@@ -4996,7 +4996,7 @@ test("layer hop: 'For Olympus!' shows a line to stop it, and /oly layerauto off 
 		H.ChooseKing("auto")
 		local lines = H.KingLines()
 		eq(#lines, 2)
-		assert(lines[2].text:find(ns.L.HOP_AUTO_LINE:format("Asmond"), 1, true), lines[2].text)
+		assert(lines[2].text:find(ns.L.HOP_AUTO_LINE:format("Asmon"), 1, true), lines[2].text)
 		lines[2].onClick()
 		eq(#H.KingLines(), 1, "stopped")
 		ns.db.hopKingChoice = "auto"
@@ -5023,12 +5023,12 @@ test("layer hop: the King's line needs a report nobody disputes, and never one r
 		ns.Print = function(m) said = m end
 		H.AskKing()
 		ns.Print = savedPrint
-		eq(said, ns.L.HOP_KING_CHECKING:format("Asmond"), "not 'offline': still being confirmed")
+		eq(said, ns.L.HOP_KING_CHECKING:format("Asmon"), "not 'offline': still being confirmed")
 		ns.rdb.guilds = { ["Olympus"] = Vouched({ total = 1, online = 1, zones = {}, t = os.time(), leader = "Asmongold Asmongler", leaderOnline = true }, "W1-Realm", "W2-Realm") }
-		eq(H.King().name, "Asmond")
+		eq(H.King().name, "Asmon")
 		-- One report is enough for the line while nobody disagrees (the Crown's powers need two).
 		ns.rdb.guilds = { ["Olympus"] = Vouched({ total = 1, online = 1, zones = {}, t = os.time(), leader = "Asmongold Asmongler", leaderOnline = true }, "W1-Realm") }
-		eq(H.King().name, "Asmond", "one reporter")
+		eq(H.King().name, "Asmon", "one reporter")
 		eq(H.King(true), nil, "not strictly: 'For Olympus!' does not invite on its own for him")
 		eq(ns.Data.KnownRank("Asmongold Asmongler-Realm", "Olympus"), nil, "but no Crown powers from one")
 		-- Right after login a lone report proves nothing: the real ones have not come yet.
@@ -5049,7 +5049,7 @@ test("layer hop: the King's line needs a report nobody disputes, and never one r
 		local real = { guild = "Olympus", total = 1000, online = 200, leader = "Asmongold Asmongler", leaderOnline = true, users = 5, zones = {}, officers = {},
 			ranks = {}, top = {}, faction = "Alliance" }
 		ns.Data.Receive(real, "Honest-Realm")
-		eq(H.King() and H.King().name, "Asmond", "forged against real: the forged report counted for nothing")
+		eq(H.King() and H.King().name, "Asmon", "forged against real: the forged report counted for nothing")
 		-- A same-named character on another realm can't vouch for itself.
 		ns.rdb.guilds = { ["Olympus"] = Vouched({ total = 1, online = 1, zones = {}, t = os.time(), leader = "Atk", leaderOnline = true }, "Atk-Elsewhere") }
 		eq(H.King(), nil, "its own vote from another realm")
@@ -5072,7 +5072,7 @@ test("layer hop: the King's layer line tops the Census and the Realm only while 
 		-- His addon announces his layer: one click asks for it.
 		ns.Layers.Receive("Asmongold-Realm", { mapID = 1453, zoneUID = 9, rank = 0, guild = "Olympus" })
 		local k = H.King()
-		eq(k.name, "Asmond", "the name the army calls him, whatever his character's"); eq(k.zoneUID, 9)
+		eq(k.name, "Asmon", "the name the army calls him, whatever his character's"); eq(k.zoneUID, 9)
 		-- In another zone: the button says where he is, and asks nothing.
 		w.see(7)
 		w.map = 1429
@@ -5082,16 +5082,16 @@ test("layer hop: the King's layer line tops the Census and the Realm only while 
 		eq(#w.sent, 0, "not in his zone: nothing asked")
 		w.map = 1453
 		eq(#H.KingLines(), 1, "in his zone: the button alone")
-		assert(H.KingLine().text:find("Ask invite for Asmond Layer", 1, true), H.KingLine().text)
+		assert(H.KingLine().text:find("Ask invite for Asmon Layer", 1, true), H.KingLine().text)
 		H.KingLine().onClick()
 		eq(w.sent[1], "CHANNEL LQ~1~1453~9", "asks for the King's layer")
-		assert(ns.Views.Build("census")[1].text:find("Asmond", 1, true), "tops the Census")
-		assert(ns.Views.RealmLines()[1].text:find("Asmond", 1, true), "tops the Realm")
+		assert(ns.Views.Build("census")[1].text:find("Asmon", 1, true), "tops the Census")
+		assert(ns.Views.RealmLines()[1].text:find("Asmon", 1, true), "tops the Realm")
 		-- On his layer: says so, nothing to click.
 		H.Reset()
 		w.see(9)
 		line = H.KingLine()
-		assert(line.text:find(ns.L.HOP_KING_HERE:format("Asmond"), 1, true) and not line.onClick, line.text)
+		assert(line.text:find(ns.L.HOP_KING_HERE:format("Asmon"), 1, true) and not line.onClick, line.text)
 		-- Offline: no line at all.
 		ns.rdb.guilds["Olympus"].leaderOnline = false
 		eq(H.KingLine(), nil, "not online: no line")
@@ -5139,7 +5139,7 @@ test("layer hop: alone on the King's layer, a window asks whether the addon may 
 			H.CheckKingPrompt()
 			local f = H.prompt
 			assert(f and f:IsShown(), "alone on his layer: the window")
-			assert(f.text:GetText():find("Asmond is online and you are on his layer", 1, true), f.text:GetText())
+			assert(f.text:GetText():find("Asmon is online and you are on his layer", 1, true), f.text:GetText())
 			-- Left to right: the way out (grey), by hand, and For Olympus! (lit), all one size.
 			eq(f.buttons[1]:GetText(), "Can't right now"); eq(f.buttons[2]:GetText(), "Invite manually")
 			eq(f.buttons[3]:GetText(), "For Olympus!"); eq(f.checkLabel:GetText(), "Don't ask me again")
@@ -5348,7 +5348,7 @@ test("Throne: the King shows himself on the map with a button, everyone checks i
 		eq(K.Location(), nil, "not the King: no crown")
 		K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", ("T1~P~%s~Olympus~1453~420~510"):format(id))
 		local at = K.Location()
-		eq(at.mapID, 1453); eq(at.x, 0.42); eq(at.y, 0.51); eq(at.name, "Asmond")
+		eq(at.mapID, 1453); eq(at.x, 0.42); eq(at.y, 0.51); eq(at.name, "Asmon")
 		K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", ("T1~P~%s~Olympus~1453~2000~5"):format(id))
 		eq(K.Location().x, 0.42, "off the map: ignored")
 		-- No news for a while: the crown goes away on its own.
@@ -5792,11 +5792,11 @@ test("Hands of the King: he names them, they use the tools he lends them, nothin
 		eq(K.IsHand(), true); eq(K.Visible(), true); eq(K.CanCommand(), true)
 		assert(Printed(w, "named you a Hand"), "told")
 		local lines, _, detail = K.Build()
-		eq(lines[1].text, ns.L.THRONE_ROOM_HAND:format("Asmond"), "the King's own pages (his Hands) are not a Hand's")
+		eq(lines[1].text, ns.L.THRONE_ROOM_HAND:format("Asmon"), "the King's own pages (his Hands) are not a Hand's")
 		K.Show("home")
 		lines, _, detail = K.Build()
-		eq(lines[1].text, ns.L.THRONE_ROOM_HAND:format("Asmond"))
-		eq(detail, ns.L.THRONE_YOU_ARE_HAND:format("Asmond"))
+		eq(lines[1].text, ns.L.THRONE_ROOM_HAND:format("Asmon"))
+		eq(detail, ns.L.THRONE_YOU_ARE_HAND:format("Asmon"))
 		assert(not Texts(lines):find("Hands of the King", 1, true), "the Hands are the King's page alone")
 		assert(not Texts(lines):find("Treasury", 1, true) and not Texts(lines):find("Court", 1, true), "so are the court and the treasury")
 		-- Anyone else's client: a forged list does nothing; the King's is trusted.
@@ -5867,7 +5867,7 @@ test("Vox Populi: pick one or several, a chart of the results, the winner worked
 			K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", msg)
 			local f = V.Frame()
 			assert(f and f:IsShown(), "the window")
-			eq(f.title:GetText(), ns.L.VOX_ASKS:format("Asmond"))
+			eq(f.title:GetText(), ns.L.VOX_ASKS:format("Asmon"))
 			eq(f.kind:GetText(), ns.L.VOX_PICK_MANY)
 			eq(f.rows[3]:IsShown(), true); eq(f.rows[4]:IsShown(), false)
 			eq(f.vote:IsShown(), true)
@@ -6273,7 +6273,7 @@ test("Treasury review fixes: the week survives the update, the King's word reach
 			eq(T.SummaryTip(), ns.L.TREASURY_SUMMARY_BTN_TIP_PLAIN)
 			ns.rdb.treasuryFlags = { book = true, balance = true, at = at }
 			eq(T.SummaryTip(), ns.L.TREASURY_SUMMARY_BTN_TIP:format(ns.L.TREASURY_PART_BALANCE))
-			-- Asmond's view keeps its own switches: the King's word stays, and goes with the view.
+			-- Asmon's view keeps its own switches: the King's word stays, and goes with the view.
 			AsSoldier(); ns.rdb.treasuryFlags = { balance = true, at = at }
 			K.Preview = function() return true end
 			local sent = #w.sent
@@ -6773,7 +6773,7 @@ test("Royal Writs: the King writes to his Lords, each can acknowledge, nobody el
 			local f = OlympusWritFrame
 			assert(f:IsShown(), "the writ")
 			eq(f.body:GetText(), "Muster at dawn cffff0000 in Goldshire")
-			eq(f.sign:GetText(), ns.L.WRIT_SIGNED:format("Asmond"))
+			eq(f.sign:GetText(), ns.L.WRIT_SIGNED:format("Asmon"))
 			f.ack:Click()
 			eq(w.whispered[1].to, "Asmongold Asmongler-Realm"); eq(w.whispered[1].msg, ("T6~%d~Olympus Zeus"):format(id))
 			local decrees = Texts(ns.Views.Build("decrees"))
@@ -6823,7 +6823,7 @@ test("Open the Gates and the Royal Pardon: the King's word in the Realm and on t
 		eq(A.Gates(), nil, "an Olympus guild only")
 		K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", msg)
 		eq(A.Gates().guild, "Olympus Zeus")
-		assert(Printed(w, "Asmond opened the gates of <Olympus Zeus>"), "told")
+		assert(Printed(w, "Asmon opened the gates of <Olympus Zeus>"), "told")
 		local realm = Texts(ns.Views.RealmLines())
 		assert(realm:find(ns.L.GATES_LINE:format("Olympus Zeus"), 1, true), realm)
 		-- A Hand may open them; only the opener or the King closes them.
@@ -6847,7 +6847,7 @@ test("Open the Gates and the Royal Pardon: the King's word in the Realm and on t
 		eq(#ns.Inspect.shame.list, 2, "not a Hand's to give")
 		K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", "T1~F~6~Olympus~Naked")
 		eq(#ns.Inspect.shame.list, 1); eq(ns.Inspect.shame.list[1].name, "Pirate")
-		assert(Printed(w, "By royal pardon of Asmond, Naked leaves the Wall of Shame"), "told")
+		assert(Printed(w, "By royal pardon of Asmon, Naked leaves the Wall of Shame"), "told")
 		-- A list published later does not bring the name back (for a week).
 		ns.Inspect.ShowShame({ by = "Zed", list = { { name = "Naked", guild = "Olympus II" }, { name = "Pirate", guild = "Olympus II" } }, t = w.clock })
 		eq(#ns.Inspect.shame.list, 1)
