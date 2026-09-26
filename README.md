@@ -91,7 +91,7 @@ are highlighted. It is rate limited, so nobody gets spammed. The game lists 50 p
   ("Asmongold's layer"), with how many members are there.
 
 ### Layer hop: join the King's layer without begging in chat
-While Asmongold is online, the top of the Census and the Realm shows **"Ask invite for Asmond
+While Asmongold is online, the top of the Census and the Realm shows **"Ask invite for Asmon
 Layer"** with his crown. One click (or `/oly hop`) and the addon does the asking:
 
 - You must already be in his zone (a layer is read per zone): if you are not, the line says
@@ -106,7 +106,7 @@ Layer"** with his crown. One click (or `/oly hop`) and the addon does the asking
   of the group as soon as it sees the move (or offers a **Leave group** button if it can't
   tell).
 
-Players alone on the King's layer are asked once per login: **"Asmond is online and you are on
+Players alone on the King's layer are asked once per login: **"Asmon is online and you are on
 his layer. May the addon invite the players who want to join, and take them out of the group
 once they are there?"** with **For Olympus!**, **Can't right now** and **Invite manually**, and
 a **Don't ask me again** box. With For Olympus! the addon invites on its own (only while you
