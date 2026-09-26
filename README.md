@@ -16,7 +16,6 @@ looks like Blizzard's Guild window and docks right next to it.
 
 <p align="center">
 <img src="docs/1-census.png" width="400" alt="The census on WoW: Forever: 35,679 soldiers in 72 Olympus guilds">
-<img src="docs/6-guild-tooltip.png" width="440" alt="Hovering a guild: members, online, Lord, free slots, level, classes and zones">
 </p>
 <p align="center"><sub>Live on the Forever beta: 16,194 soldiers in 21 guilds, and one guild's details on hover.</sub></p>
 
