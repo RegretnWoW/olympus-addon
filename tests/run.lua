@@ -6560,7 +6560,7 @@ test("the King's guild in one place: <Olympus> on the Alliance, the Horde's once
 		eq(ns.IsKingGuild("Olympus"), true); eq(ns.IsKingGuild("OLYMPUS"), true); eq(ns.IsKingGuild("Olympus II"), false); eq(ns.IsKingGuild(nil), false)
 		eq(ns.IsCrownRank("Olympus", 1), true); eq(ns.IsCrownRank("Olympus II", 1), false); eq(ns.IsCrownRank("Olympus II", 0), true)
 		ns.faction = "Horde"
-		eq(ns.IsKingGuild("Olympus"), true, "the Horde's, until his guild there is known: a guild named Olympus")
+		eq(ns.IsKingGuild("Mudhutters"), true, "the Horde's: <Mudhutters> (0.9.4)"); eq(ns.IsKingGuild("Olympus"), false)
 		ns.KING_GUILD.Horde = nil
 		eq(ns.IsKingGuild("Olympus"), false, "no Horde King with no guild set")
 		ns.KING_GUILD.Horde = "olympus horde"
@@ -7215,8 +7215,10 @@ end)
 
 test("#18: the Horde, with no King named yet: the census King commands nothing, his crown still shows", function()
 	WithThrone(function(w, K)
-		local savedFaction, savedLogin = ns.faction, ns.Comm.loginAt
+		local savedFaction, savedLogin, savedPin, savedGuild = ns.faction, ns.Comm.loginAt, ns.KING_CHARACTER.Horde, ns.KING_GUILD.Horde
 		local ok, err = pcall(function()
+			-- (0.9.4 names the Horde's King: this checks the rule for a side where none is named.)
+			ns.KING_CHARACTER.Horde, ns.KING_GUILD.Horde = nil, "olympus"
 			ns.faction = "Horde"
 			ns.Comm.loginAt = w.clock - 3600
 			ns.rdb.guilds = { ["Olympus"] = Vouched({ total = 300, online = 30, zones = {}, t = w.clock, leader = "Hordeking", realm = "Realm" },
@@ -7243,6 +7245,7 @@ test("#18: the Horde, with no King named yet: the census King commands nothing, 
 			ns.me = "Hordeking-Realm"
 			eq(K.IsKing(), true)
 		end)
+		ns.KING_CHARACTER.Horde, ns.KING_GUILD.Horde = savedPin, savedGuild
 		ns.faction, ns.Comm.loginAt = savedFaction, savedLogin
 		if not ok then error(err, 0) end
 	end)
@@ -8899,6 +8902,45 @@ test("0.9.3 a player can say no to Royal Inspections: the call is heard, nothing
 		K.random, ns.db.royalInspection = saved.random, saved.opt
 		if ns.Inspect.IsPatrolling() then ns.Inspect.SetPatrol(false) end
 		ns.Inspect.SetPace(nil)
+		if not ok then error(err, 0) end
+	end)
+end)
+
+-- 0.9.4: the Horde's King
+test("0.9.4 the Horde's King: Duskmonkey Boneback of <Mudhutters>, a guild of the federation on the Horde side", function()
+	WithThrone(function(w, K)
+		local saved = { faction = ns.faction, guild = GetGuildInfo, me = ns.me }
+		local ok, err = pcall(function()
+			ns.faction = "Horde"
+			eq(ns.IsKingGuild("Mudhutters"), true); eq(ns.IsFederation("Mudhutters"), true, "his guild is Olympus's")
+			local ourRealm = ns.realm
+			ns.realm = "ClassicBetaPvP" -- (a client of his realm group: a learned realm elsewhere is not ours)
+			ns.rdb.kingRealmHorde = nil
+			eq(ns.IsKingCharacter("Duskmonkey Boneback-ClassicBetaPvE"), true, "realm unknown yet: his name anywhere")
+			eq(ns.rdb.kingRealmHorde, nil, "a name in a report teaches nothing")
+			ns.LearnKingRealm("Duskmonkey Boneback-ClassicBetaPvP2") -- a message he sent
+			eq(ns.rdb.kingRealmHorde, "ClassicBetaPvP2", "his realm, learned")
+			eq(ns.IsKingCharacter("Duskmonkey Boneback-ClassicBetaPvP"), true, "the same realm group")
+			eq(ns.IsKingCharacter("Duskmonkey Boneback-ClassicBetaPvE"), false, "then only there")
+			ns.rdb.kingRealmHorde, ns.realm = nil, ourRealm
+			eq(ns.IsKingCharacter("Duskmonkey Boneback"), true)
+			eq(ns.IsKingCharacter("Asmongold Asmongler"), false, "the Alliance's King is not the Horde's")
+			-- His own client: guild master of <Mudhutters>, the addon on.
+			GetGuildInfo = function() return "Mudhutters", "Chief", 0 end
+			ns.me = "Duskmonkey Boneback-Realm"
+			eq(ns.IsMember(), true); eq(K.IsKing(), true)
+			-- The army obeys him, and nobody else speaking for his guild.
+			AsSoldier()
+			GetGuildInfo = function() return "Olympus Horde", "Grunt", 3 end
+			eq(K.Authorized("A", "Duskmonkey Boneback-Realm", "Mudhutters"), true)
+			eq(K.Authorized("A", "Faker Guy-Realm", "Mudhutters"), false)
+			-- The Alliance: <Mudhutters> is nobody's, and the Horde's King is no King there.
+			ns.faction = "Alliance"
+			eq(ns.IsKingGuild("Mudhutters"), false); eq(ns.IsFederation("Mudhutters"), false)
+			eq(ns.IsKingCharacter("Duskmonkey Boneback"), false)
+		end)
+		ns.faction, GetGuildInfo, ns.me = saved.faction, saved.guild, saved.me
+		ns.rdb.kingRealmHorde = nil
 		if not ok then error(err, 0) end
 	end)
 end)

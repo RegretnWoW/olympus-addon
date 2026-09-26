@@ -2,7 +2,7 @@ local ADDON, ns = ...
 local L = ns.L
 
 ns.NAME = "Olympus"
-ns.VERSION = "0.9.3"
+ns.VERSION = "0.9.4"
 ns.PREFIX = "OLYMPUS"        -- addon message prefix (max 16 chars)
 ns.CHANNEL = "OlympusNet"    -- hidden chat channel shared by every Olympus guild (Alliance)
 ns.CHANNEL_HORDE = "OlympusNetH" -- the Horde's: the two factions never see each other's guilds
@@ -491,7 +491,7 @@ ns.CROWN_ICON = "Interface\\GroupFrame\\UI-Group-LeaderIcon"
 -- The King's guild on each side: the guild master of this exact name is the King, its officers
 -- are of the Crown. The Alliance's is <Olympus>; the Horde's is set here once Asmongold founds
 -- it (a guild name is one per realm, so it can't be "Olympus" there).
-ns.KING_GUILD = { Alliance = "olympus", Horde = "olympus" }
+ns.KING_GUILD = { Alliance = "olympus", Horde = "mudhutters" } -- (the Horde's: <Mudhutters>, 0.9.4)
 function ns.IsKingGuild(guild)
 	if type(guild) ~= "string" then return false end
 	local want = ns.KING_GUILD[ns.faction or "Alliance"]
@@ -507,15 +507,39 @@ end
 -- realm group alone (ns.KING_REALM's): anywhere else (Forever's other realms, Classic Era,
 -- Anniversary) there is no King by name either, like the Horde's, and a namesake on another
 -- group is not him.
-ns.KING_CHARACTER = { Alliance = "Asmongold Asmongler", Horde = nil }
+-- The Horde's (0.9.4): Duskmonkey Boneback, guild master of <Mudhutters>. His realm is not known
+-- yet: until it is (ns.KING_REALM_HORDE), his name alone counts on the Horde, anywhere (Forever
+-- names are one per region; a namesake can only exist on another client or region).
+ns.KING_CHARACTER = { Alliance = "Asmongold Asmongler", Horde = "Duskmonkey Boneback" }
 ns.KING_REALM = "ClassicBetaPvP"
+ns.KING_REALM_HORDE = nil
+-- Until it is set here, the Horde King's realm is learned from the first message of his that
+-- reaches us (his name is his alone), and from then on only that realm group counts: shown in
+-- /oly status so it can be written here.
+local function KingRealm()
+	if ns.faction == "Horde" then return ns.KING_REALM_HORDE or (ns.rdb and ns.rdb.kingRealmHorde) end
+	return ns.KING_REALM
+end
+ns.KingRealm = KingRealm
 function ns.KingCharacter()
-	if ns.GroupOf(ns.realm or ns.CurrentRealm()) ~= ns.GroupOf(ns.KING_REALM) then return nil end
+	local realm = KingRealm()
+	if realm and ns.GroupOf(ns.realm or ns.CurrentRealm()) ~= ns.GroupOf(realm) then return nil end
 	return ns.KING_CHARACTER[ns.faction or "Alliance"]
 end
 function ns.IsKingCharacter(name)
 	local pin = ns.KingCharacter()
-	return pin ~= nil and type(name) == "string" and ns.ShortName(name) == pin and OfGroup(name, ns.KING_REALM)
+	if pin == nil or type(name) ~= "string" or ns.ShortName(name) ~= pin then return false end
+	local realm = KingRealm()
+	return realm == nil or OfGroup(name, realm)
+end
+-- Learned only from a message he sent (King.lua: the sender name is the server's), never from
+-- a name written inside a report, which anyone could forge to lock him out.
+function ns.LearnKingRealm(sender)
+	if ns.faction ~= "Horde" or KingRealm() ~= nil or not ns.rdb or not ns.IsKingCharacter(sender) then return end
+	local realm = ns.RealmOf(ns.FullName(sender))
+	if not realm then return end
+	ns.rdb.kingRealmHorde = realm
+	ns.Log("the Horde's King is on %s (learned from his first message)", realm)
 end
 
 -- The Crown: guild masters of any Olympus guild, and the officers of the King's guild.
@@ -632,6 +656,8 @@ end
 
 function ns.IsFederation(guild)
 	if type(guild) ~= "string" or guild == "" then return false end
+	-- The King's own guild is Olympus whatever its name (the Horde's is <Mudhutters>, 0.9.4).
+	if ns.IsKingGuild(guild) then return true end
 	local known = federation[guild]
 	if known == nil then
 		known = Federation(guild)

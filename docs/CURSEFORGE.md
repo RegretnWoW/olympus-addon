@@ -207,8 +207,8 @@ court takes him there. Each of his tools lives where it belongs:
 Every command is checked on each client: it only counts if the sender is the King by name
 (the server stamps every sender's name, so nobody else can carry his), or one of the Hands he
 named, for what he lends them. No census vote can make anyone else King or silence him. On the
-Horde, until an update names its King's character, nobody's commands count (his crown on the
-map still shows). Answers go to the King alone. Nothing another player sends can put free text on his screen: only names and
+Horde the King is Duskmonkey Boneback, guild master of `<Mudhutters>` (0.9.4): his guild counts
+as an Olympus guild there, whatever its name. Answers go to the King alone. Nothing another player sends can put free text on his screen: only names and
 Olympus guild names.
 
 ### The Treasury (the Treasurer, the King, and the army when the King says so)

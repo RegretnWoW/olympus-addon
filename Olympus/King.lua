@@ -106,7 +106,11 @@ function King.Visible() return King.IsKing() or King.IsHand() or King.Preview() 
 -- (his position, his name on the lines) still comes from the census there (Data.KnownRank).
 local function KingSender(sender, guild, soft)
 	if not ns.IsKingGuild(guild) then return false end
-	if ns.KingCharacter() then return ns.IsKingCharacter(sender) end
+	if ns.KingCharacter() then
+		if not ns.IsKingCharacter(sender) then return false end
+		ns.LearnKingRealm(sender) -- (the Horde's, while unknown: from the server's name)
+		return true
+	end
 	return soft == true and ns.Data.KnownRank(sender, guild, true) == 0
 end
 
