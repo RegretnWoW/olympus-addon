@@ -11080,5 +11080,421 @@ test("0.9.9: the decree timer alone follows a switch of style: off the world map
 	end)
 end)
 
+---------------------------------------------------------------------------
+-- 0.9.9: a client without the High Council's lists asks the channel for them (HQ)
+---------------------------------------------------------------------------
+
+-- Clients on one channel, each with Workshop.lua loaded into a namespace of its own (its own
+-- lists, timers and sends; the test key of WithTestCouncil): what one client sends reaches the
+-- handler of every other one for its type, whole, as Comm hands it over once its pieces are
+-- in. net.Client(name, rdb) adds one (an rdb shared with the test namespace lets
+-- ns.IsHighCouncillor read what that client took); net.Hear(name, msg, dist) is a message from
+-- someone outside the test's clients; net.Run(seconds) moves the clock, firing the timers due
+-- in order (ns.Every's again and again). Each client draws 0.5 unless the test says otherwise.
+local function CouncilNet(fn)
+	local dialogs = {}
+	for k, v in pairs(StaticPopupDialogs) do dialogs[k] = v end
+	local net = { clock = 1800000100, users = 1, sent = {}, clients = {} }
+	local function Post(from, dist, msg)
+		net.sent[#net.sent + 1] = { client = from, from = from.name, dist = dist, msg = msg, t = net.clock }
+		for _, c in ipairs(net.clients) do
+			local h = c ~= from and msg:sub(3, 3) == "~" and c.handlers[msg:sub(1, 2)]
+			if h then h(dist, from.name, msg) end
+		end
+	end
+	function net.Client(name, rdb)
+		local c = { name = name, handlers = {}, timers = {} }
+		local cns = setmetatable({ me = name, rdb = rdb or {}, db = {} }, { __index = ns })
+		cns.On, cns.Fire, cns.Log = function() end, function() end, function() end
+		cns.Now = function() return net.clock end
+		cns.After = function(delay, _, f) c.timers[#c.timers + 1] = { at = net.clock + delay, fn = f } end
+		cns.Every = function(every, _, f) c.timers[#c.timers + 1] = { at = net.clock + every, every = every, fn = f } end
+		cns.King = { AddonsOnline = function() return net.users end }
+		cns.Comm = {
+			Handle = function(kind, f) c.handlers[kind] = f end,
+			Send = function(dist, msg) Post(c, dist, msg) end,
+			SendChunked = function(msg) Post(c, "CHANNEL", msg) end,
+			Whisper = function() end,
+		}
+		assert(loadfile(ADDON_DIR .. "Workshop.lua"))("Olympus", cns)
+		c.ns, c.W = cns, cns.Workshop
+		c.W.random = function() return 0.5 end
+		net.clients[#net.clients + 1] = c
+		return c
+	end
+	function net.Hear(name, msg, dist) Post({ name = name }, dist or "CHANNEL", msg) end
+	function net.Run(seconds)
+		local stop = net.clock + seconds
+		while true do
+			local due, owner, index
+			for _, c in ipairs(net.clients) do
+				for i, t in ipairs(c.timers) do
+					if t.at <= stop and (not due or t.at < due.at) then due, owner, index = t, c, i end
+				end
+			end
+			if not due then break end
+			net.clock = math.max(net.clock, due.at)
+			if due.every then due.at = due.at + due.every else table.remove(owner.timers, index) end
+			due.fn()
+		end
+		net.clock = stop
+	end
+	-- The types of the messages a client (or anyone: nil) sent, in order: "HQ HS HT"; of one
+	-- type only, when given.
+	function net.Types(from, kind)
+		local out = {}
+		for _, s in ipairs(net.sent) do
+			local t = s.msg:sub(1, 2)
+			if (not from or s.client == from) and (not kind or t == kind) then out[#out + 1] = t end
+		end
+		return table.concat(out, " ")
+	end
+	function net.Last(from)
+		for i = #net.sent, 1, -1 do if net.sent[i].client == from then return net.sent[i] end end
+	end
+	local ok, err = pcall(fn, net)
+	wipe(StaticPopupDialogs)
+	for k, v in pairs(dialogs) do StaticPopupDialogs[k] = v end
+	if not ok then error(err, 0) end
+end
+
+-- A client holding the test key's name list (NAMES4, at 1800000001) and, unless told not to,
+-- its titles list (TITLES, at 1800000002).
+local function CouncilHolder(net, name, namesOnly)
+	local c = net.Client(name)
+	eq(c.W.TakeCouncil(COUNCIL_TEST_NAMES4), true, name)
+	if not namesOnly then eq(c.W.TakeTitles(COUNCIL_TEST_TITLES), true, name) end
+	return c
+end
+
+test("0.9.9 a client without the High Council's lists asks the channel: 45 to 90 s after login, then every 10 minutes, 3 times a session at most", function()
+	WithTestCouncil(function()
+		CouncilNet(function(net)
+			local a = net.Client("Asker-Realm")
+			a.W.random = function() return 0 end
+			a.W.CouncilLogin()
+			net.Run(44)
+			eq(net.Types(), "", "not in its first 45 s")
+			net.Run(1)
+			eq(net.Types(a), "HQ", "45 s after login (the earliest draw)")
+			eq(net.sent[1].msg, "HQ~0~0", "the times of the lists it holds: none"); eq(net.sent[1].dist, "CHANNEL")
+			net.Run(600)
+			eq(net.Types(a), "HQ", "not again within 10 minutes")
+			net.Run(15)
+			eq(net.Types(a), "HQ HQ", "10 minutes later, on the council's ticker (each minute)")
+			net.Run(600)
+			eq(net.Types(a), "HQ HQ HQ")
+			net.Run(7200)
+			eq(net.Types(a), "HQ HQ HQ", "3 times a session at most")
+		end)
+		CouncilNet(function(net)
+			local a = net.Client("Asker-Realm")
+			a.W.random = function() return 0.999 end
+			a.W.CouncilLogin()
+			net.Run(89)
+			eq(net.Types(), "", "the latest draw...")
+			net.Run(1)
+			eq(net.Types(a), "HQ", "...90 s after login")
+			-- Once it has the name list, it asks no more (nobody answered this one).
+			eq(a.W.TakeCouncil(COUNCIL_TEST_NAMES4, "Relay Guy-Realm"), true)
+			net.Run(7200)
+			eq(net.Types(a, "HQ"), "HQ", "the list came: no more asks (it relays it now and then instead)")
+			-- Someone's ask says a newer name list exists: this one, older, is asked for.
+			net.Hear("Newer-Realm", "HQ~1800000003~0")
+			net.Run(60)
+			eq(net.Types(a, "HQ"), "HQ HQ", "a list older than one heard of")
+			eq(net.Last(a).msg, "HQ~1800000001~0", "with the time of the list it holds")
+		end)
+		CouncilNet(function(net)
+			-- A client holding the lists never asks (its ticker still relays them now and then).
+			local h = CouncilHolder(net, "Holder-Realm")
+			h.W.CouncilLogin()
+			net.Run(7200)
+			local types = net.Types(h)
+			assert(types:find("HS HT", 1, true) and not types:find("HQ", 1, true), types)
+		end)
+	end)
+end)
+
+test("0.9.9 a client that heard someone else ask for as much waits: the answer reaches the whole channel", function()
+	WithTestCouncil(function()
+		CouncilNet(function(net)
+			local first, second = net.Client("First-Realm"), net.Client("Second-Realm")
+			first.W.random = function() return 0 end -- asks at 45 s; the second at 67.5 s
+			first.W.CouncilLogin(); second.W.CouncilLogin()
+			net.Run(120)
+			eq(net.Types(first), "HQ"); eq(net.Types(second), "", "the first one's ask covers it")
+			-- Someone who holds more than it asking covers nothing: that ask comes from a newer list.
+			local third = net.Client("Third-Realm")
+			third.W.TakeCouncil(COUNCIL_TEST_NAMES4)
+			third.W.CouncilLogin()
+			net.Hear("Newer-Realm", "HQ~1800000003~0")
+			net.Run(120)
+			eq(net.Types(third), "HQ", "its own ask")
+			eq(net.Last(third).msg, "HQ~1800000001~0")
+		end)
+	end)
+end)
+
+test("0.9.9 a holder of a newer list answers an ask once, 3 to 15 s after it, as a relay sends it; malformed or foreign asks count for nothing", function()
+	WithTestCouncil(function()
+		CouncilNet(function(net)
+			local h = CouncilHolder(net, "Holder-Realm")
+			h.W.random = function() return 0.999 end
+			-- Not on the channel, not ours, not an ask: nothing (and none of it takes its turn).
+			net.Hear("Asker-Realm", "HQ~0~0", "GUILD")
+			net.Hear("Asker-Realm", "HQ~0~0", "WHISPER")
+			net.Hear("Holder-Realm", "HQ~0~0")
+			for _, bad in ipairs({ "HQ~0", "HQ~0~0~0", "HQ~x~0", "HQ~-1~0", "HQ~ 0~0", "HQ~0~0 ", "HQ~" .. ("9"):rep(20) .. "~" .. ("9"):rep(20) }) do
+				net.Hear("Asker-Realm", bad)
+			end
+			net.Run(60)
+			eq(net.Types(h), "", "nothing answered")
+			-- An ask from a client with nothing: its lists, 3 to 15 s later (here 14.99 s).
+			net.Hear("Asker-Realm", "HQ~0~0")
+			net.Run(14)
+			eq(net.Types(h), "", "not yet")
+			net.Run(1)
+			eq(net.Types(h), "HS HT", "the names, then the titles")
+			eq(net.sent[#net.sent - 1].msg, "HS~" .. COUNCIL_TEST_NAMES4, "as signed, under the relay's type")
+			eq(net.sent[#net.sent].msg, "HT~" .. COUNCIL_TEST_TITLES)
+			eq(net.sent[#net.sent].dist, "CHANNEL")
+			-- Asks it holds nothing newer for: no answer.
+			net.Run(200)
+			net.Hear("Asker-Realm", "HQ~1800000001~1800000002")
+			net.Hear("Asker-Realm", "HQ~1800000003~1800000005")
+			net.Run(60)
+			eq(net.Types(h), "HS HT", "nothing newer to send")
+			-- An ask that lacks only the titles gets the titles alone.
+			net.Hear("Asker-Realm", "HQ~1800000001~0")
+			net.Run(20)
+			eq(net.Types(h), "HS HT HT", "only what the asker lacks")
+		end)
+	end)
+end)
+
+test("0.9.9 an answer is left out when someone else sent the same list meanwhile; a forged list with the same time silences nobody", function()
+	WithTestCouncil(function()
+		CouncilNet(function(net)
+			local first = CouncilHolder(net, "First-Realm", true) -- the names alone
+			local second = CouncilHolder(net, "Second-Realm")
+			first.W.random = function() return 0 end              -- answers at 3 s; the second at 9 s
+			net.Hear("Asker-Realm", "HQ~0~0")
+			net.Run(20)
+			eq(net.Types(first), "HS")
+			eq(net.Types(second), "HT", "the names went out from someone else: the titles alone")
+		end)
+		CouncilNet(function(net)
+			local h = CouncilHolder(net, "Holder-Realm")
+			net.Hear("Asker-Realm", "HQ~0~0")
+			net.Run(2)
+			-- Lists with its lists' times but not its lists (changed, or not signed): no answer of theirs.
+			net.Hear("Faker Guy-Realm", "HS~" .. COUNCIL_TEST_NAMES4:gsub("Fourth Mod", "Faker Guy"))
+			net.Hear("Faker Guy-Realm", "HT~" .. COUNCIL_TEST_TITLES:gsub("Keeper of Coin", "Boss"))
+			net.Run(20)
+			eq(net.Types(h), "HS HT", "still answered")
+		end)
+		CouncilNet(function(net)
+			-- Both lists from a relay meanwhile: nothing left to send.
+			local h = CouncilHolder(net, "Holder-Realm")
+			net.Hear("Asker-Realm", "HQ~0~0")
+			net.Run(2)
+			net.Hear("Relay Guy-Realm", "HS~" .. COUNCIL_TEST_NAMES4)
+			net.Hear("Relay Guy-Realm", "HT~" .. COUNCIL_TEST_TITLES)
+			net.Run(20)
+			eq(net.Types(h), "", "left out")
+		end)
+	end)
+end)
+
+test("0.9.9 an ask storm: a client answers once every 2 minutes at most, however many asks", function()
+	WithTestCouncil(function()
+		CouncilNet(function(net)
+			local h = CouncilHolder(net, "Holder-Realm")
+			h.W.random = function() return 0 end
+			for i = 1, 300 do
+				net.Hear("Asker" .. i .. "-Realm", "HQ~0~0")
+				net.Run(2)
+			end
+			local times = {}
+			for _, s in ipairs(net.sent) do
+				if s.from == h.name and s.msg:sub(1, 2) == "HS" then times[#times + 1] = s.t end
+			end
+			eq(#times, 5, "600 s of asks: 5 answers")
+			for i = 2, #times do assert(times[i] - times[i - 1] >= h.W.LIST_ANSWER_GAP, "answers " .. (times[i] - times[i - 1]) .. " s apart") end
+		end)
+		CouncilNet(function(net)
+			-- In a large army about LIST_ANSWERS clients take an ask up: one draw per 2 minutes,
+			-- won or not, so a stream of asks does not bring every client's turn.
+			net.users = 300
+			local h = CouncilHolder(net, "Holder-Realm")
+			local draws = 0
+			h.W.random = function() draws = draws + 1 return 0.5 end
+			net.Hear("Asker1-Realm", "HQ~0~0")
+			net.Run(20)
+			eq(net.Types(h), "", "3 in 300: not this one"); eq(draws, 1)
+			h.W.random = function() draws = draws + 1 return 0.005 end
+			net.Hear("Asker2-Realm", "HQ~0~0")
+			net.Run(20)
+			eq(net.Types(h), ""); eq(draws, 1, "no second draw within 2 minutes")
+			net.Run(80)
+			net.Hear("Asker3-Realm", "HQ~0~0")
+			net.Run(20)
+			eq(net.Types(h), "HS HT", "its turn: 2 minutes after the first draw")
+		end)
+		CouncilNet(function(net)
+			-- Just logged in, the census not in yet (every client would count itself alone):
+			-- no ask taken up in its first 90 s.
+			local h = CouncilHolder(net, "Holder-Realm")
+			h.W.CouncilLogin()
+			net.Run(80)
+			net.Hear("Asker1-Realm", "HQ~0~0")
+			net.Run(10)
+			eq(net.Types(h), "", "not in its first 90 s")
+			net.Hear("Asker2-Realm", "HQ~0~0")
+			net.Run(20)
+			eq(net.Types(h), "HS HT", "then as any client")
+		end)
+	end)
+end)
+
+test("0.9.9 the author's client answers an ask in 1 to 3 s, even when someone sent the list first, once a minute at most", function()
+	WithTestCouncil(function()
+		CouncilNet(function(net)
+			local author = CouncilHolder(net, "Author-Realm")
+			author.ns.COUNCIL_SIGNED, author.ns.COUNCIL_TITLES = COUNCIL_TEST_NAMES4, COUNCIL_TEST_TITLES
+			net.users = 300 -- (no draw for him, however large the army)
+			author.W.random = function() return 0.999 end
+			net.Hear("Asker-Realm", "HQ~0~0")
+			net.Run(0.5)
+			net.Hear("Relay Guy-Realm", "HS~" .. COUNCIL_TEST_NAMES4)
+			net.Hear("Relay Guy-Realm", "HT~" .. COUNCIL_TEST_TITLES)
+			net.Run(2.4)
+			eq(net.Types(author), "", "not before 1 s + his draw")
+			net.Run(0.1)
+			eq(net.Types(author), "HS HT", "within 3 s, the relay heard or not")
+			local sentAt = net.Last(author).t
+			net.Run(59 - (net.clock - sentAt))
+			net.Hear("Asker2-Realm", "HQ~0~0")
+			net.Run(10)
+			eq(net.Types(author), "HS HT", "not twice within a minute")
+			net.Hear("Asker3-Realm", "HQ~0~0")
+			net.Run(10)
+			eq(net.Types(author), "HS HT HS HT", "a minute later")
+		end)
+		CouncilNet(function(net)
+			-- The same ask, his client and another holder's: his answer comes first.
+			local author = CouncilHolder(net, "Author-Realm")
+			author.ns.COUNCIL_SIGNED = COUNCIL_TEST_NAMES4
+			local h = CouncilHolder(net, "Holder-Realm")
+			author.W.random, h.W.random = function() return 0.999 end, function() return 0 end
+			net.Hear("Asker-Realm", "HQ~0~0")
+			net.Run(20)
+			eq(net.Types(author), "HS HT", "at 3 s"); eq(net.Types(h), "", "the holder's, due at 3 s too, left out")
+		end)
+	end)
+end)
+
+test("0.9.9 a councillor without the list asks, takes a holder's answer, and gets the My council icon button", function()
+	WithUI(function()
+		WithTestCouncil(function()
+			CouncilNet(function(net)
+				local w, UI = ForeverWorld(true)
+				CommunitiesFrame:Show(); w.buttons[1]:Click()
+				local function Buttons()
+					UI.SelectTab("realm")
+					local out = {}
+					for _, d in ipairs(OlympusFrameHD.detailButtons) do if d:IsShown() then out[#out + 1] = d:GetText() end end
+					return table.concat(out, ", ")
+				end
+				-- Third Mod is on the signed list; his client never got it (0.9.8: "council -").
+				ns.me = "Third Mod-Realm"
+				local asker = net.Client(ns.me, ns.rdb)
+				local h = CouncilHolder(net, "Holder-Realm")
+				eq(ns.IsHighCouncillor(ns.me), false)
+				eq(Buttons(), "", "no council known: neither button")
+				local verify, checks = ns.Sign.Verify, 0
+				ns.Sign.Verify = function(...) checks = checks + 1 return verify(...) end
+				asker.W.CouncilLogin()
+				net.Run(67)
+				eq(net.Types(), "", "not asked yet (at 67.5 s)")
+				net.Run(1)
+				eq(net.Types(asker), "HQ")
+				net.Run(10)
+				eq(net.Types(h), "HS HT", "the holder answered")
+				eq(checks, 2, "each list checked once, by the asker")
+				eq(ns.rdb.council.blob, COUNCIL_TEST_NAMES4); eq(ns.rdb.councilTitles.blob, COUNCIL_TEST_TITLES)
+				eq(ns.IsHighCouncillor(ns.me), true, "a councillor on his own client")
+				eq(Buttons(), ns.L.COUNCIL_ASK_BTN .. ", " .. ns.L.COUNCIL_ICON_BTN, "his icon button, next to Ask a High Councillor")
+				net.Run(7200)
+				eq(net.Types(asker, "HQ"), "HQ", "asked once: the lists came")
+			end)
+		end)
+	end)
+end)
+
+test("0.9.9 identical relays of a valid list cost one signature check, from any number of senders", function()
+	WithTestCouncil(function()
+		CouncilNet(function(net)
+			local a = net.Client("Asker-Realm")
+			local verify, checks = ns.Sign.Verify, 0
+			ns.Sign.Verify = function(...) checks = checks + 1 return verify(...) end
+			for i = 1, 20 do
+				net.Hear("Relay" .. i .. "-Realm", "HS~" .. COUNCIL_TEST_NAMES4)
+				net.Hear("Relay" .. i .. "-Realm", "HT~" .. COUNCIL_TEST_TITLES)
+			end
+			eq(checks, 2, "one check per list: the first copy; the others are the list held")
+			eq(a.ns.rdb.council.blob, COUNCIL_TEST_NAMES4); eq(a.ns.rdb.councilTitles.blob, COUNCIL_TEST_TITLES)
+			-- Five holders due to answer one ask at the same second: the first one does, the others
+			-- (and the client above, due later) hear it and leave theirs out. The late client checks
+			-- each list once; everyone else holds them already, and checks nothing.
+			for i = 1, 5 do CouncilHolder(net, "Holder" .. i .. "-Realm").W.random = function() return 0 end end
+			local late = net.Client("Late-Realm")
+			checks = 0
+			net.Hear("Late-Realm", "HQ~0~0")
+			net.Run(20)
+			eq(net.Types(), ("HS HT "):rep(20) .. "HQ HS HT", "one answer")
+			eq(net.Last(net.clients[2]).msg, "HT~" .. COUNCIL_TEST_TITLES, "from the first holder")
+			eq(checks, 2, "the late client's two checks")
+			eq(late.ns.rdb.council.blob, COUNCIL_TEST_NAMES4); eq(late.ns.rdb.councilTitles.blob, COUNCIL_TEST_TITLES)
+		end)
+	end)
+end)
+
+test("0.9.9 HQ on the channel: this version's Comm hands it to the Workshop; a 0.9.8 client drops it unread and logs nothing", function()
+	WithTestCouncil(function()
+		local dialogs, ci = {}, C_ChatInfo
+		for k, v in pairs(StaticPopupDialogs) do dialogs[k] = v end
+		local ok, err = pcall(function()
+			-- Comm.lua has not changed since 0.9.8, and 0.9.8's Workshop registers no HQ handler:
+			-- a Comm without the Workshop is a 0.9.8 client hearing the ask.
+			local old, Deliver = FreshComm()
+			local logs = {}
+			old.Log = function(fmt, ...) logs[#logs + 1] = fmt:format(...) end
+			Deliver("CHANNEL", "Asker-Realm", "HQ~0~0")
+			local st = old.Comm.Stats()
+			eq(st.recv, 1, "heard"); eq(st.byType["ch:HQ"], 1)
+			eq(st.bad, 0, "not a broken census report"); eq(st.partial, 0)
+			eq(#logs, 0, "nothing logged")
+			-- This version: the Workshop's handler gets it through the real CHAT_MSG_ADDON path.
+			local cns, Deliver2 = FreshComm()
+			local timers, sent = {}, {}
+			local wns = setmetatable({ On = function() end, rdb = {}, King = { AddonsOnline = function() return 1 end },
+				After = function(_, _, f) timers[#timers + 1] = f end }, { __index = cns })
+			assert(loadfile(ADDON_DIR .. "Workshop.lua"))("Olympus", wns)
+			eq(wns.Workshop.TakeCouncil(COUNCIL_TEST_NAMES4), true)
+			cns.Comm.SendChunked = function(msg) sent[#sent + 1] = msg end
+			Deliver2("CHANNEL", "Asker-Realm", "HQ~0~0")
+			eq(#timers, 1, "an answer on its way")
+			timers[1]()
+			eq(sent[1], "HS~" .. COUNCIL_TEST_NAMES4)
+		end)
+		wipe(StaticPopupDialogs)
+		for k, v in pairs(dialogs) do StaticPopupDialogs[k] = v end
+		C_ChatInfo = ci
+		if not ok then error(err, 0) end
+	end)
+end)
+
 print(("\n%d passed, %d failed"):format(passed, failed))
 os.exit(failed == 0 and 0 or 1)

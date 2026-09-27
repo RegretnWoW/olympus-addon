@@ -620,12 +620,71 @@ end
 -- A department's name may be empty (councillors outside any department: the council's own);
 -- its icon is what ns.CouncilIconValue takes, or nothing. "public" says whether the army sees
 -- the council in the census yet (ns.CouncilVisible).
+-- A client that lacks the lists asks for them (0.9.9, a moderator's report: a councillor's
+-- client that never got the list had no "My council icon", and relays alone can take hours):
+--   HQ~<time of the name list it holds, or 0>~<time of the titles list it holds, or 0>
+-- A client holding a newer list answers as a relay sends (HS~, then HT~), with the lists newer
+-- than the asker's only. 0.9.8 clients drop HQ unread (Comm hands a type it has no handler for
+-- to nobody, and logs nothing).
 ---------------------------------------------------------------------------
 
 Workshop.COUNCIL_MAX = 30
 Workshop.RELAY_EVERY = 1800 -- a client passes the list along about every 30 minutes...
 Workshop.RELAYS = 3         -- ...and about this many clients do, whatever the army's size
 local lastCouncilSent = -math.huge
+
+-- Asking: once LIST_ASK_AFTER to LIST_ASK_AFTER + LIST_ASK_SPREAD seconds after login, then
+-- every LIST_ASK_EVERY while still without the name list (or holding a list older than one
+-- heard of), LIST_ASKS times a session at most. An answer goes to the whole channel: while
+-- someone else's ask for as much (or more) is not LIST_ASK_EVERY old, ours waits.
+Workshop.LIST_ASK_AFTER, Workshop.LIST_ASK_SPREAD = 45, 45
+Workshop.LIST_ASK_EVERY, Workshop.LIST_ASKS = 600, 3
+-- Answering: after LIST_ANSWER_MIN to LIST_ANSWER_MIN + LIST_ANSWER_SPREAD seconds, left out
+-- when the same list went out from someone else meanwhile; one ask taken up per
+-- LIST_ANSWER_GAP whatever the number of asks, and never in our first LIST_ANSWER_AFTER (the
+-- census is still coming). About LIST_ANSWERS clients take an ask up, whatever the army's size.
+-- The author's client answers sooner, always, once per AUTHOR_ANSWER_GAP.
+Workshop.LIST_ANSWER_MIN, Workshop.LIST_ANSWER_SPREAD, Workshop.LIST_ANSWER_GAP = 3, 12, 120
+Workshop.LIST_ANSWER_AFTER, Workshop.LIST_ANSWERS = 90, 3
+Workshop.AUTHOR_ANSWER_MIN, Workshop.AUTHOR_ANSWER_SPREAD, Workshop.AUTHOR_ANSWER_GAP = 1, 2, 60
+local LIST_STORE = { HS = "council", HT = "councilTitles" }
+local advertised = { HS = 0, HT = 0 } -- the newest list times heard of this session
+local listAsks, lastListAsk, askArmed = 0, -math.huge, false
+local heardAsk        -- someone else's asks heard lately: { names, titles, t }, the lowest times
+local answering       -- our answer waiting: { names, titles, heard = { HS, HT }, mine }
+local lastListAnswer, councilLoginAt = -math.huge, -math.huge
+
+-- The list of a kind ("HS" names, "HT" titles) we hold, as signed, and its time (0: none).
+local function HeldList(kind)
+	local l = ns.rdb and ns.rdb[LIST_STORE[kind]]
+	if type(l) ~= "table" then return nil, 0 end
+	return type(l.blob) == "string" and l.blob or nil, tonumber(l.at) or 0
+end
+
+-- A list of that kind newer than `than`, when we hold one.
+local function NewerList(kind, than)
+	local blob, at = HeldList(kind)
+	return blob and at > than and blob or nil
+end
+
+-- A list time heard of (someone's ask, or a relay the signature budget left unchecked).
+local function Advertise(kind, at)
+	if at and at > advertised[kind] then advertised[kind] = at end
+end
+
+-- A list heard on the channel from someone else: the very one our answer would send, so the
+-- asker has it (the author's answer goes anyway). Only the list we hold, byte for byte: a
+-- forged one with the same time never silences anyone.
+local function HeardList(kind, blob)
+	if answering and not answering.mine and blob == (HeldList(kind)) then answering.heard[kind] = true end
+end
+
+local function AuthorLists() return ns.COUNCIL_SIGNED ~= nil or ns.COUNCIL_TITLES ~= nil end
+
+local function SendLists(names, titles)
+	if names then ns.Comm.SendChunked("HS~" .. names) end
+	if titles then ns.Comm.SendChunked("HT~" .. titles) end
+end
 
 local function CouncilNames()
 	local c = ns.rdb and ns.rdb.council
@@ -658,7 +717,10 @@ local function RememberFalse(blob)
 	if falseCount >= 100 then wipe(falseLists); falseCount = 0 end
 	falseLists[blob], falseCount = true, falseCount + 1
 end
-function Workshop.ResetVerify() wipe(verifiedFrom); wipe(verifyTimes); wipe(falseLists); falseCount = 0 end -- tests
+function Workshop.ResetVerify() -- tests (the list times heard of go too)
+	wipe(verifiedFrom); wipe(verifyTimes); wipe(falseLists); falseCount = 0
+	if Workshop.ResetListAsk then Workshop.ResetListAsk() end
+end
 
 function Workshop.TakeCouncil(blob, sender)
 	if type(blob) ~= "string" or #blob > 2000 then return false end
@@ -669,7 +731,10 @@ function Workshop.TakeCouncil(blob, sender)
 	-- client a signature check for nothing (0.9.8).
 	local c = ns.rdb.council
 	if type(c) == "table" and (tonumber(c.at) or 0) >= at then return false end
-	if sender and not MayVerify(sender, "HS", blob, ns.Now()) then return false end
+	if sender and not MayVerify(sender, "HS", blob, ns.Now()) then
+		if not falseLists[blob] then Advertise("HS", at) end -- (not checked: asked for later)
+		return false
+	end
 	if not ns.Sign or not ns.Sign.Verify(text, sig) then
 		if sender then
 			RememberFalse(blob)
@@ -690,7 +755,9 @@ end
 
 function Workshop.HandleCouncil(dist, sender, text)
 	if dist ~= "CHANNEL" or type(text) ~= "string" then return end
-	Workshop.TakeCouncil(text:match("^HS~(HS1~.*)$") or text, ns.FullName(sender))
+	local blob = text:match("^HS~(HS1~.*)$") or text
+	Workshop.TakeCouncil(blob, ns.FullName(sender))
+	HeardList("HS", blob)
 end
 ns.Comm.Handle("HS", function(...) Workshop.HandleCouncil(...) end)
 
@@ -732,7 +799,10 @@ function Workshop.TakeTitles(blob, sender)
 	if not at then return false end
 	local t = ns.rdb.councilTitles
 	if type(t) == "table" and (tonumber(t.at) or 0) >= at then return false end
-	if sender and not MayVerify(sender, "HT", blob, ns.Now()) then return false end
+	if sender and not MayVerify(sender, "HT", blob, ns.Now()) then
+		if not falseLists[blob] then Advertise("HT", at) end
+		return false
+	end
 	if not ns.Sign or not ns.Sign.Verify(text, sig) then
 		if sender then
 			RememberFalse(blob)
@@ -749,7 +819,9 @@ end
 
 function Workshop.HandleTitles(dist, sender, text)
 	if dist ~= "CHANNEL" or type(text) ~= "string" then return end
-	Workshop.TakeTitles(text:match("^HT~(HT1~.*)$") or text, ns.FullName(sender))
+	local blob = text:match("^HT~(HT1~.*)$") or text
+	Workshop.TakeTitles(blob, ns.FullName(sender))
+	HeardList("HT", blob)
 end
 ns.Comm.Handle("HT", function(...) Workshop.HandleTitles(...) end)
 
@@ -762,7 +834,7 @@ function Workshop.RelayCouncil(force)
 	local titles = type(t) == "table" and type(t.blob) == "string" and t.blob or nil
 	if not names and not titles then return end
 	local now = ns.Now()
-	local mine = ns.COUNCIL_SIGNED ~= nil or ns.COUNCIL_TITLES ~= nil
+	local mine = AuthorLists()
 	local every = mine and 600 or Workshop.RELAY_EVERY
 	if not force and now - lastCouncilSent < every then return end
 	lastCouncilSent = now
@@ -770,8 +842,87 @@ function Workshop.RelayCouncil(force)
 		local users = ns.King and ns.King.AddonsOnline and ns.King.AddonsOnline() or 1
 		if Workshop.random() > math.min(1, Workshop.RELAYS / users) then return end
 	end
-	if names then ns.Comm.SendChunked("HS~" .. names) end
-	if titles then ns.Comm.SendChunked("HT~" .. titles) end
+	SendLists(names, titles)
+end
+
+-- Whether we should ask: no name list at all, or one older than a list heard of.
+function Workshop.NeedLists()
+	if type(ns.rdb and ns.rdb.council) ~= "table" then return true end
+	local _, names = HeldList("HS")
+	local _, titles = HeldList("HT")
+	return names < advertised.HS or titles < advertised.HT
+end
+
+-- Our ask, when due (the first one waits for its time after login: askArmed).
+function Workshop.AskLists()
+	if not askArmed or not Workshop.NeedLists() then return false end
+	local now = ns.Now()
+	if listAsks >= Workshop.LIST_ASKS or now - lastListAsk < Workshop.LIST_ASK_EVERY then return false end
+	local _, names = HeldList("HS")
+	local _, titles = HeldList("HT")
+	local h = heardAsk
+	if h and now - h.t < Workshop.LIST_ASK_EVERY and h.names <= names and h.titles <= titles then return false end
+	listAsks, lastListAsk = listAsks + 1, now
+	ns.Comm.Send("CHANNEL", ("HQ~%s~%s"):format(names, titles), "councillists")
+	return true
+end
+
+-- Someone's ask: taken up when we hold a newer list and it is our turn (see LIST_ANSWER_*).
+-- An answer already waiting covers the asks that come meanwhile.
+function Workshop.AnswerAsk(names, titles)
+	if answering then
+		answering.names, answering.titles = math.min(answering.names, names), math.min(answering.titles, titles)
+		return false
+	end
+	if not NewerList("HS", names) and not NewerList("HT", titles) then return false end
+	local now, mine = ns.Now(), AuthorLists()
+	if now - lastListAnswer < (mine and Workshop.AUTHOR_ANSWER_GAP or Workshop.LIST_ANSWER_GAP) then return false end
+	if not mine and now - councilLoginAt < Workshop.LIST_ANSWER_AFTER then return false end
+	-- One draw per gap, won or not: a stream of asks does not bring every client's turn.
+	lastListAnswer = now
+	if not mine then
+		local users = ns.King and ns.King.AddonsOnline and ns.King.AddonsOnline() or 1
+		if Workshop.random() > math.min(1, Workshop.LIST_ANSWERS / users) then return false end
+	end
+	local pending = { names = names, titles = titles, heard = {}, mine = mine }
+	answering = pending
+	local wait = mine and Workshop.AUTHOR_ANSWER_MIN + Workshop.random() * Workshop.AUTHOR_ANSWER_SPREAD
+		or Workshop.LIST_ANSWER_MIN + Workshop.random() * Workshop.LIST_ANSWER_SPREAD
+	Workshop.after(wait, "council answer", function()
+		if answering ~= pending then return end
+		answering = nil
+		local hs = not pending.heard.HS and NewerList("HS", pending.names) or nil
+		local ht = not pending.heard.HT and NewerList("HT", pending.titles) or nil
+		if not hs and not ht then return end
+		lastListAnswer = ns.Now()
+		SendLists(hs, ht)
+	end)
+	return true
+end
+
+function Workshop.HandleListAsk(dist, sender, text)
+	if dist ~= "CHANNEL" or type(text) ~= "string" or #text > 40 then return end
+	if ns.FullName(sender) == ns.me then return end
+	local names, titles = text:match("^HQ~(%d+)~(%d+)$")
+	names, titles = tonumber(names), tonumber(titles)
+	if not names or not titles then return end
+	Advertise("HS", names)
+	Advertise("HT", titles)
+	local now, h = ns.Now(), heardAsk
+	if h and now - h.t < Workshop.LIST_ASK_EVERY then
+		h.names, h.titles = math.min(h.names, names), math.min(h.titles, titles)
+	else
+		heardAsk = { names = names, titles = titles, t = now }
+	end
+	Workshop.AnswerAsk(names, titles)
+end
+ns.Comm.Handle("HQ", function(...) Workshop.HandleListAsk(...) end)
+
+-- Tests start from a clean state.
+function Workshop.ResetListAsk()
+	advertised.HS, advertised.HT = 0, 0
+	listAsks, lastListAsk, askArmed, heardAsk = 0, -math.huge, false, nil
+	answering, lastListAnswer, councilLoginAt = nil, -math.huge, -math.huge
 end
 
 function Workshop.EditCouncil(verb)
@@ -1265,16 +1416,23 @@ end
 -- names, and the titles since 0.9.9): his client takes them and sends the newest it holds at
 -- once. Any other client passes the lists along a whole RELAY_EVERY after login at the earliest
 -- (0.9.8): until the census says how many addons are online, each would count itself alone and
--- relay for sure, the whole army at once after a server restart.
+-- relay for sure, the whole army at once after a server restart. A client without the lists
+-- asks for them (0.9.9): first LIST_ASK_AFTER to LIST_ASK_AFTER + LIST_ASK_SPREAD after login,
+-- then with the council's ticker.
 function Workshop.CouncilLogin()
-	lastCouncilSent = ns.Now()
+	lastCouncilSent, councilLoginAt = ns.Now(), ns.Now()
 	if ns.COUNCIL_SIGNED then Workshop.TakeCouncil(ns.COUNCIL_SIGNED) end
 	if ns.COUNCIL_TITLES then Workshop.TakeTitles(ns.COUNCIL_TITLES) end
 	if ns.COUNCIL_SIGNED or ns.COUNCIL_TITLES then
 		ns.After(15, "council", function() Workshop.RelayCouncil(true) end)
 	end
+	ns.After(Workshop.LIST_ASK_AFTER + Workshop.random() * Workshop.LIST_ASK_SPREAD, "council lists", function()
+		askArmed = true
+		Workshop.AskLists()
+	end)
 	ns.Every(60, "council", function()
 		Workshop.RelayCouncil()
+		Workshop.AskLists()
 		Workshop.SayAvailable()
 		Workshop.SayIcon()
 	end)
