@@ -626,6 +626,52 @@ function UI.SideTabsFit(count, tabHeight, height)
 	return SIDE_TOP + count * tabHeight + (count - 1) * SIDE_GAP + SIDE_ART_BELOW <= height
 end
 
+-- Blizzard's help button art, on every client we run on (the Guild & Communities window, the
+-- settings, the help plates): a texture of its own, with itself added faintly as the highlight
+-- (RinglessHelpPlateButtonTemplate).
+UI.HELP_ICON = "Interface\\Common\\help-i"
+
+-- The help button in the title bar, just left of the close button, where Blizzard puts a
+-- window's minimize button (0.9.9, asked for by Max of Asmongold's moderators). A plain button:
+-- a click opens the copy box (UI.ShowHelp), which already keeps to the gamepad UI's rules.
+local function HelpButton(f)
+	local close = f.CloseButton or _G[f:GetName() .. "CloseButton"]
+	local b = CreateFrame("Button", nil, f)
+	-- As big as the close button's art: Forever's is 24 and fills it, Classic's red disc is
+	-- about 20 inside a 32 button, so there it tucks in closer. Told apart by the button, not
+	-- by our window's look: the old window on Forever has Mainline's close button too.
+	local classic = close and (close:GetWidth() or 0) > 28
+	b:SetSize(classic and 20 or 22, classic and 20 or 22)
+	if close then
+		b:SetPoint("RIGHT", close, "LEFT", classic and 4 or 0, 0)
+	else -- (both templates have one; just in case) the title bar's right end
+		b:SetPoint("TOPRIGHT", f, "TOPRIGHT", -28, -2)
+	end
+	-- Over the frame's border like the close button (Forever's metal title bar is a NineSlice
+	-- at +500 and its buttons at 510): at the close button's level, or above the border.
+	local border = f.NineSlice and f.NineSlice.GetFrameLevel and f.NineSlice:GetFrameLevel() or f:GetFrameLevel()
+	b:SetFrameLevel(math.max(border + 10, close and close.GetFrameLevel and close:GetFrameLevel() or 0))
+	b.icon = b:CreateTexture(nil, "ARTWORK")
+	b.icon:SetTexture(UI.HELP_ICON)
+	b.icon:SetAllPoints()
+	b:SetHighlightTexture(UI.HELP_ICON, "ADD")
+	local highlight = b.GetHighlightTexture and b:GetHighlightTexture()
+	if highlight and highlight.SetAlpha then highlight:SetAlpha(0.2) end
+	b:SetScript("OnClick", function() ns.SafeCall("help", UI.ShowHelp) end)
+	-- The title bar still drags the window from there, as it did before the button.
+	b:RegisterForDrag("LeftButton")
+	b:SetScript("OnDragStart", function() f:StartMoving() end)
+	b:SetScript("OnDragStop", function() f:GetScript("OnDragStop")(f) end)
+	b:SetScript("OnEnter", function(self)
+		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+		GameTooltip:AddLine(L.HELP_BTN, 1, 0.82, 0)
+		GameTooltip:AddLine(L.HELP_BTN_TIP, 1, 1, 1, true)
+		GameTooltip:Show()
+	end)
+	b:SetScript("OnLeave", function() GameTooltip:Hide() end)
+	return b
+end
+
 local function CreateMain(style)
 	local g = GEOMETRY[style]
 	local hd = style == "hd"
@@ -677,6 +723,7 @@ local function CreateMain(style)
 			pcall(f.SetPortraitToAsset, f, ns.LOGO)
 		end
 	end
+	f.helpButton = HelpButton(f)
 
 	-- One dark panel over the whole interior, like the Guild window (its inside is near
 	-- black, not the lighter marble of the plain portrait frame).
@@ -1701,7 +1748,7 @@ ns.RegisterEvent("UI_SCALE_CHANGED", function() ns.SafeCall("relayout", Relayout
 
 ---------------------------------------------------------------------------
 ---------------------------------------------------------------------------
--- Copy box (Discord text, bug report)
+-- Copy box (Discord text, bug report, help)
 ---------------------------------------------------------------------------
 
 local copyFrame
@@ -1709,6 +1756,48 @@ local copyFrame
 function UI.ShowBugReport()
 	local text = ns.BuildBugReport()
 	UI.ShowCopy(L.REPORT_BUG, text, ns.Workshop and ns.Workshop.BugAction and ns.Workshop.BugAction(text) or nil)
+end
+
+-- Where the addon lives: its code and issues (the toc's X-Website), its CurseForge page.
+UI.LINKS = {
+	github = "https://github.com/dnl-gentile/olympus-addon",
+	issues = "https://github.com/dnl-gentile/olympus-addon/issues",
+	curseforge = "https://www.curseforge.com/wow/addons/olympus-guild",
+}
+
+-- The help button's page: the version, the tabs in a line each, then the lines /oly help prints
+-- for the privacy switches and the chats (the same strings, so they never disagree), and the
+-- links. In the copy box, so a link can be copied; its button is Report a bug.
+function UI.ShowHelp()
+	local lines = {
+		L.TITLE .. " " .. tostring(ns.VERSION),
+		"",
+		L.HELP_TABS,
+		"  " .. L.TAB_CENSUS .. ": " .. L.HELP_TAB_CENSUS,
+		"  " .. L.TAB_REALM .. ": " .. L.HELP_TAB_REALM,
+		"  " .. L.TAB_DECREES .. ": " .. L.HELP_TAB_DECREES,
+		"  " .. L.TAB_HERALDRY .. ": " .. L.HELP_TAB_HERALDRY,
+		"  " .. L.HELP_TAB_OTHERS,
+		"",
+		L.HELP_ALL_COMMANDS,
+		"",
+		L.HELP_PRIVACY,
+		L.HELP_LOCATION,
+		L.HELP_ROLLCALL,
+		L.HELP_INSPECTION,
+		"",
+		L.HELP_CHATS,
+		L.HELP_CHAN_ALL,
+		L.HELP_CHAN_CAPTAINS,
+		L.HELP_CHAN_LORDS,
+		L.HELP_CHATWIN,
+		"",
+		L.HELP_LINKS,
+		"  GitHub: " .. UI.LINKS.github,
+		"  " .. L.HELP_ISSUES .. ": " .. UI.LINKS.issues,
+		"  CurseForge: " .. UI.LINKS.curseforge,
+	}
+	UI.ShowCopy(L.HELP_TITLE, table.concat(lines, "\n"), { label = L.REPORT_BUG, fn = function() UI.ShowBugReport() end })
 end
 
 -- action: an optional { label, fn } button at the bottom (fn returns true once done).
