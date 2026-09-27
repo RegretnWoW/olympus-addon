@@ -296,11 +296,12 @@ end)
 test("demo data is gone and old installs forget the setting", function()
 	eq(ns.Data.BuildDemo, nil); eq(ns.Data.SetDemo, nil); eq(ns.Inspect.BuildDemo, nil); eq(ns.Layers.BuildDemo, nil)
 	local savedDB, savedR, savedRealm = ns.db, ns.rdb, ns.realm
-	for _, old in ipairs({ { demo = true }, { demo = true, configVersion = 2 }, { demo = true, configVersion = 3 } }) do
+	for _, old in ipairs({ { demo = true }, { demo = true, configVersion = 2 }, { demo = true, configVersion = 3, throneLetterRead = true } }) do
 		OlympusDB = old
 		for _, fn in ipairs(EVENT_SCRIPTS) do fn(nil, "ADDON_LOADED", "Olympus") end
 		eq(OlympusDB.demo, nil, "demo setting cleared (configVersion " .. tostring(old.configVersion) .. ")")
 		eq(OlympusDB.configVersion, 3)
+		eq(OlympusDB.throneLetterRead, nil, "1.0.0: the letter's flag goes with it")
 	end
 	ns.db, ns.rdb, ns.realm = savedDB, savedR, savedRealm
 end)
