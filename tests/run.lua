@@ -74,7 +74,7 @@ end
 -- Load addon files like WoW does: each gets (addonName, sharedTable)
 ---------------------------------------------------------------------------
 local ns = {}
-for _, file in ipairs({ "Bootstrap", "Locales", "Core", "Diagnostics", "Dialog", "Codec", "Sign", "Zones", "Who", "Data", "Roster", "Comm", "Map", "Layers", "Hop", "Positions", "Decree", "Channels", "Inspect", "King", "Vox", "Court", "Treasury", "Bank", "Acts", "Workshop", "Recruit", "Views" }) do
+for _, file in ipairs({ "Bootstrap", "Locales", "Core", "Diagnostics", "Dialog", "Codec", "Sign", "Zones", "Who", "Data", "Roster", "Comm", "Map", "Layers", "Hop", "Positions", "Decree", "Channels", "Inspect", "King", "Vox", "Court", "Treasury", "Bank", "Acts", "Workshop", "Ed25519", "libs/QREncode/qrencode", "Link", "Recruit", "Views" }) do
 	local chunk = assert(loadfile(ADDON_DIR .. file .. ".lua"))
 	chunk("Olympus", ns)
 end
@@ -11079,6 +11079,888 @@ test("0.9.9: the decree timer alone follows a switch of style: off the world map
 		end)
 	end)
 end)
+
+---------------------------------------------------------------------------
+-- Olympus Link (0.9.10): SHA-512 and Ed25519 (Ed25519.lua), the Discord codes, the requests,
+-- the confirmers, the draw, the watchers and the window (Link.lua).
+---------------------------------------------------------------------------
+
+do
+local Ed, Link = ns.Ed25519, ns.Link
+local function Hex(s) return Ed.ToHex(s) end
+local function Bytes(h) return assert(Ed.FromHex(h), "hex") end
+
+-- tests/fixtures/ed25519-vectors.txt: RFC 8032 7.1, Python's "cryptography", and the addon's own.
+local function Vectors()
+	local out = {}
+	for line in io.lines(ROOT .. "tests/fixtures/ed25519-vectors.txt") do
+		if line ~= "" and line:sub(1, 1) ~= "#" then
+			local name, seed, pk, msg, sig = line:match("^(%S+) (%x+) (%x+) (%S+) (%x+)$")
+			assert(name, "a vector: " .. line:sub(1, 40))
+			out[#out + 1] = { name = name, seed = Bytes(seed), pk = Bytes(pk), msg = msg == "-" and "" or Bytes(msg), sig = Bytes(sig) }
+		end
+	end
+	return out
+end
+-- tests/fixtures/link-sample.txt: a code and proofs signed with throwaway keys.
+local function Sample()
+	local out = {}
+	for line in io.lines(ROOT .. "tests/fixtures/link-sample.txt") do
+		local k, v = line:match("^([%w_]+)=(.*)$")
+		if k then out[k] = v end
+	end
+	return out
+end
+local SAMPLE = Sample()
+local FAKE_SIG = Ed.ToB64(string.rep("\7", 64)) -- well formed; only the bot can check a proof
+
+-- Runs fn(w) as the addon, with sends, whispers, popups, prints and time recorded; the crypto
+-- jobs' frames wait in w.frames (RunFrames runs them).
+local function WithLink(fn)
+	local saved = { me = ns.me, Now = ns.Now, Send = ns.Comm.Send, Whisper = ns.Comm.Whisper, Show = StaticPopup_Show,
+		Guild = GetGuildInfo, Print = ns.Print, print = print, faction = ns.faction, council = ns.rdb.council,
+		discord = ns.db.discord, mine = ns.db.myCharacters, keys = ns.LINK_BACKEND_KEYS, after = Ed.after, slice = Ed.SLICE_MS,
+		owner = ns.LINK_WATCHER_OWNER }
+	local w = { sent = {}, whispered = {}, popups = {}, printed = {}, frames = {}, clock = 1799990000 }
+	local ok, err = pcall(function()
+		Link.Reset(); Ed.Reset()
+		ns.Now = function() return w.clock end
+		ns.Comm.Send = function(dist, msg, key) w.sent[#w.sent + 1] = { dist = dist, msg = msg, key = key } end
+		ns.Comm.Whisper = function(to, msg, key) w.whispered[#w.whispered + 1] = { to = to, msg = msg, key = key } end
+		StaticPopup_Show = function(name, a, b, data) w.popups[#w.popups + 1] = { name = name, a = a, b = b, data = data } end
+		ns.Print = function(m) w.printed[#w.printed + 1] = tostring(m) end
+		print = function(m) w.printed[#w.printed + 1] = tostring(m) end
+		Ed.after = function(f) w.frames[#w.frames + 1] = f end
+		ns.faction = "Alliance"
+		ns.rdb.council = { names = { ["test councillor"] = true, ["other councillor"] = true } }
+		ns.db.discord, ns.db.myCharacters = nil, nil
+		ns.LINK_BACKEND_KEYS = { SAMPLE.backend_pub }
+		ns.LINK_WATCHER_OWNER = nil
+		ns.me = "Some Player-Realm"
+		GetGuildInfo = function() return "Olympus II", "Member", 3 end
+		fn(w)
+	end)
+	ns.me, ns.Now, ns.Comm.Send, ns.Comm.Whisper, StaticPopup_Show = saved.me, saved.Now, saved.Send, saved.Whisper, saved.Show
+	GetGuildInfo, ns.Print, print, ns.faction, ns.rdb.council = saved.Guild, saved.Print, saved.print, saved.faction, saved.council
+	ns.db.discord, ns.db.myCharacters, ns.LINK_BACKEND_KEYS, Ed.after, Ed.SLICE_MS = saved.discord, saved.mine, saved.keys, saved.after, saved.slice
+	ns.LINK_WATCHER_OWNER = saved.owner
+	Link.Reset(); Ed.Reset()
+	if not ok then error(err, 0) end
+end
+local function RunFrames(w)
+	local n = 0
+	while #w.frames > 0 do
+		table.remove(w.frames, 1)()
+		n = n + 1
+		assert(n < 200000, "the jobs never end")
+	end
+	return n
+end
+local function Said(w, text)
+	for _, p in ipairs(w.printed) do if p:find(text, 1, true) then return true end end
+	return false
+end
+local function Whispers(w, prefix)
+	local out = {}
+	for _, x in ipairs(w.whispered) do if x.msg:sub(1, #prefix) == prefix then out[#out + 1] = x end end
+	return out
+end
+local function Announce(name, id, tier) Link.HandleAnnounce("CHANNEL", name, ("DV~1~%s~%s"):format(id, tier)) end
+local function AsConfirmer(name, id, seed)
+	ns.me = name
+	GetGuildInfo = function() return "Olympus Zeus", "Member", 3 end
+	Link.Store().key = { id = id, seed = seed }
+end
+local function AsRequester(name)
+	ns.me = name or "Some Player-Realm"
+	GetGuildInfo = function() return "Olympus II", "Member", 3 end
+	Link.Store().key = nil
+end
+-- The percent-decoding the page does (decodeURIComponent).
+local function DecodeURI(s) return (s:gsub("%%(%x%x)", function(h) return string.char(tonumber(h, 16)) end)) end
+-- A token signed by the sample's backend key, with any fields (the bot's format).
+local function Token(R, user, exp, mode, seed)
+	local signed = ("OLC1.%s.%s.%d.%s"):format(R, user, exp, mode)
+	return signed .. "." .. Ed.ToB64(Ed.Sign(seed or Ed.FromB64(SAMPLE.backend_seed), signed))
+end
+
+test("Olympus Link: SHA-512 against FIPS 180-4's examples and every padding boundary", function()
+	local cases = {
+		{ "", "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e" },
+		{ "abc", "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f" },
+		{ "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq", "204a8fc6dda82f0a0ced7beb8e08a41657c16ef468b228a8279be331a703c33596fd15c13b1b07f9aa1d3bea57789ca031ad85c7a71dd70354ec631238ca3445" },
+		{ "abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu",
+			"8e959b75dae313da8cf4f72814fc143f8f7779c6eb9f7fa17299aeadb6889018501d289e4900f7e4331b99dec4b5433ac7d329eeb6dd26545e96e55b874be909" },
+		{ string.rep("a", 1000000), "e718483d0ce769644e2e42c7bc15b4638e1f98b13b2044285632a803afa973ebde0ff244877ea60a4cb0432ce577c31beb009c5c2c49aa2e4eadb217ad8cc09b" },
+	}
+	-- Lengths either side of the padding's edges (112 and 128 bytes), as Python's hashlib gives them.
+	local edges = {
+		[111] = "62a2e7673c61612605aea5eba118234b2b3cb12ccd8d2be2a54b86fc9d3e79e62f9e0056ba002e6843a5f07f4dec6aaac3cb7592d3e6491c9f2a9796558bd2a9",
+		[112] = "10c783e0186b159b548a6083dd6b42f1d2ac3cad306f89a4589176a1fc914c1e4022d9ff302593a4fdb40b68f8ac5187ed8987d714c1fe1d9d1aaebbb8aa2707",
+		[127] = "9d0ca03a060896d8063a7d12748834242be3be3b7e43f3f0a1aef5862308f3de926c435f452c9d79b1faa1a44931aca14721535d4e73b8680e813c7dc8727252",
+		[128] = "3ce012825d65b66ff2c6173a98cf698e12f1e22b8fb49895949a3795c4f9e64a8b643791f54876aed796a6c75df99f79ba0379c14a8de2b3212a141d9e7f7f47",
+		[239] = "1a7f9762b6d131b27366dc70fd011c2b156b91c9c2e51be3152fd9fe13c476e70c4c33904bfb9b2658984fc7a95968b94b54362d0538281d0947a3fbdc301e61",
+		[240] = "037297f99cec421dfd4a47b79f320569bfc823edac02091c95a50fdcc48c2d088a9c792254c691c6b494c7a74706aa5fee025e4c6df1d826562420c9b491ec55",
+	}
+	for n, want in pairs(edges) do
+		local t = {}
+		for i = 0, n - 1 do t[#t + 1] = string.char((i * 13 + 5) % 256) end
+		cases[#cases + 1] = { table.concat(t), want }
+	end
+	for _, c in ipairs(cases) do eq(Hex(Ed.SHA512(c[1])), c[2], #c[1] .. " bytes") end
+end)
+
+test("Olympus Link: Ed25519 keys and signatures byte for byte: RFC 8032 7.1 (1023-byte message too), Python's, the addon's", function()
+	local names = {}
+	for _, v in ipairs(Vectors()) do
+		names[#names + 1] = v.name
+		eq(Hex(Ed.PublicKey(v.seed)), Hex(v.pk), v.name .. ": public key")
+		eq(Hex(Ed.Sign(v.seed, v.msg)), Hex(v.sig), v.name .. ": signature")
+		eq(Hex(Ed.Sign(v.seed, v.msg, v.pk)), Hex(v.sig), v.name .. ": signature, public key given")
+		eq(Ed.Verify(v.pk, v.msg, v.sig), true, v.name .. ": Python's and the RFC's signatures check")
+	end
+	local all = table.concat(names, " ")
+	for _, want in ipairs({ "rfc8032-test1", "rfc8032-test2", "rfc8032-test3", "rfc8032-test1024", "python-oly4-accented", "lua-oly4-accented" }) do
+		assert(all:find(want, 1, true), "vector " .. want)
+	end
+end)
+
+test("Olympus Link: Ed25519 refuses altered messages, signatures and keys, non-canonical S and keys, small-order keys", function()
+	local v = Vectors()[2] -- RFC 8032 TEST 2 (one byte)
+	local function Flip(s, i, b) return s:sub(1, i - 1) .. string.char(_G.bit.bxor(s:byte(i), b)) .. s:sub(i + 1) end
+	eq(Ed.Verify(v.pk, v.msg .. "", v.sig), true)
+	eq(Ed.Verify(v.pk, "\115", v.sig), false, "another message")
+	eq(Ed.Verify(v.pk, v.msg .. "\0", v.sig), false, "a byte more")
+	eq(Ed.Verify(v.pk, v.msg, Flip(v.sig, 1, 1)), false, "R altered")
+	eq(Ed.Verify(v.pk, v.msg, Flip(v.sig, 40, 16)), false, "S altered")
+	eq(Ed.Verify(Flip(v.pk, 5, 2), v.msg, v.sig), false, "the key altered")
+	eq(Ed.Verify(Vectors()[1].pk, v.msg, v.sig), false, "someone else's key")
+	-- S + L: the same number mod L, but not the one spelling RFC 8032 allows.
+	local L = { 0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde, 0x14 }
+	local s, carry = {}, 0
+	for i = 1, 32 do
+		local x = v.sig:byte(32 + i) + (L[i] or (i == 32 and 0x10 or 0)) + carry
+		s[i], carry = x % 256, math.floor(x / 256)
+	end
+	eq(carry, 0, "S + L fits 32 bytes for this vector")
+	eq(Ed.Verify(v.pk, v.msg, v.sig:sub(1, 32) .. string.char(unpack(s))), false, "S + L refused")
+	-- Keys: y = 3 is a point of large order; y = p + 3 spells it too, non-canonically; y = 2 is on
+	-- no curve point; the identity and y = 0 (order 4) are of small order.
+	eq(Ed.ValidPublicKey(Bytes("03" .. string.rep("00", 31))), true, "y = 3")
+	eq(Ed.ValidPublicKey(Bytes("f0" .. string.rep("ff", 30) .. "7f")), false, "y = p + 3")
+	eq(Ed.ValidPublicKey(Bytes("02" .. string.rep("00", 31))), false, "y = 2: not a point")
+	eq(Ed.ValidPublicKey(Bytes("01" .. string.rep("00", 31))), false, "the identity")
+	eq(Ed.ValidPublicKey(string.rep("\0", 32)), false, "order 4")
+	eq(Ed.ValidPublicKey(v.pk), true)
+	eq(Ed.Verify(Bytes("ee" .. string.rep("ff", 30) .. "7f"), v.msg, v.sig), false, "y >= p")
+	eq(Ed.Verify(string.rep("\0", 32), v.msg, v.sig), false, "a point of small order")
+	-- With the identity as the key, R = B and S = 1 would pass for any message: refused.
+	local forged = Bytes("58" .. string.rep("66", 31) .. "01" .. string.rep("00", 31))
+	eq(Ed.Verify(Bytes("01" .. string.rep("00", 31)), "anything at all", forged), false, "no forgery with a small-order key")
+	-- Wrong sizes and types.
+	eq(Ed.Verify(v.pk:sub(2), v.msg, v.sig), false)
+	eq(Ed.Verify(v.pk, v.msg, v.sig:sub(2)), false)
+	eq(Ed.Verify(v.pk, nil, v.sig), false)
+	eq(Ed.Verify(nil, v.msg, v.sig), false)
+	assert(not pcall(Ed.Sign, "short", "x"), "a seed is 32 bytes")
+end)
+
+test("Olympus Link: Ed25519 round trips; base64url and hex, one spelling each", function()
+	for i = 1, 6 do
+		local seed = ns.Sign.SHA256("olympus-link-test:round-" .. i)
+		local msg = string.rep("Olympus " .. i, i * 7)
+		local pk = Ed.PublicKey(seed)
+		local sig = Ed.Sign(seed, msg, pk)
+		eq(#sig, 64)
+		eq(Ed.Verify(pk, msg, sig), true, "round " .. i)
+		eq(Ed.Verify(pk, msg .. ".", sig), false)
+		eq(Ed.FromB64(Ed.ToB64(sig)), sig)
+		eq(#Ed.ToB64(sig), 86); eq(#Ed.ToB64(seed), 43)
+	end
+	eq(Ed.ToB64("\251\255"), "-_8", "base64url's two letters")
+	eq(Ed.FromB64("-_8"), "\251\255")
+	eq(Ed.FromB64("-_9"), nil, "unused bits set: another spelling of the same bytes")
+	eq(Ed.FromB64("ab+/"), nil, "base64's + and / are not base64url")
+	eq(Ed.FromB64("abc="), nil, "no padding")
+	eq(Ed.FromB64("a"), nil)
+	eq(Ed.FromHex("0aFf"), "\10\255"); eq(Ed.FromHex("0g"), nil); eq(Ed.FromHex("abc"), nil)
+end)
+
+test("Olympus Link: a signature in slices, resumed a frame at a time, gives the same bytes; jobs queue and fail cleanly", function()
+	WithLink(function(w)
+		local v = Vectors()[4] -- the 1023-byte message
+		Ed.SLICE_MS = 0 -- every pause yields: the most frames a job can take
+		local got, slicesSeen
+		assert(Ed.Run(function() return Ed.Sign(v.seed, v.msg) end, function(ok, sig, slices) got, slicesSeen = ok and sig, slices end))
+		local order = {}
+		Ed.Run(function() return Ed.Verify(v.pk, v.msg, v.sig) end, function(ok, res) order[#order + 1] = "verify " .. tostring(ok and res) end)
+		Ed.Run(function() error("broken on purpose") end, function(ok, err) order[#order + 1] = "error " .. tostring(ok) .. " " .. tostring(err):match("broken on purpose") end)
+		eq(got, nil, "nothing runs before the next frame")
+		eq(Ed.Busy(), 3)
+		local frames = RunFrames(w)
+		eq(Hex(got), Hex(v.sig), "the same signature")
+		assert(slicesSeen > 20, "spread over frames: " .. tostring(slicesSeen))
+		assert(frames > 40, "frames: " .. frames)
+		eq(table.concat(order, ", "), "verify true, error false broken on purpose")
+		eq(Ed.Busy(), 0)
+		-- Called directly (outside a job) it runs at once, and never yields.
+		Ed.SLICE_MS = 0
+		eq(Hex(Ed.Sign(v.seed, v.msg)), Hex(v.sig))
+		-- A full queue says so.
+		for _ = 1, Ed.MAX_JOBS do Ed.Run(function() return 1 end) end
+		eq(Ed.Run(function() return 1 end), false)
+	end)
+end)
+
+test("Olympus Link: the bot's code: parsed from both ends, checked against the bot's keys, expiry, the longest one fits a chat line", function()
+	WithLink(function(w)
+		local t = Link.ParseToken("   " .. SAMPLE.token_a .. "  ")
+		assert(t, "spaces around it are fine")
+		eq(t.R, "7K3M9QX2TB"); eq(t.user, "some.player"); eq(t.exp, tonumber(SAMPLE.token_exp)); eq(t.mode, "a")
+		eq(Link.VerifyToken(t), true)
+		eq(Link.VerifyToken(Link.ParseToken(SAMPLE.token_c)), true)
+		-- Altered anywhere: the signature no longer matches.
+		local sig = SAMPLE.token_a:match("([^.]+)$")
+		for _, bad in ipairs({ "OLC1.7K3M9QX2TC.some.player.1800000000.a", "OLC1.7K3M9QX2TB.some.playe.1800000000.a",
+			"OLC1.7K3M9QX2TB.some.player.1800000001.a", "OLC1.7K3M9QX2TB.some.player.1800000000.c" }) do
+			local parsed = Link.ParseToken(bad .. "." .. sig)
+			assert(parsed, bad)
+			eq(Link.VerifyToken(parsed), false, bad)
+		end
+		-- Another key's signature.
+		local other = Token("7K3M9QX2TB", "some.player", 1800000000, "a", ns.Sign.SHA256("olympus-link-test:not-the-bot"))
+		eq(Link.VerifyToken(Link.ParseToken(other)), false, "signed by someone else")
+		ns.LINK_BACKEND_KEYS = { "zz", Hex(Ed.PublicKey(ns.Sign.SHA256("olympus-link-test:not-the-bot"))), SAMPLE.backend_pub }
+		eq(Link.VerifyToken(Link.ParseToken(other)), true, "a second key during a change of key")
+		ns.LINK_BACKEND_KEYS = { SAMPLE.backend_pub }
+		-- Bad usernames, codes, modes and signatures never parse.
+		for _, user in ipairs({ "Some.Player", "a", string.rep("a", 33), "some player", "some-player", "sôme" }) do
+			eq(Link.ParseToken(Token("7K3M9QX2TB", user, 1800000000, "a")), nil, "username " .. user)
+		end
+		for _, R in ipairs({ "7K3M9QX2T", "7K3M9QX2TBB", "7K3M9QX2TI", "7K3M9QX2TU", "7k3m9qx2tb" }) do
+			eq(Link.ParseToken(Token(R, "some.player", 1800000000, "a")), nil, "code " .. R)
+		end
+		eq(Link.ParseToken(Token("7K3M9QX2TB", "some.player", 1800000000, "x")), nil, "mode")
+		eq(Link.ParseToken("OLC1.7K3M9QX2TB.some.player.1800000000.a." .. sig:sub(2)), nil, "85 characters")
+		eq(Link.ParseToken(SAMPLE.token_a:gsub("^OLC1", "OLC2")), nil)
+		-- The longest code there can be, in the whole command: one chat line (255 bytes).
+		local longest = Token("ZZZZZZZZZZ", string.rep("z", 32), 999999999999, "a")
+		local line = "/oly discord " .. longest
+		assert(#line <= 255, "the command is " .. #line .. " bytes")
+		assert(Link.ParseToken(longest), "and it parses")
+		-- /oly discord <code>: checked first. Expired, bad, or no bot key: a line, nothing else.
+		Link.Slash(SAMPLE.token_a)
+		RunFrames(w)
+		eq(#w.popups, 1, "a good code: the question")
+		w.clock = tonumber(SAMPLE.token_exp)
+		Link.Slash(SAMPLE.token_a)
+		assert(Said(w, ns.L.LINK_CODE_EXPIRED), "expired")
+		w.clock = 1799990000
+		Link.Slash("OLC1.7K3M9QX2TB.some.player.1800000001.a." .. sig)
+		RunFrames(w)
+		assert(Said(w, ns.L.LINK_CODE_BAD), "altered")
+		Link.Slash("hello")
+		ns.LINK_BACKEND_KEYS = { "PASTE-THE-BOT-PUBLIC-KEY-HEX-HERE" }
+		Link.Slash(SAMPLE.token_a)
+		assert(Said(w, ns.L.LINK_NOT_OPEN), "no bot key yet")
+		eq(#w.popups, 1, "nothing asked for those")
+		eq(#w.whispered + #w.sent, 0, "nothing sent")
+		-- A code that would stay valid for weeks is none of the bot's.
+		ns.LINK_BACKEND_KEYS = { SAMPLE.backend_pub }
+		w.clock = 1790000000
+		w.printed = {}
+		Link.Slash(SAMPLE.token_a)
+		assert(Said(w, ns.L.LINK_CODE_BAD), "too far ahead")
+	end)
+end)
+
+test("Olympus Link: the question names the Discord account; nothing is sent before Accept; Cancel sends nothing", function()
+	WithUI(function()
+		WithLink(function(w)
+			Announce("Test Councillor-Realm", "council01", "c")
+			Announce("Player One-Realm", "player01", "p")
+			Link.Slash(SAMPLE.token_a)
+			assert(Said(w, ns.L.LINK_CHECKING))
+			eq(#w.popups, 0, "not before the code is checked")
+			RunFrames(w)
+			local p = w.popups[1]
+			eq(p.name, "OLYMPUS_LINK_CONSENT")
+			eq(p.a, ns.L.LINK_CONSENT:format("Some Player", "some.player", "some.player"))
+			assert(p.a:find("Link Some Player to the Discord account @some.player?", 1, true), p.a)
+			assert(p.a:find("Only accept if @some.player is you.", 1, true), p.a)
+			eq(StaticPopupDialogs.OLYMPUS_LINK_CONSENT.text, "%s")
+			eq(#w.whispered + #w.sent, 0, "nothing sent while the question waits")
+			eq(Link.Store().chars["Some Player-Realm"], nil, "no request before Accept (Cancel leaves it so)")
+			-- Accept: the request starts, a councillor is asked.
+			StaticPopupDialogs.OLYMPUS_LINK_CONSENT.OnAccept(nil, p.data)
+			local asks = Whispers(w, "DR~")
+			eq(#asks, 1)
+			eq(asks[1].to, "Test Councillor-Realm")
+			local nonce = asks[1].msg:match("^DR~(%x+)~Olympus II~Alliance~7K3M9QX2TB$")
+			assert(nonce and #nonce == 16, asks[1].msg)
+			-- Outside an Olympus guild: no question at all.
+			w.popups = {}
+			GetGuildInfo = function() return "Not Here", "Member", 3 end
+			Link.Slash(SAMPLE.token_a)
+			RunFrames(w)
+			eq(#w.popups, 0)
+			assert(Said(w, ns.L.LINK_NOT_MEMBER))
+		end)
+	end)
+end)
+
+test("Olympus Link: a councillor confirms, the proof checks as the bot checks it, the window carries it, a watcher keeps it", function()
+	WithUI(function()
+		WithLink(function(w)
+			GetPhysicalScreenSize = function() return 1920, 1080 end
+			local councilPub = Bytes(SAMPLE.confirmer_council01_pub)
+			Announce("Test Councillor-Realm", "council01", "c")
+			local t = Link.ParseToken(SAMPLE.token_a)
+			Link.Start(t)
+			local ask = Whispers(w, "DR~")[1]
+			-- The councillor's addon: signs at once (in a job), for the name the server stamped.
+			AsConfirmer("Test Councillor-Realm", "council01", SAMPLE.confirmer_council01_seed)
+			Link.HandleRequest("WHISPER", "Some Player-Realm", ask.msg)
+			eq(#Whispers(w, "DA~"), 0, "signed in a job, not in the handler")
+			RunFrames(w)
+			local answer = Whispers(w, "DA~")[1]
+			eq(answer.to, "Some Player-Realm")
+			local issued, keyId, sig = answer.msg:match("^DA~(%d+)~([^~]+)~([%w_%-]+)$")
+			eq(keyId, "council01"); eq(#sig, 86); eq(issued, tostring(w.clock), "the server's time")
+			-- Back on the requester: one councillor's proof is enough.
+			AsRequester()
+			Link.HandleAnswer("WHISPER", "Test Councillor-Realm", answer.msg)
+			local rec = Link.Store().chars["Some Player-Realm"]
+			eq(rec.state, "ready")
+			assert(Said(w, ns.L.LINK_READY))
+			local b = Link.Parse(rec.bundle)
+			eq(b.requester, "Some Player-Realm"); eq(b.guild, "Olympus II"); eq(b.faction, "Alliance"); eq(b.R, "7K3M9QX2TB")
+			eq(#b.proofs, 1); eq(b.proofs[1].confirmer, "Test Councillor-Realm")
+			-- What the bot does with it: the signed text rebuilt, checked with the key's public half.
+			local text = Link.Message(b, b.proofs[1])
+			eq(text, ("OLY4~Some Player-Realm~Olympus II~Alliance~%s~7K3M9QX2TB~%s~council01~Test Councillor-Realm"):format(b.nonce, issued))
+			eq(Ed.Verify(councilPub, text, Ed.FromB64(b.proofs[1].sig)), true, "the councillor's signature checks")
+			eq(Ed.Verify(councilPub, text:gsub("Some Player", "Some Other"), Ed.FromB64(b.proofs[1].sig)), false)
+			-- The window (its QR code is made in a job): the URL in the box, the page's own.
+			RunFrames(w)
+			local f = Link.Window()
+			assert(f and f:IsShown(), "the window opens")
+			local url = f.copy:GetText()
+			eq(url, ns.LINK_SITE .. "#b=" .. Link.EncodeURI(rec.bundle))
+			eq(DecodeURI(url:match("#b=(.*)$")), rec.bundle, "the page reads the bundle back")
+			assert(not url:find("[ ,;]", #ns.LINK_SITE + 4), "spaces, commas and semicolons encoded")
+			assert(f.name:GetText():find("Some Player", 1, true))
+			eq(f.hint:GetText(), ns.L.LINK_SCAN:format(ns.L.LINK_WATCHER_GENERIC))
+			local escape = false
+			for _, n in ipairs(UISpecialFrames) do if n == "OlympusLinkFrame" then escape = true end end
+			eq(escape, true, "Escape closes it (mouse and keyboard)")
+			-- A watcher comes online: the proof goes to it, in pieces when long; it says so.
+			Link.HandleWatcher("CHANNEL", "Faker-Realm", "DW~1")
+			eq(#Whispers(w, "DB~"), 0, "a watcher must be a High Councillor")
+			Link.HandleWatcher("CHANNEL", "Other Councillor-Realm", "DW~1")
+			local pieces = Whispers(w, "DB~")
+			assert(#pieces >= 1)
+			for _, x in ipairs(pieces) do eq(x.to, "Other Councillor-Realm"); assert(#x.msg <= 255, #x.msg) end
+			ns.me = "Other Councillor-Realm"
+			Link.Store().watch["Other Councillor-Realm"] = true
+			for _, x in ipairs(pieces) do Link.HandleBundle("WHISPER", "Some Player-Realm", x.msg) end
+			local kept = Link.Store().inbox["7K3M9QX2TB"]
+			eq(kept.bundle, rec.bundle); eq(kept.from, "Some Player-Realm")
+			local ack = Whispers(w, "DK~")[1]
+			eq(ack.to, "Some Player-Realm"); eq(ack.msg, "DK~7K3M9QX2TB")
+			AsRequester()
+			Link.HandleAck("WHISPER", "Other Councillor-Realm", ack.msg)
+			eq(rec.state, "delivered")
+			assert(Said(w, ns.L.LINK_DELIVERED:format(ns.L.LINK_WATCHER_GENERIC)))
+			-- /oly discord status: per character of the account.
+			Link.Store().chars["Alt Char-Realm"] = { state = "waiting", R = "ABCDEFGHJK", mode = "a", exp = w.clock + 7200, proofs = {} }
+			w.printed = {}
+			Link.Slash("status")
+			assert(Said(w, ns.L.LINK_STATUS_DELIVERED:format("Some Player", ns.L.LINK_WATCHER_GENERIC)), table.concat(w.printed, "\n"))
+			assert(Said(w, ns.L.LINK_STATUS_WAITING:format("Alt Char", ns.L.LINK_NEED_PLAYERS:format(0, 3), 2)), table.concat(w.printed, "\n"))
+			GetPhysicalScreenSize = nil
+		end)
+	end)
+end)
+
+test("Olympus Link: mode c waits for a councillor; mode a asks councillors first, one at a time; false \"c\" claims are players", function()
+	WithUI(function()
+		WithLink(function(w)
+			Announce("Player One-Realm", "player01", "p")
+			Announce("Faker-Realm", "faker001", "c") -- not on the signed list
+			Link.Start(Link.ParseToken(SAMPLE.token_c))
+			eq(#Whispers(w, "DR~"), 0, "mode c: players are never asked")
+			assert(Said(w, ns.L.LINK_WAITING_COUNCIL))
+			w.clock = w.clock + 60
+			Link.Tick()
+			eq(#Whispers(w, "DR~"), 0)
+			-- A councillor comes online: asked at once.
+			Announce("Test Councillor-Realm", "council01", "c")
+			eq(#Whispers(w, "DR~"), 1)
+			eq(Whispers(w, "DR~")[1].to, "Test Councillor-Realm")
+			-- Mode a: two councillors, asked one at a time, 10 seconds each, before any player.
+			Link.Forget()
+			w.whispered = {}
+			Announce("Other Councillor-Realm", "council02", "c")
+			Link.Start(Link.ParseToken(SAMPLE.token_a))
+			eq(#Whispers(w, "DR~"), 1, "one councillor")
+			w.clock = w.clock + 5
+			Link.Tick()
+			eq(#Whispers(w, "DR~"), 1, "still his turn")
+			w.clock = w.clock + 6
+			Link.Tick()
+			eq(#Whispers(w, "DR~"), 2, "the next councillor")
+			local second = Whispers(w, "DR~")[2].to
+			assert(second ~= Whispers(w, "DR~")[1].to)
+			w.clock = w.clock + 11
+			Link.Tick()
+			-- No councillor answered: the draw, where the false "c" is a player.
+			local asked = {}
+			for _, x in ipairs(Whispers(w, "DR~")) do asked[x.to] = true end
+			eq(asked["Player One-Realm"], true); eq(asked["Faker-Realm"], true)
+			local req = Link.Request()
+			eq(req.asked["Faker-Realm"].c, false, "asked as a player")
+		end)
+	end)
+end)
+
+test("Olympus Link: the draw: the five lowest SHA-256(R~keyId) first, three proofs make it, the next five after 30 s, then the request waits and retries", function()
+	WithUI(function()
+		WithLink(function(w)
+			local R = "7K3M9QX2TB"
+			local byId = {}
+			for i = 1, 12 do
+				local id = ("player%02d"):format(i)
+				byId[id] = ("Player %02d-Realm"):format(i)
+				Announce(byId[id], id, "p")
+			end
+			-- The order the bot checks too: hex SHA-256 of "R~keyId", lowest first.
+			local ids = {}
+			for id in pairs(byId) do ids[#ids + 1] = id end
+			table.sort(ids, function(a, b) return Hex(ns.Sign.SHA256(R .. "~" .. a)) < Hex(ns.Sign.SHA256(R .. "~" .. b)) end)
+			Link.Start(Link.ParseToken(SAMPLE.token_a))
+			local asks = Whispers(w, "DR~")
+			eq(#asks, 5, "five at once")
+			for i = 1, 5 do eq(asks[i].to, byId[ids[i]], "draw place " .. i) end
+			assert(Said(w, ns.L.LINK_DRAWING))
+			-- Two answer within the 30 seconds: not enough.
+			local function Answer(id) Link.HandleAnswer("WHISPER", byId[id], ("DA~%d~%s~%s"):format(w.clock, id, FAKE_SIG)) end
+			w.clock = w.clock + 10
+			Answer(ids[1]); Answer(ids[2])
+			eq(Link.Store().chars["Some Player-Realm"].state, "waiting")
+			-- An answer from someone not asked, or with another key, counts for nothing.
+			Link.HandleAnswer("WHISPER", byId[ids[9]], ("DA~%d~%s~%s"):format(w.clock, ids[9], FAKE_SIG))
+			Link.HandleAnswer("WHISPER", byId[ids[3]], ("DA~%d~%s~%s"):format(w.clock, ids[4], FAKE_SIG))
+			Link.HandleAnswer("WHISPER", byId[ids[3]], ("DA~%d~%s~%s"):format(w.clock, ids[3], "short"))
+			eq(Link.Store().chars["Some Player-Realm"].state, "waiting")
+			w.clock = w.clock + 21
+			Link.Tick()
+			asks = Whispers(w, "DR~")
+			eq(#asks, 10, "the next five after 30 seconds")
+			for i = 6, 10 do eq(asks[i].to, byId[ids[i]], "draw place " .. i) end
+			w.clock = w.clock + 31
+			Link.Tick()
+			eq(#Whispers(w, "DR~"), 10, "ten at most in a round")
+			assert(Said(w, ns.L.LINK_WAITING))
+			-- A confirmer who was never asked comes online (after ROUND_GAP): a new round asks it.
+			w.clock = w.clock + Link.ROUND_GAP
+			Announce("Late Player-Realm", "player13", "p")
+			local last = Whispers(w, "DR~")
+			assert(#last > 10, "a new round")
+			local lateAsked = false
+			for i = 11, #last do if last[i].to == "Late Player-Realm" then lateAsked = true end end
+			eq(lateAsked, true)
+			w.clock = w.clock + 5
+			Link.HandleAnswer("WHISPER", "Late Player-Realm", ("DA~%d~player13~%s"):format(w.clock, FAKE_SIG))
+			local rec = Link.Store().chars["Some Player-Realm"]
+			eq(rec.state, "ready", "three fresh proofs")
+			local b = Link.Parse(rec.bundle)
+			eq(#b.proofs, 3)
+			local keys = {}
+			for _, p in ipairs(b.proofs) do keys[p.keyId] = true end
+			eq(keys[ids[1]] and keys[ids[2]] and keys.player13, true)
+		end)
+	end)
+end)
+
+test("Olympus Link: stale players' proofs are left out; a waiting request comes back at login and expires with its code", function()
+	WithUI(function()
+		WithLink(function(w)
+			for i = 1, 3 do Announce(("Player %d-Realm"):format(i), ("player0%d"):format(i), "p") end
+			Link.Start(Link.ParseToken(SAMPLE.token_a))
+			Link.HandleAnswer("WHISPER", "Player 1-Realm", ("DA~%d~player01~%s"):format(w.clock, FAKE_SIG))
+			Link.HandleAnswer("WHISPER", "Player 2-Realm", ("DA~%d~player02~%s"):format(w.clock, FAKE_SIG))
+			local rec = Link.Store().chars["Some Player-Realm"]
+			eq(rec.state, "waiting")
+			-- /reload: the request and its proofs come back, a new round starts.
+			Link.Reset()
+			w.whispered = {}
+			w.clock = w.clock + Link.FRESH + 1
+			Link.Resume()
+			assert(Said(w, ns.L.LINK_RESUMED))
+			for i = 1, 3 do Announce(("Player %d-Realm"):format(i), ("player0%d"):format(i), "p") end
+			eq(#Whispers(w, "DR~"), 3, "everyone asked again")
+			Link.HandleAnswer("WHISPER", "Player 3-Realm", ("DA~%d~player03~%s"):format(w.clock, FAKE_SIG))
+			eq(rec.state, "waiting", "the first two proofs are too old to count with it")
+			Link.HandleAnswer("WHISPER", "Player 1-Realm", ("DA~%d~player01~%s"):format(w.clock, FAKE_SIG))
+			Link.HandleAnswer("WHISPER", "Player 2-Realm", ("DA~%d~player02~%s"):format(w.clock, FAKE_SIG))
+			eq(rec.state, "ready")
+			-- A request whose code expired goes, with a line.
+			Link.Forget()
+			Link.Start(Link.ParseToken(SAMPLE.token_a))
+			w.clock = tonumber(SAMPLE.token_exp)
+			Link.Tick()
+			eq(Link.Store().chars["Some Player-Realm"], nil)
+			assert(Said(w, ns.L.LINK_EXPIRED))
+		end)
+	end)
+end)
+
+test("Olympus Link: a confirmer signs within its limits, never for its own characters, other factions or other guilds", function()
+	WithLink(function(w)
+		AsConfirmer("Test Councillor-Realm", "council01", SAMPLE.confirmer_council01_seed)
+		local pub = Bytes(SAMPLE.confirmer_council01_pub)
+		local function Ask(from, guild, faction, nonce)
+			Link.HandleRequest("WHISPER", from, ("DR~%s~%s~%s~7K3M9QX2TB"):format(nonce or "0123456789abcdef", guild or "Olympus II", faction or "Alliance"))
+			RunFrames(w)
+		end
+		Ask("Req One-Realm")
+		local a = Whispers(w, "DA~")
+		eq(#a, 1)
+		local issued, sig = a[1].msg:match("^DA~(%d+)~council01~(.+)$")
+		local b = { requester = "Req One-Realm", guild = "Olympus II", faction = "Alliance", nonce = "0123456789abcdef", R = "7K3M9QX2TB" }
+		eq(Ed.Verify(pub, Link.Message(b, { issued = issued, keyId = "council01", confirmer = "Test Councillor-Realm" }), Ed.FromB64(sig)), true)
+		-- One a minute per requesting character, five a day.
+		Ask("Req One-Realm")
+		eq(#Whispers(w, "DA~"), 1, "again within a minute: nothing")
+		for i = 2, 5 do
+			w.clock = w.clock + 61
+			Ask("Req One-Realm")
+			eq(#Whispers(w, "DA~"), i)
+		end
+		w.clock = w.clock + 61
+		Ask("Req One-Realm")
+		eq(#Whispers(w, "DA~"), 5, "a sixth the same day: nothing")
+		eq(Link.Stats().refused, 2)
+		w.clock = w.clock + 86400
+		Ask("Req One-Realm")
+		eq(#Whispers(w, "DA~"), 6, "the next day")
+		-- Thirty a minute in all.
+		w.clock = w.clock + 120
+		w.whispered = {}
+		for i = 1, 35 do Ask(("Req %02d-Realm"):format(i)) end
+		eq(#Whispers(w, "DA~"), 30)
+		-- Refused without a word: our own account, not an Olympus guild, the other faction, bad fields.
+		w.clock = w.clock + 120
+		w.whispered = {}
+		ns.db.myCharacters = { ["my alt-realm"] = true }
+		Ask("My Alt-Realm")
+		Ask("Req Two-Realm", "Horde Heroes")
+		Ask("Req Three-Realm", "Olympus II", "Horde")
+		Ask("Req Four-Realm", "Olympus II", "Alliance", "0123456789ABCDEF")
+		Link.HandleRequest("CHANNEL", "Req Five-Realm", "DR~0123456789abcdef~Olympus II~Alliance~7K3M9QX2TB")
+		Link.HandleRequest("WHISPER", "Req Six-Realm", "DR~0123456789abcdef~Olympus II~Alliance~7K3M9QX2TB~extra")
+		RunFrames(w)
+		eq(#w.whispered, 0, "nothing for any of them")
+		-- The confirmer's own guild: only someone its roster lists.
+		local savedRoster = ns.Roster.byName
+		ns.Roster.byName = { ["Guildmate-Realm"] = 3 }
+		GetGuildInfo = function() return "Olympus II", "Member", 3 end
+		Ask("Stranger-Realm", "Olympus II")
+		eq(#w.whispered, 0, "claims our guild, not in our roster")
+		Ask("Guildmate-Realm", "Olympus II")
+		ns.Roster.byName = savedRoster
+		eq(#Whispers(w, "DA~"), 1)
+		-- Without a key: nothing.
+		Link.Store().key = nil
+		w.whispered = {}
+		Ask("Req Seven-Realm")
+		eq(#w.whispered, 0)
+	end)
+end)
+
+test("Olympus Link: confirmers and watchers say they are online; the key is never shown, logged or reported", function()
+	WithLink(function(w)
+		-- A player who never used it: the ticker and a login write nothing to the SavedVariables.
+		Link.Resume(); Link.Tick()
+		eq(ns.db.discord, nil, "nothing saved")
+		eq(#w.sent + #w.whispered, 0, "nothing sent")
+		local seed = SAMPLE.confirmer_council01_seed
+		ns.me = "Test Councillor-Realm"
+		local log, errors = ns.db.log, ns.db.errors
+		ns.db.log, ns.db.errors = {}, {}
+		local ok, err = pcall(function()
+			SlashCmdList.OLYMPUS("discord key COUNCIL01 " .. seed)
+			eq(Link.Store().key.id, "council01", "the id in lowercase")
+			RunFrames(w)
+			assert(Said(w, ns.L.LINK_KEY_SET:format("council01")))
+			assert(Said(w, SAMPLE.confirmer_council01_pub), "the public key, to compare with what was registered")
+			eq(w.sent[#w.sent].msg, "DV~1~council01~c", "a councillor's key says c")
+			w.printed = {}
+			SlashCmdList.OLYMPUS("discord key")
+			RunFrames(w)
+			assert(Said(w, ns.L.LINK_KEY_SHOW:format("council01", ns.L.LINK_TIER_C, SAMPLE.confirmer_council01_pub)))
+			-- Every 5 minutes, "p" for anyone the signed list does not name.
+			ns.me = "Player One-Realm"
+			w.clock = w.clock + 301
+			Link.Tick()
+			eq(w.sent[#w.sent].msg, "DV~1~council01~p")
+			-- A failure inside /oly discord: the report names the command, not what followed it.
+			local savedSetKey = Link.SetKey
+			Link.SetKey = function() error("on purpose") end
+			SlashCmdList.OLYMPUS("discord key council01 " .. seed)
+			Link.SetKey = savedSetKey
+			eq(ns.SlashWhere("discord key council01 " .. seed), "slash discord")
+			eq(ns.SlashWhere("helpme where is the bank"), "slash helpme where is the bank", "other commands as before")
+			local text = table.concat({ ns.StatusText(), ns.BuildBugReport(), table.concat(w.printed, "\n"), table.concat(ns.db.log, "\n") }, "\n")
+			for _, e in ipairs(ns.db.errors) do text = text .. e.key .. e.where .. e.msg .. (e.stack or "") end
+			eq(#ns.db.errors, 1, "the failure was kept")
+			assert(not text:find(seed, 1, true), "the key is nowhere")
+			assert(not text:find(Hex(Ed.FromB64(seed)), 1, true), "not in hex either")
+			assert(ns.StatusText():find("key council01 as p", 1, true), "the id and tier are")
+			-- Off: said on the channel at once, and gone from the account.
+			SlashCmdList.OLYMPUS("discord key off")
+			eq(w.sent[#w.sent].msg, "DV~0")
+			eq(Link.Store().key, nil)
+			-- Watchers: High Councillors only.
+			SlashCmdList.OLYMPUS("discord watcher on")
+			assert(Said(w, ns.L.LINK_WATCHER_ONLY))
+			ns.me = "Test Councillor-Realm"
+			SlashCmdList.OLYMPUS("discord watcher on")
+			eq(w.sent[#w.sent].msg, "DW~1")
+			SlashCmdList.OLYMPUS("discord watcher off")
+			eq(w.sent[#w.sent].msg, "DW~0")
+			eq(Link.Watching(), false)
+		end)
+		ns.db.log, ns.db.errors = log, errors
+		if not ok then error(err, 0) end
+	end)
+end)
+
+test("Olympus Link: the requester hands its proof to a watcher, waits for its word, tries again when a watcher is heard", function()
+	WithLink(function(w)
+		local sample = Link.Parse(SAMPLE.bundle_players)
+		assert(sample, "the sample bundle parses")
+		ns.me = sample.requester
+		local rec = { state = "ready", R = sample.R, bundle = SAMPLE.bundle_players, readyAt = w.clock, n = 3 }
+		Link.Store().chars[ns.me] = rec
+		Link.Deliver()
+		eq(#w.whispered, 0, "no watcher online")
+		Link.HandleWatcher("CHANNEL", "Test Councillor-Realm", "DW~1")
+		local first = #Whispers(w, "DB~")
+		assert(first >= 2, "a long proof goes in pieces: " .. first)
+		-- No word from it: nothing more until a watcher is heard again.
+		w.clock = w.clock + Link.ACK_WAIT + 1
+		Link.Tick(); Link.Tick()
+		eq(#Whispers(w, "DB~"), first)
+		Link.HandleWatcher("CHANNEL", "Test Councillor-Realm", "DW~1")
+		eq(#Whispers(w, "DB~"), 2 * first, "sent again")
+		-- A word from someone we never sent it to, or for another code: nothing.
+		Link.HandleAck("WHISPER", "Other Councillor-Realm", "DK~" .. sample.R)
+		Link.HandleAck("WHISPER", "Test Councillor-Realm", "DK~ABCDEFGHJK")
+		eq(rec.state, "ready")
+		Link.HandleAck("WHISPER", "Test Councillor-Realm", "DK~" .. sample.R)
+		eq(rec.state, "delivered")
+		-- Kept 7 days after it was ready, then gone.
+		w.clock = w.clock + Link.DELIVER_FOR
+		Link.Resume()
+		eq(Link.Store().chars[ns.me], nil)
+	end)
+end)
+
+test("Olympus Link: a watcher's inbox: well-formed proofs from their own requester, one per code, 500 at most, one a minute each", function()
+	WithLink(function(w)
+		ns.me = "Test Councillor-Realm"
+		local function Bundle(requester, R)
+			return Link.Build({ requester = requester, guild = "Olympus II", faction = "Alliance", nonce = "0123456789abcdef", R = R },
+				{ { issued = "1799990000", keyId = "council02", confirmer = "Other Councillor-Realm", sig = FAKE_SIG } })
+		end
+		Link.HandleBundle("WHISPER", "Some Player-Realm", "DB~" .. Bundle("Some Player-Realm", "7K3M9QX2TB"))
+		eq(next(Link.Store().inbox), nil, "not a watcher: nothing kept")
+		Link.Store().watch[ns.me] = true
+		Link.HandleBundle("WHISPER", "Some Player-Realm", "DB~" .. Bundle("Some Player-Realm", "7K3M9QX2TB"))
+		eq(Link.Store().inbox["7K3M9QX2TB"].from, "Some Player-Realm")
+		eq(#Whispers(w, "DK~"), 1)
+		-- The same again (our word was lost): told again, not kept twice.
+		Link.HandleBundle("WHISPER", "Some Player-Realm", "DB~" .. Bundle("Some Player-Realm", "7K3M9QX2TB"))
+		eq(#Whispers(w, "DK~"), 2)
+		-- Someone else's code, someone else's name, garbage: nothing.
+		w.clock = w.clock + 61
+		Link.HandleBundle("WHISPER", "Another Player-Realm", "DB~" .. Bundle("Another Player-Realm", "7K3M9QX2TB"))
+		Link.HandleBundle("WHISPER", "Another Player-Realm", "DB~" .. Bundle("Some Player-Realm", "ABCDEFGHJK"))
+		Link.HandleBundle("WHISPER", "Another Player-Realm", "DB~hello")
+		Link.HandleBundle("WHISPER", "Another Player-Realm", "DB~OLB4~broken")
+		Link.HandleBundle("CHANNEL", "Another Player-Realm", "DB~" .. Bundle("Another Player-Realm", "ABCDEFGHJK"))
+		eq(Link.Store().inbox["7K3M9QX2TB"].from, "Some Player-Realm", "the first one stays")
+		eq(Link.Store().inbox.ABCDEFGHJK, nil)
+		eq(#Whispers(w, "DK~"), 2)
+		-- One a minute from one requester.
+		Link.HandleBundle("WHISPER", "Another Player-Realm", "DB~" .. Bundle("Another Player-Realm", "ABCDEFGHJK"))
+		Link.HandleBundle("WHISPER", "Another Player-Realm", "DB~" .. Bundle("Another Player-Realm", "BCDEFGHJKM"))
+		eq(Link.Store().inbox.BCDEFGHJKM, nil, "too soon")
+		w.clock = w.clock + 61
+		Link.HandleBundle("WHISPER", "Another Player-Realm", "DB~" .. Bundle("Another Player-Realm", "BCDEFGHJKM"))
+		assert(Link.Store().inbox.BCDEFGHJKM, "a minute later")
+		-- 500 at most: the oldest go.
+		local alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+		for i = 1, 520 do
+			w.clock = w.clock + 1
+			local R = "Z" .. alphabet:sub(i % 32 + 1, i % 32 + 1) .. alphabet:sub(math.floor(i / 32) % 32 + 1, math.floor(i / 32) % 32 + 1) .. "0000000"
+			Link.HandleBundle("WHISPER", ("Many %d-Realm"):format(i), "DB~" .. Bundle(("Many %d-Realm"):format(i), R))
+		end
+		local n = 0
+		for _ in pairs(Link.Store().inbox) do n = n + 1 end
+		eq(n, 500)
+		eq(Link.Store().inbox["7K3M9QX2TB"], nil, "the oldest went first")
+	end)
+end)
+
+test("Olympus Link: forget, show, the proof's round trip, and the sample proofs check as the bot checks them", function()
+	WithUI(function()
+		WithLink(function(w)
+			-- The sample: every proof's signature checks against its confirmer's public key.
+			for _, name in ipairs({ "bundle_council", "bundle_players" }) do
+				local b = Link.Parse(SAMPLE[name])
+				assert(b, name)
+				eq(Link.Build(b, b.proofs), SAMPLE[name], "built back byte for byte")
+				for _, p in ipairs(b.proofs) do
+					local pub = Bytes(SAMPLE["confirmer_" .. p.keyId .. "_pub"])
+					eq(Ed.Verify(pub, Link.Message(b, p), Ed.FromB64(p.sig)), true, name .. " " .. p.keyId)
+				end
+			end
+			-- Round trip with accented names; bad bundles never parse.
+			local head = { requester = "Sômé Plâyer-Realm", guild = "Ólympus Ørder", faction = "Horde", nonce = "00ff00ff00ff00ff", R = "ZYXWVTSRQP" }
+			local proofs = {}
+			for i = 1, 4 do proofs[i] = { issued = tostring(1799990000 + i), keyId = "player0" .. i, confirmer = "Some Player " .. i .. "-Realm", sig = FAKE_SIG } end
+			local s = Link.Build(head, proofs)
+			local back = Link.Parse(s)
+			eq(back.requester, head.requester); eq(back.guild, head.guild); eq(#back.proofs, 4); eq(back.proofs[4].issued, "1799990004")
+			eq(DecodeURI(Link.EncodeURI(s)), s)
+			proofs[5] = proofs[1]
+			eq(Link.Build(head, proofs), nil, "four proofs at most")
+			eq(Link.Parse(s .. ";" .. "1,player05,X-Realm," .. FAKE_SIG), nil)
+			eq(Link.Parse(s:gsub("Horde", "Pandaren")), nil)
+			eq(Link.Parse(s:gsub("OLB4", "OLB3")), nil)
+			eq(Link.Build({ requester = "No Realm", guild = "G", faction = "Horde", nonce = "00ff00ff00ff00ff", R = "ZYXWVTSRQP" }, { proofs[1] }), nil)
+			-- show and forget.
+			Link.Slash("show")
+			assert(Said(w, ns.L.LINK_NOTHING))
+			Link.Store().chars["Some Player-Realm"] = { state = "ready", R = "7K3M9QX2TB", bundle = SAMPLE.bundle_council:gsub("Some Player%-ClassicBetaPvP", "Some Player-Realm"), readyAt = w.clock, council = true }
+			Link.Slash("show")
+			RunFrames(w)
+			eq(Link.Window():IsShown(), true)
+			Link.Slash("forget")
+			eq(Link.Store().chars["Some Player-Realm"], nil)
+			eq(Link.Window():IsShown(), false, "the window closes with it")
+			assert(Said(w, ns.L.LINK_FORGOTTEN))
+			w.printed = {}
+			Link.Slash("show")
+			assert(Said(w, ns.L.LINK_NOTHING))
+		end)
+	end)
+end)
+
+test("Olympus Link: the QR code: level M up to version 15, L past it; modules on whole screen pixels, 4 when they fit, 3 at least", function()
+	WithUI(function()
+		WithLink(function(w)
+			local short = ns.LINK_SITE .. "#b=" .. string.rep("x", 300)
+			local m, level = Link.Matrix(short)
+			eq(level, 2); assert((#m - 17) / 4 <= 15, "version " .. (#m - 17) / 4)
+			local long = ns.LINK_SITE .. "#b=" .. string.rep("x", 600)
+			m, level = Link.Matrix(long)
+			eq(level, 1); assert((#m - 17) / 4 > 15)
+			-- Finder patterns in three corners, the fourth corner free.
+			local n = #m
+			for _, c in ipairs({ { 1, 1 }, { n - 6, 1 }, { 1, n - 6 } }) do
+				for d = 0, 6 do
+					assert(m[c[1] + d][c[2]] > 0 and m[c[1]][c[2] + d] > 0, "finder ring")
+				end
+				assert(m[c[1] + 1][c[2] + 1] < 0 and m[c[1] + 3][c[2] + 3] > 0, "finder inside")
+			end
+			-- The whole code in merged rectangles covers exactly the dark modules.
+			local dark, covered = 0, 0
+			for x = 1, n do for y = 1, n do if m[x][y] > 0 then dark = dark + 1 end end end
+			for _, r in ipairs(Link.Rects(m)) do covered = covered + r.w * r.h end
+			eq(covered, dark)
+			eq(Link.ModulePixels(101, 1080, 268), 5, "1080p: about half the screen")
+			eq(Link.ModulePixels(101, 720, 179), 4, "720p: 4 still fits")
+			eq(Link.ModulePixels(101, 480, 119), 3, "a small screen: 3")
+			eq(Link.ModulePixels(101, 2160, 537), 10)
+			-- The window: every module edge on a whole pixel of a 1920 x 1080 screen, UI scale 0.9.
+			GetPhysicalScreenSize = function() return 1920, 1080 end
+			UIParent.scale = 0.9
+			Link.Store().chars["Some Player-Realm"] = { state = "ready", R = "7K3M9QX2TB", readyAt = w.clock, n = 3,
+				bundle = SAMPLE.bundle_players:gsub("Some Player%-ClassicBetaPvP~", "Some Player-Realm~") }
+			Link.ShowWindow(true)
+			RunFrames(w)
+			local f = Link.Window()
+			local px = 768 / 1080 / 0.9
+			assert(f.modulePixels >= 4, "module pixels " .. f.modulePixels)
+			local function Whole(v) return math.abs(v / px - math.floor(v / px + 0.5)) < 1e-6 end
+			local canvas = f.canvas
+			local _, _, _, cx, cy = canvas:GetPoint(1)
+			assert(Whole(cx) and Whole(cy), "the code's corner on a pixel")
+			assert(Whole(canvas:GetWidth()), "its size in whole pixels")
+			eq(canvas:GetWidth() / px, f.codePixels)
+			for i = 1, f.shownModules do
+				local t = f.modules[i]
+				local _, _, _, x, y = t:GetPoint(1)
+				assert(Whole(x) and Whole(y) and Whole(t:GetWidth()) and Whole(t:GetHeight()), "module " .. i)
+			end
+			local _, _, _, fx, fy = f:GetPoint(1)
+			assert(Whole(fx) and Whole(fy), "the window's corner on a pixel")
+			UIParent.scale = nil
+			GetPhysicalScreenSize = nil
+		end)
+	end)
+end)
+
+test("Olympus Link: gamepad UI: the code box and the question are Olympus's own dialogs, the window stays off the escape list and the chat keeps the keyboard", function()
+	WithUI(function()
+		WithLink(function(w)
+			WithGamepadUI(true, function(game)
+				local calls, saved = {}, { focus = GetCurrentKeyBoardFocus }
+				local traps = { "ShowUIPanel", "HideUIPanel", "ChatFrame_OpenChat", "ChatEdit_ActivateChat", "ChatEdit_FocusActiveWindow", "ChatEdit_InsertLink" }
+				for _, name in ipairs(traps) do
+					saved[name] = rawget(_G, name)
+					_G[name] = function() calls[#calls + 1] = name end
+				end
+				GetCurrentKeyBoardFocus = function() return { name = "ChatFrame1EditBox" } end
+				local ok, err = pcall(function()
+					Link.Slash("")
+					eq(#game.shown, 0, "never the game's popup")
+					local box = ns.Dialog.Find("OLYMPUS_LINK_CODE")
+					assert(box, "Olympus's dialog")
+					box.editBox:SetText(SAMPLE.token_a)
+					box.buttons[1]:Click()
+					RunFrames(w)
+					eq(#game.shown, 0)
+					local q = ns.Dialog.Find("OLYMPUS_LINK_CONSENT")
+					assert(q, "the question, in Olympus's dialog")
+					eq(q.text:GetText(), ns.L.LINK_CONSENT:format("Some Player", "some.player", "some.player"))
+					eq(#w.whispered + #w.sent, 0)
+					Link.Store().chars["Some Player-Realm"] = { state = "ready", R = "7K3M9QX2TB", readyAt = w.clock, council = true,
+						bundle = SAMPLE.bundle_council:gsub("Some Player%-ClassicBetaPvP", "Some Player-Realm") }
+					local took
+					Link.ShowWindow(true)
+					RunFrames(w)
+					local f = Link.Window()
+					f.copy.SetFocus = function() took = true end
+					f:Hide()
+					Link.ShowWindow(true) -- (the code made already: at once)
+					eq(f:IsShown(), true)
+					eq(#UISpecialFrames, 0, "nothing written to the escape list")
+					eq(took, nil, "the chat keeps the keyboard")
+					eq(#calls, 0, "no panel or chat call: " .. table.concat(calls, " "))
+				end)
+				for _, name in ipairs(traps) do _G[name] = saved[name] end
+				GetCurrentKeyBoardFocus = saved.focus
+				if not ok then error(err, 0) end
+			end)
+		end)
+	end)
+end)
+end
 
 print(("\n%d passed, %d failed"):format(passed, failed))
 os.exit(failed == 0 and 0 or 1)

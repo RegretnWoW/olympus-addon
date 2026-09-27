@@ -280,6 +280,46 @@ for the King, and for every member once the King shows the army something of it.
 - The round **Olympus** button in the bottom left corner of the map switches markers
   (army per zone, decrees) on and off.
 
+### Olympus Link: your Discord role (0.9.10)
+Players in game prove to the Olympus bot on Discord that a character is yours, and the bot gives
+you your role. No password, no Battle.net login, and nothing leaves the game before you say yes.
+
+1. **Get a code** from the Olympus bot on Discord (its `/link` command, or the Olympus Link
+   page after "Continue with Discord"). It looks like `OLC1.7K3M9QX2TB.your.name.1800000000.c.…`
+   and is good for 24 hours.
+2. **Type `/oly discord <code>`** in the game's chat (or `/oly discord` alone and paste it in the
+   box). The addon checks the bot's signature and the expiry first, then asks: *"Link <Name> to
+   the Discord account @your.name? … Only accept if @your.name is you."* The Discord account shown
+   is the one the bot signed into the code: nobody can change it. Cancel sends nothing.
+3. **Confirmers answer in game**, by addon whisper. A High Councillor online signs a proof that
+   this character asked, with a key of their own (one is enough, asked one at a time). When the
+   bot allows it and no councillor is online, five verified players drawn at random for your code
+   are asked instead, and three must confirm. Nobody picks who is drawn: the draw is
+   SHA-256 of your code with each confirmer's key id, and the code is new each time. No confirmer
+   online? The request stays open until the code expires and is asked again when one comes
+   online, and at each login.
+4. **The proof reaches the bot** one of two ways:
+   - **now**: the **Olympus Link** window shows a QR code and the same link in a copy box. On the
+     Olympus Link page, share the WoW window, point your phone's camera at it, or paste the link.
+     The proof rides after the `#` of the link, which a browser never sends to any server;
+   - **or later, by itself**: the addon hands it to the bot's watcher (a High Councillor's
+     character in watcher mode) the next time you are both online. The bot's keeper uploads what
+     the watcher kept. The proof waits in your addon for 7 days, so nothing is lost while the bot
+     or the watcher is away.
+
+`/oly discord show` opens the window again, `/oly discord status` lists every character of your
+account (waiting for confirmers, ready, delivered), `/oly discord forget` drops this character's
+request and proof.
+
+**For confirmers and watchers.** The bot's keeper gives each confirmer a key (an id and 43
+letters): `/oly discord key <id> <key>` keeps it on your account, `/oly discord key` shows its id and
+public half (to compare with what was registered), `/oly discord key off` removes it. The key is
+never shown, sent, logged or written in `/oly status` and `/oly bug`. With a key, your addon says
+it is online every 5 minutes and signs, by itself, the requests of players of an Olympus guild of
+your faction: one a minute and five a day per character, thirty a minute in all, never for the
+characters of your own account. High Councillors can turn on `/oly discord watcher on`: the proofs
+players hand you are kept in your SavedVariables (500 at most, one per code).
+
 ### Everywhere
 - **Copy**: every tab produces a ready-to-paste text for Discord.
 - The window opens from `/oly`, the minimap button, or the round button in your guild window:
@@ -346,7 +386,9 @@ find or join it. Share the same secret with the officers of the other Olympus gu
 3. The reporter sends a compact summary of its guild about every 3 minutes on the hidden Olympus channel.
 4. Every client adds up all the summaries: that is the census.
 
-Nothing leaves the game. There is no server, no website, no account and no tracking.
+Nothing leaves the game. There is no server, no website, no account and no tracking. The one
+exception is Olympus Link, and only when you ask for it: the proof that a character is yours
+goes to the Olympus bot on Discord, through the page you scan it with or a watcher.
 
 **Realms vs layers.** A realm (ClassicBetaPvP, ClassicBetaPvP2...) is a separate world
 with its own guilds; layers are copies of a zone *inside* one realm. Guilds on the same
@@ -374,6 +416,9 @@ tracking. Your name is on every message (the game adds it). What goes where:
 | Your position as a dot on the map | your guild | only with `/oly share` (off by default) |
 | The Treasurer's book (balance, donations and who gave them, the ranking) and the guild bank of `<Olympus>` (its gold and items) | everyone on the Olympus channel receives the bytes; the addon shows them to the King, and to the army only with his switches | only after the Treasurer says yes (asked once; `/oly treasurer on\|off`), withdrawn at once when he turns it off |
 | The King's crown on the map, and with it his zone and layer | everyone on the Olympus channel | only while the King turns it on (Throne tab), whatever he answered to the question |
+| Olympus Link (0.9.10): a request (your guild, faction, a random number and your code's id) | the confirmers asked (a whisper each): a High Councillor, or five verified players drawn for your code | only after you press **Accept** on `/oly discord <code>` |
+| Olympus Link: the finished proof (your character name, realm, guild, faction and the confirmers' names and signatures) | the Olympus bot, through the page you scan it with, or a watcher (a High Councillor, by whisper) who hands it to the bot | when it is ready, until it is delivered (7 days at most) |
+| Olympus Link: "a confirmer's key is online" (its id), "a watcher is online" | everyone on the Olympus channel | every 5 minutes, only from players who set a key or turned the watcher on |
 
 Decrees and the King's calls go out when someone sends one (a decree carries its sender's
 position on the map).
@@ -467,6 +512,13 @@ copy. No addon can prevent that. What this one does is make an edited copy usele
   decrees; everyone else can use [Olympus] only. Sent with Blizzard's logged addon-message
   function (lines sent any other way are dropped); rate limited per sender and per channel, and
   no single sender can fill a channel.
+- **Olympus Link** (0.9.10): the bot's codes carry an Ed25519 signature every addon checks
+  against the bot's public key, written in `Olympus/Link.lua` (`ns.LINK_BACKEND_KEYS`), so the
+  Discord account the question names is the bot's word. Each proof is an Ed25519 signature by a
+  confirmer's own key; the bot keeps only the public halves, can revoke one, and checks every
+  proof again (the signature, the key's owner, the time, the draw). The addon signs and checks
+  in small slices over several frames, so the game never stops for it. `Olympus/Ed25519.lua` is
+  checked against RFC 8032's vectors and signs byte for byte as Python's `cryptography` does.
 - `/oly block <name>` ignores a player completely.
 
 Limits, stated honestly:
@@ -527,6 +579,10 @@ Limits, stated honestly:
 | `/oly helpme [text]` (or **Ask a High Councillor** on the Realm tab) | ask the High Council (the moderators) for help: it goes by whisper to up to three of them online who take requests |
 | `/oly council list` · `/oly council help on\|off` | the High Council as your addon knows it; moderators: take help requests or not. The list is signed by the author on his own computer and checked by every client: no name is written in the addon's code, and nobody can forge or change it |
 | `/oly council icon` (or **My council icon** on the Realm tab, councillors only) | moderators: a councillor's name in the Olympus chats always carries the High Council's mark (the game's target-frame skull), which nobody can change. An icon of your own after it is optional: pick it from the game's icons, like a macro's. Your addon announces it on the channel (at once, then every 20 minutes), and other clients take it only from a councillor and only as a game icon |
+| `/oly discord <code>` · `/oly discord` | Olympus Link: link this character to your Discord account with the bot's code (or paste it in a box) |
+| `/oly discord show` · `status` · `forget` | the Olympus Link window (QR code and link) again; every character's request or proof; drop this character's |
+| `/oly discord key <id> <key>` · `key` · `key off` | confirmers: keep the key the bot's keeper gave you, show its id and public half, remove it |
+| `/oly discord watcher on\|off` | High Councillors: keep the proofs players hand you for the bot |
 | `/oly hop` | ask for an invite to the King's layer (while he is online) |
 | `/oly vox off` · `/oly vox on` | Vox Populi questions in chat only, or in a window |
 | `/oly layerhelp on` · `/oly layerhelp off` | get (or not) requests to invite players to your layer |
@@ -566,6 +622,7 @@ luajit tests/run.lua                      # offline tests: codec, roster, hierar
 scripts/lint-globals.sh                   # catches locals used before they are declared
 bash tests/check-scripts.sh               # verify check-script failure handling (also run in CI)
 bash tests/sign-roundtrip.sh              # the High Council signing script end to end (needs python3)
+python3 tests/fixtures/make-link-vectors.py --check  # Olympus Link's shared Ed25519 vectors and sample (needs "cryptography")
 python3 scripts/council-sign.py sign "First Surname,..." [realm group]  # the author: sign the High Council list
 python3 scripts/council-sign.py council [council.json]  # the author: sign the names, departments and titles (see the script)
 scripts/package.sh                        # dist/Olympus-<version>.zip
@@ -573,8 +630,10 @@ WOW_HOST=user@pc scripts/deploy.sh        # copy to a Windows PC over SSH
 WOW_HOST=user@pc scripts/logs.sh          # read the log and captured errors from that PC
 ```
 
-Bundled libraries: LibStub (public domain), CallbackHandler-1.0 (Ace3, BSD) and
-HereBeDragons by Nevcairiel (BSD), the map library Questie uses.
+Bundled libraries: LibStub (public domain), CallbackHandler-1.0 (Ace3, BSD),
+HereBeDragons by Nevcairiel (BSD), the map library Questie uses, and luaqrcode by Patrick
+Gundlach and contributors (speedata, 3-clause BSD) for Olympus Link's QR code
+(`Olympus/libs/QREncode/qrencode.lua`, its changes listed at its top).
 
 ## Credits
 

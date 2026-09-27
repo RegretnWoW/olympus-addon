@@ -40,6 +40,9 @@ Treasury.lua
 Bank.lua
 Acts.lua
 Workshop.lua
+Ed25519.lua
+libs\QREncode\qrencode.lua
+Link.lua
 Recruit.lua
 Views.lua
 UI.lua
