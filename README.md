@@ -274,7 +274,8 @@ for the King, and for every member once the King shows the army something of it.
 - Hover any player in the world to see their last inspection in the tooltip.
 
 ### World map
-- Soldiers per zone on zone and continent maps, and per continent on the world map.
+- Soldiers per zone on zone and continent maps, and per continent on the world map (with
+  Blizzard's gamepad mode, only per continent: see below).
 - The round **Olympus** button in the bottom left corner of the map switches markers
   (army per zone, decrees) on and off.
 
@@ -289,8 +290,13 @@ for the King, and for every member once the King shows the army something of it.
   freezes) when an addon opens one. With mouse and keyboard, the game's popups as always.
   Since 0.9.8 it also leaves the game's own frames alone there: no quiet `/who` on its own
   (**Refresh** and **Find Olympus online** still search, and the answer shows in the game's
-  Who list), and the Issue Reporter is the game's to show. If the game still says it blocked
-  Olympus, type `/oly bug` and send the text: it names the action the game refused.
+  Who list), and the Issue Reporter is the game's to show. Since 0.9.9 it leaves the world map
+  alone there too: no zone counts, decrees, crown or guildmate dots on it (the minimap keeps
+  the crown and the dots, the Azeroth map its continent totals), because each of those went
+  through the map library into the gamepad map's own state. If the game still says it blocked Olympus, a
+  `/reload` clears it; to tell us what it was, open the Olympus window, press its help button
+  (left of the X), then **Report a bug**. Don't type `/oly bug` with the gamepad: a command
+  typed in the chat there can set the block off again.
 - English and Portuguese (follows the game language).
 
 ## Install

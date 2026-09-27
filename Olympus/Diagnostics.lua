@@ -45,7 +45,8 @@ function ns.CaptureError(where, err)
 	ns.Log("ERROR in %s: %s", where, msg)
 	if not warnedThisSession then
 		warnedThisSession = true
-		ns.Print("|cffff4040" .. L.ERROR_CAUGHT .. "|r")
+		-- (With the gamepad UI not "type /oly bug": a command typed there can set off a block.)
+		ns.Print("|cffff4040" .. (ns.GamepadUI() and L.ERROR_CAUGHT_GAMEPAD or L.ERROR_CAUGHT) .. "|r")
 	end
 end
 

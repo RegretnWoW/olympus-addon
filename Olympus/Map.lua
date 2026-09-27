@@ -95,7 +95,10 @@ Map.ContainerOf = ContainerOf -- for tests
 local function RefreshNow()
 	refreshQueued = false
 	if not Pins then return end
-	Pins:RemoveAllWorldMapIcons(Map)
+	-- With the gamepad UI no zone circles (they are the pin library's, ns.WorldMapIcons); the
+	-- continent totals below are drawn by us, never through the library, and stay.
+	local world = ns.WorldMapIcons(Pins, Map)
+	if world then Pins:RemoveAllWorldMapIcons(Map) end
 	for i = #active, 1, -1 do
 		active[i]:Hide()
 		pool[#pool + 1] = active[i]
@@ -106,7 +109,7 @@ local function RefreshNow()
 		return
 	end
 	local s = ns.Data.Summary()
-	for _, z in ipairs(s.zoneList) do
+	for _, z in ipairs(world and s.zoneList or {}) do
 		local mapID = ns.Zones.MapID(z.key)
 		if mapID and z.count > 0 then
 			local p = table.remove(pool) or CreatePin()
@@ -320,7 +323,38 @@ local function HookWorldMap()
 	end
 end
 
+-- The pin library's world map provider, with the gamepad UI (0.9.9). On every map change, and
+-- at each loading screen, it clears its pins from the map whether it has any or not, through
+-- RemoveAllPinsByTemplate: that marks the map's canvas dirty (MarkCanvasDirty clears its current
+-- zoom) from the library's code, which is ours when our copy is the one loaded. The gamepad map
+-- then zooms, builds its button bar and closes with B in our taint, and the game blocks it
+-- until a /reload. So there, with none of the library's pins on the map, it returns at once:
+-- there is nothing to clear. With pins to clear, and always with mouse and keyboard, the
+-- library's own code runs, as it came. Only our own copy (another addon's code is not ours to
+-- change), wrapped once at login, before the map is first opened; the provider and its pool
+-- stay, other addons may use this copy too.
+local providerQuiet = false
+function Map.QuietPinsProvider()
+	if providerQuiet then return true end
+	local lib = LibStub and LibStub("HereBeDragons-Pins-2.0", true)
+	local provider = type(lib) == "table" and lib.worldmapProvider
+	local original = type(provider) == "table" and provider.RemoveAllData
+	if type(original) ~= "function" or type(issecurevariable) ~= "function" then return false end
+	local _, owner = issecurevariable(provider, "RemoveAllData")
+	if owner ~= ADDON then return false end
+	providerQuiet = true
+	provider.RemoveAllData = function(self, ...)
+		if ns.GamepadUI() then
+			local pinPool = lib.worldmapPinsPool
+			if type(pinPool) == "table" and type(pinPool.GetNumActive) == "function" and pinPool:GetNumActive() == 0 then return end
+		end
+		return original(self, ...)
+	end
+	return true
+end
+
 ns.On("LOGIN", function()
+	ns.SafeCall("map provider", Map.QuietPinsProvider)
 	ns.SafeCall("map hooks", HookWorldMap)
 	if not Pins then
 		local raw = LibStub and LibStub("HereBeDragons-Pins-2.0", true)

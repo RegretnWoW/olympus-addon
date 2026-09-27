@@ -779,13 +779,15 @@ local function Crown(size)
 	return f
 end
 
--- Draws (or removes) the crown on the world map and the minimap.
+-- Draws (or removes) the crown on the world map and the minimap. The world map's only with
+-- mouse and keyboard (ns.WorldMapIcons); drawn again when that changes, even where he stands still.
 function King.RefreshCrown()
 	if not Pins then return end
+	local world = ns.WorldMapIcons(Pins, King)
 	if kingAt and ns.Now() - kingAt.t > King.LOCATION_EXPIRE then kingAt = nil end
 	if not kingAt then
 		if crowns and crownAt then
-			Pins:RemoveWorldMapIcon(King, crowns.world)
+			if world then Pins:RemoveWorldMapIcon(King, crowns.world) end
 			Pins:RemoveMinimapIcon(King, crowns.mini)
 			crowns.world:Hide()
 			crowns.mini:Hide()
@@ -793,15 +795,15 @@ function King.RefreshCrown()
 		crownAt = nil
 		return
 	end
-	if crownAt and crownAt.mapID == kingAt.mapID and crownAt.x == kingAt.x and crownAt.y == kingAt.y then return end
+	if crownAt and crownAt.mapID == kingAt.mapID and crownAt.x == kingAt.x and crownAt.y == kingAt.y and crownAt.world == world then return end
 	crowns = crowns or { world = Crown(20), mini = Crown(16) }
 	-- Taken off before it is put back: the map library makes a new map pin on every add.
 	if crownAt then
-		Pins:RemoveWorldMapIcon(King, crowns.world)
+		if world then Pins:RemoveWorldMapIcon(King, crowns.world) end
 		Pins:RemoveMinimapIcon(King, crowns.mini)
 	end
-	crownAt = { mapID = kingAt.mapID, x = kingAt.x, y = kingAt.y }
-	Pins:AddWorldMapIconMap(King, crowns.world, kingAt.mapID, kingAt.x, kingAt.y, SHOW_FLAG)
+	crownAt = { mapID = kingAt.mapID, x = kingAt.x, y = kingAt.y, world = world }
+	if world then Pins:AddWorldMapIconMap(King, crowns.world, kingAt.mapID, kingAt.x, kingAt.y, SHOW_FLAG) end
 	Pins:AddMinimapIconMap(King, crowns.mini, kingAt.mapID, kingAt.x, kingAt.y, true, true)
 end
 

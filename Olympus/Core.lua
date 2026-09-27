@@ -416,6 +416,26 @@ function ns.Pins()
 	return nil
 end
 
+-- Whether `ref` (Map, Decree, King, Positions) puts its icons on the world map (0.9.9). Every
+-- add or remove there goes through the pin library into the map's canvas (MarkCanvasDirty,
+-- which clears its current zoom), from Olympus's code. With Blizzard's gamepad UI (Forever) the
+-- gamepad map then zooms, builds its button bar and closes with B in our taint, and the game
+-- blocks it until a /reload. There no icon of ours goes on the world map; the minimap is not the
+-- gamepad UI's, its icons stay. Icons `ref` put on the world map before a switch to the gamepad
+-- UI (without a /reload) are taken off, once. With mouse and keyboard: true, as always.
+local worldMapIconsOf = {} -- [ref] = true: may have icons on the world map
+function ns.WorldMapIcons(pins, ref)
+	if not ns.GamepadUI() then
+		worldMapIconsOf[ref] = true
+		return true
+	end
+	if worldMapIconsOf[ref] then
+		worldMapIconsOf[ref] = nil
+		pins:RemoveAllWorldMapIcons(ref)
+	end
+	return false
+end
+
 -- Round logo button with the exact geometry of minimap buttons (LibDBIcon layout at 31px,
 -- scaled to the requested size): gold tracking ring, dark disc, round logo.
 function ns.MakeRoundButton(name, parent, size)

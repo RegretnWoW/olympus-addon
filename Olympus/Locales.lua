@@ -768,7 +768,7 @@ L.SHOW_MORE = "Show %d more (%d of %d)"
 -- 0.9.8: review-fixes
 L.HELP_COUNCIL = "  /oly helpme [text] - ask the High Council (the moderators) for help; /oly council list | help on|off (moderators)"
 -- 0.9.8: gamepad
-L.BLOCKED_GAMEPAD = "The game blocked an Olympus action while you play with the gamepad. Please type /oly bug and send us the text: it says which action it was."
+L.BLOCKED_GAMEPAD = "The game blocked an Olympus action while you play with the gamepad: a /reload clears it. To tell us which action it was, open the Olympus window, press its help button (left of the X), then Report a bug. Please don't type /oly bug with the gamepad: typing a command in the chat there can set the block off again."
 L.WHO_GAMEPAD = "With the gamepad UI the answer shows in the game's own Who list (Olympus reads it from there), and Olympus no longer searches on its own."
 L.ISSUE_GAMEPAD = "With the gamepad UI the game hides the Issue Reporter itself (it only comes with the game's menu): Olympus leaves it alone there."
 -- 0.9.8: council-icon
@@ -804,6 +804,8 @@ L.HELP_PRIVACY = "Privacy:"
 L.HELP_CHATS = "The Olympus chats print in your chat window, and the Realm tab keeps their last lines:"
 L.HELP_LINKS = "Links:"
 L.HELP_ISSUES = "Bugs and ideas"
+-- 0.9.9: gamepad map
+L.ERROR_CAUGHT_GAMEPAD = "Something went wrong. It was saved: to see it, open the Olympus window, press its help button (left of the X), then Report a bug."
 if GetLocale and GetLocale() == "ptBR" then
 	L.THOUSANDS = "."
 	L.ARMY_TOTAL = "%s soldados"
@@ -1528,7 +1530,7 @@ if GetLocale and GetLocale() == "ptBR" then
 	-- 0.9.8: review-fixes
 	L.HELP_COUNCIL = "  /oly helpme [texto] - pedir ajuda ao High Council (os moderadores); /oly council list | help on|off (moderadores)"
 	-- 0.9.8: gamepad
-	L.BLOCKED_GAMEPAD = "O jogo bloqueou uma ação do Olympus enquanto você joga com o controle. Digite /oly bug e mande o texto para nós: ele diz qual ação foi."
+	L.BLOCKED_GAMEPAD = "O jogo bloqueou uma ação do Olympus enquanto você joga com o controle: um /reload resolve. Para nos dizer qual ação foi, abra a janela do Olympus, aperte o botão de ajuda dela (à esquerda do X) e depois Reportar bug. Com o controle não digite /oly bug: digitar um comando no chat ali pode disparar o bloqueio de novo."
 	L.WHO_GAMEPAD = "Com a interface de controle a resposta aparece na própria lista Quem do jogo (o Olympus lê de lá), e o Olympus não busca mais sozinho."
 	L.ISSUE_GAMEPAD = "Com a interface de controle o próprio jogo esconde o Issue Reporter (ele só aparece com o menu do jogo): lá o Olympus não mexe nele."
 	-- 0.9.8: council-icon
@@ -1564,4 +1566,6 @@ if GetLocale and GetLocale() == "ptBR" then
 	L.HELP_CHATS = "Os chats do Olympus aparecem na sua janela de chat, e a aba O Reino guarda as últimas linhas:"
 	L.HELP_LINKS = "Links:"
 	L.HELP_ISSUES = "Bugs e ideias"
+	-- 0.9.9: gamepad map
+	L.ERROR_CAUGHT_GAMEPAD = "Algo deu errado. Foi salvo: para ver, abra a janela do Olympus, aperte o botão de ajuda dela (à esquerda do X) e depois Reportar bug."
 end

@@ -10540,5 +10540,518 @@ test("0.9.9: gamepad UI: the help button works, writes nothing to UISpecialFrame
 	end)
 end)
 
+---------------------------------------------------------------------------
+-- 0.9.9: the world map with Blizzard's gamepad UI (Forever). Olympus's icons there went through
+-- HereBeDragons-Pins, whose adds and removes, and its provider's clearing on every map change,
+-- mark the map's canvas dirty (MarkCanvasDirty clears its current zoom) from Olympus's code:
+-- the gamepad map then zoomed, built its button bar and closed with B in our taint, and the
+-- game blocked it. With the gamepad UI nothing of Olympus's goes through the library onto the
+-- world map; with mouse and keyboard every call stays as it was.
+---------------------------------------------------------------------------
+
+-- A frame stand-in: the methods it lacks (capitalised, like the game's) do nothing, and its
+-- fields stay fields (the pin library reads pin.icon, Olympus p.text).
+local function MapTestFrame(kind, name, parent)
+	local f = { kind = kind, name = name, parent = parent, scripts = {}, shown = true, level = 1 }
+	function f:SetScript(k, fn) self.scripts[k] = fn end
+	function f:GetScript(k) return self.scripts[k] end
+	function f:SetParent(p) self.parent = p end
+	function f:GetParent() return self.parent end
+	function f:Show() self.shown = true end
+	function f:Hide() self.shown = false end
+	function f:IsShown() return self.shown end
+	function f:EnableMouse(on) self.mouse = on end
+	function f:GetFrameLevel() return self.level end
+	function f:SetFrameLevel(level) self.level = level end
+	function f:GetWidth() return 1000 end
+	function f:GetHeight() return 700 end
+	function f:GetScale() return 1 end
+	function f:SetText(text) self.shownText = text end
+	function f:GetText() return self.shownText end
+	function f:CreateTexture() return MapTestFrame("Texture", nil, self) end
+	function f:CreateFontString() return MapTestFrame("FontString", nil, self) end
+	return setmetatable(f, { __index = function(_, key)
+		if type(key) == "string" and key:match("^%u") then return function() end end
+	end })
+end
+
+-- Blizzard's world map, as far as the pin library goes into it: MapCanvasMixin's code, copied
+-- from Forever's Blizzard_MapCanvas.lua (its line numbers below), and the scroll container's
+-- MarkCanvasDirty (MapCanvas_ScrollContainerMixin.lua:430-441), counted. Closed and at rest
+-- (current zoom = target zoom), as after a login.
+local function MockWorldMap()
+	local map = MapTestFrame("Frame", "WorldMapFrame")
+	map.pinPools, map.dataProviders, map.mapID, map.shown = {}, {}, 1453, false
+	local canvas = MapTestFrame("Frame", "canvas", map)
+	local sc = MapTestFrame("ScrollFrame", "ScrollContainer", map)
+	sc.marks = 0
+	sc.currentScale, sc.targetScale, sc.currentScrollX, sc.targetScrollX, sc.currentScrollY, sc.targetScrollY = 0.8, 0.8, 0.5, 0.5, 0.5, 0.5
+	map.ScrollContainer = sc
+	function sc:MarkCanvasDirty()
+		self.marks = self.marks + 1
+		if self.currentScale == self.targetScale then self.currentScale = nil end
+		if self.currentScrollX == self.targetScrollX then self.currentScrollX = nil end
+		if self.currentScrollY == self.targetScrollY then self.currentScrollY = nil end
+	end
+	function sc:GetCanvasScale() return self.currentScale or self.targetScale end
+	-- The next frame's OnUpdate brings the current zoom and scroll back to their targets.
+	function sc:Settle() self.currentScale, self.currentScrollX, self.currentScrollY = self.targetScale, self.targetScrollX, self.targetScrollY end
+	function map:GetCanvas() return canvas end
+	function map:GetMapID() return self.mapID end
+	function map:AddDataProvider(provider) self.dataProviders[provider] = true; provider:OnAdded(self) end -- :191-194
+	function map:AcquirePin(template, ...) -- :280-331, for a plain frame pin
+		local pin, new = self.pinPools[template]:Acquire()
+		pin.pinTemplate, pin.owningMap = template, self
+		if new then pin:OnLoad() end
+		self.ScrollContainer:MarkCanvasDirty()
+		pin:Show()
+		pin:OnAcquired(...)
+		return pin
+	end
+	function map:RemoveAllPinsByTemplate(template) -- :357-362
+		if self.pinPools[template] then
+			self.pinPools[template]:ReleaseAll()
+			self.ScrollContainer:MarkCanvasDirty()
+		end
+	end
+	function map:RemovePin(pin) -- :364-371
+		self.pinPools[pin.pinTemplate]:Release(pin)
+		self.ScrollContainer:MarkCanvasDirty()
+	end
+	function map:EnumeratePinsByTemplate(template) -- :373-378
+		if self.pinPools[template] then return self.pinPools[template]:EnumerateActive() end
+		return function() end
+	end
+	function map:OnMapChanged() -- :803-806 (secureexecuterange: every data provider)
+		for provider in pairs(self.dataProviders) do provider:OnMapChanged() end
+	end
+	function map:OnShow() -- :97-106, through RefreshAll (:699-702) and RefreshAllDataProviders (:669-675)
+		self.shown = true
+		for provider in pairs(self.dataProviders) do provider:RefreshAllData(true) end
+	end
+	return map
+end
+
+-- Forever's CreateUnsecuredRegionPoolInstance (Pools.lua:659-667, ObjectPoolMixin): the pin
+-- library sets its create and reset functions afterwards.
+local function MockRegionPool()
+	local pool = { active = {}, inactive = {}, count = 0 }
+	function pool:Acquire()
+		local object = table.remove(self.inactive)
+		local new = object == nil
+		if new then
+			object = self.createFunc(self)
+			self.resetFunc(self, object, new)
+		end
+		self.active[object], self.count = true, self.count + 1
+		return object, new
+	end
+	function pool:Release(object)
+		if not self.active[object] then return false end
+		self.resetFunc(self, object)
+		self.active[object], self.count = nil, self.count - 1
+		self.inactive[#self.inactive + 1] = object
+		return true
+	end
+	function pool:ReleaseAll() for object in pairs(self.active) do self:Release(object) end end
+	function pool:EnumerateActive() return pairs(self.active) end
+	function pool:GetNumActive() return self.count end
+	return pool
+end
+
+-- A stand-in for HereBeDragons-Pins that writes down each call Olympus makes to it, in order.
+local function RecordingPins()
+	local lib = { log = {}, names = {} }
+	local function note(what, ref, mapID)
+		lib.log[#lib.log + 1] = what .. " " .. (lib.names[ref] or tostring(ref)) .. (mapID and (" " .. mapID) or "")
+	end
+	function lib:AddWorldMapIconMap(ref, _, mapID) note("world+", ref, mapID) return true end
+	function lib:RemoveWorldMapIcon(ref) note("world-", ref) end
+	function lib:RemoveAllWorldMapIcons(ref) note("worldAll", ref) end
+	function lib:AddMinimapIconMap(ref, _, mapID) note("mini+", ref, mapID) return true end
+	function lib:RemoveMinimapIcon(ref) note("mini-", ref) end
+	function lib:Take() local out = self.log; self.log = {} return out end
+	return lib
+end
+
+-- Map.lua, Decree.lua, Positions.lua and King.lua loaded again, fresh, into a namespace of their
+-- own: their message handlers and LOGIN callbacks are kept here, not given to the addon's. With
+-- `lib` as the pin library, or (nil) whatever LibStub has.
+local function LoadMapModules(lib)
+	local w = { handlers = {}, login = {} }
+	local gns = setmetatable({}, { __index = ns })
+	local loading
+	gns.On = function(name, fn) if name == "LOGIN" then w.login[loading] = fn end end
+	gns.Comm = setmetatable({ Handle = function(kind, fn) w.handlers[kind] = fn end }, { __index = ns.Comm })
+	local savedLibStub, savedPopups = LibStub, StaticPopupDialogs
+	if lib then LibStub = function(name) if name == "HereBeDragons-Pins-2.0" then return lib end end end
+	StaticPopupDialogs = {} -- (King.lua's popups stay the addon's)
+	local ok, err = pcall(function()
+		for _, file in ipairs({ "Map", "Decree", "Positions", "King" }) do
+			loading = file
+			assert(loadfile(ADDON_DIR .. file .. ".lua"))("Olympus", gns)
+		end
+	end)
+	LibStub, StaticPopupDialogs = savedLibStub, savedPopups
+	if not ok then error(err, 0) end
+	w.ns = gns
+	if lib then
+		lib.names[gns.Map], lib.names[gns.Decree], lib.names[gns.Positions], lib.names[gns.King] = "Map", "Decree", "Positions", "King"
+	end
+	return w
+end
+
+-- What the icons come from: a decree (a preview), a guildmate's position, the King's crown
+-- where he stands, and the census's zones (Stormwind 7, Elwynn 3: 10 in Eastern Kingdoms).
+local function WithMapIcons(fn)
+	local saved = { CreateFrame = CreateFrame, WorldMapFrame = WorldMapFrame, UIParent = UIParent, print = ns.Print,
+		best = C_Map.GetBestMapForUnit, pos = C_Map.GetPlayerMapPosition, info = C_Map.GetMapInfo, rect = C_Map.GetMapRectOnMap,
+		showMap = ns.db.showMap, showDecrees = ns.db.showDecrees, showMates = ns.db.showMates, guilds = ns.rdb.guilds }
+	local frames = {}
+	local ok, err = pcall(function()
+		CreateFrame = function(kind, name, parent) local f = MapTestFrame(kind, name, parent); frames[#frames + 1] = f; return f end
+		UIParent = MapTestFrame("Frame", "UIParent")
+		WorldMapFrame = MockWorldMap()
+		WorldMapFrame.mapID, WorldMapFrame.shown = 947, true -- open on Azeroth, where the continent totals are
+		ns.Print = function() end
+		C_Map.GetBestMapForUnit = function() return 1453 end
+		C_Map.GetPlayerMapPosition = function() return { GetXY = function() return 0.42, 0.51 end } end
+		C_Map.GetMapInfo = function(id)
+			local m = MAPS[id]
+			if not m then return nil end
+			local parent = ({ [1429] = 1415, [1453] = 1415, [1436] = 1415, [1415] = 947 })[id]
+			return { mapID = id, name = m[1], mapType = m[2], parentMapID = parent }
+		end
+		C_Map.GetMapRectOnMap = function() return 0.1, 0.3, 0.2, 0.8 end
+		ns.db.showMap, ns.db.showDecrees, ns.db.showMates = true, true, true
+		ns.rdb.guilds = { ["Olympus"] = { total = 100, online = 10, zones = { m1453 = 7, m1429 = 3 }, t = os.time() } }
+		fn({ frames = frames })
+	end)
+	CreateFrame, WorldMapFrame, UIParent, ns.Print = saved.CreateFrame, saved.WorldMapFrame, saved.UIParent, saved.print
+	C_Map.GetBestMapForUnit, C_Map.GetPlayerMapPosition, C_Map.GetMapInfo, C_Map.GetMapRectOnMap = saved.best, saved.pos, saved.info, saved.rect
+	ns.db.showMap, ns.db.showDecrees, ns.db.showMates, ns.rdb.guilds = saved.showMap, saved.showDecrees, saved.showMates, saved.guilds
+	if not ok then error(err, 0) end
+end
+
+local function MapIconsStart(w)
+	local g = w.ns
+	g.Decree.Preview("MUSTER")
+	w.handlers.P1("GUILD", "Mate-Realm", ns.Codec.EncodePosition(1453, 0.4, 0.5, ""))
+	g.Positions.Refresh()
+	g.King.HandleCommand("CHANNEL", ns.KingCharacter() .. "-Realm", "T1~P~3~Olympus~1453~420~510")
+	assert(g.King.Location(), "the King's crown is up")
+	g.Map.Refresh()
+end
+-- The refreshes that come on their own afterwards (the census, the timers, the map's menu).
+local function MapIconsRound(w)
+	local g = w.ns
+	g.Map.Refresh(); g.Decree.RefreshPins(); g.Positions.Refresh(); g.King.RefreshCrown()
+end
+local function MapIconsKingMoves(w)
+	w.ns.King.HandleCommand("CHANNEL", ns.KingCharacter() .. "-Realm", "T1~P~3~Olympus~1453~430~510")
+end
+-- Hours later: the decree, the guildmate's position and the crown have all expired.
+local function MapIconsExpire(w)
+	local savedNow = ns.Now
+	local later = ns.Now() + 3 * 3600
+	ns.Now = function() return later end
+	local ok, err = pcall(function() w.ns.Decree.Active(); w.ns.Positions.Refresh(); w.ns.King.RefreshCrown() end)
+	ns.Now = savedNow
+	if not ok then error(err, 0) end
+end
+
+local function SameList(got, want, what)
+	eq(table.concat(got, ", "), table.concat(want, ", "), what)
+end
+
+-- The continent totals: Olympus's own circles on the Azeroth map's canvas (never the pin
+-- library's, never in its pools), plain frames SmartNavigation cannot focus (no Button, no
+-- mouse down or up script). Their numbers.
+local function ContinentCircles(env)
+	local out = {}
+	for _, f in ipairs(env.frames) do
+		if f.parent == WorldMapFrame:GetCanvas() and f.shown then
+			eq(f.kind, "Frame"); eq(f.scripts.OnMouseDown, nil); eq(f.scripts.OnMouseUp, nil)
+			out[#out + 1] = f.text:GetText()
+		end
+	end
+	return table.concat(out, " ")
+end
+
+test("0.9.9: mouse and keyboard: Olympus's calls to the map library, one by one, as before (zone circles, decrees, crown, guildmates)", function()
+	WithMapIcons(function(env)
+		WithGamepadUI(false, function()
+			local lib = RecordingPins()
+			local w = LoadMapModules(lib)
+			MapIconsStart(w)
+			SameList(lib:Take(), { "world+ Decree 1453", "world+ Positions 1453", "mini+ Positions 1453", "world+ King 1453",
+				"mini+ King 1453", "worldAll Map", "world+ Map 1453", "world+ Map 1429" }, "start")
+			MapIconsRound(w)
+			SameList(lib:Take(), { "worldAll Map", "world+ Map 1453", "world+ Map 1429", "world+ Decree 1453",
+				"world+ Positions 1453", "mini+ Positions 1453" }, "a refresh (the King stands still: nothing)")
+			MapIconsKingMoves(w)
+			SameList(lib:Take(), { "world- King", "mini- King", "world+ King 1453", "mini+ King 1453" }, "the King moves")
+			MapIconsExpire(w)
+			SameList(lib:Take(), { "world- Decree", "world- Positions", "mini- Positions", "world- King", "mini- King" }, "all expired")
+			eq(ContinentCircles(env), "10", "the continent total")
+		end)
+	end)
+end)
+
+test("0.9.9: gamepad UI: nothing of Olympus's on the world map through the map library; the minimap's icons and the continent totals stay", function()
+	WithMapIcons(function(env)
+		WithGamepadUI(true, function()
+			local lib = RecordingPins()
+			local w = LoadMapModules(lib)
+			MapIconsStart(w)
+			SameList(lib:Take(), { "mini+ Positions 1453", "mini+ King 1453" }, "start: the minimap's, as with mouse and keyboard")
+			MapIconsRound(w)
+			SameList(lib:Take(), { "mini+ Positions 1453" }, "a refresh")
+			MapIconsKingMoves(w)
+			SameList(lib:Take(), { "mini- King", "mini+ King 1453" }, "the King moves")
+			MapIconsExpire(w)
+			SameList(lib:Take(), { "mini- Positions", "mini- King" }, "all expired")
+			eq(ContinentCircles(env), "10", "the continent total still drawn")
+			-- The map's menu turns the zones and the decrees off and on: still nothing there.
+			ns.db.showDecrees = false; w.ns.Decree.RefreshPins(); ns.db.showDecrees = true; w.ns.Decree.RefreshPins()
+			w.ns.Map.SetEnabled(false); w.ns.Map.SetEnabled(true)
+			SameList(lib:Take(), {}, "the map's menu")
+		end)
+	end)
+end)
+
+test("0.9.9: switched to the gamepad UI without a /reload: Olympus's world map icons are taken off once, then left alone; back to mouse and keyboard they return", function()
+	WithMapIcons(function()
+		local lib = RecordingPins()
+		local w
+		WithGamepadUI(false, function()
+			w = LoadMapModules(lib)
+			MapIconsStart(w); MapIconsRound(w)
+			lib:Take()
+		end)
+		WithGamepadUI(true, function()
+			MapIconsRound(w)
+			SameList(lib:Take(), { "worldAll Map", "worldAll Decree", "worldAll Positions", "mini+ Positions 1453",
+				"worldAll King", "mini- King", "mini+ King 1453" }, "the first refreshes with the gamepad UI: off the world map, once each")
+			MapIconsRound(w)
+			SameList(lib:Take(), { "mini+ Positions 1453" }, "then nothing on the world map")
+		end)
+		WithGamepadUI(false, function()
+			MapIconsRound(w)
+			SameList(lib:Take(), { "worldAll Map", "world+ Map 1453", "world+ Map 1429", "world+ Decree 1453",
+				"world+ Positions 1453", "mini+ Positions 1453", "world- King", "mini- King", "world+ King 1453", "mini+ King 1453" },
+				"mouse and keyboard again: back on the world map, the crown where he still stands too")
+		end)
+	end)
+end)
+
+-- Runs fn(env) with the real HereBeDragons-Pins (Olympus/libs) loaded against MockWorldMap.
+-- `owner` is who wrote the live provider's RemoveAllData, as the game's issecurevariable names
+-- it: "Olympus" when our copy is the one loaded, another addon's name when theirs is.
+local REAL_PINS_GLOBALS = { "LibStub", "CreateFrame", "WorldMapFrame", "UIParent", "Minimap", "C_Minimap", "GetCVar",
+	"Mixin", "CreateFromMixins", "MapCanvasDataProviderMixin", "MapCanvasPinMixin", "CreateUnsecuredRegionPoolInstance",
+	"CreateFramePool", "issecurevariable", "hooksecurefunc", "HBD_PINS_WORLDMAP_SHOW_PARENT", "HBD_PINS_WORLDMAP_SHOW_CONTINENT",
+	"HBD_PINS_WORLDMAP_SHOW_WORLD" }
+local function WithRealPinsLibrary(owner, fn)
+	local saved = {}
+	for _, name in ipairs(REAL_PINS_GLOBALS) do saved[name] = rawget(_G, name) end
+	local ok, err = pcall(function()
+		Mixin = function(object, ...)
+			for i = 1, select("#", ...) do for k, v in pairs((select(i, ...))) do object[k] = v end end
+			return object
+		end
+		CreateFromMixins = function(...) return Mixin({}, ...) end
+		-- MapCanvas_DataProviderBase.lua: OnAdded :4-7, RemoveAllData :20-22, RefreshAllData :24-26,
+		-- GetMap :70-72, OnMapChanged :74-77.
+		MapCanvasDataProviderMixin = {
+			OnAdded = function(self, map) self.owningMap = map end,
+			RemoveAllData = function() end,
+			RefreshAllData = function() end,
+			GetMap = function(self) return self.owningMap end,
+			OnMapChanged = function(self) self:RefreshAllData() end,
+		}
+		MapCanvasPinMixin = {}
+		CreateUnsecuredRegionPoolInstance, CreateFramePool = MockRegionPool, nil
+		GetCVar = function() return "0" end
+		C_Minimap = { GetViewRadius = function() return 100 end }
+		CreateFrame = function(kind, name, parent) return MapTestFrame(kind, name, parent) end
+		UIParent, Minimap = MapTestFrame("Frame", "UIParent"), MapTestFrame("Frame", "Minimap")
+		hooksecurefunc = function(t, key, post) local original = t[key]; t[key] = function(...) original(...); post(...) end end
+		WorldMapFrame = MockWorldMap()
+		LibStub = nil
+		assert(loadfile(ADDON_DIR .. "libs/LibStub/LibStub.lua"))()
+		-- HereBeDragons-2.0, as far as the pin library and Map.lua use it: zones 100 yards wide.
+		local HBD = LibStub:NewLibrary("HereBeDragons-2.0", 1)
+		HBD.mapData = { [1453] = { mapType = 3, parent = 1415 }, [1429] = { mapType = 3, parent = 1415 }, [1415] = { mapType = 2, parent = 947 } }
+		HBD.RegisterCallback = function() end
+		function HBD:GetPlayerWorldPosition() return nil end
+		function HBD:GetPlayerZone() return nil end
+		function HBD:GetWorldCoordinatesFromZone(x, y) return x * 100, y * 100, 0 end
+		function HBD:GetZoneCoordinatesFromWorld(wx, wy) return wx / 100, wy / 100 end
+		function HBD:GetZoneCoordinatesFromWorldInstance(wx, wy) return wx / 100, wy / 100 end
+		function HBD:GetZoneSize() return 100, 100 end
+		assert(loadfile(ADDON_DIR .. "libs/HereBeDragons/HereBeDragons-Pins-2.0.lua"))()
+		local lib = LibStub("HereBeDragons-Pins-2.0")
+		issecurevariable = function(t, key)
+			if t == lib.worldmapProvider and key == "RemoveAllData" then return false, owner end
+			return true
+		end
+		local env = { lib = lib, map = WorldMapFrame, sc = WorldMapFrame.ScrollContainer, libRemoveAllData = lib.worldmapProvider.RemoveAllData }
+		-- The loading screen after a login or /reload: the library's own handler.
+		function env.EnteringWorld() lib.updateFrame.scripts.OnEvent(lib.updateFrame, "PLAYER_ENTERING_WORLD") end
+		fn(env)
+	end)
+	for _, name in ipairs(REAL_PINS_GLOBALS) do _G[name] = saved[name] end
+	if not ok then error(err, 0) end
+end
+
+local function Count(t) local n = 0 for _ in pairs(t) do n = n + 1 end return n end
+
+test("0.9.9: the real map library with the gamepad UI: Olympus's refreshes, the loading screen and map changes never mark the world map's canvas dirty", function()
+	WithMapIcons(function()
+		WithGamepadUI(true, function()
+			WithRealPinsLibrary("Olympus", function(env)
+				local w = LoadMapModules()
+				w.login.Map() -- PLAYER_LOGIN: every addon loaded, the map not opened yet
+				env.EnteringWorld()
+				MapIconsStart(w); MapIconsRound(w); MapIconsKingMoves(w)
+				env.map:OnMapChanged()
+				env.map:OnShow()
+				env.map.mapID = 1429; env.map:OnMapChanged()
+				eq(env.sc.marks, 0, "MarkCanvasDirty calls")
+				eq(env.sc.currentScale, 0.8, "the canvas's zoom, never cleared from our code")
+				eq(next(env.lib.worldmapPins), nil, "no icon of ours for the world map")
+				eq(env.lib.worldmapPinsPool:GetNumActive(), 0, "no pin of the library's on the map")
+				eq(Count(env.lib.minimapPins), 2, "the crown and the guildmate on the minimap")
+				-- The provider and its pool stay, for other addons using this copy: their icons come
+				-- and go through the library's own code, as always.
+				eq(env.map.pinPools.HereBeDragonsPinsTemplate, env.lib.worldmapPinsPool)
+				eq(env.map.dataProviders[env.lib.worldmapProvider], true)
+				local icon = MapTestFrame("Frame")
+				env.lib:AddWorldMapIconMap("AnotherAddon", icon, 1429, 0.5, 0.5)
+				local before = env.sc.marks
+				env.map:OnMapChanged()
+				assert(env.sc.marks >= before + 2, "their pin cleared and put back: the library's code ran")
+				env.lib:RemoveWorldMapIcon("AnotherAddon", icon)
+				before = env.sc.marks
+				env.map:OnMapChanged(); env.EnteringWorld()
+				eq(env.sc.marks, before, "gone again: nothing to clear")
+				-- A pool without a count: the library's code, as it came.
+				env.lib.worldmapPinsPool.GetNumActive = nil
+				env.map:OnMapChanged()
+				eq(env.sc.marks, before + 1)
+			end)
+		end)
+	end)
+end)
+
+test("0.9.9: the real map library with mouse and keyboard: the world map gets exactly what the library as it came gives it", function()
+	-- Each step's MarkCanvasDirty calls, and the canvas's zoom after it (it settles again before
+	-- the next step).
+	local function Steps(login)
+		local steps = {}
+		WithMapIcons(function()
+			WithGamepadUI(false, function()
+				WithRealPinsLibrary("Olympus", function(env)
+					local w = LoadMapModules()
+					if login then w.login.Map() end
+					eq(rawequal(env.lib.worldmapProvider.RemoveAllData, env.libRemoveAllData), not login, "wrapped at login only")
+					local function Step(name, fn)
+						local before = env.sc.marks
+						fn()
+						steps[#steps + 1] = ("%s %d %s"):format(name, env.sc.marks - before, tostring(env.sc.currentScale))
+						env.sc:Settle()
+					end
+					Step("loading screen", env.EnteringWorld)
+					Step("icons", function() MapIconsStart(w) end)
+					Step("map change", function() env.map:OnMapChanged() end)
+					Step("map opened", function() env.map:OnShow() end)
+					Step("refresh", function() MapIconsRound(w) end)
+					Step("king moves", function() MapIconsKingMoves(w) end)
+					Step("expired", function() MapIconsExpire(w) end)
+					Step("other map", function() env.map.mapID = 1429; env.map:OnMapChanged() end)
+				end)
+			end)
+		end)
+		return steps
+	end
+	local wrapped, asItCame = Steps(true), Steps(false)
+	SameList(wrapped, asItCame, "wrapped vs as it came")
+	eq(wrapped[1], "loading screen 1 nil", "the library still clears (and marks) as it always did")
+end)
+
+test("0.9.9: the map library's provider is wrapped only when it is Olympus's own copy", function()
+	WithMapIcons(function()
+		WithGamepadUI(true, function()
+			-- Another addon's copy is the live one: its code, untouched.
+			WithRealPinsLibrary("SomeOtherAddon", function(env)
+				local w = LoadMapModules()
+				w.login.Map()
+				assert(rawequal(env.lib.worldmapProvider.RemoveAllData, env.libRemoveAllData), "not ours to wrap")
+				eq(w.ns.Map.QuietPinsProvider(), false)
+				env.EnteringWorld()
+				eq(env.sc.marks, 1, "that copy clears as it always did")
+			end)
+			-- Ours: wrapped once, however often asked.
+			WithRealPinsLibrary("Olympus", function(env)
+				local w = LoadMapModules()
+				w.login.Map()
+				local first = env.lib.worldmapProvider.RemoveAllData
+				assert(not rawequal(first, env.libRemoveAllData), "ours: wrapped")
+				eq(w.ns.Map.QuietPinsProvider(), true)
+				assert(rawequal(env.lib.worldmapProvider.RemoveAllData, first), "wrapped once")
+			end)
+		end)
+		-- The tests' stand-ins, and a client without issecurevariable: nothing done, no error.
+		local savedLibStub, savedSecure = LibStub, issecurevariable
+		local ok, err = pcall(function()
+			local w = LoadMapModules(RecordingPins())
+			LibStub = function() return { AddWorldMapIconMap = function() end } end
+			issecurevariable = function() return false, "Olympus" end
+			eq(w.ns.Map.QuietPinsProvider(), false, "no provider")
+			local provider = { RemoveAllData = function() end }
+			local original = provider.RemoveAllData
+			LibStub = function() return { worldmapProvider = provider } end
+			issecurevariable = nil
+			eq(w.ns.Map.QuietPinsProvider(), false, "no issecurevariable")
+			assert(rawequal(provider.RemoveAllData, original))
+		end)
+		LibStub, issecurevariable = savedLibStub, savedSecure
+		if not ok then error(err, 0) end
+	end)
+end)
+
+test("0.9.9: with the gamepad UI Olympus's chat lines send players to the help button and Report a bug, not to typing /oly bug", function()
+	local L = ns.L
+	-- Mouse and keyboard: the same line as before.
+	eq(L.ERROR_CAUGHT, "Something went wrong. It was saved - type /oly bug to see it.")
+	for _, key in ipairs({ "BLOCKED_GAMEPAD", "ERROR_CAUGHT_GAMEPAD" }) do
+		assert(L[key]:find("help button", 1, true) and L[key]:find(L.REPORT_BUG, 1, true), key .. ": " .. L[key])
+	end
+	assert(L.BLOCKED_GAMEPAD:find("/reload", 1, true), "a /reload clears the block")
+	-- Portuguese too.
+	local savedLocale, pt = GetLocale, {}
+	GetLocale = function() return "ptBR" end
+	local ok, err = pcall(function() assert(loadfile(ADDON_DIR .. "Locales.lua"))("Olympus", pt) end)
+	GetLocale = savedLocale
+	if not ok then error(err, 0) end
+	for _, key in ipairs({ "BLOCKED_GAMEPAD", "ERROR_CAUGHT_GAMEPAD" }) do
+		assert(pt.L[key]:find("botão de ajuda", 1, true) and pt.L[key]:find(pt.L.REPORT_BUG, 1, true), key .. ": " .. pt.L[key])
+	end
+	assert(pt.L.BLOCKED_GAMEPAD:find("/reload", 1, true))
+	-- A caught error's line: the gamepad UI's there, the old one with mouse and keyboard.
+	local function Line(gamepad)
+		local printed = {}
+		local gns = setmetatable({ db = { errors = {} } }, { __index = ns })
+		gns.On, gns.RegisterEvent = function() end, function() end
+		gns.Print = function(m) printed[#printed + 1] = m end
+		assert(loadfile(ADDON_DIR .. "Diagnostics.lua"))("Olympus", gns)
+		WithGamepadUI(gamepad, function() gns.CaptureError("test", "boom") end)
+		return printed[1] or ""
+	end
+	assert(Line(true):find(L.ERROR_CAUGHT_GAMEPAD, 1, true), "gamepad UI")
+	assert(Line(false):find(L.ERROR_CAUGHT, 1, true), "mouse and keyboard")
+end)
+
 print(("\n%d passed, %d failed"):format(passed, failed))
 os.exit(failed == 0 and 0 or 1)

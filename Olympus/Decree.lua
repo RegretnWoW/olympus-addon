@@ -88,14 +88,16 @@ local function Show(d)
 	ns.Fire("DECREES_CHANGED")
 end
 
+-- (Not on the world map with the gamepad UI: ns.WorldMapIcons.)
 local function RefreshPinsNow()
 	if not Pins then return end
+	local world = ns.WorldMapIcons(Pins, Decree)
 	for _, d in ipairs(active) do
 		if d.pin then
 			if ns.db.showDecrees then
-				Pins:AddWorldMapIconMap(Decree, d.pin, d.mapID, d.x, d.y, SHOW_FLAG)
+				if world then Pins:AddWorldMapIconMap(Decree, d.pin, d.mapID, d.x, d.y, SHOW_FLAG) end
 			else
-				Pins:RemoveWorldMapIcon(Decree, d.pin)
+				if world then Pins:RemoveWorldMapIcon(Decree, d.pin) end
 				d.pin:Hide()
 			end
 		end
@@ -153,7 +155,10 @@ function Decree.Active()
 	for i = #active, 1, -1 do
 		local d = active[i]
 		if now > d.expires then
-			if Pins and d.pin then Pins:RemoveWorldMapIcon(Decree, d.pin); d.pin:Hide() end
+			if Pins and d.pin then
+				if ns.WorldMapIcons(Pins, Decree) then Pins:RemoveWorldMapIcon(Decree, d.pin) end
+				d.pin:Hide()
+			end
 			table.remove(active, i)
 		end
 	end
