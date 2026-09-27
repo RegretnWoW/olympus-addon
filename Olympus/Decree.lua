@@ -150,13 +150,20 @@ function Decree.Preview(kind)
 		text = L.DECREE_PREVIEW_TEXT, sender = ns.DisplayName(ns.me), t = ns.Now() })
 end
 
+-- The 15 s expiry timer also follows a switch of the interface style without a /reload: to the
+-- gamepad UI, the decrees leave the world map at once (not 5 to 60 minutes later, when they
+-- expire); back to mouse and keyboard, they return.
+local lastWorld
 function Decree.Active()
 	local now, out = ns.Now(), {}
+	local world = Pins and ns.WorldMapIcons(Pins, Decree)
+	if Pins and lastWorld == false and world then RefreshPinsNow() end
+	lastWorld = world
 	for i = #active, 1, -1 do
 		local d = active[i]
 		if now > d.expires then
 			if Pins and d.pin then
-				if ns.WorldMapIcons(Pins, Decree) then Pins:RemoveWorldMapIcon(Decree, d.pin) end
+				if world then Pins:RemoveWorldMapIcon(Decree, d.pin) end
 				d.pin:Hide()
 			end
 			table.remove(active, i)
