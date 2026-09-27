@@ -58,7 +58,8 @@ are highlighted. It is rate limited, so nobody gets spammed.
   right below the guild master).
   Each shows level, class and online or *offline 3d*. Long absences show in red.
 - The **Treasurer of Olympus** (Pyralis Ashandar, chosen by Asmongold's chat) right under
-  the King, with a gold coin next to his name wherever he shows, his tooltip included. Only
+  the King, with a gold coin next to his name wherever he shows, his tooltip and his lines in
+  the Olympus chats included. Only
   that exact character of the guild OLYMPUS gets it: look-alikes don't.
 - **Members online** under each guild: your own guild's from your roster, any other's from
   `/who`. Opening a guild searches `/who` for that guild alone (up to 50 of its players).
@@ -504,7 +505,7 @@ Limits, stated honestly:
 | `/oly block <name>` | ignore a player |
 | `/oly map` | zone markers on the world map |
 | `/oly sound` | alert sounds on or off |
-| `/oly bug` | copyable bug report |
+| `/oly bug` | copyable bug report (also: the help button left of the window's X, then **Report a bug**) |
 | `/oly status` | diagnostics in chat |
 
 ## Reporting a bug
