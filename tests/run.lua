@@ -10593,11 +10593,17 @@ local function MapTestFrame(kind, name, parent)
 	function f:EnableMouse(on) self.mouse = on end
 	function f:GetFrameLevel() return self.level end
 	function f:SetFrameLevel(level) self.level = level end
-	function f:GetWidth() return 1000 end
+	-- (What a map icon is made of, kept: its size, picture, mask and anchor, 1.0.0.)
+	function f:SetSize(w, h) self.size = { w, h } end
+	function f:GetWidth() return self.size and self.size[1] or 1000 end
 	function f:GetHeight() return 700 end
 	function f:GetScale() return 1 end
 	function f:SetText(text) self.shownText = text end
 	function f:GetText() return self.shownText end
+	function f:SetTexture(texture) self.texture = texture end
+	function f:SetMask(mask) self.mask = mask end
+	function f:SetPoint(...) self.anchor = { ... } end
+	function f:ClearAllPoints() self.anchor = nil end
 	function f:CreateTexture() return MapTestFrame("Texture", nil, self) end
 	function f:CreateFontString() return MapTestFrame("FontString", nil, self) end
 	return setmetatable(f, { __index = function(_, key)
@@ -11568,6 +11574,138 @@ test("1.0.0 the list keeps its place in the Treasury too: Show more under the ra
 			end)
 			ns.PlayAlert = savedAlert
 			if not ok then error(err, 0) end
+		end)
+	end)
+end)
+
+---------------------------------------------------------------------------
+-- 1.0.0: on the world map a decree was a square icon of 34 drawn over the zone circles, and hid
+-- their numbers (a Muster called in Stormwind covered Stormwind's 886 and Elwynn's 438). Now it
+-- is a round icon, smaller, beside the circle; the King's crown too. With mouse and keyboard only.
+---------------------------------------------------------------------------
+
+-- How far a badge's centre (radius br) stands from circle c's: off its number from c.r + 0.75 br.
+local function Apart(x, y, c) return math.sqrt((x - c.x) ^ 2 + (y - c.y) ^ 2) end
+
+test("1.0.0 world map: a badge over a zone circle goes beside it, top right first, off every number; several take their own places", function()
+	local M = ns.Map
+	local K, br = M.BADGE_REACH, 12
+	-- Stormwind's circle (886: 31 across, its gold edge 2 more all round) and Elwynn's (438) overlapping.
+	local sw, elwynn = { x = 100, y = 100, r = 17.5 }, { x = 118, y = 86, r = 17 }
+	local circles = { sw, elwynn }
+	local function Off(spot, what)
+		for _, c in ipairs(circles) do
+			assert(Apart(spot.x, spot.y, c) >= c.r + K * br - 1e-6, what .. ": over a number")
+		end
+	end
+	-- A muster called in the middle of Stormwind: to its circle's top right, beside the rim.
+	local s = M.PlaceBadges({ { x = 101, y = 99, r = br } }, circles)[1]
+	local spot = { x = 101 + s.dx, y = 99 + s.dy }
+	assert(spot.x > sw.x and spot.y > sw.y, "top right")
+	eq(math.floor(Apart(spot.x, spot.y, sw) + 0.5), math.floor(sw.r + K * br + 0.5 + 0.5), "just past the rim")
+	Off(spot, "the muster")
+	-- The crown and two decrees on the same spot: each its own place, none over another.
+	local list = { { x = 100, y = 100, r = 10 }, { x = 100, y = 100, r = br }, { x = 100, y = 100, r = br } }
+	local spots = M.PlaceBadges(list, circles)
+	local at = {}
+	for i, b in ipairs(list) do
+		at[i] = { x = b.x + spots[i].dx, y = b.y + spots[i].dy, r = b.r }
+		for _, c in ipairs(circles) do assert(Apart(at[i].x, at[i].y, c) >= c.r + K * b.r - 1e-6, "badge " .. i .. " over a number") end
+		for j = 1, i - 1 do assert(Apart(at[i].x, at[i].y, at[j]) >= at[i].r + at[j].r - 1e-6, ("badges %d and %d overlap"):format(j, i)) end
+	end
+	assert(at[1].x > 100 and at[1].y > 100, "the first one, top right")
+	assert(at[2].x < 100 and at[2].y > 100, "the next, top left")
+	-- Top right taken by a neighbour's number: the next free place.
+	local a, b = { x = 0, y = 0, r = 15 }, { x = 25, y = 25, r = 15 }
+	s = M.PlaceBadges({ { x = 1, y = 0, r = br } }, { a, b })[1]
+	assert(1 + s.dx < 0 and s.dy > 0, "top left")
+	assert(Apart(1 + s.dx, s.dy, b) >= b.r + K * br, "off the neighbour's number")
+	-- Away from every circle: right where it was called.
+	s = M.PlaceBadges({ { x = 300, y = 300, r = br } }, circles)[1]
+	eq(s.dx, 0); eq(s.dy, 0)
+	-- A circle it only brushes (past its number): left alone.
+	s = M.PlaceBadges({ { x = 100 + sw.r + K * br + 1, y = 100, r = br } }, { sw })[1]
+	eq(s.dx, 0); eq(s.dy, 0)
+end)
+
+test("1.0.0 world map: the Muster and the crown in Stormwind are round, smaller, beside the circles; the gamepad UI still gets none", function()
+	WithMapIcons(function(env)
+		local lib = RecordingPins()
+		local w
+		WithGamepadUI(false, function()
+			w = LoadMapModules(lib)
+			MapIconsStart(w)
+			lib:Take()
+			local g = w.ns
+			-- The decree: an anchor for the pin library, a round horn of 20 drawn from it.
+			local d = g.Decree.Active()[1]
+			local decree = d.pin
+			eq(decree.badge.decree, d)
+			eq(decree.badge.size[1], 20, "smaller than the square of 34")
+			eq(decree.badge.icon.texture, "Interface\\Icons\\INV_Misc_Horn_01")
+			eq(decree.badge.icon.mask, "Interface\\CharacterFrame\\TempPortraitAlphaMask", "round")
+			eq(decree.badge.edge.mask or decree.badge.edge.texture, "Interface\\CharacterFrame\\TempPortraitAlphaMask", "in a disc")
+			eq(decree.mouse, nil, "the anchor takes no mouse"); eq(decree.badge.mouse, true, "the badge has the tooltip")
+			assert(decree.badge.scripts.OnEnter, "its tooltip")
+			-- The crown: a badge too, its picture as drawn.
+			local crown
+			for _, f in ipairs(env.frames) do if f.badge and f.badge.icon.texture == ns.CROWN_ICON then crown = f end end
+			assert(crown, "the world map's crown")
+			eq(crown.badge.icon.mask, nil, "the crown as drawn")
+			-- On screen: Stormwind's circle and Elwynn's side by side, the muster and the King inside
+			-- Stormwind's.
+			local sw, elwynn
+			for _, f in ipairs(env.frames) do
+				if f.key == "m1453" and f.shown then sw = f elseif f.key == "m1429" and f.shown then elwynn = f end
+			end
+			assert(sw and elwynn, "the zone circles")
+			local function Place(f, x, y)
+				f.IsVisible = function() return true end
+				f.GetCenter = function() return x, y end
+				f.GetEffectiveScale = function() return 1 end
+			end
+			Place(sw, 500, 400); Place(elwynn, 516, 388); Place(decree, 502, 401); Place(crown, 501, 399)
+			g.Map.LayoutBadges()
+			local function Spot(f)
+				local p = f.badge.anchor
+				eq(p[1], "CENTER"); eq(p[2], f); eq(p[3], "CENTER")
+				return 0, 0, p[4], p[5]
+			end
+			local swC = { x = 500, y = 400, r = sw:GetWidth() / 2 + 2 }
+			local elC = { x = 516, y = 388, r = elwynn:GetWidth() / 2 + 2 }
+			local spots = {}
+			for _, it in ipairs({ { decree, 502, 401, 12 }, { crown, 501, 399, 10 } }) do
+				local _, _, dx, dy = Spot(it[1])
+				local x, y = it[2] + dx, it[3] + dy
+				assert(dx ~= 0 or dy ~= 0, "moved")
+				for _, c in ipairs({ swC, elC }) do
+					assert(Apart(x, y, c) >= c.r + g.Map.BADGE_REACH * it[4] - 1e-6, "off a number")
+				end
+				spots[#spots + 1] = { x = x, y = y, r = it[4] }
+				eq(it[1].badge.level, it[1].level + 3, "over the circles")
+			end
+			assert(Apart(spots[1].x, spots[1].y, spots[2]) >= spots[1].r + spots[2].r - 1e-6, "not over each other")
+			SameList(lib:Take(), {}, "the layout calls nothing of the map library")
+			-- The muster expires; the next decree gets its icon back, a new picture.
+			decree.badge.anchor = nil
+			local savedNow = ns.Now
+			local later = ns.Now() + 3600
+			ns.Now = function() return later end
+			local ok, err = pcall(function() g.Decree.Active() end)
+			ns.Now = savedNow
+			assert(ok, err)
+			g.Decree.Preview("ARMS")
+			local arms = g.Decree.Active()[1]
+			eq(arms.pin, decree, "the same icon")
+			eq(decree.badge.icon.texture, "Interface\\Icons\\Ability_Warrior_WarCry")
+			eq(decree.badge.decree, arms)
+		end)
+		WithGamepadUI(true, function()
+			-- Nothing of ours on the world map there: nothing laid out either.
+			local decree = w.ns.Decree.Active()[1].pin
+			decree.badge.anchor = nil
+			w.ns.Map.LayoutBadges()
+			eq(decree.badge.anchor, nil, "left alone")
 		end)
 	end)
 end)

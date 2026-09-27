@@ -762,6 +762,11 @@ function King.ToggleLocation()
 	Changed()
 end
 
+local function CrownTip(self)
+	GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+	GameTooltip:AddLine(L.THRONE_LOCATION_PIN:format(kingAt and kingAt.name or "?"), 1, 0.82, 0)
+	GameTooltip:Show()
+end
 local function Crown(size)
 	local f = CreateFrame("Frame", nil, UIParent)
 	f:SetSize(size, size)
@@ -769,12 +774,17 @@ local function Crown(size)
 	f.icon:SetTexture(ns.CROWN_ICON)
 	f.icon:SetAllPoints()
 	f:EnableMouse(true)
-	f:SetScript("OnEnter", function(self)
-		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-		GameTooltip:AddLine(L.THRONE_LOCATION_PIN:format(kingAt and kingAt.name or "?"), 1, 0.82, 0)
-		GameTooltip:Show()
-	end)
+	f:SetScript("OnEnter", CrownTip)
 	f:SetScript("OnLeave", function() GameTooltip:Hide() end)
+	return f
+end
+-- The world map's crown sits beside the zone circles, never over their numbers (1.0.0,
+-- Map.Badge); the minimap's is a plain crown (no circles there).
+local function WorldCrown()
+	local f = ns.Map.Badge(20, false)
+	ns.Map.SetBadge(f, ns.CROWN_ICON)
+	f.badge:SetScript("OnEnter", CrownTip)
+	f.badge:SetScript("OnLeave", function() GameTooltip:Hide() end)
 	return f
 end
 
@@ -795,7 +805,7 @@ function King.RefreshCrown()
 		return
 	end
 	if crownAt and crownAt.mapID == kingAt.mapID and crownAt.x == kingAt.x and crownAt.y == kingAt.y and crownAt.world == world then return end
-	crowns = crowns or { world = Crown(20), mini = Crown(16) }
+	crowns = crowns or { world = WorldCrown(), mini = Crown(16) }
 	-- Taken off before it is put back: the map library makes a new map pin on every add.
 	if crownAt then
 		if world then Pins:RemoveWorldMapIcon(King, crowns.world) end

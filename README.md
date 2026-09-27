@@ -277,6 +277,9 @@ for the King, and for every member once the King shows the army something of it.
 ### World map
 - Soldiers per zone on zone and continent maps, and per continent on the world map (with
   Blizzard's gamepad mode, only per continent: see below).
+- Decrees are round icons (the horn, the war cry...) where they were called, and the King's
+  crown where he stands. Over a zone's circle they move just outside its edge, top right first,
+  so its number stays readable; several around one circle each take a place of their own.
 - The round **Olympus** button in the bottom left corner of the map switches markers
   (army per zone, decrees) on and off.
 
