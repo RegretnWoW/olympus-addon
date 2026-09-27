@@ -633,26 +633,35 @@ Workshop.RELAY_EVERY = 1800 -- a client passes the list along about every 30 min
 Workshop.RELAYS = 3         -- ...and about this many clients do, whatever the army's size
 local lastCouncilSent = -math.huge
 
--- Asking: once LIST_ASK_AFTER to LIST_ASK_AFTER + LIST_ASK_SPREAD seconds after login, then
--- every LIST_ASK_EVERY while still without the name list (or holding a list older than one
--- heard of), LIST_ASKS times a session at most. An answer goes to the whole channel: while
--- someone else's ask for as much (or more) is not LIST_ASK_EVERY old, ours waits.
-Workshop.LIST_ASK_AFTER, Workshop.LIST_ASK_SPREAD = 45, 45
-Workshop.LIST_ASK_EVERY, Workshop.LIST_ASKS = 600, 3
--- Answering: after LIST_ANSWER_MIN to LIST_ANSWER_MIN + LIST_ANSWER_SPREAD seconds, left out
--- when the same list went out from someone else meanwhile; one ask taken up per
--- LIST_ANSWER_GAP whatever the number of asks, and never in our first LIST_ANSWER_AFTER (the
--- census is still coming). About LIST_ANSWERS clients take an ask up, whatever the army's size.
+-- Asking: once LIST_ASK_AFTER to LIST_ASK_AFTER + LIST_ASK_SPREAD seconds after login, then,
+-- while still without the name list (or holding a list older than one heard of), again
+-- LIST_ASK_AGAIN after an ask nobody answered (no list newer than ours heard since), or
+-- LIST_ASK_EVERY after one somebody did; LIST_ASKS times a session at most. An answer goes to
+-- the whole channel: while someone else's ask for as much (or more) is under LIST_ASK_HOLD old
+-- (its answer can still be on its way), ours waits.
+Workshop.LIST_ASK_AFTER, Workshop.LIST_ASK_SPREAD, Workshop.LIST_ASK_HOLD = 45, 45, 40
+Workshop.LIST_ASK_AGAIN, Workshop.LIST_ASK_EVERY, Workshop.LIST_ASKS = 150, 600, 3
+-- Answering, each kind of list (names, titles) on its own: after LIST_ANSWER_MIN to
+-- LIST_ANSWER_MIN + LIST_ANSWER_SPREAD seconds, left out when the same list went out from
+-- someone else meanwhile; once per LIST_ANSWER_GAP after we sent it, whatever the number of
+-- asks. About LIST_ANSWERS clients take an ask up, whatever the army's size: one draw per
+-- LIST_DRAW_GAP (an ask that soon after the one we drew for is covered by its answer), none
+-- while the census counts nobody but us (right after a server restart every client would
+-- count itself alone, and all of them answer), and one sender's asks count once per
+-- LIST_ASK_FROM (a client asks LIST_ASK_AGAIN apart at the soonest).
 -- The author's client answers sooner, always, once per AUTHOR_ANSWER_GAP.
 Workshop.LIST_ANSWER_MIN, Workshop.LIST_ANSWER_SPREAD, Workshop.LIST_ANSWER_GAP = 3, 12, 120
-Workshop.LIST_ANSWER_AFTER, Workshop.LIST_ANSWERS = 90, 3
+Workshop.LIST_DRAW_GAP, Workshop.LIST_ANSWERS, Workshop.LIST_ASK_FROM = 30, 3, 120
 Workshop.AUTHOR_ANSWER_MIN, Workshop.AUTHOR_ANSWER_SPREAD, Workshop.AUTHOR_ANSWER_GAP = 1, 2, 60
 local LIST_STORE = { HS = "council", HT = "councilTitles" }
 local advertised = { HS = 0, HT = 0 } -- the newest list times heard of this session
 local listAsks, lastListAsk, askArmed = 0, -math.huge, false
+local listHeardAt = -math.huge -- the last list newer than ours heard on the channel
 local heardAsk        -- someone else's asks heard lately: { names, titles, t }, the lowest times
 local answering       -- our answer waiting: { names, titles, heard = { HS, HT }, mine }
-local lastListAnswer, councilLoginAt = -math.huge, -math.huge
+local answeredAt = { HS = -math.huge, HT = -math.huge } -- our last answer of each list
+local drawnAt = { HS = -math.huge, HT = -math.huge }    -- our last draw for each list, won or not
+local askedFrom, askedFromCount = {}, 0                 -- sender -> when its ask last counted
 
 -- The list of a kind ("HS" names, "HT" titles) we hold, as signed, and its time (0: none).
 local function HeldList(kind)
@@ -674,8 +683,12 @@ end
 
 -- A list heard on the channel from someone else: the very one our answer would send, so the
 -- asker has it (the author's answer goes anyway). Only the list we hold, byte for byte: a
--- forged one with the same time never silences anyone.
+-- forged one with the same time never silences anyone. One newer than ours (taken or not)
+-- answers our ask: the next one waits LIST_ASK_EVERY.
 local function HeardList(kind, blob)
+	local at = tonumber(blob:match("^" .. kind .. "1~(%d+)~"))
+	local _, held = HeldList(kind)
+	if at and at > held then listHeardAt = ns.Now() end
 	if answering and not answering.mine and blob == (HeldList(kind)) then answering.heard[kind] = true end
 end
 
@@ -853,35 +866,49 @@ function Workshop.NeedLists()
 	return names < advertised.HS or titles < advertised.HT
 end
 
--- Our ask, when due (the first one waits for its time after login: askArmed).
+-- Our ask, when due (the first one waits for its time after login: askArmed). It tries again
+-- LIST_ASK_AGAIN later, for an ask nobody answers (the council's ticker tries each minute).
 function Workshop.AskLists()
-	if not askArmed or not Workshop.NeedLists() then return false end
+	if not askArmed or not Workshop.NeedLists() or listAsks >= Workshop.LIST_ASKS then return false end
 	local now = ns.Now()
-	if listAsks >= Workshop.LIST_ASKS or now - lastListAsk < Workshop.LIST_ASK_EVERY then return false end
+	local wait = listHeardAt > lastListAsk and Workshop.LIST_ASK_EVERY or Workshop.LIST_ASK_AGAIN
+	if now - lastListAsk < wait then return false end
 	local _, names = HeldList("HS")
 	local _, titles = HeldList("HT")
 	local h = heardAsk
-	if h and now - h.t < Workshop.LIST_ASK_EVERY and h.names <= names and h.titles <= titles then return false end
+	if h and now - h.t < Workshop.LIST_ASK_HOLD and h.names <= names and h.titles <= titles then return false end
 	listAsks, lastListAsk = listAsks + 1, now
 	ns.Comm.Send("CHANNEL", ("HQ~%s~%s"):format(names, titles), "councillists")
+	if listAsks < Workshop.LIST_ASKS then
+		Workshop.after(Workshop.LIST_ASK_AGAIN, "council lists", function() Workshop.AskLists() end)
+	end
 	return true
 end
 
 -- Someone's ask: taken up when we hold a newer list and it is our turn (see LIST_ANSWER_*).
--- An answer already waiting covers the asks that come meanwhile.
+-- An answer already waiting covers the asks that come meanwhile. Each list is drawn for and
+-- sent on a clock of its own: an ask for the titles alone never holds the names back, and a
+-- draw lost (or an answer left out) holds a client back LIST_DRAW_GAP only.
 function Workshop.AnswerAsk(names, titles)
 	if answering then
 		answering.names, answering.titles = math.min(answering.names, names), math.min(answering.titles, titles)
 		return false
 	end
-	if not NewerList("HS", names) and not NewerList("HT", titles) then return false end
 	local now, mine = ns.Now(), AuthorLists()
-	if now - lastListAnswer < (mine and Workshop.AUTHOR_ANSWER_GAP or Workshop.LIST_ANSWER_GAP) then return false end
-	if not mine and now - councilLoginAt < Workshop.LIST_ANSWER_AFTER then return false end
-	-- One draw per gap, won or not: a stream of asks does not bring every client's turn.
-	lastListAnswer = now
+	local gap = mine and Workshop.AUTHOR_ANSWER_GAP or Workshop.LIST_ANSWER_GAP
+	local kinds = {}
+	for kind, than in pairs({ HS = names, HT = titles }) do
+		if NewerList(kind, than) and now - answeredAt[kind] >= gap
+			and (mine or now - drawnAt[kind] >= Workshop.LIST_DRAW_GAP) then
+			kinds[#kinds + 1] = kind
+		end
+	end
+	if #kinds == 0 then return false end
 	if not mine then
+		-- A census that counts nobody but us is not in yet (whoever asked is online too).
 		local users = ns.King and ns.King.AddonsOnline and ns.King.AddonsOnline() or 1
+		if users <= 1 then return false end
+		for _, kind in ipairs(kinds) do drawnAt[kind] = now end
 		if Workshop.random() > math.min(1, Workshop.LIST_ANSWERS / users) then return false end
 	end
 	local pending = { names = names, titles = titles, heard = {}, mine = mine }
@@ -891,25 +918,42 @@ function Workshop.AnswerAsk(names, titles)
 	Workshop.after(wait, "council answer", function()
 		if answering ~= pending then return end
 		answering = nil
-		local hs = not pending.heard.HS and NewerList("HS", pending.names) or nil
-		local ht = not pending.heard.HT and NewerList("HT", pending.titles) or nil
-		if not hs and not ht then return end
-		lastListAnswer = ns.Now()
-		SendLists(hs, ht)
+		local at, send = ns.Now(), {}
+		for kind, than in pairs({ HS = pending.names, HT = pending.titles }) do
+			if not pending.heard[kind] and at - answeredAt[kind] >= gap then send[kind] = NewerList(kind, than) end
+		end
+		if send.HS then answeredAt.HS = at end
+		if send.HT then answeredAt.HT = at end
+		SendLists(send.HS, send.HT)
 	end)
 	return true
 end
 
 function Workshop.HandleListAsk(dist, sender, text)
 	if dist ~= "CHANNEL" or type(text) ~= "string" or #text > 40 then return end
-	if ns.FullName(sender) == ns.me then return end
+	sender = ns.FullName(sender)
+	if type(sender) ~= "string" or sender == ns.me then return end
 	local names, titles = text:match("^HQ~(%d+)~(%d+)$")
 	names, titles = tonumber(names), tonumber(titles)
 	if not names or not titles then return end
+	-- One sender's asks count once per LIST_ASK_FROM: a character sending asks without end
+	-- brings no more draws than that (a client of ours asks LIST_ASK_AGAIN apart at the soonest).
+	local now = ns.Now()
+	if now - (askedFrom[sender] or -math.huge) < Workshop.LIST_ASK_FROM then return end
+	if not askedFrom[sender] then
+		if askedFromCount >= 200 then -- (the table stays small: the old ones go first)
+			for name, t in pairs(askedFrom) do
+				if now - t >= Workshop.LIST_ASK_FROM then askedFrom[name], askedFromCount = nil, askedFromCount - 1 end
+			end
+			if askedFromCount >= 200 then wipe(askedFrom); askedFromCount = 0 end
+		end
+		askedFromCount = askedFromCount + 1
+	end
+	askedFrom[sender] = now
 	Advertise("HS", names)
 	Advertise("HT", titles)
-	local now, h = ns.Now(), heardAsk
-	if h and now - h.t < Workshop.LIST_ASK_EVERY then
+	local h = heardAsk
+	if h and now - h.t < Workshop.LIST_ASK_HOLD then
 		h.names, h.titles = math.min(h.names, names), math.min(h.titles, titles)
 	else
 		heardAsk = { names = names, titles = titles, t = now }
@@ -921,8 +965,10 @@ ns.Comm.Handle("HQ", function(...) Workshop.HandleListAsk(...) end)
 -- Tests start from a clean state.
 function Workshop.ResetListAsk()
 	advertised.HS, advertised.HT = 0, 0
-	listAsks, lastListAsk, askArmed, heardAsk = 0, -math.huge, false, nil
-	answering, lastListAnswer, councilLoginAt = nil, -math.huge, -math.huge
+	listAsks, lastListAsk, askArmed, heardAsk, listHeardAt = 0, -math.huge, false, nil, -math.huge
+	answering = nil
+	answeredAt.HS, answeredAt.HT, drawnAt.HS, drawnAt.HT = -math.huge, -math.huge, -math.huge, -math.huge
+	wipe(askedFrom); askedFromCount = 0
 end
 
 function Workshop.EditCouncil(verb)
@@ -1418,9 +1464,9 @@ end
 -- (0.9.8): until the census says how many addons are online, each would count itself alone and
 -- relay for sure, the whole army at once after a server restart. A client without the lists
 -- asks for them (0.9.9): first LIST_ASK_AFTER to LIST_ASK_AFTER + LIST_ASK_SPREAD after login,
--- then with the council's ticker.
+-- then when due (Workshop.AskLists), the council's ticker trying too.
 function Workshop.CouncilLogin()
-	lastCouncilSent, councilLoginAt = ns.Now(), ns.Now()
+	lastCouncilSent = ns.Now()
 	if ns.COUNCIL_SIGNED then Workshop.TakeCouncil(ns.COUNCIL_SIGNED) end
 	if ns.COUNCIL_TITLES then Workshop.TakeTitles(ns.COUNCIL_TITLES) end
 	if ns.COUNCIL_SIGNED or ns.COUNCIL_TITLES then

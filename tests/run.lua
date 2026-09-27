@@ -11091,10 +11091,13 @@ end)
 -- ns.IsHighCouncillor read what that client took); net.Hear(name, msg, dist) is a message from
 -- someone outside the test's clients; net.Run(seconds) moves the clock, firing the timers due
 -- in order (ns.Every's again and again). Each client draws 0.5 unless the test says otherwise.
+-- The census (King.AddonsOnline) counts net.users addons online: 3 unless the test says
+-- otherwise, so that it counts others than the client itself (a holder whose census counts
+-- nobody else takes no ask up) and every draw is won (3 takers in 3).
 local function CouncilNet(fn)
 	local dialogs = {}
 	for k, v in pairs(StaticPopupDialogs) do dialogs[k] = v end
-	local net = { clock = 1800000100, users = 1, sent = {}, clients = {} }
+	local net = { clock = 1800000100, users = 3, sent = {}, clients = {} }
 	local function Post(from, dist, msg)
 		net.sent[#net.sent + 1] = { client = from, from = from.name, dist = dist, msg = msg, t = net.clock }
 		for _, c in ipairs(net.clients) do
@@ -11167,7 +11170,7 @@ local function CouncilHolder(net, name, namesOnly)
 	return c
 end
 
-test("0.9.9 a client without the High Council's lists asks the channel: 45 to 90 s after login, then every 10 minutes, 3 times a session at most", function()
+test("0.9.9 a client without the High Council's lists asks the channel: 45 to 90 s after login, again 150 s after an ask nobody answered (10 minutes after one somebody did), 3 times a session at most", function()
 	WithTestCouncil(function()
 		CouncilNet(function(net)
 			local a = net.Client("Asker-Realm")
@@ -11178,14 +11181,28 @@ test("0.9.9 a client without the High Council's lists asks the channel: 45 to 90
 			net.Run(1)
 			eq(net.Types(a), "HQ", "45 s after login (the earliest draw)")
 			eq(net.sent[1].msg, "HQ~0~0", "the times of the lists it holds: none"); eq(net.sent[1].dist, "CHANNEL")
-			net.Run(600)
-			eq(net.Types(a), "HQ", "not again within 10 minutes")
-			net.Run(15)
-			eq(net.Types(a), "HQ HQ", "10 minutes later, on the council's ticker (each minute)")
-			net.Run(600)
+			net.Run(149)
+			eq(net.Types(a), "HQ", "not again within 150 s")
+			net.Run(1)
+			eq(net.Types(a), "HQ HQ", "150 s later: nobody answered")
+			net.Run(150)
 			eq(net.Types(a), "HQ HQ HQ")
 			net.Run(7200)
 			eq(net.Types(a), "HQ HQ HQ", "3 times a session at most")
+		end)
+		CouncilNet(function(net)
+			-- A list newer than its own came after its ask, one it could not take (not signed):
+			-- somebody answered, and the next ask waits 10 minutes, on the council's ticker.
+			local a = net.Client("Asker-Realm")
+			a.W.random = function() return 0 end
+			a.W.CouncilLogin()
+			net.Run(50)
+			net.Hear("Faker Guy-Realm", "HS~" .. COUNCIL_TEST_NAMES4:gsub("Fourth Mod", "Faker Guy"))
+			net.Run(600)
+			eq(net.Types(a, "HQ"), "HQ", "not again within 10 minutes")
+			eq(a.W.NeedLists(), true, "(still without the list)")
+			net.Run(20)
+			eq(net.Types(a, "HQ"), "HQ HQ", "10 minutes after its ask, at the ticker's next minute (660 s)")
 		end)
 		CouncilNet(function(net)
 			local a = net.Client("Asker-Realm")
@@ -11216,22 +11233,28 @@ test("0.9.9 a client without the High Council's lists asks the channel: 45 to 90
 	end)
 end)
 
-test("0.9.9 a client that heard someone else ask for as much waits: the answer reaches the whole channel", function()
+test("0.9.9 a client that heard someone else ask for as much waits while that ask's answer can come: the answer reaches the whole channel", function()
 	WithTestCouncil(function()
 		CouncilNet(function(net)
 			local first, second = net.Client("First-Realm"), net.Client("Second-Realm")
 			first.W.random = function() return 0 end -- asks at 45 s; the second at 67.5 s
 			first.W.CouncilLogin(); second.W.CouncilLogin()
-			net.Run(120)
+			net.Run(100)
 			eq(net.Types(first), "HQ"); eq(net.Types(second), "", "the first one's ask covers it")
+			-- Nobody answered it within 40 s: the second asks itself, at its next minute.
+			net.Run(20)
+			eq(net.Types(second), "HQ", "at 120 s")
 			-- Someone who holds more than it asking covers nothing: that ask comes from a newer list.
 			local third = net.Client("Third-Realm")
 			third.W.TakeCouncil(COUNCIL_TEST_NAMES4)
 			third.W.CouncilLogin()
 			net.Hear("Newer-Realm", "HQ~1800000003~0")
-			net.Run(120)
-			eq(net.Types(third), "HQ", "its own ask")
+			net.Run(70)
+			eq(net.Types(third), "HQ", "its own ask (at 187.5 s)")
 			eq(net.Last(third).msg, "HQ~1800000001~0")
+			-- (and the names it holds answer the first one's second ask, at 195 s)
+			net.Run(30)
+			eq(net.Types(third), "HQ HS"); eq(net.Types(first), "HQ HQ")
 		end)
 	end)
 end)
@@ -11259,14 +11282,15 @@ test("0.9.9 a holder of a newer list answers an ask once, 3 to 15 s after it, as
 			eq(net.sent[#net.sent - 1].msg, "HS~" .. COUNCIL_TEST_NAMES4, "as signed, under the relay's type")
 			eq(net.sent[#net.sent].msg, "HT~" .. COUNCIL_TEST_TITLES)
 			eq(net.sent[#net.sent].dist, "CHANNEL")
-			-- Asks it holds nothing newer for: no answer.
+			-- Asks it holds nothing newer for: no answer (other askers: one sender's asks count
+			-- once every 2 minutes).
 			net.Run(200)
-			net.Hear("Asker-Realm", "HQ~1800000001~1800000002")
-			net.Hear("Asker-Realm", "HQ~1800000003~1800000005")
+			net.Hear("Asker2-Realm", "HQ~1800000001~1800000002")
+			net.Hear("Asker3-Realm", "HQ~1800000003~1800000005")
 			net.Run(60)
 			eq(net.Types(h), "HS HT", "nothing newer to send")
 			-- An ask that lacks only the titles gets the titles alone.
-			net.Hear("Asker-Realm", "HQ~1800000001~0")
+			net.Hear("Asker4-Realm", "HQ~1800000001~0")
 			net.Run(20)
 			eq(net.Types(h), "HS HT HT", "only what the asker lacks")
 		end)
@@ -11324,8 +11348,9 @@ test("0.9.9 an ask storm: a client answers once every 2 minutes at most, however
 			for i = 2, #times do assert(times[i] - times[i - 1] >= h.W.LIST_ANSWER_GAP, "answers " .. (times[i] - times[i - 1]) .. " s apart") end
 		end)
 		CouncilNet(function(net)
-			-- In a large army about LIST_ANSWERS clients take an ask up: one draw per 2 minutes,
-			-- won or not, so a stream of asks does not bring every client's turn.
+			-- In a large army about LIST_ANSWERS clients take an ask up: one draw per 30 s, won
+			-- or not (an ask that soon after is covered by the first one's answer), so a stream
+			-- of asks does not bring every client's turn.
 			net.users = 300
 			local h = CouncilHolder(net, "Holder-Realm")
 			local draws = 0
@@ -11335,25 +11360,11 @@ test("0.9.9 an ask storm: a client answers once every 2 minutes at most, however
 			eq(net.Types(h), "", "3 in 300: not this one"); eq(draws, 1)
 			h.W.random = function() draws = draws + 1 return 0.005 end
 			net.Hear("Asker2-Realm", "HQ~0~0")
-			net.Run(20)
-			eq(net.Types(h), ""); eq(draws, 1, "no second draw within 2 minutes")
-			net.Run(80)
+			net.Run(10)
+			eq(net.Types(h), ""); eq(draws, 1, "no second draw within 30 s (at 20 s)")
 			net.Hear("Asker3-Realm", "HQ~0~0")
 			net.Run(20)
-			eq(net.Types(h), "HS HT", "its turn: 2 minutes after the first draw")
-		end)
-		CouncilNet(function(net)
-			-- Just logged in, the census not in yet (every client would count itself alone):
-			-- no ask taken up in its first 90 s.
-			local h = CouncilHolder(net, "Holder-Realm")
-			h.W.CouncilLogin()
-			net.Run(80)
-			net.Hear("Asker1-Realm", "HQ~0~0")
-			net.Run(10)
-			eq(net.Types(h), "", "not in its first 90 s")
-			net.Hear("Asker2-Realm", "HQ~0~0")
-			net.Run(20)
-			eq(net.Types(h), "HS HT", "then as any client")
+			eq(net.Types(h), "HS HT", "its turn: 30 s after the first draw")
 		end)
 	end)
 end)
@@ -11479,7 +11490,8 @@ test("0.9.9 HQ on the channel: this version's Comm hands it to the Workshop; a 0
 			-- This version: the Workshop's handler gets it through the real CHAT_MSG_ADDON path.
 			local cns, Deliver2 = FreshComm()
 			local timers, sent = {}, {}
-			local wns = setmetatable({ On = function() end, rdb = {}, King = { AddonsOnline = function() return 1 end },
+			-- (A census counting 3 online: the asker and others besides us; every draw won.)
+			local wns = setmetatable({ On = function() end, rdb = {}, King = { AddonsOnline = function() return 3 end },
 				After = function(_, _, f) timers[#timers + 1] = f end }, { __index = cns })
 			assert(loadfile(ADDON_DIR .. "Workshop.lua"))("Olympus", wns)
 			eq(wns.Workshop.TakeCouncil(COUNCIL_TEST_NAMES4), true)
@@ -11493,6 +11505,141 @@ test("0.9.9 HQ on the channel: this version's Comm hands it to the Workshop; a 0
 		for k, v in pairs(dialogs) do StaticPopupDialogs[k] = v end
 		C_ChatInfo = ci
 		if not ok then error(err, 0) end
+	end)
+end)
+
+-- The review of the asks (0.9.9): after a server restart nobody got the lists for 11 minutes
+-- (holders took no ask up in their first 90 s, and the refused ask kept every other asker quiet
+-- for 10 minutes), and a draw, lost or left out, kept a holder from any ask for 2 minutes, of
+-- either list (so an ask a minute after an answered one, or right after a titles-only one, got
+-- nothing until its asker's next ask, 10 minutes later).
+
+test("0.9.9 holders and askers logging in together (a server restart): the askers hold the lists within 2 minutes", function()
+	WithTestCouncil(function()
+		CouncilNet(function(net)
+			local h = CouncilHolder(net, "Holder-Realm")
+			local a, b = net.Client("AskerA-Realm"), net.Client("AskerB-Realm")
+			a.W.random = function() return 0 end -- asks at 45 s; B at 67.5 s
+			h.W.CouncilLogin(); a.W.CouncilLogin(); b.W.CouncilLogin()
+			net.Run(120)
+			eq(net.Types(), "HQ HS HT", "A's ask at 45 s, the holder's answer at 54 s; B had the lists by its time")
+			eq(a.ns.rdb.council.blob, COUNCIL_TEST_NAMES4, "A"); eq(a.ns.rdb.councilTitles.blob, COUNCIL_TEST_TITLES)
+			eq(b.ns.rdb.council.blob, COUNCIL_TEST_NAMES4, "B"); eq(b.ns.rdb.councilTitles.blob, COUNCIL_TEST_TITLES)
+		end)
+		CouncilNet(function(net)
+			-- Nobody holds the lists when A asks. B heard A's ask and let its own go; once that
+			-- ask's answer could have come (40 s), B asks itself, at its next minute.
+			local a, b = net.Client("AskerA-Realm"), net.Client("AskerB-Realm")
+			a.W.random = function() return 0 end
+			a.W.CouncilLogin(); b.W.CouncilLogin()
+			net.Run(70)
+			eq(net.Types(), "HQ", "A at 45 s; B's at 67.5 s held back by A's")
+			local h = CouncilHolder(net, "Holder-Realm") -- logs in at 70 s
+			h.W.CouncilLogin()
+			net.Run(50)
+			eq(net.Types(b), "HQ", "B at 120 s, nobody having answered A")
+			net.Run(20)
+			eq(net.Types(), "HQ HQ HS HT", "the holder, 50 s after its login, answers B")
+			eq(a.ns.rdb.council.blob, COUNCIL_TEST_NAMES4, "A too"); eq(b.ns.rdb.council.blob, COUNCIL_TEST_NAMES4)
+		end)
+	end)
+end)
+
+test("0.9.9 a holder takes no ask up while its census counts nobody but itself, and as soon as it counts others, even just logged in", function()
+	WithTestCouncil(function()
+		CouncilNet(function(net)
+			-- Every client would count itself alone right after a server restart, and all answer.
+			net.users = 1
+			local h = CouncilHolder(net, "Holder-Realm")
+			h.W.CouncilLogin()
+			net.Run(600)
+			net.Hear("Asker1-Realm", "HQ~0~0")
+			net.Run(20)
+			eq(net.Types(h), "", "10 minutes after login, the census still counting nobody else")
+			-- The census counts 40: this holder, logged in 5 s ago, draws 0.05 against 3 in 40.
+			net.users = 40
+			local h2 = CouncilHolder(net, "Second-Realm")
+			h2.W.random = function() return 0.05 end
+			h2.W.CouncilLogin()
+			net.Run(5)
+			net.Hear("Asker2-Realm", "HQ~0~0")
+			net.Run(20)
+			eq(net.Types(h2), "HS HT", "5 s after its login")
+			eq(net.Types(h), "", "(the first one drew 0.5: not its turn)")
+		end)
+	end)
+end)
+
+test("0.9.9 an ask a minute after one that was answered is answered too: the holder that drew and sent nothing draws again", function()
+	WithTestCouncil(function()
+		CouncilNet(function(net)
+			local h1, h2 = CouncilHolder(net, "First-Realm"), CouncilHolder(net, "Second-Realm")
+			h1.W.random = function() return 0 end -- due at 3 s; the second at 9 s
+			net.Hear("AskerA-Realm", "HQ~0~0")
+			net.Run(20)
+			eq(net.Types(), "HQ HS HT"); eq(net.Types(h1), "HS HT", "the first holder answered; the second heard it")
+			net.Run(40)
+			-- B logged in after that answer, and asks 60 s after A.
+			net.Hear("AskerB-Realm", "HQ~0~0")
+			net.Run(20)
+			eq(net.Types(h2), "HS HT", "the second holder answers B, 9 s later")
+			eq(net.Types(h1), "HS HT", "the first one sent 60 s ago: not again within 2 minutes")
+		end)
+	end)
+end)
+
+test("0.9.9 an ask for the titles alone does not hold the names back: each list has its own 2 minutes", function()
+	WithTestCouncil(function()
+		CouncilNet(function(net)
+			local h = CouncilHolder(net, "Holder-Realm")
+			h.W.random = function() return 0 end -- answers 3 s after an ask
+			local t0 = net.clock
+			local function At(t) net.Run(t0 + t - net.clock) end
+			net.Hear("Titles-Realm", "HQ~1800000001~0")
+			At(10)
+			eq(net.Types(h), "HT", "the titles alone, at 3 s")
+			net.Hear("Asker-Realm", "HQ~0~0")
+			At(20)
+			eq(net.Types(h), "HT HS", "the names at 13 s; not the titles again, sent 7 s before")
+			-- Titles-only asks each time the titles' 2 minutes end (123, 246, 369 s): a names ask
+			-- a minute after each one still gets the names.
+			for i = 1, 3 do
+				At(123 * i)
+				net.Hear("Titles" .. i .. "-Realm", "HQ~1800000001~0")
+				At(123 * i + 60)
+				net.Hear("Asker" .. i .. "-Realm", "HQ~0~0")
+			end
+			At(500)
+			eq(net.Types(h), "HT HS HT HS HT HS HT HS")
+		end)
+	end)
+end)
+
+test("0.9.9 one sender's asks count once every 2 minutes; asks from many senders, one draw per 30 s", function()
+	WithTestCouncil(function()
+		CouncilNet(function(net)
+			net.users = 300
+			local h = CouncilHolder(net, "Holder-Realm")
+			local draws = 0
+			h.W.random = function() draws = draws + 1 return 0.5 end
+			for _ = 1, 120 do net.Hear("Spammer-Realm", "HQ~0~0"); net.Run(2) end
+			eq(draws, 2, "240 s of asks from one sender: at 0 and 120 s")
+			draws = 0
+			for i = 1, 60 do net.Hear("Asker" .. i .. "-Realm", "HQ~0~0"); net.Run(2) end
+			eq(draws, 4, "120 s of asks from 60 senders: one draw each 30 s")
+			eq(net.Types(h), "", "3 in 300: lost every one")
+		end)
+		CouncilNet(function(net)
+			-- An ask held back counts for nothing else either: it tells of no newer list.
+			local c = CouncilHolder(net, "Client-Realm", true)
+			net.Hear("Spammer-Realm", "HQ~0~0")
+			net.Run(1)
+			net.Hear("Spammer-Realm", "HQ~1800000003~0")
+			eq(c.W.NeedLists(), false, "its second ask, 1 s after the first")
+			net.Run(120)
+			net.Hear("Spammer-Realm", "HQ~1800000003~0")
+			eq(c.W.NeedLists(), true, "2 minutes later it counts")
+		end)
 	end)
 end)
 
