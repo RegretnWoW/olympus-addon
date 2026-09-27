@@ -9950,7 +9950,7 @@ local function WithTestCouncil(fn)
 	local W = ns.Workshop
 	local saved = { council = ns.rdb.council, titles = ns.rdb.councilTitles, heard = ns.rdb.councilIcons, mine = ns.db.councilIcons,
 		me = ns.me, signed = ns.COUNCIL_SIGNED, ownTitles = ns.COUNCIL_TITLES, guilds = ns.rdb.guilds, now = ns.Now,
-		chunked = ns.Comm.SendChunked, verify = ns.Sign.Verify, ui = ns.UI, online = ns.Roster.online, after = ns.After }
+		chunked = ns.Comm.SendChunked, verify = ns.Sign.Verify, ui = ns.UI, online = ns.Roster.online, after = ns.After, sweep = ns.Who.sweep }
 	local ok, err = pcall(function()
 		ns.rdb.council, ns.rdb.councilTitles, ns.rdb.councilIcons, ns.db.councilIcons = nil, nil, nil, nil
 		ns.COUNCIL_SIGNED, ns.COUNCIL_TITLES = nil, nil
@@ -9961,6 +9961,7 @@ local function WithTestCouncil(fn)
 	ns.rdb.council, ns.rdb.councilTitles, ns.rdb.councilIcons, ns.db.councilIcons = saved.council, saved.titles, saved.heard, saved.mine
 	ns.me, ns.COUNCIL_SIGNED, ns.COUNCIL_TITLES, ns.rdb.guilds, ns.Now = saved.me, saved.signed, saved.ownTitles, saved.guilds, saved.now
 	ns.Comm.SendChunked, ns.Sign.Verify, ns.UI, ns.Roster.online, ns.After = saved.chunked, saved.verify, saved.ui, saved.online, saved.after
+	ns.Who.sweep = saved.sweep
 	ns.Views.ExpandAll(false)
 	W.ResetVerify()
 	if not ok then error(err, 0) end
@@ -10268,6 +10269,24 @@ test("0.9.9 the Realm: the High Council under the King and the Treasurer, only f
 		end
 		assert(After(lord, "Other Mod"), lord and lord.text)
 		assert(After(captain, "Test Councillor"), captain and captain.text)
+		-- And after a member's name: one in our own guild's roster (Fourth Mod, <Olympus II> here),
+		-- one /who saw in another guild (Third Mod, in <Olympus>). A soldier sees neither mark.
+		ns.Who.sweep = { list = { { name = "Third Mod", guild = "Olympus", level = 20 } } }
+		local function Member(guild, key)
+			local _, from = Find(lines, "<" .. guild .. ">")
+			for i = (from or #lines) + 1, #lines do
+				if lines[i].key == key and lines[i].indent == 2 then return lines[i] end
+			end
+		end
+		lines = ns.Views.RealmLines()
+		local rostered, seen = Member("Olympus II", "Fourth Mod"), Member("Olympus", "Third Mod")
+		assert(After(rostered, "Fourth Mod"), rostered and rostered.text)
+		assert(After(seen, "Third Mod"), seen and seen.text)
+		ns.me = "Tester-Realm"
+		lines = ns.Views.RealmLines()
+		rostered, seen = Member("Olympus II", "Fourth Mod"), Member("Olympus", "Third Mod")
+		assert(rostered and not rostered.text:find(ns.HIGH_COUNCIL_MARK, 1, true), rostered and rostered.text)
+		assert(seen and not seen.text:find(ns.HIGH_COUNCIL_MARK, 1, true), seen and seen.text)
 		-- The author's own client (it holds the signed lists) sees it too.
 		ns.me = "Tester-Realm"
 		eq(Find(ns.Views.RealmLines(), HEADER), nil)
@@ -10279,6 +10298,40 @@ test("0.9.9 the Realm: the High Council under the King and the Treasurer, only f
 		lines = ns.Views.RealmLines()
 		assert(Find(lines, HEADER), "public")
 		assert(Find(lines, "Operations Director"), "with the titles")
+	end)
+end)
+
+test("0.9.9 the Realm's council rows: seen online now beats a days-old report, and a days-old report is greyed", function()
+	WithTestCouncil(function()
+		local W, L = ns.Workshop, ns.L
+		W.TakeCouncil(COUNCIL_TEST_NAMES4)
+		W.TakeTitles(COUNCIL_TEST_TITLES)
+		-- <Olympus III>'s last report is three days old (still listed, greyed): Other Mod its Lord,
+		-- online then; Fourth Mod a Captain, offline four days then. /who sees Fourth Mod in it now.
+		ns.rdb.guilds = {
+			["Olympus III"] = Vouched({ total = 200, online = 20, zones = {}, t = os.time() - 3 * 86400, leader = "Other Mod", leaderOnline = true,
+				realm = "Realm", officers = { { name = "Fourth Mod", online = false, days = 4, class = "PR", level = 22 } } }, "W5-Realm", "W6-Realm"),
+		}
+		ns.Roster.online = {}
+		ns.Who.sweep = { list = { { name = "Fourth Mod", guild = "Olympus III", level = 22 } } }
+		ns.me = "Third Mod-Realm"
+		ns.Views.ExpandAll(true)
+		local opened
+		ns.UI = { ShowPerson = function(p) opened = p end, Refresh = function() end }
+		local lines = ns.Views.RealmLines()
+		local other, fourth = Find(lines, "Operations Director"), Find(lines, "Keeper of Coin")
+		-- Fourth Mod: online, as /who sees him now, and his card says so.
+		eq(fourth.right, "|cff40ff40" .. L.ONLINE_NOW .. "|r")
+		fourth.onClick()
+		eq(opened.name, "Fourth Mod"); eq(opened.guild, "Olympus III"); eq(opened.online, true)
+		-- Other Mod: only that old report knows him, so what it said is greyed, as its guild is.
+		eq(other.right, "|cff9d9d9d" .. L.ONLINE_NOW .. "|r")
+		-- Without the /who sighting, the old report alone: greyed too, warning mark and all.
+		ns.Who.sweep = { list = {} }
+		fourth = Find(ns.Views.RealmLines(), "Keeper of Coin")
+		eq(fourth.right, "|cff9d9d9d" .. L.OFFLINE_DAYS:format(4) .. " !|r")
+		fourth.onClick()
+		eq(opened.guild, "Olympus III"); eq(opened.rank, L.CAPTAIN); eq(opened.days, 4)
 	end)
 end)
 

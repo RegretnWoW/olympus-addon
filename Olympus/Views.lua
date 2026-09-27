@@ -34,12 +34,13 @@ local function ClassColored(name, classFile)
 	return c and ("|c%s%s|r"):format(c.colorStr, name) or name
 end
 
-local function Presence(online, days)
-	if online then return Green(L.ONLINE_NOW) end
+-- `dim`: what an old report said (older than Data.FRESH), all grey, as its guild is in the tree.
+local function Presence(online, days, dim)
+	if online then return (dim and Grey or Green)(L.ONLINE_NOW) end
 	if not days or days < 1 then return Grey(L.OFFLINE_TODAY) end
 	local d = math.floor(days)
 	local text = L.OFFLINE_DAYS:format(d)
-	if d >= (ns.db.warnDays or 3) then return Red(text .. " !") end
+	if d >= (ns.db.warnDays or 3) then return (dim and Grey or Red)(text .. " !") end
 	return Grey(text)
 end
 
@@ -599,27 +600,35 @@ end
 local COUNCIL_ROW = {} -- its open/closed key in `expanded`: no guild's name can be a table
 
 -- What the census knows of these names (a set of short names, lower case): each guild's Lord
--- and Captains from its report, then who was seen online (our roster, /who), the first found.
--- Short name -> a person as the rows open them.
+-- and Captains from a fresh report, then who was seen online (our roster, /who), then the Lords
+-- and Captains of older reports, the first found. (An old report last: days old, it must not
+-- hide someone seen online now.) Short name -> a person as the rows open them, and the set of
+-- those only an old report knows.
 local function Known(s, wanted)
-	local out = {}
-	local function Add(guild, p)
+	local out, old = {}, {}
+	local function Add(guild, p, stale)
 		local key = type(p.name) == "string" and ns.ShortName(p.name):lower()
 		if key and wanted[key] and not out[key] then
 			p.guild = guild
-			out[key] = p
+			out[key], old[key] = p, stale or nil
 		end
 	end
-	for _, e in ipairs(s.guilds) do
-		local g = e.g
-		if g.leader then
-			Add(e.name, { name = g.leader, realm = g.realm, class = g.leaderClass, level = g.leaderLevel, zone = g.leaderZone,
-				rank = L.LORD, online = g.leaderOnline, days = g.leaderDays })
-		end
-		for _, o in ipairs(g.officers or {}) do
-			Add(e.name, { name = o.name, realm = g.realm, class = o.class, level = o.level, zone = o.zone, rank = L.CAPTAIN, online = o.online, days = o.days })
+	local function Reports(fresh)
+		for _, e in ipairs(s.guilds) do
+			local g = e.g
+			if e.fresh == fresh then
+				if g.leader then
+					Add(e.name, { name = g.leader, realm = g.realm, class = g.leaderClass, level = g.leaderLevel, zone = g.leaderZone,
+						rank = L.LORD, online = g.leaderOnline, days = g.leaderDays }, not fresh)
+				end
+				for _, o in ipairs(g.officers or {}) do
+					Add(e.name, { name = o.name, realm = g.realm, class = o.class, level = o.level, zone = o.zone, rank = L.CAPTAIN,
+						online = o.online, days = o.days }, not fresh)
+				end
+			end
 		end
 	end
+	Reports(true)
 	local mine = GetGuildInfo("player")
 	for _, m in ipairs(mine and ns.Roster.online or {}) do
 		Add(mine, { name = m.name, class = m.class, level = m.level, zone = m.zone, rank = m.rank, online = true })
@@ -637,7 +646,8 @@ local function Known(s, wanted)
 			end
 		end
 	end
-	return out
+	Reports(false)
+	return out, old
 end
 
 local function Council(s) return "|c" .. ns.HIGH_COUNCIL_COLOR .. s .. "|r" end
@@ -663,7 +673,7 @@ local function CouncilLines(lines, s)
 	local wanted = {}
 	for _, m in ipairs(loose) do wanted[m.name:lower()] = true end
 	for _, d in ipairs(depts) do for _, m in ipairs(d.members) do wanted[m.name:lower()] = true end end
-	local known = Known(s, wanted)
+	local known, old = Known(s, wanted)
 	-- "<mark><own icon> Name - Title": where the census knows them, when they were last on, and a
 	-- click opens what it knows.
 	local function Member(m, indent)
@@ -673,7 +683,7 @@ local function CouncilLines(lines, s)
 			key = person.name,
 			indent = indent,
 			text = ns.CouncilMark(m.name) .. " " .. Council(Plain(m.name)) .. (m.title and (" - " .. Grey(Plain(m.title))) or ""),
-			right = p and Presence(p.online, p.days) or nil,
+			right = p and Presence(p.online, p.days, old[m.name:lower()]) or nil,
 			onClick = function() ns.UI.ShowPerson(person) end,
 		}
 	end
