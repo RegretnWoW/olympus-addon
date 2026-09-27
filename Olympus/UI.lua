@@ -634,14 +634,16 @@ UI.HELP_ICON = "Interface\\Common\\help-i"
 -- The help button in the title bar, just left of the close button, where Blizzard puts a
 -- window's minimize button (0.9.9, asked for by Max of Asmongold's moderators). A plain button:
 -- a click opens the copy box (UI.ShowHelp), which already keeps to the gamepad UI's rules.
-local function HelpButton(f, hd)
+local function HelpButton(f)
 	local close = f.CloseButton or _G[f:GetName() .. "CloseButton"]
 	local b = CreateFrame("Button", nil, f)
 	-- As big as the close button's art: Forever's is 24 and fills it, Classic's red disc is
-	-- about 20 inside a 32 button, so there it tucks in closer.
-	b:SetSize(hd and 22 or 20, hd and 22 or 20)
+	-- about 20 inside a 32 button, so there it tucks in closer. Told apart by the button, not
+	-- by our window's look: the old window on Forever has Mainline's close button too.
+	local classic = close and (close:GetWidth() or 0) > 28
+	b:SetSize(classic and 20 or 22, classic and 20 or 22)
 	if close then
-		b:SetPoint("RIGHT", close, "LEFT", hd and 0 or 4, 0)
+		b:SetPoint("RIGHT", close, "LEFT", classic and 4 or 0, 0)
 	else -- (both templates have one; just in case) the title bar's right end
 		b:SetPoint("TOPRIGHT", f, "TOPRIGHT", -28, -2)
 	end
@@ -721,7 +723,7 @@ local function CreateMain(style)
 			pcall(f.SetPortraitToAsset, f, ns.LOGO)
 		end
 	end
-	f.helpButton = HelpButton(f, hd)
+	f.helpButton = HelpButton(f)
 
 	-- One dark panel over the whole interior, like the Guild window (its inside is near
 	-- black, not the lighter marble of the plain portrait frame).

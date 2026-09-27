@@ -9935,8 +9935,34 @@ local function CheckHelpBox(box)
 	eq(box.action:IsShown(), true); eq(box.action:GetText(), ns.L.REPORT_BUG)
 end
 
+-- PortraitFrameTemplate's close button as each client's template builds it, before our code
+-- runs. Classic Era and Anniversary: UI-Panel-MinimizeButton, 32 wide at TOPRIGHT 4,5, its red
+-- disc 6 in from each side (Blizzard's Classic World Map overlaps two such buttons by 12).
+-- Forever (Mainline): 24 wide at TOPRIGHT 1,0, its X filling it, at level 510 over the metal
+-- border, a NineSlice at 500 (Blizzard_SharedXML/Mainline/SharedUIPanelTemplates). Forever uses
+-- it in both our windows: the old one too, next to ClassicUI Forever's Guild tab.
+local CLASSIC_DISC_INSET = 6
+local function WithCloseButton(client, fn)
+	local savedTemplate = TEMPLATES.PortraitFrameTemplate
+	TEMPLATES.PortraitFrameTemplate = function(w)
+		savedTemplate(w)
+		local close = w.CloseButton
+		if client == "forever" then
+			w.NineSlice = NewWidget("Frame", nil, w)
+			w.NineSlice.level = 500
+			close.level = 510
+			close:SetSize(24, 24); close:SetPoint("TOPRIGHT", w, "TOPRIGHT", 1, 0)
+		else
+			close:SetSize(32, 32); close:SetPoint("TOPRIGHT", w, "TOPRIGHT", 4, 5)
+		end
+	end
+	local ok, err = pcall(fn)
+	TEMPLATES.PortraitFrameTemplate = savedTemplate
+	if not ok then error(err, 0) end
+end
+
 test("0.9.9: the help button, left of the close button, opens the help and links; its button the bug report", function()
-	WithUI(function()
+	WithUI(function() WithCloseButton("classic", function()
 		local UI = LoadUI()
 		UI.Toggle()
 		local main = OlympusFrame
@@ -9944,10 +9970,9 @@ test("0.9.9: the help button, left of the close button, opens the help and links
 		assert(help, "a help button on the window")
 		eq(help.parent, main); eq(help:IsShown(), true)
 		eq(help.icon.texture, "Interface\\Common\\help-i", "Blizzard's help art (used by its own code on every client)")
-		-- Where Classic's PortraitFrameTemplate puts its close button (32 wide, its disc in the middle).
-		close:SetSize(32, 32); close:SetPoint("TOPRIGHT", main, "TOPRIGHT", 4, 5)
 		assert(help:GetLeft() < close:GetLeft(), "left of the close button")
-		assert(help:GetRight() < close:GetLeft() + close:GetWidth() / 2, "clear of its X")
+		assert(help:GetRight() <= close:GetLeft() + CLASSIC_DISC_INSET,
+			("clear of its red disc: %s past the button's edge"):format(help:GetRight() - close:GetLeft()))
 		eq(help:GetBottom() + help:GetHeight() / 2, close:GetBottom() + close:GetHeight() / 2, "on the same line, the title bar")
 		assert(help:GetFrameLevel() >= close:GetFrameLevel(), "drawn like the close button")
 		-- The title bar still drags the window from there.
@@ -9982,36 +10007,44 @@ test("0.9.9: the help button, left of the close button, opens the help and links
 		eq(main.tab, "census"); eq(main.buttons[3]:GetText(), ns.L.REPORT_BUG)
 		main.buttons[3]:Click()
 		eq(box.TitleText:GetText(), ns.L.REPORT_BUG)
-	end)
+	end) end)
 end)
 
 test("0.9.9: the help button in the HD window: over Forever's metal title bar, left of its close button", function()
-	WithUI(function()
-		-- Forever's PortraitFrameTemplate: its metal border a NineSlice at 500, the close button 24
-		-- wide at 510 (Blizzard_SharedXML/Mainline/SharedUIPanelTemplates.xml).
-		local savedTemplate = TEMPLATES.PortraitFrameTemplate
-		TEMPLATES.PortraitFrameTemplate = function(w)
-			savedTemplate(w)
-			w.NineSlice = NewWidget("Frame", nil, w)
-			w.NineSlice.level = 500
-			w.CloseButton.level = 510
-		end
-		local ok, err = pcall(function()
-			local w = ForeverWorld(true)
-			CommunitiesFrame:Show(); w.buttons[1]:Click()
-			local main = OlympusFrameHD
-			local help, close = main.helpButton, main.CloseButton
-			assert(help, "a help button on the HD window")
-			eq(help:GetFrameLevel(), 510, "at the close button's level, over the border")
-			close:SetSize(24, 24); close:SetPoint("TOPRIGHT", main, "TOPRIGHT", 0, 0)
-			assert(help:GetRight() <= close:GetLeft(), "left of the close button, like Blizzard's minimize button")
-			eq(help:GetTop() - help:GetHeight() / 2, close:GetTop() - close:GetHeight() / 2, "on the same line")
-			help:Click()
-			CheckHelpBox(OlympusCopyFrame)
-		end)
-		TEMPLATES.PortraitFrameTemplate = savedTemplate
-		if not ok then error(err, 0) end
-	end)
+	WithUI(function() WithCloseButton("forever", function()
+		local w = ForeverWorld(true)
+		CommunitiesFrame:Show(); w.buttons[1]:Click()
+		local main = OlympusFrameHD
+		local help, close = main.helpButton, main.CloseButton
+		assert(help, "a help button on the HD window")
+		eq(help:GetFrameLevel(), 510, "at the close button's level, over the border")
+		assert(help:GetRight() <= close:GetLeft(), "left of the close button, like Blizzard's minimize button")
+		eq(help:GetTop() - help:GetHeight() / 2, close:GetTop() - close:GetHeight() / 2, "on the same line")
+		help:Click()
+		CheckHelpBox(OlympusCopyFrame)
+	end) end)
+end)
+
+-- The old window on Forever still has Mainline's close button, its X filling it: the help
+-- button no longer tucked 4 into it as next to Classic's (review of 0.9.9).
+test("0.9.9: the help button in the old window on Forever (ClassicUI Forever's Guild tab): clear of Mainline's close button", function()
+	WithUI(function() WithCloseButton("forever", function()
+		local w, UI = ForeverWorld(true)
+		ClassicUIForeverGuildPanel = FakeFrame("ClassicUIForeverGuildPanel", FriendsFrame)
+		FriendsFrame:Show(); ClassicUIForeverGuildPanel:Show()
+		w.buttons[2]:Click()
+		eq(UI.WindowStyle(), "old")
+		local main = OlympusFrame
+		local help, close = main.helpButton, main.CloseButton
+		assert(help, "a help button on the old window")
+		assert(help:GetLeft() < close:GetLeft(), "left of the close button")
+		assert(help:GetRight() <= close:GetLeft(),
+			("clear of its X: %s over it"):format(help:GetRight() - close:GetLeft()))
+		eq(help:GetTop() - help:GetHeight() / 2, close:GetTop() - close:GetHeight() / 2, "on the same line")
+		eq(help:GetFrameLevel(), 510, "over the metal border, like the close button")
+		help:Click()
+		CheckHelpBox(OlympusCopyFrame)
+	end) end)
 end)
 
 test("0.9.9: gamepad UI: the help button works, writes nothing to UISpecialFrames and leaves the chat's keyboard", function()
