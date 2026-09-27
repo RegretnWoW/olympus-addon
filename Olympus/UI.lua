@@ -808,6 +808,9 @@ local function CreateMain(style)
 	if f.listBox then scroll:SetFrameLevel(f.listBox:GetFrameLevel() + 2) end
 	scroll:SetPoint("BOTTOMRIGHT", f.scrollRight or g.scroll.right, g.scroll.bottom)
 	f.scroll = scroll
+	-- The place a redraw gave the list, once more when the client measures the list again
+	-- (UI.KeepPlace): after Blizzard's own handler, whatever it did with the offset.
+	scroll:HookScript("OnScrollRangeChanged", function(self) ns.SafeCall("list place", UI.HoldPlace, f, self) end)
 	f.views = {}
 	for _, t in ipairs(TABS) do
 		local v = CreateFrame("Frame", nil, scroll)
@@ -1196,6 +1199,7 @@ local function ShowTab(key)
 	for k, v in pairs(main.views) do v:SetShown(k == key) end
 	main.scroll:SetScrollChild(main.views[key])
 	main.scroll:SetVerticalScroll(0)
+	main.page, main.wantScroll = nil, nil -- a tab opened: its list starts at the top (UI.KeepPlace)
 	-- The Throne is a page of parchment with dark ink (the rows use line.font).
 	if key == "throne" and not main.parchment then
 		local p = main.scroll:CreateTexture(nil, "BACKGROUND")
@@ -1260,6 +1264,69 @@ function UI.CensusName()
 	return GetRealmName and GetRealmName() or ""
 end
 
+---------------------------------------------------------------------------
+-- The list keeps its place (1.0.0). A redraw (a row opened or closed, "Show more", a report
+-- coming in) leaves the list where it was: the row clicked stays where it was on screen, and
+-- when it opened, its first rows below come into sight if they fell under the list's bottom
+-- edge (the row itself never leaves the top). Only another tab, or another page of one (the
+-- Realm's chats, the Throne's pages, the Treasury's book), starts at the top.
+---------------------------------------------------------------------------
+
+UI.SHOW_BELOW = 3  -- rows under an opened row brought into sight
+UI.CLICK_KEEP = 2  -- seconds a click waits for the redraw it causes (RefreshSoon, DATA_CHANGED)
+UI.PLACE_HOLD = 1  -- seconds a redraw's place is given again when the client measures the list
+
+-- Which page of its tab the list shows: another one starts at the top.
+local function PageOf(tab, locked)
+	if locked then return "join" end
+	local sub
+	if tab == "realm" then sub = ns.Views.ChatTier and ns.Views.ChatTier() or "tree"
+	elseif tab == "throne" then sub = ns.King and ns.King.mode
+	elseif tab == "treasury" then sub = ns.Treasury and ns.Treasury.mode end
+	return tab .. "/" .. tostring(sub or "")
+end
+
+local function Clamp(v, lo, hi) return math.max(lo, math.min(v, hi)) end
+
+-- The list just drawn in `content` goes back to `offset`, the row clicked (Views.TakeClick) to
+-- where it was on screen; on another page, to the top. The scroll range is taken from the
+-- heights (the client measures it again only when it next draws: UI.HoldPlace then).
+function UI.KeepPlace(content, offset, click, page)
+	local scroll = main.scroll
+	local want = 0
+	if page == main.page then
+		want = offset
+		local rows = content.rows or {}
+		local r = click and GetTime() - (click.t or 0) <= UI.CLICK_KEEP and rows[click.index]
+		if r and r:IsShown() and r.top then
+			-- Where it was on screen when clicked (whatever the offset did since).
+			want = (click.offset or offset) + (r.top - (click.top or 0))
+			-- It opened (the list grew): the rows under it into sight, the row staying in.
+			local n = content.lineCount or 0
+			local last = n > (click.lines or 0) and rows[math.min(click.index + UI.SHOW_BELOW, n)]
+			local view = scroll:GetHeight() or 0
+			if last and last.top and view > 0 then
+				local bottom = last.top + (last:GetHeight() or 0)
+				if bottom > want + view then want = math.min(bottom - view, r.top) end
+			end
+		end
+	end
+	main.page = page
+	want = Clamp(want, 0, math.max(0, (content:GetHeight() or 0) - (scroll:GetHeight() or 0)))
+	main.wantScroll, main.wantAt = want, GetTime()
+	scroll:SetVerticalScroll(want)
+end
+
+-- The client measured the list again (OnScrollRangeChanged, after Blizzard's own handler): the
+-- place the last redraw gave it, if the offset moved away from it, within a moment of that
+-- redraw only (later on, the offset is the player's own scrolling).
+function UI.HoldPlace(frame, scroll)
+	local want = frame == main and frame.wantScroll
+	if not want or GetTime() - (frame.wantAt or 0) > UI.PLACE_HOLD then return end
+	want = Clamp(want, 0, scroll:GetVerticalScrollRange() or 0)
+	if math.abs((scroll:GetVerticalScroll() or 0) - want) > 0.5 then scroll:SetVerticalScroll(want) end
+end
+
 function UI.Refresh()
 	if not main or not main:IsShown() then return end
 	UI.lastRedraw = GetTime()
@@ -1290,7 +1357,11 @@ function UI.Refresh()
 			end
 		end
 		FitHeader()
-		ns.Views.Render(main.views[main.tab], lines, not locked and ns.Views.COLUMNS[main.tab] or nil)
+		-- Drawn again where it was (UI.KeepPlace): the offset and the row clicked, taken first.
+		local content = main.views[main.tab]
+		local offset, click = main.scroll:GetVerticalScroll() or 0, ns.Views.TakeClick(content)
+		ns.Views.Render(content, lines, not locked and ns.Views.COLUMNS[main.tab] or nil)
+		UI.KeepPlace(content, offset, click, PageOf(main.tab, locked))
 		main.detailTitle:SetText(title or "")
 		main.detailText:SetText(text or "")
 		SetButtons(main.buttons, locked and RECRUIT_BUTTONS or Shown(BUTTONS[main.tab]))

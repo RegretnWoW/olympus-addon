@@ -103,10 +103,17 @@ local function Row(content, i)
 		fs:SetWordWrap(false)
 		r.cols[c] = fs
 	end
+	r.index = i
 	r:SetScript("OnClick", function(self)
 		if not self.line then return end
 		-- HD: the person opened stays lit, like the roster's selected member.
 		if content.style == "hd" and self.line.key then ns.SafeCall("view select", Views.Select, content, self.line.key) end
+		-- Where the row was clicked, for the redraw its click causes (UI.lua keeps it in place):
+		-- its place in the list, the list's offset then (the list is the scroll frame's child).
+		local scroll = content:GetParent()
+		local offset = scroll and scroll.GetVerticalScroll and scroll:GetVerticalScroll()
+		content.click = { index = self.index, top = self.top or 0, lines = content.lineCount or 0, t = GetTime(),
+			offset = type(offset) == "number" and offset or nil }
 		if self.line.onClick then ns.SafeCall("view click", self.line.onClick) end
 		if ns.UI.Clicked then ns.UI.Clicked() end
 	end)
@@ -240,6 +247,7 @@ function Views.Render(content, lines, layout)
 	for i, line in ipairs(lines) do
 		local r = Row(content, i)
 		r.line = line
+		r.top = -y -- how far down the list the row starts (UI.lua keeps the list's place)
 		r:ClearAllPoints()
 		r:SetPoint("TOPLEFT", content, "TOPLEFT", 0, y)
 		r:SetWidth(width)
@@ -302,7 +310,16 @@ function Views.Render(content, lines, layout)
 		if line.gapAfter then y = y - 6 end
 	end
 	for i = #lines + 1, #(content.rows or {}) do content.rows[i]:Hide() end
+	content.lineCount = #lines
 	content:SetHeight(-y + 8)
+end
+
+-- The last row clicked in `content` ({ index, top, lines, t }: where it started, how many lines
+-- the list had, when), once: taken by the redraw that follows (UI.lua).
+function Views.TakeClick(content)
+	local click = content.click
+	content.click = nil
+	return click
 end
 
 ---------------------------------------------------------------------------
@@ -521,6 +538,7 @@ end
 local chatTier -- the channel shown instead of the Realm tree, or nil
 
 function Views.ChatShown() return chatTier ~= nil end
+function Views.ChatTier() return chatTier end
 -- Another tab opened: the Realm opens on its tree again next time.
 function Views.CloseChat() chatTier = nil end
 function Views.ShowChat(tier)

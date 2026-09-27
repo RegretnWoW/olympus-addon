@@ -1414,6 +1414,28 @@ function Widget:GetStringWidth()
 end
 function Widget:IsTruncated() return self.wrap == false and (self.w or 0) > 0 and self:GetUnboundedStringWidth() > self.w end
 function Widget:Click() self:Fire("OnClick") end
+-- A ScrollFrame, as far as the list's place goes (1.0.0): the offset it is given, within 0 and
+-- its range. The range (how far the scroll child reaches past the frame) is the one the client
+-- measured when it last drew: Settle() is that next draw, which measures it again and runs
+-- OnScrollRangeChanged (Blizzard's handler, then the hooks) when it changed. Whether the client
+-- holds an offset to a range it has not measured yet is not known: the stand-in does (the
+-- harder case for the list).
+function Widget:SetScrollChild(child) self.scrollChild = child end
+function Widget:GetScrollChild() return self.scrollChild end
+function Widget:GetVerticalScrollRange() return self.scrollRange or 0 end
+function Widget:GetVerticalScroll() return self.vscroll or 0 end
+function Widget:SetVerticalScroll(offset)
+	self.vscroll = math.max(0, math.min(offset, self.scrollRange or 0))
+	self:Fire("OnVerticalScroll", self.vscroll)
+end
+function Widget:Settle()
+	local child = self.scrollChild
+	local range = child and math.max(0, child:GetHeight() - self:GetHeight()) or 0
+	if range ~= (self.scrollRange or 0) then
+		self.scrollRange = range
+		self:Fire("OnScrollRangeChanged", 0, range)
+	end
+end
 -- GameTooltip: who owns it and the lines it shows.
 function Widget:SetOwner(owner, anchor) self.owner, self.ownerAnchor, self.lines = owner, anchor, {} end
 function Widget:AddLine(text) self.lines = self.lines or {}; self.lines[#self.lines + 1] = text end
@@ -11399,6 +11421,154 @@ test("0.9.9 the King's stream: /oly council (list) in chat cuts the names short 
 		end)
 		ns.Print = savedPrint
 		if not ok then error(err, 0) end
+	end)
+end)
+
+---------------------------------------------------------------------------
+-- 1.0.0: the list keeps its place. In game, opening a row (a guild in the Realm, the High
+-- Council, "Show more") threw the list back to the top, and the player had to scroll down again
+-- to the row he had just opened. What moved the offset there is the client's and is not
+-- reproduced here: the stand-in's own handler (Blizzard's, in game) puts the offset back at the
+-- top when the client measures the list again, the jump as it was seen. The list must come back
+-- where it was all the same, and start at the top only on another tab or page.
+---------------------------------------------------------------------------
+
+-- The client's next draw: it measures the list again, its handler throwing the list to the top.
+local function DrawJumping(scroll)
+	scroll.scripts.OnScrollRangeChanged = function(self) self.vscroll = 0 end
+	scroll:Settle()
+end
+-- The shown row of the tab's list whose text has `text`.
+local function ListRow(main, text)
+	for _, r in ipairs(main.views[main.tab].rows or {}) do
+		if r:IsShown() and r.line and type(r.line.text) == "string" and r.line.text:find(text, 1, true) then return r end
+	end
+end
+-- How far down its list a row starts (its anchor there), and its place in the list.
+local function Top(r) return -select(5, r:GetPoint(1)) end
+local function Index(r) for i, x in ipairs(r:GetParent().rows) do if x == r then return i end end end
+local SHOW_BELOW = 3 -- (UI.SHOW_BELOW: the rows under an opened row brought into sight)
+-- Thirty guilds, each with its Lord, three Captains and two ranks: a long Realm tree.
+local function ManyGuilds()
+	local now, out = os.time(), {}
+	for i = 1, 30 do
+		local officers = {}
+		for k = 1, 3 do officers[k] = { name = ("Capt%02d%s"):format(i, string.char(96 + k)), online = k == 1, days = 0 } end
+		out[("Olympus %02d"):format(i)] = { total = 100 + i, online = 10, zones = {}, t = now, leader = ("Lord%02d"):format(i),
+			leaderOnline = true, officers = officers, ranks = { { name = "Lord", count = 1 }, { name = "Knight", count = 99 + i } } }
+	end
+	return out
+end
+
+test("1.0.0 the list keeps its place: a guild opened in the Realm stays where it was on screen, its first rows come into sight", function()
+	WithUI(function()
+		local w, UI = ForeverWorld(true)
+		CommunitiesFrame:Show(); w.buttons[1]:Click()
+		local main = OlympusFrameHD
+		ns.rdb.guilds = ManyGuilds()
+		ns.Views.ExpandAll(false)
+		UI.SelectTab("realm")
+		local scroll, rows = main.scroll, main.views.realm.rows
+		scroll:Settle()
+		local view = scroll:GetHeight()
+		assert(view > 100 and scroll:GetVerticalScrollRange() > 300, ("a long tree: %s past %s"):format(scroll:GetVerticalScrollRange(), view))
+		-- Scrolled down, a closed guild in the middle of the screen opened.
+		scroll:SetVerticalScroll(200)
+		local row
+		for _, r in ipairs(rows) do
+			if r:IsShown() and Top(r) >= 200 + 60 and r.line.text:find("[+] ", 1, true) then row = r break end
+		end
+		assert(row, "a closed guild on screen")
+		local name = row.line.text:match("<(Olympus %d+)>")
+		local onScreen = Top(row) - 200
+		row:Click()
+		DrawJumping(scroll)
+		eq(scroll:GetVerticalScroll(), 200, "the list where it was")
+		assert(row.line.text:find("^%[%-%] ") and row.line.text:find("<" .. name .. ">", 1, true), "the same row, opened: " .. row.line.text)
+		eq(Top(row) - scroll:GetVerticalScroll(), onScreen, "where it was on screen")
+		eq(rows[Index(row) + 1].line.indent, 1, "its Lord right under it")
+		-- A closed guild at the bottom edge: the list moves just enough for its first rows.
+		local low
+		for i, r in ipairs(rows) do
+			if r:IsShown() and i > Index(row) + 2 and r.line.text:find("^%[%+%] ") then low = r break end
+		end
+		assert(low, "a closed guild further down")
+		scroll:SetVerticalScroll(Top(low) + low:GetHeight() - view)
+		assert(scroll:GetVerticalScroll() > 200, "scrolled down to it")
+		low:Click()
+		DrawJumping(scroll)
+		local below = rows[Index(low) + SHOW_BELOW]
+		eq(scroll:GetVerticalScroll(), Top(below) + below:GetHeight() - view, "just enough for its first rows")
+		assert(Top(low) >= scroll:GetVerticalScroll(), "the guild itself still in sight")
+		assert(low.line.text:find("[-] ", 1, true), low.line.text)
+		-- The first one closed again: it stays where it is.
+		local at = scroll:GetVerticalScroll()
+		local before = Top(row) - at
+		row:Click()
+		DrawJumping(scroll)
+		eq(scroll:GetVerticalScroll(), at, "closed: the list stays")
+		assert(row.line.text:find("^%[%+%] ") and row.line.text:find("<" .. name .. ">", 1, true), row.line.text)
+		eq(Top(row) - at, before)
+		-- A report comes in (a redraw without a click): the list stays too.
+		UI.Refresh()
+		DrawJumping(scroll)
+		eq(scroll:GetVerticalScroll(), at, "a redraw")
+		-- The player scrolls a moment later, and the list is measured again: his scrolling stays.
+		scroll.scripts.OnScrollRangeChanged = nil
+		main.wantAt = (main.wantAt or 0) - (ns.UI.PLACE_HOLD or 1) - 1
+		scroll:SetVerticalScroll(100)
+		scroll.scrollRange = scroll.scrollRange + 1; scroll:Fire("OnScrollRangeChanged")
+		eq(scroll:GetVerticalScroll(), 100, "the player's own offset")
+		-- Another tab, and back: the top.
+		UI.SelectTab("decrees"); UI.SelectTab("realm")
+		DrawJumping(scroll)
+		eq(scroll:GetVerticalScroll(), 0, "another tab starts at the top")
+		ns.Views.ExpandAll(false)
+	end)
+end)
+
+test("1.0.0 the list keeps its place in the Treasury too: Show more under the ranking brings the next donors into sight", function()
+	WithUI(function()
+		WithThrone(function()
+			local T = ns.Treasury
+			local savedAlert = ns.PlayAlert
+			local ok, err = pcall(function()
+				ns.PlayAlert = function() end
+				AsTreasurer()
+				local function Name(i) return "Donor " .. string.char(65 + math.floor((i - 1) / 26)) .. string.char(97 + (i - 1) % 26) .. "name" end
+				for i = 1, 120 do T.Record(Name(i), 10000 + i, "trade", nil, { quiet = true }) end
+				T.Show("summary")
+				local UI = LoadUI()
+				UI.Toggle(); UI.SelectTab("treasury")
+				local main = OlympusFrame
+				eq(main.tab, "treasury")
+				local scroll = main.scroll
+				scroll:Settle()
+				local view = scroll:GetHeight()
+				local more = ListRow(main, ns.L.SHOW_MORE:match("^[^%%]+"))
+				assert(more, "Show more under the ranking")
+				-- Scrolled so that "Show more" is the last row on screen, and clicked.
+				local offset = Top(more) + more:GetHeight() - view
+				assert(offset > 0, "the ranking runs past the window")
+				scroll:SetVerticalScroll(offset)
+				eq(scroll:GetVerticalScroll(), offset)
+				more:Click()
+				scroll.vscroll = 0 -- (thrown to the top even before the redraw)
+				UI.Refresh() -- (TREASURY_CHANGED: UI.RefreshSoon)
+				DrawJumping(scroll)
+				local rows = main.views.treasury.rows
+				assert(more.line.text:find("26. Donor", 1, true), "the next donor where Show more was: " .. more.line.text)
+				local below = rows[Index(more) + SHOW_BELOW]
+				eq(scroll:GetVerticalScroll(), Top(below) + below:GetHeight() - view, "the next donors in sight, just enough")
+				assert(scroll:GetVerticalScroll() > offset and scroll:GetVerticalScroll() <= Top(more), "down from where it was, never past the row")
+				-- Another page of the tab (the Treasurer's book): its top.
+				T.Show("book"); UI.Refresh()
+				DrawJumping(scroll)
+				eq(scroll:GetVerticalScroll(), 0, "another page starts at the top")
+			end)
+			ns.PlayAlert = savedAlert
+			if not ok then error(err, 0) end
+		end)
 	end)
 end)
 
