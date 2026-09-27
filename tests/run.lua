@@ -11711,5 +11711,86 @@ test("1.0.0 world map: the Muster and the crown in Stormwind are round, smaller,
 	end)
 end)
 
+---------------------------------------------------------------------------
+-- 1.0.0: the author's photo mode for the store's screenshots (/oly photo).
+---------------------------------------------------------------------------
+
+-- A child of UIParent as photo mode sees it: its name and alpha. Hide, Show and SetPoint are
+-- never to be called on it: they fail the test.
+local function PhotoFrame(name, alpha, extra)
+	local f = { name = name, alpha = alpha, sets = 0 }
+	function f:GetName() return self.name end
+	function f:GetAlpha() return self.alpha end
+	function f:SetAlpha(a) self.alpha, self.sets = a, self.sets + 1 end
+	for _, verb in ipairs({ "Hide", "Show", "SetShown", "SetPoint", "ClearAllPoints", "SetParent" }) do
+		f[verb] = function() error(verb .. " on " .. tostring(name), 2) end
+	end
+	for k, v in pairs(extra or {}) do f[k] = v end
+	return f
+end
+
+test("1.0.0 photo mode: the author's /oly photo hides all but Olympus and the world map by alpha, and gives every alpha back", function()
+	local UI = LoadUI()
+	local saved = { UIParent = UIParent, WorldMapFrame = WorldMapFrame, GameTooltip = GameTooltip, combat = InCombatLockdown,
+		print = ns.Print, me = ns.me, devThrone = ns.devThrone, devWorkshop = ns.devWorkshop, UI = ns.UI }
+	local printed = {}
+	local ok, err = pcall(function()
+		ns.UI = UI
+		ns.Print = function(m) printed[#printed + 1] = m end
+		local chat, bars, faded, gone = PhotoFrame("ChatFrame1", 1), PhotoFrame("MainMenuBar", 1), PhotoFrame("SomeAddonFrame", 0.4), PhotoFrame("Gone", 0)
+		local map, tip = PhotoFrame("WorldMapFrame", 1), PhotoFrame("GameTooltip", 1)
+		local forbidden = PhotoFrame(nil, 1, { IsForbidden = function() return true end })
+		local window, card, pin = PhotoFrame("OlympusFrameHD", 1), PhotoFrame("OlympusPersonFrameHD", 0.9), PhotoFrame(nil, 1, { olympus = true })
+		local children = { chat, bars, faded, gone, map, tip, forbidden, window, card, pin }
+		UIParent = { GetChildren = function() return unpack(children) end }
+		WorldMapFrame, GameTooltip = map, tip
+		InCombatLockdown = function() return false end
+		ns.devThrone, ns.devWorkshop = nil, nil
+		-- Anyone else: not available, nothing touched.
+		ns.me = "Tester-Realm"
+		SlashCmdList.OLYMPUS("photo")
+		eq(UI.PhotoMode(), false); eq(printed[#printed], ns.L.PHOTO_ONLY_AUTHOR); eq(chat.sets, 0)
+		-- The author: everything else at alpha 0, Olympus, the world map and the tooltip as they are.
+		ns.me = ns.AUTHOR .. "-" .. ns.AUTHOR_REALM
+		assert(ns.Workshop.IsAuthor(), "the author")
+		SlashCmdList.OLYMPUS("photo")
+		eq(UI.PhotoMode(), true); eq(printed[#printed], ns.L.PHOTO_ON)
+		eq(chat.alpha, 0); eq(bars.alpha, 0); eq(faded.alpha, 0)
+		eq(gone.sets, 0, "already at 0: left alone")
+		for _, f in ipairs({ map, tip, forbidden, window, card, pin }) do eq(f.sets, 0, tostring(f.name or "an unnamed frame")) end
+		-- In combat: refused, both ways.
+		InCombatLockdown = function() return true end
+		SlashCmdList.OLYMPUS("photo")
+		eq(UI.PhotoMode(), true); eq(printed[#printed], ns.L.PHOTO_COMBAT); eq(chat.alpha, 0)
+		InCombatLockdown = function() return false end
+		-- Again: every alpha back as it was.
+		SlashCmdList.OLYMPUS("photo")
+		eq(UI.PhotoMode(), false); eq(printed[#printed], ns.L.PHOTO_OFF)
+		eq(chat.alpha, 1); eq(bars.alpha, 1); eq(faded.alpha, 0.4); eq(gone.alpha, 0); eq(gone.sets, 0)
+		-- The author's own test build (Dev.lua) on another character; a /reload with it on gives the
+		-- alphas back before the interface goes (PLAYER_LOGOUT).
+		ns.me, ns.devThrone = "Tester-Realm", { Tester = true }
+		SlashCmdList.OLYMPUS("photo")
+		eq(UI.PhotoMode(), true); eq(bars.alpha, 0)
+		faded.alpha = 0 -- (its own code faded it meanwhile: still given back what it had)
+		for _, fn in ipairs(EVENT_SCRIPTS) do fn(nil, "PLAYER_LOGOUT") end
+		eq(UI.PhotoMode(), false); eq(bars.alpha, 1); eq(chat.alpha, 1); eq(faded.alpha, 0.4)
+		-- The gamepad UI: not there (said so), nothing touched; turned off there, it still comes back.
+		WithGamepadUI(true, function()
+			SlashCmdList.OLYMPUS("photo")
+			eq(UI.PhotoMode(), false); eq(printed[#printed], ns.L.PHOTO_GAMEPAD); eq(chat.alpha, 1)
+		end)
+		SlashCmdList.OLYMPUS("photo")
+		eq(UI.PhotoMode(), true)
+		WithGamepadUI(true, function()
+			SlashCmdList.OLYMPUS("photo")
+			eq(UI.PhotoMode(), false); eq(chat.alpha, 1); eq(bars.alpha, 1)
+		end)
+	end)
+	UIParent, WorldMapFrame, GameTooltip, InCombatLockdown = saved.UIParent, saved.WorldMapFrame, saved.GameTooltip, saved.combat
+	ns.Print, ns.me, ns.devThrone, ns.devWorkshop, ns.UI = saved.print, saved.me, saved.devThrone, saved.devWorkshop, saved.UI
+	if not ok then error(err, 0) end
+end)
+
 print(("\n%d passed, %d failed"):format(passed, failed))
 os.exit(failed == 0 and 0 or 1)

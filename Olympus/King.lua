@@ -769,6 +769,7 @@ local function CrownTip(self)
 end
 local function Crown(size)
 	local f = CreateFrame("Frame", nil, UIParent)
+	f.olympus = true -- (ours: photo mode leaves it shown, UI.TogglePhoto)
 	f:SetSize(size, size)
 	f.icon = f:CreateTexture(nil, "OVERLAY")
 	f.icon:SetTexture(ns.CROWN_ICON)

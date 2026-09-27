@@ -39,6 +39,7 @@ end
 
 local function CreatePin()
 	local p = CreateFrame("Frame", nil, UIParent)
+	p.olympus = true -- (ours: photo mode leaves it shown, UI.TogglePhoto)
 	p:SetSize(20, 20)
 	p:EnableMouse(true)
 	p.edge = p:CreateTexture(nil, "BACKGROUND", nil, -1)
@@ -360,6 +361,7 @@ end
 -- like the zone circles; otherwise its picture as drawn (the crown).
 function Map.Badge(size, round)
 	local anchor = CreateFrame("Frame", nil, UIParent)
+	anchor.olympus = true -- (ours: photo mode leaves it shown, UI.TogglePhoto)
 	anchor:SetSize(1, 1)
 	anchor:Hide() -- (the pin library shows it when it puts it on the map)
 	local b = CreateFrame("Frame", nil, anchor)

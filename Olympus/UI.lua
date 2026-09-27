@@ -2027,3 +2027,55 @@ ns.On("LOGIN", function()
 	UI.UpdateMinimapButton()
 	ns.Log("ui ready")
 end)
+
+---------------------------------------------------------------------------
+-- Photo mode (1.0.0), the author's, for the store's screenshots: /oly photo hides everything on
+-- the screen but Olympus's own frames, the world map and the tooltip (Olympus's tooltips are
+-- part of the pictures), and /oly photo again, or a /reload, brings it all back. By alpha alone:
+-- each child of UIParent at 0, its own alpha kept and given back as it was, never Hide, Show or
+-- SetPoint on the game's frames. Never in combat, and not with the gamepad UI (its frames are
+-- the game's to handle there); turning it off works with the gamepad UI too.
+---------------------------------------------------------------------------
+
+local photo -- [frame] = its alpha before, while photo mode is on
+
+-- The author's character, or the author's own test build (Dev.lua, never published).
+function UI.PhotoAllowed()
+	return (ns.Workshop and ns.Workshop.IsAuthor and ns.Workshop.IsAuthor() == true) or ns.devThrone ~= nil or ns.devWorkshop ~= nil
+end
+function UI.PhotoMode() return photo ~= nil end
+
+-- Olympus's own: its named frames, and the few unnamed ones on UIParent it marks (map icons).
+local function Ours(f)
+	local name = f.GetName and f:GetName()
+	return f.olympus == true or (type(name) == "string" and name:find("^Olympus") ~= nil)
+end
+
+local function PhotoOff()
+	local was = photo
+	photo = nil
+	for f, alpha in pairs(was or {}) do pcall(f.SetAlpha, f, alpha) end
+end
+
+function UI.TogglePhoto()
+	if not UI.PhotoAllowed() then return ns.Print(L.PHOTO_ONLY_AUTHOR) end
+	if InCombatLockdown and InCombatLockdown() then return ns.Print(L.PHOTO_COMBAT) end
+	if photo then
+		PhotoOff()
+		return ns.Print(L.PHOTO_OFF)
+	end
+	if ns.GamepadUI() then return ns.Print(L.PHOTO_GAMEPAD) end
+	ns.Print(L.PHOTO_ON) -- (first: the chat goes too)
+	photo = {}
+	for _, f in ipairs({ UIParent:GetChildren() }) do
+		local keep = f == WorldMapFrame or f == GameTooltip or (f.IsForbidden and f:IsForbidden()) or Ours(f)
+		local alpha = not keep and f.GetAlpha and f:GetAlpha()
+		if type(alpha) == "number" and alpha > 0 then
+			photo[f] = alpha
+			f:SetAlpha(0)
+		end
+	end
+end
+
+-- A /reload (or logging out) gives every alpha back first: another addon may save its frame's.
+ns.RegisterEvent("PLAYER_LOGOUT", function() if photo then PhotoOff() end end)

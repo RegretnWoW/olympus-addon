@@ -399,7 +399,10 @@ position, no chat, nothing else. He can also ask a player on an old version to u
 window with the two version numbers and nothing else. Only his character on his realm group
 can do either: every addon checks the sender's name, which nobody else can carry. `/oly
 rollcall off` refuses both. The addon's error catcher keeps only Olympus's own errors (for
-`/oly bug`), never another addon's.
+`/oly bug`), never another addon's. For the store's screenshots he has a photo mode (`/oly
+photo`, his character only): on his own screen it fades everything but Olympus and the world
+map to invisible, and gives every frame its look back on the second `/oly photo` or a
+`/reload`. Never in combat, not with the gamepad UI, and nothing is sent to anyone.
 
 The addon is plain Lua running on each player's computer, so anyone can edit their own
 copy. No addon can prevent that. What this one does is make an edited copy useless:

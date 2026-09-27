@@ -1255,6 +1255,9 @@ SlashCmdList.OLYMPUS = function(input)
 		elseif cmd == "minimap" then
 			ns.db.hideMinimap = not ns.db.hideMinimap
 			ns.UI.UpdateMinimapButton()
+		elseif cmd == "photo" then
+			-- The author's photo mode for the store's screenshots (UI.TogglePhoto, 1.0.0).
+			ns.UI.TogglePhoto()
 		elseif cmd == "debug" then
 			ns.db.debug = not ns.db.debug
 			ns.Print("debug = " .. tostring(ns.db.debug))
