@@ -1,18 +1,44 @@
-# A sample Olympus Link code and proofs (0.9.10), signed with throwaway test keys (made by
-# tests/fixtures/make-link-vectors.py from public labels): never use them for anything real.
-# key=value; the *_seed values are base64url (as /oly discord key takes them), *_pub hex.
+# A sample Olympus Link (0.9.10): the bot's codes, confirmers' certificates and finished links, signed
+# with throwaway test keys (made by tests/fixtures/make-link-vectors.py from public labels): never use
+# them for anything real. key=value; *_seed are base64url (as /oly discord key takes them), *_pub hex.
+# token_a (mode a) and token_c (mode c): OLC2.<R>.<username>.<exp>.<mode>.<T>.<sig>, signed by the
+#   backend key over all but the last field; token_a_T is T of the sample's three player keys.
+# tag_a, tag_c: the first 16 hex of SHA-256(<that token's signature>~<requester>).
+# confirmer_<id>_cert: OLK1.<id>.<public key base64url>.<tier c|p>.<exp>.<sig>, signed by the backend key.
+# bundle_council, bundle_council_two: links made with token_c (tag_c); bundle_players (one gv w) and
+#   bundle_players_claimed (all gv c): with token_a (tag_a); bundle_impostor: another character's
+#   request for the same R, with a tag made without the code's signature (the Worker must refuse it).
 backend_seed=-LViF2FIy-wZSwsJ5jz49rsOFW5uqGIOjSp7U8Tl534
 backend_pub=070a599da007dbca7a54999daeab8eec7bd9e1cd4dd53659322552bc33f2225b
-token_a=OLC1.7K3M9QX2TB.some.player.1800000000.a.kHdJulRcU68lUEGRtw2b4-guVu96O9mOZQH5kWErj4sHZ_OTVEMcI4gUVpTzwJ4ilc3yy5FdLNOOhq5-W2PGBA
-token_c=OLC1.7K3M9QX2TB.some.player.1800000000.c.9KXNc8Yz3blkRXNdS8gYZ7r1QWtARBYyNWBl-4gm7pEOekS60l-GNIyBQPmjKPFS4kIxsqXJbjNk26BLh1x-BA
+requester=Some Player-ClassicBetaPvP
+guild=Olympus II
+faction=Alliance
+nonce=0123456789abcdef
+R=7K3M9QX2TB
 token_exp=1800000000
+cert_exp=1830000000
+token_a_T=ffffffff
+token_a=OLC2.7K3M9QX2TB.some.player.1800000000.a.ffffffff.VJ33WFmTQWJUI8G80js5uQk-kFEu8d1B9ZeXVRkZ6sjnnkocEN4HP4uMFoDykwOhzubwN7QE87AjlH3NsFQLDA
+token_c=OLC2.7K3M9QX2TB.some.player.1800000000.c.00000000.TmJVCJJtjs5W_sOXnQm3G10J3y5xwVQkii6zRhi0EO-5AmL__PtEg1Ao7VaiUivi1Jslf4i1OJUxMDDNXtG4Ag
+tag_a=4691dfa97d6316b5
+tag_c=5f2f66f046a1db8a
 confirmer_council01_seed=qNXE1TVzvf9QBf36k03JuLMi_MkexA4pnp5Myz57VJc
 confirmer_council01_pub=ec8625fa537ee50453146f50c298eb2922590c60ded7b54ade9e85702a70219b
+confirmer_council01_cert=OLK1.council01.7IYl-lN-5QRTFG9QwpjrKSJZDGDe17VK3p6FcCpwIZs.c.1830000000.arYTictUuQ8GAtyDKuatSY5u4TcmBIk3TOkSRnj9wQeGZf1f2uloU-udjLiOpak4aQFRthop8705u3HU0Yw8Dw
+confirmer_council02_seed=JsknRxzcrT-BrP-Yq3eDIOMTlF2RKqDt1qROdcuawRo
+confirmer_council02_pub=20c8f6a546cd110a90a3b2c7e62fd969093f29ae609ce3b1a8f2595cb48f0315
+confirmer_council02_cert=OLK1.council02.IMj2pUbNEQqQo7LH5i_ZaQk_Ka5gnOOxqPJZXLSPAxU.c.1830000000.BZPibX8nsg0M-gvuh2QkBEZu3DJ6mHhm0tNcBacWkGZ7axMUbZ85lu0Luar9ywAK6-ICoipMoGJov4wjwVu-DQ
 confirmer_player01_seed=iKnhQWO80CqcL3fNqs39uaQXWR--IW-73uuinMKAZXQ
 confirmer_player01_pub=6237dcc3647b0995f0815a34a06541548363f74da2a4f7541415d582245d421a
+confirmer_player01_cert=OLK1.player01.Yjfcw2R7CZXwgVo0oGVBVINj902ipPdUFBXVgiRdQho.p.1830000000.n2pUb9BAK9CPrT-xGpJ_66YBnKW1amfjwcqmEcHhRhP8C1RL6fsKAWlZGTKjX88EEahzU9lCHlVHhUGM47xeBg
 confirmer_player02_seed=BQwx04YUBR3Cr9-qPwEKWhLSXWdzWxlq4Z01TofAIaw
 confirmer_player02_pub=86dcd40827cbcb608b4419cc4afb1a68eb36b8002b208f05998a0dba2b4f4cba
+confirmer_player02_cert=OLK1.player02.htzUCCfLy2CLRBnMSvsaaOs2uAArII8FmYoNuitPTLo.p.1830000000._XlSBnNuy2SJwh4e9s5shqR3WzRdeMd1ecRpLPOWbbPUVudFTJN0mdyVb-P-ijE09A0DJOBmyvbHhoJzpTcNCQ
 confirmer_player03_seed=Frjw-ShDGZ96B6oEgKW1lZ5-BNJzQsOcp-Y7ouu5Bvs
 confirmer_player03_pub=24b7aace15afb8c48409285ea8e2baac0884b6e8e6aa644189259ac57c607c7d
-bundle_council=OLB4~Some Player-ClassicBetaPvP~Olympus II~Alliance~0123456789abcdef~7K3M9QX2TB~1799990100,council01,Test Councillor-ClassicBetaPvP,paPnJlSn3GCvezZ842606qVAblgziD32Uj6t0HV36X-HLpz2wOWIozvV0i5pbqzl-vOLhiFA-Ocu6Nf0XKJVCg
-bundle_players=OLB4~Some Player-ClassicBetaPvP~Olympus II~Alliance~0123456789abcdef~7K3M9QX2TB~1799990200,player01,Some Player Two-ClassicBetaPvP,Uzq98STOw5pvnoR_3gXlNt0_eTXpCCRM_sfS_vpvActLVxBCYT4d5YzgsMOB_QjopbkRuqRbzwcttFOUtPUnDw;1799990230,player02,Some Player Three-ClassicBetaPvP,cijGkkcK6cUPfThk1mmr4kPtda5eiSrScCEy36y3zT2P1mcWV-6RRjkrNovGUi5WtzbeZM2nBJ2np6DyDQzgDQ;1799990260,player03,Some Player Four-ClassicBetaPvP,Y4TJHG_U4nZQxcCQPUS6Uj1cLFM06LyuBBzQl4UFnsMrLJbdtUEtv_9zOMTWwUUfqsHBYIhFqB9PZl7K7cSjBw
+confirmer_player03_cert=OLK1.player03.JLeqzhWvuMSECSheqOK6rAiEtujmqmRBiSWaxXxgfH0.p.1830000000.wIOxnEwfrX3YL5EJWO7iPcjUp9EQP4DrhoPlKYXi8zFb0Gv9oc97hp1aib4f9pXi5hwrOvE9nbPCagZFMjlZAQ
+bundle_council=OLB4~Some Player-ClassicBetaPvP~Olympus II~Alliance~0123456789abcdef~7K3M9QX2TB~5f2f66f046a1db8a~1799990100,council01,Test Councillor-ClassicBetaPvP,r,UDWmhHUQ8mbNq-UNmlkXlHglN_rp7CX8NCgCymo1g9iGLqicTZ0vuB-gPVWsQtu0waD9CaibIakE8IfUVnwDAg
+bundle_council_two=OLB4~Some Player-ClassicBetaPvP~Olympus II~Alliance~0123456789abcdef~7K3M9QX2TB~5f2f66f046a1db8a~1799990100,council01,Test Councillor-ClassicBetaPvP,c,5HSC7j3u0oEScSU4jU6mFeIz9kC1wE8g-1vIgCByRGot5fqy81e9T1gfcsF57tMb1RFKRWdaOe0fSfDpkF3uBg;1799990110,council02,Other Councillor-ClassicBetaPvP,w,lIqvL44x1H8uyenpL2rE9RutbIzRHBLvzWaxAu5gwo2_F6rtMUkCMuceirKmhvmLW0ZU0bVl9-9Y2VV-Or0YCw
+bundle_players=OLB4~Some Player-ClassicBetaPvP~Olympus II~Alliance~0123456789abcdef~7K3M9QX2TB~4691dfa97d6316b5~1799990200,player01,Some Player Two-ClassicBetaPvP,w,QpEyorXg_g1X3E7w94fUy66ZVPizuA1tUifjTnl9R2QsaUIDcmjq5tBNsxsmE8FNpZ4igyx1otNA1JX1lJB1Cw;1799990230,player02,Some Player Three-ClassicBetaPvP,c,I7dHLO9mxgd-6iffq-10O053N0O6wBYmObJlKh4ObBwjjeQGjxlwTqhF79Lxv6wn13_Xrgmr1OWiJsi8746OBg;1799990260,player03,Some Player Four-ClassicBetaPvP,c,syfCXL0MtzMC_ZCBoH8qH8d1IL4p57h9GJVe80pUVPQ3ltbL7OOMEbOP-qwpKU5o_7SPUef-UzkMMnLRSDe_Bg
+bundle_players_claimed=OLB4~Some Player-ClassicBetaPvP~Olympus II~Alliance~0123456789abcdef~7K3M9QX2TB~4691dfa97d6316b5~1799990200,player01,Some Player Two-ClassicBetaPvP,c,oYWEzFeqF6tw4nRnZRUl7Sz3pBpl7-pI-24qw3jz_e-qctUu3bImgGCnGIfl2afngGwviU_o-MaK5t7Y0-b1Bg;1799990230,player02,Some Player Three-ClassicBetaPvP,c,I7dHLO9mxgd-6iffq-10O053N0O6wBYmObJlKh4ObBwjjeQGjxlwTqhF79Lxv6wn13_Xrgmr1OWiJsi8746OBg;1799990260,player03,Some Player Four-ClassicBetaPvP,c,syfCXL0MtzMC_ZCBoH8qH8d1IL4p57h9GJVe80pUVPQ3ltbL7OOMEbOP-qwpKU5o_7SPUef-UzkMMnLRSDe_Bg
+bundle_impostor=OLB4~Other Player-ClassicBetaPvP~Olympus II~Alliance~0123456789abcdef~7K3M9QX2TB~d566445acb5aa754~1799990150,council02,Other Councillor-ClassicBetaPvP,c,Ve9KtHyfmmOzaMvm3abHnsLIzK53KZMGVJh3tVmmlWhhxFTvXicCqERVmgZwJANhdJZwzeah6gerL276llfLCw
