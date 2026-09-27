@@ -7,6 +7,9 @@ local L = ns.L
 --     the versions of the guild's addon users, counted by its reporter from their hellos).
 --   * A roll call on demand: each addon answers with its version, client, window and what
 --     works (V1/V2); when the army is large, only a share of them answers.
+--   * Every answer, searchable by name, guild or version, 25 at a time (0.9.9); a full roll
+--     call, one roll call every ROLL_EVERY until nearly every addon user answered; and one
+--     player asked alone by whisper, on the channel or not (0.9.9 and newer answer it).
 --   * A report to copy for Discord.
 --   * "Please update", to a player on an old version: a fixed text, nothing else (V3).
 --   * The author's presence (V4): players can send him their bug report from the Report a
@@ -16,6 +19,7 @@ local L = ns.L
 -- Classic realms no name has a space: nobody else can carry his. Receivers answer a roll call
 -- once per ROLL_GAP, and show "please update" once per UPDATE_GAP, only when really behind.
 --   V1~<id>~<share 1-100>                                              (channel)
+--   V1~<id>~100    the author asks this player alone (0.9.9; 0.9.8 takes V1 from the channel only)  (whisper)
 --   V2~<id>~<version>~<guild>~<client>~<window>~<flags>~<errors>~<level>~<class>   (whisper)
 --   V3~<latest version>                                                (whisper)
 --   V4~<version>                                                       (channel)
@@ -46,13 +50,25 @@ Workshop.MAX_PIECES = 25
 Workshop.MAX_REPORTS = 30
 Workshop.MAX_SHOWN = 30
 Workshop.MAX_ASK = 15           -- "please update" whispers per click (the send queue holds 60)
+Workshop.ROLL_PAGE = 25         -- answers listed, 25 more a click (the window stays light)
+Workshop.ROLL_ROUNDS = 20       -- a full roll call stops after this many rounds...
+Workshop.ROLL_ENOUGH = 95       -- ...or once this share (%) of the addon users the census counts answered
+Workshop.ASK_ONE_EVERY = 10     -- the author asks one player by whisper at most this often
+Workshop.ASK_ONE_SPREAD = 2     -- ...and that player's addon answers within 1 + this many seconds
 
 -- Swappable in tests.
 Workshop.random = math.random
 Workshop.after = function(seconds, where, fn) ns.After(seconds, where, fn) end
 
-local roll            -- the author's roll calls: { id, t, share, answers = { [sender] = answer }, count }
-                      -- answers stay from one roll call to the next (a newer answer replaces)
+local roll            -- the author's roll calls: { id, t, share, ids = { [id] = asked at }, answers = { [sender] = answer }, count }
+                      -- answers stay from one roll call to the next (a newer answer replaces);
+                      -- each ask's id (a roll call, a player asked alone) takes answers for ROLL_OPEN
+local full            -- the full roll call: { running, started, round, users, nextAt, reason, token }
+local search = ""     -- the tab's search box, as typed
+local shownAnswers = Workshop.ROLL_PAGE -- answers listed ("Show more", "Show all", "Show fewer")
+local menuFor         -- the answer whose actions are open under its row
+local askedOne = {}   -- [folded Name-Realm] = when the author asked them alone
+local lastAskOne = -math.huge
 local reports = {}    -- bug reports received: { from, t, text }, newest last
 local pieces = {}     -- [sender#id] = { n, got, parts, t }
 local bugsFrom = {}   -- [sender] = times of their reports this hour
@@ -181,6 +197,35 @@ function Workshop.SetAnswers(on)
 end
 
 ---------------------------------------------------------------------------
+-- Text for the search and "Ask <name>" (0.9.9)
+---------------------------------------------------------------------------
+
+local function TrimText(s) return (tostring(s or ""):gsub("^%s+", ""):gsub("%s+$", "")) end
+
+-- Letters folded for the search, byte by byte: A-Z, and Latin-1's accented capitals (À to Þ but
+-- ×, in UTF-8 C3 80-9E, their small letters C3 A0-BE). Not the C library's lower(): its idea of a
+-- letter can change with the locale and split a UTF-8 letter. Any other letter stays whole.
+local function Fold(s)
+	s = tostring(s or ""):gsub("[A-Z]", function(c) return string.char(c:byte() + 32) end)
+	return (s:gsub("\195([\128-\158])", function(c)
+		if c == "\151" then return nil end
+		return "\195" .. string.char(c:byte() + 32)
+	end))
+end
+Workshop.Fold = Fold
+
+-- A player's name as the author may type it: letters (any, UTF-8 ones too), Forever's "First
+-- Surname" with its one space, with "-Realm" or not. A version or a guild with digits is not one.
+local function NameLike(s)
+	if type(s) ~= "string" or #s < 2 or #s > 48 then return false end
+	local name, realm = s:match("^([^%-]+)%-([^%-]+)$")
+	name = name or s
+	if realm and realm:find("[%s~|%c]") then return false end
+	return name:find("^[%a\128-\255]+$") ~= nil or name:find("^[%a\128-\255]+ [%a\128-\255]+$") ~= nil
+end
+Workshop.NameLike = NameLike
+
+---------------------------------------------------------------------------
 -- Roll call
 ---------------------------------------------------------------------------
 
@@ -200,27 +245,54 @@ function Workshop.ReportedUsers()
 	return n
 end
 
+-- A new ask (a roll call, or one player asked alone): its id takes answers for ROLL_OPEN. The
+-- answers so far stay: a newer one replaces a player's older one.
+local function NewAsk(now)
+	roll = roll or { answers = {}, count = 0, ids = {} }
+	for id, t in pairs(roll.ids) do
+		if now - t > Workshop.ROLL_OPEN then roll.ids[id] = nil end
+	end
+	local id = Workshop.random(1, 99999)
+	roll.ids[id] = now
+	return id
+end
+
+-- A roll call on the channel, to the share of the army `users` asks for (0.9.8 clients take it
+-- as ever: the format never changes).
+local function SendRoll(users, now)
+	lastRoll = now
+	local share = Workshop.Share(users)
+	local id = NewAsk(now)
+	roll.id, roll.t, roll.share = id, now, share
+	ns.Comm.Send("CHANNEL", ("V1~%d~%d"):format(id, share), "rollcall")
+	return share
+end
+
+-- Before the census is in, the army's size is unknown: every addon would answer.
+local function CensusIn(now)
+	local users = Workshop.ReportedUsers()
+	if users == 0 or now - (ns.Comm.loginAt or 0) < Workshop.ROLL_AFTER then return nil end
+	return users
+end
+
 function Workshop.RollCall()
 	if not Workshop.Visible() then return end
 	local now = ns.Now()
 	if now - lastRoll < Workshop.ROLL_EVERY then
 		return ns.Print(L.WORKSHOP_ROLL_WAIT:format(math.ceil((Workshop.ROLL_EVERY - (now - lastRoll)) / 60)))
 	end
-	-- Before the census is in, the army's size is unknown: every addon would answer.
-	local users = Workshop.ReportedUsers()
-	if users == 0 or now - (ns.Comm.loginAt or 0) < Workshop.ROLL_AFTER then return ns.Print(L.WORKSHOP_ROLL_EARLY) end
-	lastRoll = now
-	local share = Workshop.Share(users)
-	-- The answers so far stay: a newer one replaces a player's older one.
-	local answers, count = roll and roll.answers or {}, roll and roll.count or 0
-	roll = { id = Workshop.random(1, 99999), t = now, share = share, answers = answers, count = count }
-	ns.Comm.Send("CHANNEL", ("V1~%d~%d"):format(roll.id, share), "rollcall")
-	ns.Print(L.WORKSHOP_ROLL_SENT:format(share))
+	local users = CensusIn(now)
+	if not users then return ns.Print(L.WORKSHOP_ROLL_EARLY) end
+	ns.Print(L.WORKSHOP_ROLL_SENT:format(SendRoll(users, now)))
 	Changed()
 end
 
+-- A roll call reaches us on the channel (a share of the army answers), or by whisper (0.9.9:
+-- the author asks this player alone, V1~<id>~100). Either way the author's alone, once per
+-- ROLL_GAP; asked alone, the answer goes within ASK_ONE_SPREAD seconds or so.
 function Workshop.HandleRoll(dist, sender, text)
-	if dist ~= "CHANNEL" or not IsAuthorName(sender) or Workshop.IsAuthor() or not Workshop.Answers() then return end
+	local alone = dist == "WHISPER"
+	if (dist ~= "CHANNEL" and not alone) or not IsAuthorName(sender) or Workshop.IsAuthor() or not Workshop.Answers() then return end
 	local id, share = text:match("^V1~(%d+)~(%d+)$")
 	id, share = tonumber(id), tonumber(share)
 	if not id or not share then return end
@@ -231,29 +303,152 @@ function Workshop.HandleRoll(dist, sender, text)
 	if Workshop.random(1, 100) > math.max(1, math.min(100, share)) then return end
 	lastRollAnswer = now
 	-- Spread over ROLL_SPREAD: a thousand answers do not arrive in the same second.
-	Workshop.after(1 + Workshop.random() * Workshop.ROLL_SPREAD, "roll call answer", function()
+	local spread = alone and Workshop.ASK_ONE_SPREAD or Workshop.ROLL_SPREAD
+	Workshop.after(1 + Workshop.random() * spread, "roll call answer", function()
 		ns.Comm.Whisper(ns.FullName(sender), Answer(id), "rollanswer")
 	end)
 end
 
+---------------------------------------------------------------------------
+-- The full roll call (0.9.9): a roll call every ROLL_EVERY, each to the share a single one asks
+-- (Share: never more answers than one roll call), until ROLL_ENOUGH % of the addon users the
+-- census counts answered, ROLL_ROUNDS rounds went out, or the author stops it.
+---------------------------------------------------------------------------
+
+-- The players who answered since it began, of the addon users the census counts (the latest
+-- count while it runs), and the share of them in %.
+local function FullCount()
+	local n = 0
+	for _, a in pairs(roll and roll.answers or {}) do
+		if (a.t or 0) >= full.started then n = n + 1 end
+	end
+	if full.running then
+		local users = Workshop.ReportedUsers()
+		if users > 0 then full.users = users end
+	end
+	local m = math.max(1, full.users or 1)
+	return n, m, math.min(100, math.floor(n * 100 / m))
+end
+
+local function FinishFull(reason)
+	full.running, full.reason, full.nextAt = false, reason, nil
+	local n, m, pct = FullCount()
+	ns.Print(L["WORKSHOP_FULL_" .. reason:upper()]:format(full.round, n, m, pct))
+	Changed()
+end
+
+-- Enough answered: it ends there.
+local function FullEnough()
+	local n, m = FullCount()
+	if n * 100 < Workshop.ROLL_ENOUGH * m then return false end
+	FinishFull("enough")
+	return true
+end
+
+-- One round, then the next one ROLL_EVERY later, while this full roll call (token) runs. The
+-- last round's answers get their ROLL_EVERY too before it ends.
+local function FullRound(token)
+	if not full or full.token ~= token or not full.running then return end
+	if FullEnough() then return end
+	if full.round >= Workshop.ROLL_ROUNDS then return FinishFull("rounds") end
+	local now = ns.Now()
+	local users = Workshop.ReportedUsers()
+	if users > 0 then full.users = users end
+	SendRoll(full.users, now)
+	full.round, full.nextAt = full.round + 1, now + Workshop.ROLL_EVERY
+	Workshop.after(Workshop.ROLL_EVERY, "full roll call", function() FullRound(token) end)
+	Changed()
+end
+
+function Workshop.FullRunning() return full ~= nil and full.running == true end
+function Workshop.Full() return full end
+
+function Workshop.StartFull()
+	if not Workshop.Visible() or Workshop.FullRunning() then return false end
+	local now = ns.Now()
+	local users = CensusIn(now)
+	if not users then
+		ns.Print(L.WORKSHOP_ROLL_EARLY)
+		return false
+	end
+	local token = {}
+	full = { running = true, started = now, round = 0, users = users, token = token }
+	ns.Print(L.WORKSHOP_FULL_START:format(Workshop.ROLL_ENOUGH, users, Workshop.ROLL_ROUNDS))
+	if roll and now - lastRoll < Workshop.ROLL_EVERY then
+		-- A roll call went out moments ago: it is the first round, the next one ROLL_EVERY after it.
+		full.round, full.started, full.nextAt = 1, lastRoll, lastRoll + Workshop.ROLL_EVERY
+		Workshop.after(full.nextAt - now, "full roll call", function() FullRound(token) end)
+		Changed()
+	else
+		FullRound(token)
+	end
+	return true
+end
+
+function Workshop.StopFull()
+	if not Workshop.FullRunning() then return false end
+	FinishFull("stopped")
+	return true
+end
+
+-- The Workshop's button: starts one, or stops the one running.
+function Workshop.ToggleFull()
+	if Workshop.FullRunning() then return Workshop.StopFull() end
+	return Workshop.StartFull()
+end
+
 function Workshop.HandleAnswer(dist, sender, text)
 	if dist ~= "WHISPER" or not Workshop.Visible() or not roll then return end
-	if ns.Now() - roll.t > Workshop.ROLL_OPEN then return end
 	local id, version, guild, client, window, flags, errors, level, class =
 		text:match("^V2~(%d+)~([^~]*)~([^~]*)~([^~]*)~([^~]*)~([^~]*)~(%d+)~(%d+)~([^~]*)$")
-	if tonumber(id) ~= roll.id then return end
+	id = tonumber(id)
+	local now = ns.Now()
+	local at = id and roll.ids[id]
+	if not at or now - at > Workshop.ROLL_OPEN then return end
 	sender = ns.FullName(sender)
 	local before = roll.answers[sender]
-	if before and before.roll == roll.id then return end
+	if before and before.roll == id then return end
 	if not before and roll.count >= Workshop.MAX_ANSWERS then return end
 	if not before then roll.count = roll.count + 1 end
-	roll.answers[sender] = {
-		name = sender, roll = roll.id, version = Version(version), guild = Clean(guild, 40),
+	local a = {
+		name = sender, roll = id, version = Version(version), guild = Clean(guild, 40),
 		client = CLIENTS[client] and client or "?", window = WINDOWS[window] and window or "?",
 		flags = (flags or ""):gsub("[^crkmp]", ""):sub(1, 5), errors = math.min(tonumber(errors) or 0, 999),
-		level = math.min(tonumber(level) or 0, 99), class = Clean(class, 2), t = ns.Now(),
+		level = math.min(tonumber(level) or 0, 99), class = Clean(class, 2), t = now,
 	}
+	-- Folded once for the search (thousands of answers at each letter typed): the name as shown
+	-- (for the order), the whole Name-Realm, the guild.
+	a.foldedName, a.foldedFull, a.foldedGuild = Fold(ns.DisplayName(sender)), Fold(sender), Fold(a.guild)
+	roll.answers[sender] = a
+	if Workshop.FullRunning() then FullEnough() end
 	Changed()
+end
+
+---------------------------------------------------------------------------
+-- One player asked alone (0.9.9): "Ask <name>", from the search or an answer's actions. A roll
+-- call by whisper, V1~<id>~100: their addon answers within seconds, on the channel or not (a
+-- moderator's may not be). 0.9.8 and older take roll calls from the channel only and ignore it.
+---------------------------------------------------------------------------
+
+-- The name a whisper goes to, and asks are remembered by.
+local function AskKey(name) return ns.FullName(ns.Normal(TrimText(name))) end
+
+function Workshop.AskOne(name)
+	if not Workshop.Visible() or not NameLike(TrimText(name)) then return false end
+	local now = ns.Now()
+	if now - lastAskOne < Workshop.ASK_ONE_EVERY then
+		ns.Print(L.WORKSHOP_ASK_ONE_WAIT:format(math.ceil(Workshop.ASK_ONE_EVERY - (now - lastAskOne))))
+		return false
+	end
+	lastAskOne = now
+	local key = AskKey(name)
+	local id = NewAsk(now)
+	roll.t = roll.t or now
+	askedOne[Fold(key)] = now
+	ns.Comm.Whisper(key, ("V1~%d~100"):format(id), "rollask:" .. key) -- (one queued per player)
+	ns.Print(L.WORKSHOP_ASK_ONE_SENT:format(ns.DisplayName(key)))
+	Changed()
+	return true
 end
 
 ---------------------------------------------------------------------------
@@ -481,21 +676,193 @@ local function Problems(a, latest)
 	return out
 end
 
-local function RollLines(lines)
-	lines[#lines + 1] = { header = true, text = L.WORKSHOP_ROLL, right = roll and Grey(ns.Ago(roll.t)) or nil }
+-- The tab's search, as typed in its box: a new search lists from the top, its actions closed.
+function Workshop.SetSearch(text)
+	text = tostring(text or "")
+	if text == search then return end
+	search, shownAnswers, menuFor = text, Workshop.ROLL_PAGE, nil
+	ns.Fire("WORKSHOP_CHANGED")
+end
+function Workshop.Search() return search end
+
+-- How many answers the list shows ("Show more", "Show all", "Show fewer").
+function Workshop.ShowAnswers(n)
+	shownAnswers = math.max(Workshop.ROLL_PAGE, tonumber(n) or Workshop.ROLL_PAGE)
+	ns.Fire("WORKSHOP_CHANGED")
+end
+
+-- An answer's actions, opened (or closed) under its row by a click.
+function Workshop.ToggleMenu(name)
+	menuFor = menuFor ~= name and name or nil
+	ns.Fire("WORKSHOP_CHANGED")
+end
+
+-- Problems first, then by name (any case).
+local function SortAnswers(list, latest)
+	local bad = {}
+	for _, a in ipairs(list) do bad[a] = #Problems(a, latest) > 0 end
+	table.sort(list, function(a, b)
+		if bad[a] ~= bad[b] then return bad[a] end
+		if a.foldedName ~= b.foldedName then return a.foldedName < b.foldedName end
+		return a.name < b.name
+	end)
+	local n = 0
+	for _, isBad in pairs(bad) do if isBad then n = n + 1 end end
+	return n
+end
+
+-- "Ask <name>": a roll call to that player alone, by whisper.
+local function AskLine(name, indent)
+	local who = ns.DisplayName(AskKey(name))
+	local at = askedOne[Fold(AskKey(name))]
+	return {
+		indent = indent, noReport = true,
+		text = Gold("> " .. L.WORKSHOP_ASK_ONE:format(who)),
+		right = at and Grey(L.WORKSHOP_ASK_ONE_AGO:format(ns.Ago(at))) or nil,
+		onClick = function() Workshop.AskOne(name) end,
+		tooltip = function(tt)
+			tt:AddLine(L.WORKSHOP_ASK_ONE:format(who), 1, 0.82, 0)
+			tt:AddLine(L.WORKSHOP_ASK_ONE_TIP, 1, 1, 1, true)
+		end,
+	}
+end
+
+-- One answer's row: the player and guild; the version (red when behind), the game client and
+-- window, its flags (Workshop.Flags), and what is wrong (off the channel in red, errors). A click
+-- opens its actions under it: ask again by whisper, ask to update (when behind), the player's card.
+local function AnswerLines(lines, a, latest, open)
+	local outdated = Workshop.Newer(latest, a.version)
+	local right = { a.version == "?" and Grey("?") or (outdated and Red or Green)(a.version) }
+	if a.client ~= "?" then right[#right + 1] = Grey(a.client) end
+	if a.window ~= "?" then right[#right + 1] = Grey(a.window) end
+	if a.flags ~= "" then right[#right + 1] = Grey(a.flags) end
+	if not a.flags:find("c", 1, true) then right[#right + 1] = Red(L.WORKSHOP_NO_CHANNEL) end
+	if a.errors > 0 then right[#right + 1] = Red(L.WORKSHOP_ERRORS:format(a.errors)) end
+	local who = ns.DisplayName(a.name)
+	lines[#lines + 1] = {
+		key = a.name, indent = 1,
+		text = who .. (a.guild ~= "" and ("  " .. Grey("<" .. a.guild .. ">")) or ""),
+		right = table.concat(right, "  "),
+		onClick = function() Workshop.ToggleMenu(a.name) end,
+		tooltip = function(tt)
+			tt:AddLine(who, 1, 0.82, 0)
+			tt:AddLine(("%s  ·  %s  ·  %s  ·  %s"):format(a.version, a.client, a.window, a.flags ~= "" and a.flags or "-"), 1, 1, 1)
+			if a.guild ~= "" then tt:AddLine("<" .. a.guild .. ">", 0.6, 0.6, 0.6) end
+			tt:AddLine(L.WORKSHOP_ANSWERED:format(ns.Ago(a.t)), 0.6, 0.6, 0.6)
+			tt:AddLine(L.WORKSHOP_ROW_TIP, 0.25, 1, 0.25, true)
+		end,
+	}
+	if not open then return end
+	lines[#lines + 1] = AskLine(a.name, 2)
+	if outdated then
+		lines[#lines + 1] = {
+			indent = 2, noReport = true, text = Gold("> " .. L.WORKSHOP_ASK_BTN),
+			onClick = function() ns.ShowDialog("OLYMPUS_WORKSHOP_ASK", who, nil, a.name) end,
+			tooltip = function(tt)
+				tt:AddLine(L.WORKSHOP_ASK_BTN, 1, 0.82, 0)
+				tt:AddLine(L.WORKSHOP_CLICK_ASK, 1, 1, 1, true)
+			end,
+		}
+	end
+	lines[#lines + 1] = {
+		indent = 2, noReport = true, text = Gold("> " .. L.WORKSHOP_CARD),
+		onClick = function() ns.UI.ShowPerson({ name = who, level = a.level, class = a.class ~= "" and a.class or nil, guild = a.guild }) end,
+	}
+end
+
+-- A list of answers, ROLL_PAGE at a time with "Show more", "Show all" and "Show fewer" (the
+-- leaderboards' way). The copy for Discord: the first page and how many more.
+local function AnswerList(lines, list, latest, report)
+	local shown = report and Workshop.ROLL_PAGE or shownAnswers
+	for i = 1, math.min(#list, shown) do
+		AnswerLines(lines, list[i], latest, not report and menuFor == list[i].name)
+	end
+	local total, page = #list, Workshop.ROLL_PAGE
+	if report then
+		if total > shown then lines[#lines + 1] = { indent = 1, text = Grey(L.AND_MORE:format(total - shown)) } end
+		return
+	end
+	if total > shown then
+		lines[#lines + 1] = { indent = 1, noReport = true, text = Grey(L.SHOW_MORE:format(math.min(page, total - shown), shown, total)),
+			onClick = function() Workshop.ShowAnswers(shown + page) end }
+		lines[#lines + 1] = { indent = 1, noReport = true, text = Grey(L.SHOW_ALL:format(total)),
+			onClick = function() Workshop.ShowAnswers(math.huge) end }
+	end
+	if shown > page and total > page then
+		lines[#lines + 1] = { indent = 1, noReport = true, text = Grey(L.SHOW_FEWER), onClick = function() Workshop.ShowAnswers(page) end }
+	end
+end
+
+-- How the full roll call goes (or went).
+local function FullLines(lines)
+	if not full then return end
+	local n, m, pct = FullCount()
+	local right
+	if full.running then
+		right = full.nextAt and Grey(L.WORKSHOP_FULL_NEXT:format(math.max(1, math.ceil((full.nextAt - ns.Now()) / 60)))) or nil
+	else
+		right = (full.reason == "enough" and Green or Grey)(L["WORKSHOP_FULL_END_" .. full.reason:upper()])
+	end
+	lines[#lines + 1] = {
+		text = L.WORKSHOP_FULL_PROGRESS:format(full.round, n, m, pct), right = right,
+		tooltip = function(tt)
+			tt:AddLine(L.WORKSHOP_FULL_BTN, 1, 0.82, 0)
+			tt:AddLine(L.WORKSHOP_FULL_BTN_TIP, 1, 1, 1, true)
+		end,
+	}
+end
+
+-- What the search finds: every answer whose name, guild or version holds the text (any case),
+-- problems or not. A name nobody answered under: "Ask <name>" below (not for the name of a
+-- player who answered, nor for a piece of a guild's name).
+local function SearchLines(lines, text, latest)
+	-- (The name with its realm: "Ann" and "Ann-Realm" find her alike, and are her exactly.)
+	local query, exact = Fold(text), Fold(AskKey(text))
+	local list, noAsk = {}, false
+	for _, a in pairs(roll and roll.answers or {}) do
+		local byName, byGuild = a.foldedFull:find(query, 1, true) ~= nil, a.foldedGuild:find(query, 1, true) ~= nil
+		if byName or byGuild or a.version:find(query, 1, true) then list[#list + 1] = a end
+		if a.foldedFull == exact or (byGuild and not byName) then noAsk = true end
+	end
+	SortAnswers(list, latest)
+	lines[#lines + 1] = { header = true, text = L.WORKSHOP_MATCHES:format(#list) }
+	if #list == 0 then lines[#lines + 1] = { indent = 1, text = Grey(L.WORKSHOP_NO_MATCH) } end
+	AnswerList(lines, list, latest, false)
+	if not noAsk and NameLike(text) then lines[#lines + 1] = AskLine(text, 1) end
+	lines[#lines].gapAfter = true
+end
+
+-- The roll call: its search box on top, the full roll call's progress, then what the search
+-- finds, or the answers' summary and everyone who answered. `report`: the copy for Discord
+-- (no box, no search, the first page).
+local function RollLines(lines, report)
+	lines[#lines + 1] = { header = true, text = L.WORKSHOP_ROLL, right = roll and roll.t and Grey(ns.Ago(roll.t)) or nil }
+	if not report then
+		lines[#lines + 1] = {
+			text = L.WORKSHOP_SEARCH, noReport = true, input = { text = search, onChange = Workshop.SetSearch },
+			tooltip = function(tt)
+				tt:AddLine(L.WORKSHOP_SEARCH, 1, 0.82, 0)
+				tt:AddLine(L.WORKSHOP_SEARCH_TIP, 1, 1, 1, true)
+			end,
+		}
+	end
+	FullLines(lines)
+	local latest = Workshop.Latest()
+	local text = report and "" or TrimText(search)
+	if text ~= "" then return SearchLines(lines, text, latest) end
 	if not roll then
 		lines[#lines + 1] = { text = Grey(L.WORKSHOP_ROLL_NONE), gapAfter = true }
 		return
 	end
 	local versions, clients, windows, noChannel, withErrors = {}, {}, {}, 0, 0
-	local latest, list = Workshop.Latest(), {}
+	local list = {}
 	for _, a in pairs(roll.answers) do
 		Count(versions, a.version)
 		Count(clients, a.client)
 		Count(windows, a.window)
 		if not a.flags:find("c", 1, true) then noChannel = noChannel + 1 end
 		if a.errors > 0 then withErrors = withErrors + 1 end
-		if #Problems(a, latest) > 0 then list[#list + 1] = a end
+		list[#list + 1] = a
 	end
 	local function Join(map)
 		local parts = {}
@@ -503,40 +870,21 @@ local function RollLines(lines)
 		table.sort(parts)
 		return #parts > 0 and table.concat(parts, "  ·  ") or "-"
 	end
-	lines[#lines + 1] = { text = L.WORKSHOP_ANSWERS:format(roll.count, roll.share) }
+	-- (Players asked alone, and no roll call yet: no share to tell.)
+	lines[#lines + 1] = { text = roll.share and L.WORKSHOP_ANSWERS:format(roll.count, roll.share) or L.WORKSHOP_ANSWERS_ALONE:format(roll.count) }
 	lines[#lines].right = Grey(L.WORKSHOP_LAST:format(ns.Ago(roll.t)))
 	lines[#lines + 1] = { indent = 1, text = L.WORKSHOP_VERSIONS .. ": " .. Versions(versions) }
 	lines[#lines + 1] = { indent = 1, text = L.WORKSHOP_CLIENTS .. ": " .. Join(clients) }
 	lines[#lines + 1] = { indent = 1, text = L.WORKSHOP_WINDOWS .. ": " .. Join(windows) }
 	lines[#lines + 1] = { indent = 1, text = L.WORKSHOP_HEALTH:format(noChannel, withErrors), gapAfter = true }
-	table.sort(list, function(a, b)
-		if a.errors ~= b.errors then return a.errors > b.errors end
-		return a.name < b.name
-	end)
-	lines[#lines + 1] = { header = true, text = L.WORKSHOP_ATTENTION:format(#list) }
-	if #list == 0 then lines[#lines + 1] = { text = Grey(L.WORKSHOP_ALL_GOOD) } end
-	for i = 1, math.min(Workshop.MAX_SHOWN, #list) do
-		local a = list[i]
-		local outdated = Workshop.Newer(latest, a.version)
-		lines[#lines + 1] = {
-			key = a.name, indent = 1,
-			text = ns.DisplayName(a.name) .. "  " .. Grey("<" .. (a.guild ~= "" and a.guild or "?") .. ">"),
-			right = table.concat(Problems(a, latest), "  "),
-			onClick = function()
-				if outdated then
-					ns.ShowDialog("OLYMPUS_WORKSHOP_ASK", ns.DisplayName(a.name), nil, a.name)
-				else
-					ns.UI.ShowPerson({ name = ns.DisplayName(a.name), level = a.level, class = a.class ~= "" and a.class or nil, guild = a.guild })
-				end
-			end,
-			tooltip = function(tt)
-				tt:AddLine(ns.DisplayName(a.name), 1, 0.82, 0)
-				tt:AddLine(("%s  ·  %s  ·  %s  ·  %s"):format(a.version, a.client, a.window, a.flags ~= "" and a.flags or "-"), 1, 1, 1)
-				if outdated then tt:AddLine(L.WORKSHOP_CLICK_ASK, 0.25, 1, 0.25, true) end
-			end,
-		}
+	local bad = SortAnswers(list, latest)
+	lines[#lines + 1] = { header = true, text = L.WORKSHOP_EVERYONE:format(#list), right = bad > 0 and Red(L.WORKSHOP_ATTENTION:format(bad)) or nil }
+	if #list == 0 then
+		lines[#lines + 1] = { indent = 1, text = Grey(L.WORKSHOP_NO_ANSWERS) }
+	elseif bad == 0 then
+		lines[#lines + 1] = { indent = 1, text = Grey(L.WORKSHOP_ALL_GOOD) }
 	end
-	if #list > Workshop.MAX_SHOWN then lines[#lines + 1] = { indent = 1, text = Grey(L.AND_MORE:format(#list - Workshop.MAX_SHOWN)) } end
+	AnswerList(lines, list, latest, report)
 	lines[#lines].gapAfter = true
 end
 
@@ -570,23 +918,28 @@ local function BugLines(lines)
 	end
 end
 
-function Workshop.Build()
+-- The tab's lines; `report`: for the copy (Workshop.ReportText). Nothing for anyone else (the tab
+-- is hidden from them; 0.9.9: not even drawn before it is).
+function Workshop.Build(report)
+	if not Workshop.Visible() then return {}, L.TAB_WORKSHOP, "" end
 	local lines = {}
 	if Workshop.Preview() then lines[#lines + 1] = { text = Grey(L.WORKSHOP_PREVIEW), gapAfter = true } end
 	InstallLines(lines)
-	RollLines(lines)
+	RollLines(lines, report)
 	BugLines(lines)
 	return lines, L.TAB_WORKSHOP, L.WORKSHOP_HINT
 end
 
--- The copyable report for Discord.
+-- The copyable report for Discord (the tab's lines, without its box and its clickable rows).
 function Workshop.ReportText()
 	local out = { "```", L.WORKSHOP_REPORT_TITLE:format(ns.VERSION, date and date("%Y-%m-%d %H:%M") or "") }
-	for _, line in ipairs((Workshop.Build())) do
-		local text = (line.text or ""):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
-		local right = (line.right or ""):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
-		if line.header then out[#out + 1] = "" end
-		out[#out + 1] = (" "):rep(2 * (line.indent or 0)) .. text .. (right ~= "" and ("  " .. right) or "")
+	for _, line in ipairs((Workshop.Build(true))) do
+		if not line.noReport then
+			local text = (line.text or ""):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+			local right = (line.right or ""):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+			if line.header then out[#out + 1] = "" end
+			out[#out + 1] = (" "):rep(2 * (line.indent or 0)) .. text .. (right ~= "" and ("  " .. right) or "")
+		end
 	end
 	out[#out + 1] = "```"
 	return table.concat(out, "\n")
@@ -597,9 +950,10 @@ function Workshop.State() return roll end
 
 -- Tests start from a clean state.
 function Workshop.Reset()
-	roll, authorAt, authorName, answeredRoll, sending = nil, nil, nil, nil, nil
-	wipe(reports); wipe(pieces); wipe(bugsFrom); wipe(asked)
+	roll, authorAt, authorName, answeredRoll, sending, full, menuFor = nil, nil, nil, nil, nil, nil, nil
+	wipe(reports); wipe(pieces); wipe(bugsFrom); wipe(asked); wipe(askedOne)
 	lastRoll, lastRollAnswer, lastUpdateShown, lastBug, lastAsk = -math.huge, -math.huge, -math.huge, -math.huge, -math.huge
+	search, shownAnswers, lastAskOne = "", Workshop.ROLL_PAGE, -math.huge
 	changePending = false
 end
 

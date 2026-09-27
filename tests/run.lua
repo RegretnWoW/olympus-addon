@@ -11080,5 +11080,481 @@ test("0.9.9: the decree timer alone follows a switch of style: off the world map
 	end)
 end)
 
+-- 0.9.9: the Workshop's roll call, the author's wish ("I need a search there and to be able to
+-- load all, even if by parts"): a search over every answer, the whole list 25 at a time, a full
+-- roll call that rounds on its own, and one player asked alone by whisper.
+do
+	-- The first line whose text holds `text` (colour codes and all), and its place.
+	local function Find(lines, text)
+		for i, l in ipairs(lines) do
+			if (l.text or ""):find(text, 1, true) then return l, i end
+		end
+	end
+	-- The answers' rows, in order (they carry the player's name as their key).
+	local function Names(lines)
+		local out = {}
+		for _, l in ipairs(lines) do if l.key then out[#out + 1] = l.key end end
+		return table.concat(out, ",")
+	end
+	local function Many(lines)
+		local n = 0
+		for _, l in ipairs(lines) do if l.key then n = n + 1 end end
+		return n
+	end
+	-- An "Ask <name>" row (the name left out).
+	local ASK = "> " .. ns.L.WORKSHOP_ASK_ONE:format("")
+	local function Counting(W)
+		local ids = 0
+		W.random = function(a, b) if a then ids = ids + 1; return math.min(ids, b or ids) end return 0.5 end
+	end
+	local function Census(w, users) ns.rdb.guilds = { ["Olympus II"] = { t = w.clock, users = users, online = users, versions = {} } } end
+	-- A player's answer to the ask `id` (their guild, flags and errors as a 0.8 client sent them).
+	local function Say(W, id, name, version, guild, flags, errors)
+		W.HandleAnswer("WHISPER", name, ("V2~%d~%s~%s~Forever~~%s~%d~0~"):format(id, version, guild or "", flags or "c", errors or 0))
+	end
+	-- His first name alone, on our realm: someone else.
+	local NOT_AUTHOR = ns.AUTHOR:match("^%S+") .. "-Realm"
+	local function Tooltip(line)
+		local tt = { lines = {} }
+		function tt:AddLine(text) self.lines[#self.lines + 1] = text end
+		line.tooltip(tt)
+		return table.concat(tt.lines, "\n")
+	end
+
+	test("0.9.9 Workshop search: by name, guild or version, any case and UTF-8 letters too, every answer that matches", function()
+		WithWorkshop(AUTHOR_FULL, function(w, W)
+			Counting(W)
+			Census(w, 40)
+			W.RollCall()
+			local id = W.State().id
+			Say(W, id, "Ann-Realm", ns.VERSION, "Olympus IV")
+			Say(W, id, "Bob-Realm", "0.9.8", "Olympus II")
+			Say(W, id, "Élodie-Realm", ns.VERSION, "", "")
+			Say(W, id, "Carl-Realm", ns.VERSION, "Sons of Olympus")
+			-- No search: the box on top, then everyone who answered, problems first, then by name.
+			local lines = W.Build()
+			local box, at = Find(lines, ns.L.WORKSHOP_SEARCH)
+			assert(box and box.input and box.input.text == "" and box.input.onChange, "a search box")
+			eq(lines[at - 1].text, ns.L.WORKSHOP_ROLL, "at the top of the roll call")
+			eq(Names(lines), "Bob-Realm,Élodie-Realm,Ann-Realm,Carl-Realm", "behind, off the channel, then the rest by name")
+			assert(Find(lines, ns.L.WORKSHOP_EVERYONE:format(4)))
+			local eve = lines[select(2, Find(lines, "Élodie"))]
+			assert(eve.right:find("|cffff4040" .. ns.L.WORKSHOP_NO_CHANNEL, 1, true), "'no channel' in red: " .. eve.right)
+			local ann = lines[select(2, Find(lines, "Ann"))]
+			eq(ann.text, "Ann  |cff9d9d9d<Olympus IV>|r")
+			eq(ann.right, table.concat({ "|cff40ff40" .. ns.VERSION .. "|r", "|cff9d9d9dForever|r", "|cff9d9d9dc|r" }, "  "), "version, client, flags")
+			-- Any case, a piece of a name: the players who hold it, problems or not.
+			box.input.onChange("aNN")
+			eq(W.Search(), "aNN")
+			lines = W.Build()
+			eq(Names(lines), "Ann-Realm")
+			assert(Find(lines, ns.L.WORKSHOP_MATCHES:format(1)))
+			eq(Find(lines, ns.L.WORKSHOP_ASK_ONE:format("aNN")), nil, "she answered: nothing to ask")
+			eq(Find(lines, ns.L.WORKSHOP_EVERYONE:format(4)), nil, "the matches instead of everyone")
+			W.SetSearch("ann-REALM")
+			lines = W.Build()
+			eq(Names(lines), "Ann-Realm"); eq(Find(lines, ASK), nil, "with our realm's name: her too")
+			-- A guild, a version.
+			W.SetSearch("olympus i")
+			lines = W.Build()
+			eq(Names(lines), "Bob-Realm,Ann-Realm")
+			eq(Find(lines, ASK), nil, "a piece of a guild's name is nobody to ask")
+			W.SetSearch("0.9.8")
+			lines = W.Build()
+			eq(Names(lines), "Bob-Realm")
+			eq(Find(lines, ASK), nil, "a version is nobody to ask")
+			-- An accented capital finds its small letter, and the other way round.
+			W.SetSearch("ÉLO")
+			eq(Names(W.Build()), "Élodie-Realm")
+			W.SetSearch("élodie")
+			lines = W.Build()
+			eq(Names(lines), "Élodie-Realm"); eq(Find(lines, ASK), nil)
+			eq(W.Fold("ÀÉÎÕÜÇ×Þ"), "àéîõüç×þ", "Latin-1's capitals, × left alone")
+			eq(W.Fold("Łódź"), "Łódź", "other letters whole")
+			-- What the Lua patterns would read as magic is plain text here.
+			W.SetSearch("%(")
+			lines = W.Build()
+			eq(Names(lines), ""); assert(Find(lines, ns.L.WORKSHOP_NO_MATCH)); eq(Find(lines, ASK), nil)
+			-- A name nobody answered under (spaces around it are nothing): "Ask <name>", Forever's
+			-- "First Surname" too.
+			W.SetSearch("  Dora ")
+			lines = W.Build()
+			eq(Names(lines), ""); assert(Find(lines, ns.L.WORKSHOP_ASK_ONE:format("Dora")))
+			W.SetSearch("Some Mod")
+			assert(Find(W.Build(), ns.L.WORKSHOP_ASK_ONE:format("Some Mod")))
+			-- Cleared: everyone again.
+			W.SetSearch("")
+			eq(Names(W.Build()), "Bob-Realm,Élodie-Realm,Ann-Realm,Carl-Realm")
+			-- The copy for Discord: the whole list whatever is typed, no box, nothing to click.
+			W.SetSearch("ann")
+			local report = W.ReportText()
+			assert(report:find("Carl", 1, true) and report:find(ns.L.WORKSHOP_EVERYONE:format(4), 1, true), report)
+			assert(not report:find(ns.L.WORKSHOP_SEARCH, 1, true) and not report:find("|c", 1, true), report)
+		end)
+	end)
+
+	test("0.9.9 Workshop: everyone who answered, 25 at a time, with Show more, Show all and Show fewer", function()
+		WithWorkshop(AUTHOR_FULL, function(w, W)
+			Counting(W)
+			Census(w, 100)
+			W.RollCall()
+			local id = W.State().id
+			for i = 1, 60 do Say(W, id, ("P%02d-Realm"):format(i), i % 20 == 0 and "0.9.1" or ns.VERSION, "Olympus II") end
+			local lines = W.Build()
+			eq(Many(lines), 25, "the first 25")
+			local names = Names(lines)
+			assert(names:find("^P20%-Realm,P40%-Realm,P60%-Realm,P01%-Realm,P02%-Realm"), "the three behind first: " .. names)
+			local header = Find(lines, ns.L.WORKSHOP_EVERYONE:format(60))
+			assert(header.right:find(ns.L.WORKSHOP_ATTENTION:format(3), 1, true), header.right)
+			local more = Find(lines, ns.L.SHOW_MORE:format(25, 25, 60))
+			assert(more and more.onClick, "Show more")
+			assert(Find(lines, ns.L.SHOW_ALL:format(60)), "Show all")
+			eq(Find(lines, ns.L.SHOW_FEWER), nil, "nothing to fold yet")
+			more.onClick()
+			lines = W.Build()
+			eq(Many(lines), 50)
+			assert(Find(lines, ns.L.SHOW_MORE:format(10, 50, 60)) and Find(lines, ns.L.SHOW_FEWER))
+			Find(lines, ns.L.SHOW_ALL:format(60)).onClick()
+			lines = W.Build()
+			eq(Many(lines), 60, "all of them")
+			eq(Find(lines, ns.L.SHOW_ALL:format(60)), nil); assert(Find(lines, ns.L.SHOW_FEWER))
+			-- More answers come while all are shown: they show too.
+			Say(W, id, "P61-Realm", ns.VERSION, "Olympus II")
+			eq(Many(W.Build()), 61)
+			Find(W.Build(), ns.L.SHOW_FEWER).onClick()
+			lines = W.Build()
+			eq(Many(lines), 25, "back to the first 25")
+			eq(Find(lines, ns.L.SHOW_FEWER), nil)
+			-- A search lists from its top, a page at a time too.
+			Find(lines, ns.L.SHOW_ALL:format(61)).onClick()
+			W.SetSearch("p")
+			lines = W.Build()
+			eq(Many(lines), 25); assert(Find(lines, ns.L.SHOW_ALL:format(61)))
+			-- The copy for Discord: the first page and how many more.
+			local report = W.ReportText()
+			assert(report:find(ns.L.AND_MORE:format(36), 1, true), report)
+			assert(not report:find(ns.L.SHOW_ALL:format(61), 1, true), report)
+		end)
+	end)
+
+	test("0.9.9 full roll call: rounds every 5 minutes, each as light as one roll call, until 95% answered, 20 rounds or stopped", function()
+		local firstRound
+		WithWorkshop(AUTHOR_FULL, function(w, W)
+			Counting(W)
+			-- The rounds' timers wait for Next(); the rest runs at once.
+			local timers = {}
+			W.after = function(s, where, f)
+				if where == "full roll call" then timers[#timers + 1] = { s = s, f = f } else f() end
+			end
+			local users = 3000
+			local function Next()
+				local t = table.remove(timers, 1)
+				w.clock = w.clock + t.s
+				Census(w, users) -- (the census keeps coming meanwhile)
+				t.f()
+			end
+			local function Rolls()
+				local out = {}
+				for _, s in ipairs(w.sent) do if s.msg:find("^V1~") then out[#out + 1] = s end end
+				return out
+			end
+			-- Not before the census is in: its size decides the share.
+			eq(W.StartFull(), false); eq(#w.sent, 0); eq(w.printed[#w.printed], ns.L.WORKSHOP_ROLL_EARLY)
+			-- 3000 addon users: each round asks 10%, like one Roll call (a 0.9.8 client reads it as ever).
+			Census(w, users)
+			eq(W.ToggleFull(), true); eq(W.FullRunning(), true)
+			eq(#Rolls(), 1); eq(Rolls()[1].dist, "CHANNEL"); assert(Rolls()[1].msg:find("^V1~%d+~10$"), Rolls()[1].msg)
+			eq(W.Share(users), 10)
+			firstRound = Rolls()[1].msg
+			assert(Find(W.Build(), ns.L.WORKSHOP_FULL_PROGRESS:format(1, 0, 3000, 0)))
+			eq(#timers, 1); eq(timers[1].s, W.ROLL_EVERY, "the next round 5 minutes later")
+			-- Roll call meanwhile: no, the rounds are the roll calls.
+			W.RollCall()
+			eq(#Rolls(), 1); eq(w.printed[#w.printed], ns.L.WORKSHOP_ROLL_WAIT:format(5))
+			-- Answers to any round count; the census grows to 100000: the share stays at its floor, 5%.
+			Say(W, W.State().id, "Ann-Realm", ns.VERSION)
+			users = 100000
+			Next()
+			eq(#Rolls(), 2); assert(Rolls()[2].msg:find("^V1~%d+~5$"), Rolls()[2].msg)
+			assert(Find(W.Build(), ns.L.WORKSHOP_FULL_PROGRESS:format(2, 1, 100000, 0)))
+			users = 3000
+			-- Twenty rounds, then its last answers get their 5 minutes, and it ends.
+			for _ = 3, W.ROLL_ROUNDS do Next() end
+			eq(#Rolls(), W.ROLL_ROUNDS); eq(W.FullRunning(), true)
+			for _, r in ipairs(Rolls()) do
+				local share = tonumber(r.msg:match("~(%d+)$"))
+				assert(share >= 5 and share <= 100, r.msg)
+			end
+			Next()
+			eq(#Rolls(), W.ROLL_ROUNDS, "no 21st round"); eq(W.FullRunning(), false); eq(#timers, 0)
+			eq(w.printed[#w.printed], ns.L.WORKSHOP_FULL_ROUNDS:format(20, 1, 3000, 0))
+			assert(Find(W.Build(), ns.L.WORKSHOP_FULL_PROGRESS:format(20, 1, 3000, 0)))
+
+			-- Stopped by the same button: the round waiting never goes.
+			W.Reset(); Counting(W); timers = {}; w.sent = {}
+			w.clock = w.clock + W.ROLL_EVERY
+			Census(w, users)
+			W.ToggleFull()
+			eq(#Rolls(), 1)
+			eq(W.ToggleFull(), true); eq(W.FullRunning(), false)
+			eq(w.printed[#w.printed], ns.L.WORKSHOP_FULL_STOPPED:format(1, 0, 3000, 0))
+			Next()
+			eq(#Rolls(), 1, "stopped: nothing more")
+			assert(Find(W.Build(), ns.L.WORKSHOP_FULL_PROGRESS:format(1, 0, 3000, 0)))
+
+			-- A small army: everyone asked, and once 95% answered it ends there, at once.
+			W.Reset(); Counting(W); timers = {}; w.sent = {}
+			users = 40
+			w.clock = w.clock + W.ROLL_EVERY
+			Census(w, users)
+			W.StartFull()
+			assert(Rolls()[1].msg:find("^V1~%d+~100$"), Rolls()[1].msg)
+			local id = W.State().id
+			for i = 1, 37 do Say(W, id, ("A%02d-Realm"):format(i), ns.VERSION) end
+			eq(W.FullRunning(), true, "37 of 40: not yet")
+			Say(W, id, "A38-Realm", ns.VERSION)
+			eq(W.FullRunning(), false, "38 of 40 is 95%")
+			eq(w.printed[#w.printed], ns.L.WORKSHOP_FULL_ENOUGH:format(1, 38, 40, 95))
+			Next()
+			eq(#Rolls(), 1, "no round after it ended")
+
+			-- Pressed moments after a Roll call: that one is the first round, the next 5 minutes after it.
+			W.Reset(); Counting(W); timers = {}; w.sent = {}
+			w.clock = w.clock + W.ROLL_EVERY
+			Census(w, users)
+			W.RollCall()
+			w.clock = w.clock + 120
+			W.StartFull()
+			eq(#Rolls(), 1, "nothing more at once"); eq(timers[1].s, W.ROLL_EVERY - 120)
+			assert(Find(W.Build(), ns.L.WORKSHOP_FULL_PROGRESS:format(1, 0, 40, 0)))
+			Next()
+			eq(#Rolls(), 2)
+		end)
+		-- A round, as a 0.9.8 client (its roll call code, tests/fixtures) hears it on the channel:
+		-- answered as ever when its draw falls in the share.
+		WithWorkshop("Some Player-Realm", function(w, W)
+			W.random = function(a) return a or 0 end
+			local old = assert(loadfile(ROOT .. "tests/fixtures/rollcall-0.9.8.lua"))(ns, W)
+			old.HandleRoll("CHANNEL", AUTHOR_FULL, firstRound)
+			eq(#w.whispered, 1); eq(w.whispered[1].to, AUTHOR_FULL)
+			assert(w.whispered[1].msg:find("^V2~" .. firstRound:match("^V1~(%d+)") .. "~"), w.whispered[1].msg)
+		end)
+	end)
+
+	test("0.9.9 Ask <name>: a roll call by whisper, answered by a 0.9.9 client, ignored by a 0.9.8 one", function()
+		local asked
+		WithWorkshop(AUTHOR_FULL, function(w, W)
+			Counting(W)
+			-- No roll call yet, a name nobody answered under: "Ask <name>" (its tooltip says who can answer).
+			W.SetSearch("Some Mod")
+			local ask = Find(W.Build(), ns.L.WORKSHOP_ASK_ONE:format("Some Mod"))
+			assert(ask and ask.onClick, "Ask Some Mod")
+			assert(Tooltip(ask):find("0.9.9", 1, true), Tooltip(ask))
+			ask.onClick()
+			eq(#w.whispered, 1); eq(w.whispered[1].to, "Some Mod-Realm")
+			local msg = w.whispered[1].msg
+			assert(msg:find("^V1~%d+~100$"), msg)
+			eq(#w.sent, 0, "nothing on the channel")
+			asked = msg
+			eq(Find(W.Build(), ns.L.WORKSHOP_ASK_ONE:format("Some Mod")).right, "|cff9d9d9d" .. ns.L.WORKSHOP_ASK_ONE_AGO:format(ns.Ago(w.clock)) .. "|r", "the row says when")
+			-- One ask every 10 seconds, and names only.
+			eq(W.AskOne("Other Mod"), false); eq(#w.whispered, 1)
+			eq(w.printed[#w.printed], ns.L.WORKSHOP_ASK_ONE_WAIT:format(10))
+			w.clock = w.clock + W.ASK_ONE_EVERY
+			eq(W.AskOne("0.9.8"), false); eq(W.AskOne("Olympus 2"), false); eq(#w.whispered, 1)
+
+			-- The player's 0.9.9 addon: the author's alone, answered within 1 to 3 seconds.
+			ns.me = "Some Mod-Realm"
+			local waits = {}
+			W.after = function(s, _, f) waits[#waits + 1] = s; f() end
+			W.HandleRoll("WHISPER", NOT_AUTHOR, msg)
+			eq(#w.whispered, 1, "not the author")
+			W.HandleRoll("WHISPER", AUTHOR_FULL, msg)
+			eq(#w.whispered, 2); eq(w.whispered[2].to, AUTHOR_FULL)
+			assert(waits[1] >= 1 and waits[1] <= 3, waits[1])
+			local answer = w.whispered[2].msg
+			assert(answer:find("^V2~" .. msg:match("^V1~(%d+)") .. "~"), answer)
+			W.HandleRoll("WHISPER", AUTHOR_FULL, msg)
+			eq(#w.whispered, 2, "once")
+
+			-- The author takes it: the search finds it, nothing left to ask.
+			ns.me = AUTHOR_FULL
+			W.HandleAnswer("WHISPER", "Some Mod-Realm", answer)
+			eq(W.State().answers["Some Mod-Realm"].version, ns.VERSION)
+			local lines = W.Build()
+			eq(Names(lines), "Some Mod-Realm"); eq(Find(lines, ns.L.WORKSHOP_ASK_ONE:format("Some Mod")), nil)
+			assert(Find(lines, ns.L.WORKSHOP_ANSWERS_ALONE:format(1)) == nil, "the search shows the matches")
+			W.SetSearch("")
+			assert(Find(W.Build(), ns.L.WORKSHOP_ANSWERS_ALONE:format(1)), "asked alone: no share to tell")
+			-- A click on an answer: its actions under it, "Ask" first; the card; no update to ask for.
+			local row = Find(W.Build(), "Some Mod")
+			row.onClick()
+			lines = W.Build()
+			local again, at = Find(lines, ns.L.WORKSHOP_ASK_ONE:format("Some Mod"))
+			assert(again and again.indent == 2 and lines[at - 1].key == "Some Mod-Realm", "under its row")
+			assert(Find(lines, ns.L.WORKSHOP_CARD)); eq(Find(lines, "> " .. ns.L.WORKSHOP_ASK_BTN), nil)
+			w.clock = w.clock + W.ASK_ONE_EVERY
+			again.onClick()
+			eq(#w.whispered, 3); eq(w.whispered[3].to, "Some Mod-Realm"); assert(w.whispered[3].msg:find("^V1~%d+~100$"))
+			assert(w.whispered[3].msg ~= msg, "a new ask")
+			Find(W.Build(), "Some Mod").onClick()
+			eq(Find(W.Build(), ns.L.WORKSHOP_CARD), nil, "a second click closes them")
+			-- Behind: "Ask to update" among them too.
+			W.HandleAnswer("WHISPER", "Old Timer-Realm", ("V2~%s~0.9.1~~Forever~~c~0~0~"):format(w.whispered[3].msg:match("^V1~(%d+)")))
+			Find(W.Build(), "Old Timer").onClick()
+			assert(Find(W.Build(), "> " .. ns.L.WORKSHOP_ASK_BTN))
+		end)
+		-- The same whisper to a 0.9.8 client (its roll call code, tests/fixtures): ignored; a roll
+		-- call on the channel, as a full roll call's rounds are, answered as ever.
+		WithWorkshop("Some Mod-Realm", function(w, W)
+			local old = assert(loadfile(ROOT .. "tests/fixtures/rollcall-0.9.8.lua"))(ns, W)
+			old.HandleRoll("WHISPER", AUTHOR_FULL, asked)
+			eq(#w.whispered, 0, "0.9.8 takes roll calls from the channel only")
+			old.HandleRoll("CHANNEL", AUTHOR_FULL, "V1~8~100")
+			eq(#w.whispered, 1); eq(w.whispered[1].to, AUTHOR_FULL); assert(w.whispered[1].msg:find("^V2~8~"), w.whispered[1].msg)
+		end)
+	end)
+
+	test("0.9.9 Ask <name> through the addon messages: Comm hands the author's whispered V1 to the roll call", function()
+		local saved = { ci = C_ChatInfo, dialogs = {} }
+		for k, v in pairs(StaticPopupDialogs) do saved.dialogs[k] = v end
+		local ok, err = pcall(function()
+			local cns, Deliver = FreshComm()
+			local wns = setmetatable({ On = function() end, me = "Some Mod-Realm" }, { __index = cns })
+			assert(loadfile(ADDON_DIR .. "Workshop.lua"))("Olympus", wns)
+			local W = wns.Workshop
+			W.after = function(_, _, f) f() end
+			W.random = function(a) return a or 0 end
+			local sent = {}
+			C_ChatInfo.SendAddonMessage = function(_, msg, dist, target) sent[#sent + 1] = { msg = msg, dist = dist, to = target } end
+			Deliver("WHISPER", NOT_AUTHOR, "V1~41~100")
+			cns.Comm.Pump()
+			eq(#sent, 0, "not the author")
+			Deliver("WHISPER", AUTHOR_FULL, "V1~42~100")
+			cns.Comm.Pump()
+			eq(#sent, 1); eq(sent[1].dist, "WHISPER"); assert(sent[1].msg:find("^V2~42~"), sent[1].msg)
+		end)
+		C_ChatInfo = saved.ci
+		wipe(StaticPopupDialogs)
+		for k, v in pairs(saved.dialogs) do StaticPopupDialogs[k] = v end
+		if not ok then error(err, 0) end
+	end)
+
+	test("0.9.9 Workshop: the search, the full roll call and Ask <name> are the author's alone", function()
+		WithWorkshop("Tester-Realm", function(w, W)
+			Census(w, 40)
+			eq(W.Visible(), false)
+			eq(W.AskOne("Ann"), false); eq(W.StartFull(), false); eq(W.ToggleFull(), false)
+			eq(#w.sent, 0); eq(#w.whispered, 0); eq(W.FullRunning(), false)
+			W.HandleAnswer("WHISPER", "Ann-Realm", "V2~1~0.9.9~~Forever~~c~0~0~")
+			eq(W.State(), nil)
+			W.SetSearch("ann")
+			eq(#W.Build(), 0, "nothing to draw")
+		end)
+		-- The window: no Workshop tab, and no search box made.
+		WithUI(function()
+			GetGuildInfo = function() return "Olympus II" end
+			local UI = LoadUI()
+			UI.SelectTab("workshop")
+			local main = OlympusFrame
+			eq(main.tab, "census", "the census instead")
+			eq(main.views.workshop.input, nil, "no search box")
+			for _, tab in ipairs(main.tabs) do if tab.key == "workshop" then eq(tab:IsShown(), false) end end
+			for _, b in ipairs(main.detailButtons) do
+				if b:IsShown() then assert(b:GetText() ~= ns.L.WORKSHOP_FULL_BTN, "no Full roll call button") end
+			end
+		end)
+	end)
+
+	test("0.9.9 the Workshop's search box and Full roll call button: the author's window, never taking the keyboard", function()
+		WithUI(function()
+			GetGuildInfo = function() return "Olympus II" end
+			local focused, cleared = {}, 0
+			Widget.SetFocus = function(self) focused[#focused + 1] = self end
+			Widget.SetAutoFocus = function(self, on) self.autoFocus = on end
+			Widget.ClearFocus = function() cleared = cleared + 1 end
+			local ok, err = pcall(WithWorkshop, AUTHOR_FULL, function(w, W)
+				Counting(W)
+				W.after = function() end
+				Census(w, 40)
+				W.RollCall()
+				for _, name in ipairs({ "Ann-Realm", "Bob-Realm", "Cid-Realm" }) do Say(W, W.State().id, name, ns.VERSION) end
+				local UI = LoadUI()
+				UI.SelectTab("workshop")
+				local main = OlympusFrame
+				eq(main.tab, "workshop")
+				local view = main.views.workshop
+				local eb = view.input
+				assert(eb, "the search box")
+				eq(eb.kind, "EditBox"); eq(eb.template, "InputBoxTemplate"); eq(eb.olympusBox, true)
+				eq(eb.autoFocus, false, "never takes the keyboard by itself"); eq(eb:IsShown(), true)
+				-- On its row, after its label.
+				eq(eb.points[1][1], "LEFT"); eq(eb.points[1][2].text, ns.L.WORKSHOP_SEARCH)
+				local function Shown()
+					local out = {}
+					for _, r in ipairs(view.rows) do if r:IsShown() and r.line and r.line.key then out[#out + 1] = r.line.key end end
+					return table.concat(out, ",")
+				end
+				eq(Shown(), "Ann-Realm,Bob-Realm,Cid-Realm")
+				-- Typed into: the list shows what matches, what was typed stays.
+				eb:SetText("bo"); eb:Fire("OnTextChanged", true)
+				eq(W.Search(), "bo")
+				UI.Refresh()
+				eq(Shown(), "Bob-Realm"); eq(eb:GetText(), "bo")
+				-- Enter and Escape let go of the keyboard.
+				eb:Fire("OnEnterPressed"); eb:Fire("OnEscapePressed")
+				eq(cleared, 2)
+				eq(#focused, 0, "the addon never focuses it")
+				-- The gamepad UI, the chat box typing: the tab drawn again and typed into, and still
+				-- nothing of ours takes the keyboard (ns.Focus's rule).
+				local savedFocus = GetCurrentKeyBoardFocus
+				GetCurrentKeyBoardFocus = function() return { name = "ChatFrame1EditBox" } end
+				local okPad, errPad = pcall(WithGamepadUI, true, function()
+					UI.SelectTab("workshop")
+					eb:SetText("an"); eb:Fire("OnTextChanged", true)
+					UI.Refresh()
+				end)
+				GetCurrentKeyBoardFocus = savedFocus
+				assert(okPad, errPad)
+				eq(Shown(), "Ann-Realm"); eq(#focused, 0)
+				-- Full roll call, first in the detail box (right above Roll call): the same button stops it.
+				local b = main.detailButtons[1]
+				eq(b:GetText(), ns.L.WORKSHOP_FULL_BTN)
+				b:Click()
+				eq(W.FullRunning(), true); eq(b:GetText(), ns.L.WORKSHOP_FULL_STOP)
+				b:Click()
+				eq(W.FullRunning(), false); eq(b:GetText(), ns.L.WORKSHOP_FULL_BTN)
+				eq(main.detailButtons[2]:GetText(), ns.L.DEV_KING_VIEW_ON, "the author's views after it")
+				-- Another tab: that list has no box, and this one stays in the Workshop's.
+				UI.SelectTab("census")
+				eq(main.views.census.input, nil)
+				eq(#focused, 0)
+			end)
+			Widget.SetFocus, Widget.SetAutoFocus, Widget.ClearFocus = nil, nil, nil
+			if not ok then error(err, 0) end
+		end)
+	end)
+
+	test("0.9.9 Workshop: the locales have every new line, in Portuguese too", function()
+		local savedLocale, pt = GetLocale, {}
+		GetLocale = function() return "ptBR" end
+		local ok, err = pcall(function() assert(loadfile(ADDON_DIR .. "Locales.lua"))("Olympus", pt) end)
+		GetLocale = savedLocale
+		if not ok then error(err, 0) end
+		for _, key in ipairs({ "SHOW_ALL", "SHOW_FEWER", "WORKSHOP_SEARCH", "WORKSHOP_SEARCH_TIP", "WORKSHOP_MATCHES", "WORKSHOP_NO_MATCH",
+			"WORKSHOP_EVERYONE", "WORKSHOP_NO_ANSWERS", "WORKSHOP_ANSWERS_ALONE", "WORKSHOP_ANSWERED", "WORKSHOP_ROW_TIP", "WORKSHOP_CARD",
+			"WORKSHOP_ASK_ONE", "WORKSHOP_ASK_ONE_TIP", "WORKSHOP_ASK_ONE_AGO", "WORKSHOP_ASK_ONE_SENT", "WORKSHOP_ASK_ONE_WAIT",
+			"WORKSHOP_FULL_BTN", "WORKSHOP_FULL_STOP", "WORKSHOP_FULL_BTN_TIP", "WORKSHOP_FULL_START", "WORKSHOP_FULL_PROGRESS",
+			"WORKSHOP_FULL_NEXT", "WORKSHOP_FULL_ENOUGH", "WORKSHOP_FULL_ROUNDS", "WORKSHOP_FULL_STOPPED", "WORKSHOP_FULL_END_ENOUGH",
+			"WORKSHOP_FULL_END_ROUNDS", "WORKSHOP_FULL_END_STOPPED" }) do
+			assert(type(ns.L[key]) == "string", "English " .. key)
+			assert(type(pt.L[key]) == "string" and pt.L[key] ~= ns.L[key], "Portuguese " .. key)
+			-- The same format arguments in both.
+			eq(select(2, pt.L[key]:gsub("%%[ds]", "")), select(2, ns.L[key]:gsub("%%[ds]", "")), key)
+		end
+		assert(pt.L.WORKSHOP_ASK_ONE_TIP:find("0.9.9", 1, true))
+	end)
+end
+
 print(("\n%d passed, %d failed"):format(passed, failed))
 os.exit(failed == 0 and 0 or 1)

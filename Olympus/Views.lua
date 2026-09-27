@@ -7,12 +7,15 @@ local L = ns.L
 --   { text, right, indent, header, color, onClick, tooltip = function(tt) end }
 -- or a table row { cols = { ... } } drawn with the tab's column layout. `key` (a player's
 -- name) marks a line that opens a person: the HD window keeps it lit while it is open.
+-- `input = { text, onChange = function(text) end }`: a text box after the line's text (the
+-- Workshop's search, 0.9.9), one per list.
 
 local Views = {}
 ns.Views = Views
 
 local ROW_H = 16
 local ROW_H_HD = 20 -- the Guild & Communities roster's rows (CommunitiesMemberList.xml)
+local ROW_H_INPUT = 24 -- a row with a text box (line.input): the box and its border
 local ITEM, ITEM_GAP = 30, 2 -- an item on an items row (line.items) without the game's button template (37 with it)
 local expanded = {}
 local CROWN = "|TInterface\\GroupFrame\\UI-Group-LeaderIcon:13:13|t "
@@ -232,11 +235,66 @@ end
 
 function Views.ClearSelection(content) Views.Select(content, nil) end
 
+-- The list's text box (line.input): one per list, made the first time a line asks for one and
+-- moved onto that line's row at each redraw, so typing goes on while the list changes under it.
+-- Like the council icon picker's filter, it never takes the keyboard by itself (the gamepad UI's
+-- rule, ns.Focus): the player clicks into it; Enter, Escape or its list hiding let go of it.
+local function InputBox(content)
+	if content.input then return content.input end
+	local ok, eb = pcall(CreateFrame, "EditBox", nil, content, "InputBoxTemplate")
+	if not ok or not eb then eb = CreateFrame("EditBox", nil, content) end
+	eb:SetAutoFocus(false)
+	eb:Hide()
+	eb:SetHeight(20)
+	eb:SetMaxLetters(40)
+	eb:SetFontObject("ChatFontNormal")
+	eb.olympusBox = true
+	eb:SetScript("OnTextChanged", function(self)
+		local input = self.line and self.line.input
+		if input and input.onChange then ns.SafeCall("view input", input.onChange, self:GetText() or "") end
+	end)
+	eb:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
+	eb:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+	eb:SetScript("OnHide", function(self) self:ClearFocus() end)
+	eb:SetScript("OnEnter", function(self)
+		if not (self.line and self.line.tooltip) then return end
+		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+		ns.SafeCall("view tooltip", self.line.tooltip, GameTooltip)
+		GameTooltip:Show()
+	end)
+	eb:SetScript("OnLeave", function() GameTooltip:Hide() end)
+	content.input = eb
+	return eb
+end
+
+-- The box on `r`, the row of its line: after the line's text, to the row's end. Its text is set
+-- only when it is not the line's already (what was typed stays, the cursor where it is).
+local function PlaceInput(content, r)
+	local eb = content.input
+	if not r then
+		if eb then
+			eb.line = nil
+			eb:Hide()
+		end
+		return
+	end
+	eb = InputBox(content)
+	eb.line = r.line
+	eb:ClearAllPoints()
+	eb:SetPoint("LEFT", r.left, "RIGHT", 12, 0)
+	eb:SetPoint("RIGHT", r, "RIGHT", -8, 0)
+	eb:SetFrameLevel(r:GetFrameLevel() + 2)
+	local text = tostring(r.line.input.text or "")
+	if (eb:GetText() or "") ~= text then eb:SetText(text) end
+	eb:Show()
+end
+
 function Views.Render(content, lines, layout)
 	local width = content:GetWidth()
 	local hd = content.style == "hd"
 	local rowH = hd and ROW_H_HD or ROW_H
 	local y = -2
+	local inputRow
 	for i, line in ipairs(lines) do
 		local r = Row(content, i)
 		r.line = line
@@ -286,7 +344,12 @@ function Views.Render(content, lines, layout)
 			r.right:SetFontObject(font or "GameFontHighlightSmall")
 			r.left:ClearAllPoints()
 			r.left:SetPoint("LEFT", 4 + (line.indent or 0) * 12, 0)
-			r.left:SetPoint("RIGHT", r.right, "LEFT", -6, 0)
+			-- A text box's line: its text as wide as it is, the box after it (PlaceInput).
+			if line.input and not inputRow then
+				inputRow, height = r, ROW_H_INPUT
+			else
+				r.left:SetPoint("RIGHT", r.right, "LEFT", -6, 0)
+			end
 			r.left:SetText(line.text or "")
 			r.right:SetText(line.right or "")
 		end
@@ -302,6 +365,7 @@ function Views.Render(content, lines, layout)
 		if line.gapAfter then y = y - 6 end
 	end
 	for i = #lines + 1, #(content.rows or {}) do content.rows[i]:Hide() end
+	PlaceInput(content, inputRow)
 	content:SetHeight(-y + 8)
 end
 

@@ -183,8 +183,16 @@ local DETAIL_BUTTONS = {
 			end },
 		{ "THRONE_CANCEL_AGENDA", function() ns.King.CancelAgendaButton() end, shown = function() return ns.King.Agenda() ~= nil end },
 	},
-	-- The author's views, to see and try what only the King or the Treasurer sees.
+	-- The full roll call (0.9.9), right above Roll call: rounds on its own until nearly every addon
+	-- user answered; the same button stops it. Then the author's views, to see and try what only
+	-- the King or the Treasurer sees.
 	workshop = {
+		{ "WORKSHOP_FULL_BTN", function() ns.Workshop.ToggleFull() end, refresh = true,
+			label = function() return ns.Workshop.FullRunning() and L.WORKSHOP_FULL_STOP or L.WORKSHOP_FULL_BTN end,
+			tooltip = function(tt)
+				tt:AddLine(ns.Workshop.FullRunning() and L.WORKSHOP_FULL_STOP or L.WORKSHOP_FULL_BTN, 1, 0.82, 0)
+				tt:AddLine(L.WORKSHOP_FULL_BTN_TIP, 1, 1, 1, true)
+			end },
 		{ "DEV_KING_VIEW", function() ns.King.SetDevView(not ns.King.Preview()) end, refresh = true,
 			label = function() return ns.King.Preview() and L.DEV_KING_VIEW_OFF or L.DEV_KING_VIEW_ON end },
 		{ "DEV_TREASURER_VIEW", function() ns.Treasury.SetDevView(not ns.Treasury.DevView()) end, refresh = true,
