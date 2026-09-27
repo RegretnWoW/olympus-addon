@@ -542,27 +542,31 @@ function ns.LearnKingRealm(sender)
 	ns.Log("the Horde's King is on %s (learned from his first message)", realm)
 end
 
--- The High Council: the Olympus moderators, shown with their icon and their colour in the Olympus
+-- The High Council: the Olympus moderators, shown with their mark and their colour in the Olympus
 -- chats. No name is written in this code (it is public, and names get sniped on launch realms):
 -- the list is signed by the author on his own computer and checked by every client (Sign.lua,
 -- Workshop.lua).
--- Each councillor picks their own icon from the game's (0.9.8, Workshop.lua); until one is
--- heard, a skull from the game's icons (the raid marker's before 0.9.8).
-ns.HIGH_COUNCIL_SKULL = "Interface\\Icons\\INV_Misc_Bone_HumanSkull_01"
-ns.HIGH_COUNCIL_ICON = "|T" .. ns.HIGH_COUNCIL_SKULL .. ":0|t"
+-- The mark (0.9.9, Max's): the game's target-frame skull, the one nameplates show. Fixed: nobody
+-- picks or changes it. Each councillor's own icon (0.9.8, Workshop.lua) is flavour after it; a
+-- councillor who never picked one shows the mark alone.
+ns.HIGH_COUNCIL_SKULL = "Interface\\TargetingFrame\\UI-TargetingFrame-Skull"
+ns.HIGH_COUNCIL_MARK = "|T" .. ns.HIGH_COUNCIL_SKULL .. ":0|t"
 ns.HIGH_COUNCIL_COLOR = "ffb048f8"
+-- Names are one per realm group: a signed list counts on the group of whoever published it.
+-- The list names it "A+B": any realm of it, as this client groups realms (0.9.8: a realm linked
+-- to that group since, which makes our group "A+B+C", no longer loses the list). None: anywhere.
+local function OfListGroup(name, group)
+	if group == nil then return true end
+	for _, realm in ipairs(ns.GroupRealms(group)) do
+		if OfGroup(name, realm) then return true end
+	end
+	return false
+end
 function ns.IsHighCouncillor(name)
 	local c = ns.rdb and ns.rdb.council
 	if type(name) ~= "string" or type(c) ~= "table" or type(c.names) ~= "table" then return false end
 	if not c.names[ns.ShortName(name):lower()] then return false end
-	-- Names are one per realm group: the list counts on the group of whoever published it.
-	-- The list names it "A+B": any realm of it, as this client groups realms (0.9.8: a realm
-	-- linked to that group since, which makes our group "A+B+C", no longer loses the list).
-	if c.realm == nil then return true end
-	for _, realm in ipairs(ns.GroupRealms(c.realm)) do
-		if OfGroup(name, realm) then return true end
-	end
-	return false
+	return OfListGroup(name, c.realm)
 end
 
 -- A councillor's icon as it travels and is kept (0.9.8): a file number, or a plain icon name
@@ -587,9 +591,12 @@ function ns.CouncilIconTexture(v)
 	return v
 end
 
--- The icon before a councillor's name in the Olympus chats: our own choice for our lines, what
--- their client announced for anyone else's (Workshop.lua keeps it), else the default skull.
--- Checked again here: the ones heard are kept in the SavedVariables too.
+-- A councillor's own icon, after the mark: our own choice for our lines, what their client
+-- announced for anyone else's (Workshop.lua keeps it), else "" (0.9.9: no default icon any
+-- more, the mark says it). Checked again here: the ones heard are kept in the SavedVariables
+-- too. A name without its realm, or with another realm of the group (the titles list, a census
+-- row), finds the one heard under that name: names are one per realm group, and only
+-- councillors' icons are kept.
 function ns.CouncilIcon(name)
 	local v
 	local who = type(name) == "string" and ns.FullName(name) or nil
@@ -599,10 +606,61 @@ function ns.CouncilIcon(name)
 	elseif who then
 		local heard = ns.rdb and ns.rdb.councilIcons
 		local e = type(heard) == "table" and heard[who]
+		if type(e) ~= "table" and type(heard) == "table" then
+			local short = ns.ShortName(who):lower()
+			for k, x in pairs(heard) do
+				if type(k) == "string" and ns.ShortName(k):lower() == short then e = x break end
+			end
+		end
 		v = type(e) == "table" and e.icon or nil
 	end
 	local texture = ns.CouncilIconTexture(v)
-	return texture and ("|T" .. texture .. ":0|t") or ns.HIGH_COUNCIL_ICON
+	return texture and ("|T" .. texture .. ":0|t") or ""
+end
+
+-- What goes with a councillor's name: the mark, then their own icon if they picked one. ""
+-- for anyone not on the council.
+function ns.CouncilMark(name)
+	if not ns.IsHighCouncillor(name) then return "" end
+	return ns.HIGH_COUNCIL_MARK .. ns.CouncilIcon(name)
+end
+
+-- The council's departments and titles (0.9.9, Workshop.TakeTitles), signed apart from the
+-- names: nil when none reached us, or when it is another realm group's (like the names).
+function ns.CouncilTitles()
+	local t = ns.rdb and ns.rdb.councilTitles
+	if type(t) ~= "table" or type(t.depts) ~= "table" then return nil end
+	if not OfListGroup(ns.me, t.realm) then return nil end
+	return t
+end
+
+-- A councillor's place in that list: { title, dept, icon } (the department's icon), each of
+-- them nil when the list gives none; nil for anyone not on the council's name list, or not in
+-- the titles. Kept in the SavedVariables: checked again here.
+function ns.CouncilTitle(name)
+	local t = ns.IsHighCouncillor(name) and ns.CouncilTitles()
+	if not t then return nil end
+	local short = ns.ShortName(name):lower()
+	for _, d in ipairs(t.depts) do
+		for _, m in ipairs(type(d) == "table" and type(d.members) == "table" and d.members or {}) do
+			if type(m) == "table" and type(m.name) == "string" and m.name:lower() == short then
+				local dept = type(d.name) == "string" and d.name ~= "" and d.name or nil
+				local title = type(m.title) == "string" and m.title ~= "" and m.title or nil
+				return { title = title, dept = dept, icon = dept and ns.CouncilIconValue(d.icon) or nil }
+			end
+		end
+	end
+	return nil
+end
+
+-- Who sees the High Council in the census, its marks there and its titles (0.9.9, the author's
+-- call): until launch the councillors themselves and the author's own client (the one holding
+-- the signed lists, CouncilList.lua); everyone once the signed titles list says it is public.
+-- The Olympus chats show the mark to everyone, as in 0.9.8.
+function ns.CouncilVisible()
+	if ns.COUNCIL_SIGNED ~= nil or ns.COUNCIL_TITLES ~= nil or ns.IsHighCouncillor(ns.me) then return true end
+	local t = ns.CouncilTitles()
+	return t ~= nil and t.public == true
 end
 
 -- The Crown: guild masters of any Olympus guild, and the officers of the King's guild.

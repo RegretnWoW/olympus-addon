@@ -9064,7 +9064,8 @@ test("0.9.7 the High Council: a list the author signs on his computer, checked b
 		eq(ns.IsHighCouncillor("Test Councillor-Realm"), true); eq(ns.IsHighCouncillor("other mod"), true, "any case")
 		eq(ns.IsHighCouncillor("Test Councillor-OtherRealm"), false, "its realm group only")
 		local line = ns.Channels.FormatLine("A", "Test Councillor-Realm", "Olympus", nil, "hello")
-		assert(line:find(ns.HIGH_COUNCIL_ICON, 1, true) and line:find(ns.HIGH_COUNCIL_COLOR, 1, true), line)
+		-- (0.9.9: the fixed council mark, where 0.9.8 had a default icon.)
+		assert(line:find(ns.HIGH_COUNCIL_MARK, 1, true) and line:find(ns.HIGH_COUNCIL_COLOR, 1, true), line)
 		-- A newer signed list replaces it; an older one never comes back.
 		W.HandleCouncil("CHANNEL", "Any Player-Realm", LIST2)
 		eq(ns.IsHighCouncillor("Other Mod-Realm"), false, "removed")
@@ -9104,7 +9105,7 @@ local COUNCIL_LIST1 = "HS1~1790000000~Realm~Test Councillor,Other Mod~5c8eac0d27
 -- CHAT_MSG_ADDON path of that Comm. Our dialogs are put back after.
 local function CouncilOnChannel(fn)
 	local W = ns.Workshop
-	local saved = { council = ns.rdb.council, chunked = ns.Comm.SendChunked, ci = C_ChatInfo, dialogs = {} }
+	local saved = { council = ns.rdb.council, titles = ns.rdb.councilTitles, chunked = ns.Comm.SendChunked, ci = C_ChatInfo, dialogs = {} }
 	for k, v in pairs(StaticPopupDialogs) do saved.dialogs[k] = v end
 	local ok, err = pcall(function()
 		local cns, Deliver = FreshComm()
@@ -9117,7 +9118,7 @@ local function CouncilOnChannel(fn)
 		end
 		fn(W, Hear)
 	end)
-	ns.rdb.council, ns.Comm.SendChunked, C_ChatInfo = saved.council, saved.chunked, saved.ci
+	ns.rdb.council, ns.rdb.councilTitles, ns.Comm.SendChunked, C_ChatInfo = saved.council, saved.titles, saved.chunked, saved.ci
 	wipe(StaticPopupDialogs)
 	for k, v in pairs(saved.dialogs) do StaticPopupDialogs[k] = v end
 	if not ok then error(err, 0) end
@@ -9605,43 +9606,48 @@ test("0.9.8 council icons: only a councillor's own announcement counts, and only
 	WithCouncil(function()
 		local W = ns.Workshop
 		local function Line(sender) return ns.Channels.FormatLine("A", sender, "Olympus", nil, "hello") end
-		-- Nobody announced: the default skull (one of the game's icons), then their colour.
+		-- 0.9.9: the default skull icon became the fixed council mark (the target-frame skull), and a
+		-- councillor's own icon comes after it. "The mark alone" (no icon of their own) is the mark
+		-- right before their colour, where 0.9.8 checked for its default skull.
+		local ALONE = ns.HIGH_COUNCIL_MARK .. "|c" .. ns.HIGH_COUNCIL_COLOR
+		-- Nobody announced: the mark alone, then their colour.
 		local line = Line("Test Councillor-Realm")
-		assert(line:find("|TInterface\\Icons\\INV_Misc_Bone_HumanSkull_01:0|t|c" .. ns.HIGH_COUNCIL_COLOR .. "Test Councillor|r", 1, true), line)
+		assert(line:find("|TInterface\\TargetingFrame\\UI-TargetingFrame-Skull:0|t|c" .. ns.HIGH_COUNCIL_COLOR .. "Test Councillor|r", 1, true), line)
 		-- Someone not on the council: refused, and still refused once they are on it.
 		W.HandleIcon("CHANNEL", "Random Guy-Realm", "HI~134400")
 		ns.rdb.council.names["random guy"] = "Random Guy"
 		line = Line("Random Guy-Realm")
-		assert(line:find(ns.HIGH_COUNCIL_ICON, 1, true) and not line:find("134400", 1, true), line)
+		assert(line:find(ALONE, 1, true) and not line:find("134400", 1, true), line)
 		-- A councillor anywhere but the channel: refused.
 		W.HandleIcon("WHISPER", "Test Councillor-Realm", "HI~134400")
 		W.HandleIcon("GUILD", "Test Councillor-Realm", "HI~134400")
-		assert(Line("Test Councillor-Realm"):find(ns.HIGH_COUNCIL_ICON, 1, true))
-		-- Anything but a file number or a plain name: refused, the skull stays.
+		assert(Line("Test Councillor-Realm"):find(ALONE, 1, true))
+		-- Anything but a file number or a plain name: refused, the mark stays alone.
 		for _, bad in ipairs({ "HI~134400:64:64|t|cffff0000Fake", "HI~134400:64:64tcffff0000Fake", "HI~Interface\\Icons\\X",
 			"HI~..\\..\\X", "HI~12345678901", "HI~2147483648", "HI~-5", "HI~1.5", "HI~ab cd", "HI~" .. string.rep("a", 65),
 			"HI~", "HI~00", "HI~134400~x" }) do
 			W.HandleIcon("CHANNEL", "Test Councillor-Realm", bad)
 			line = Line("Test Councillor-Realm")
-			assert(line:find(ns.HIGH_COUNCIL_ICON, 1, true), bad .. " -> " .. line)
+			assert(line:find(ALONE, 1, true), bad .. " -> " .. line)
 		end
 		eq(next(ns.rdb.councilIcons or {}), nil, "nothing kept")
-		-- A file number, then a plain icon name: theirs before their name, the colour stays.
+		-- A file number, then a plain icon name: theirs after the mark, before their name, the
+		-- colour stays (0.9.9: the mark first, where 0.9.8 had their icon alone).
 		W.HandleIcon("CHANNEL", "Test Councillor-Realm", "HI~134400")
 		line = Line("Test Councillor-Realm")
-		assert(line:find("[|T134400:0|t|c" .. ns.HIGH_COUNCIL_COLOR .. "Test Councillor|r]", 1, true), line)
-		assert(not line:find(ns.HIGH_COUNCIL_ICON, 1, true), "not the skull too")
-		assert(Line("Other Mod-Realm"):find(ns.HIGH_COUNCIL_ICON, 1, true), "the others keep the skull")
+		assert(line:find("[" .. ns.HIGH_COUNCIL_MARK .. "|T134400:0|t|c" .. ns.HIGH_COUNCIL_COLOR .. "Test Councillor|r]", 1, true), line)
+		assert(not line:find(ALONE, 1, true), "not the mark alone")
+		assert(Line("Other Mod-Realm"):find(ALONE, 1, true), "the others keep the mark alone")
 		W.HandleIcon("CHANNEL", "Test Councillor-Realm", "HI~Spell_Holy_SealOfMight")
 		line = Line("Test Councillor-Realm")
 		assert(line:find("|TInterface\\Icons\\Spell_Holy_SealOfMight:0|t|c", 1, true), line)
 		-- What the SavedVariables hold is checked again when shown.
 		ns.rdb.councilIcons["Test Councillor-Realm"].icon = "x:64|t|cffff0000"
-		assert(Line("Test Councillor-Realm"):find(ns.HIGH_COUNCIL_ICON, 1, true), "a changed file shows the skull")
-		-- "0": back to the default skull.
+		assert(Line("Test Councillor-Realm"):find(ALONE, 1, true), "a changed file shows the mark alone")
+		-- "0": no icon, the mark alone.
 		W.HandleIcon("CHANNEL", "Test Councillor-Realm", "HI~134400")
 		W.HandleIcon("CHANNEL", "Test Councillor-Realm", "HI~0")
-		assert(Line("Test Councillor-Realm"):find(ns.HIGH_COUNCIL_ICON, 1, true))
+		assert(Line("Test Councillor-Realm"):find(ALONE, 1, true))
 		eq(ns.rdb.councilIcons["Test Councillor-Realm"], nil)
 		-- Kept for COUNCIL_MAX councillors at most (the ones heard longest ago go), and only while
 		-- they are on the list.
@@ -9655,7 +9661,7 @@ test("0.9.8 council icons: only a councillor's own announcement counts, and only
 		local n = 0
 		for _ in pairs(ns.rdb.councilIcons) do n = n + 1 end
 		eq(n, W.COUNCIL_MAX)
-		assert(Line("Mod 40-Realm"):find("|T1040:0|t", 1, true)); assert(Line("Mod 1-Realm"):find(ns.HIGH_COUNCIL_ICON, 1, true))
+		assert(Line("Mod 40-Realm"):find("|T1040:0|t", 1, true)); assert(Line("Mod 1-Realm"):find(ALONE, 1, true))
 		ns.rdb.council.names["mod 40"] = nil
 		W.HandleIcon("CHANNEL", "Mod 39-Realm", "HI~5")
 		eq(ns.rdb.councilIcons["Mod 40-Realm"], nil, "off the list: forgotten")
@@ -9688,10 +9694,11 @@ test("0.9.8 a councillor's own icon: kept on the character, on their own lines, 
 		eq(W.SayIcon(), true); eq(#sent, 2); eq(sent[2], "CHANNEL HI~134400")
 		-- A value that is not an icon changes nothing.
 		eq(W.SetCouncilIcon("a|b"), false); eq(ns.db.councilIcons[ns.me], 134400); eq(#sent, 2)
-		-- The default skull back: said as "0", and still said later, so the old icon goes everywhere.
+		-- No icon: said as "0", and still said later, so the old icon goes everywhere (0.9.9: the
+		-- mark alone on our lines, where 0.9.8 put its default skull back).
 		eq(W.SetCouncilIcon(nil), true)
 		eq(sent[#sent], "CHANNEL HI~0")
-		assert(ns.Channels.FormatLine("A", ns.me, "Olympus", nil, "hi"):find(ns.HIGH_COUNCIL_ICON, 1, true))
+		assert(ns.Channels.FormatLine("A", ns.me, "Olympus", nil, "hi"):find(ns.HIGH_COUNCIL_MARK .. "|c" .. ns.HIGH_COUNCIL_COLOR, 1, true))
 		clock = clock + W.ICON_EVERY
 		eq(W.SayIcon(), true); eq(sent[#sent], "CHANNEL HI~0")
 	end)
@@ -9721,12 +9728,16 @@ test("0.9.8 the council icon picker: a councillor's alone, filled from the game'
 				ns.me = "Random Guy-Realm"
 				eq(W.ShowIconPicker(), false)
 				eq(rawget(_G, "OlympusCouncilIconFrame"), nil, "not even built")
-				-- A councillor: our own window on UIParent, the first page full, the skull in the preview.
+				-- A councillor: our own window on UIParent, the first page full, the skull in the preview
+				-- (0.9.9: the council's fixed mark, no icon of their own yet: the mark alone).
 				ns.me = "Test Councillor-Realm"
 				eq(W.ShowIconPicker(), true)
 				local f = OlympusCouncilIconFrame
 				eq(f:IsShown(), true); eq(f.parent, UIParent)
 				eq(f.preview.texture, ns.HIGH_COUNCIL_SKULL)
+				eq(f.chosenName:GetText(), ns.L.COUNCIL_ICON_MARK_ONLY)
+				assert(f.sample:GetText():find("[" .. ns.HIGH_COUNCIL_MARK .. "|c" .. ns.HIGH_COUNCIL_COLOR, 1, true), f.sample:GetText())
+				eq(f.default:GetText(), ns.L.COUNCIL_ICON_DEFAULT)
 				local shown = 0
 				for _, b in ipairs(f.cells) do if b:IsShown() then shown = shown + 1 end end
 				eq(shown, W.ICON_COLS * W.ICON_ROWS)
@@ -9742,6 +9753,7 @@ test("0.9.8 the council icon picker: a councillor's alone, filled from the game'
 				-- A click shows it in the preview; only OK keeps it and says it.
 				f.cells[1]:Click()
 				eq(f.preview.texture, "Interface\\Icons\\Spell_Holy_SealOfMight")
+				assert(f.sample:GetText():find(ns.HIGH_COUNCIL_MARK .. "|TInterface\\Icons\\Spell_Holy_SealOfMight:0|t|c", 1, true), "after the mark")
 				eq(#sent, 0, "nothing said before OK")
 				f.ok:Click()
 				eq(f:IsShown(), false)
@@ -9911,6 +9923,397 @@ test("0.9.9: the Treasurer's lines in the Olympus chats carry his gold coin, nob
 	assert(not Line("Pyralis Ashandar-Realm", nil):find(coin, 1, true))
 	-- The coin can't be written in: the text still goes through the chat filter.
 	assert(not Line("Bob-Realm", "Olympus"):find(coin, 1, true))
+end)
+
+---------------------------------------------------------------------------
+-- 0.9.9: the High Council in the census (the fixed mark, departments and titles)
+---------------------------------------------------------------------------
+
+-- A throwaway key made with scripts/council-sign.py for these tests (its private half was not
+-- kept), and the lists it signed from a test council. "council" wrote NAMES4 and TITLES: Test
+-- Councillor (Council Speaker) outside any department; Other Mod (Operations Director) and Third
+-- Mod (no title) in the Department of War (icon INV_Sword_04); Fourth Mod (Keeper of Coin) in the
+-- Department of Coin (icon 133784). Then "sign" wrote NAMES2 (Test Councillor and Other Mod
+-- alone), and "council" again PUBLIC (the same, public) and ELSEWHERE (the same, public, for
+-- another realm group).
+local COUNCIL_TEST_N = "c678abc16abd6aa6d9aa99749d404a94329c0f117b188aeb08f4b5d694dbc54b72350a22fcfc3e43f1699539d5a2bd88caf10931b236e2d6839f4fc2661844b04b4b562b53a5db26d0df5a0c1f5fd1951306a6b543c0dfc8041adad98ff9eabee50a96ef7aec9f67471c7e370a88b35de148edd9165d6971f888a046cf08acf32d41cc3cab2dc7c6be0ac181787b182ec3a292d3dc92f598ea200c6118684699a3e1228822805d2ba56c79cf3fc0a9c5327ca3d58a5f53bb1b26d5c4460e95ba69ac8546c8fc6d8ff546a389d6432c087e5fd0f7af48dbdcadd338f0de615874d2718bd7015b2f02df98d439d2b9ca26552961807d078f51a1e72fabafda94df"
+local COUNCIL_TEST_MU = "14a342bf7078843f81659e0fb28424110eab888dc491bd5aedbcf14998ad4e2a5df0fada61836a16aac634e6d08079cfbfc154c76d9876c23e14bbe8e2aab1710d145044ecc4866d9bb0bb7b489a04a1c70bfa65f231b18678ae2cb5282ddd977434c39c3178933ecabd27f39a70bf1c8fa1fed508a8570bb55a7c7e0c5b0d0491fd0dfd8657b2142dc81b993b55bc96c86993005018ecaf1f98504b6a5e765895b7a453601a775826b64d27b70798d4c13b281f95de5cb5da28cd89e51df6dae79c8c60edf55dbd9d8829af426564afec3e0d76351cd047389ad55415f4d7925de4f75564c9e8eb777899706019913babba0e36139cc7d88618835c94965745d8a5d4737"
+local COUNCIL_TEST_NAMES4 = "HS1~1800000001~Realm~Test Councillor,Other Mod,Third Mod,Fourth Mod~b54896b283654f949430157787cf3950fb9e86b55e477d5c82aeac6eae8e8e228f2885ef7574bc4ef28c8f960af9b7e121f7aeff516f34ae3ad915c12048877719eb867557d28607e594acaa5194f57ac64c93c54d8c569bfbe9b898b826a82682a0ed2bb8ae787c2ad27635bc4b005ab090f023c926b291704ea21b307d12b08d90f858f8cb6b2e7912182fff1f5488fd97d02d999930f968c808137edece31d01beeb3032f206359af2269710f2766012f70ebaa85cadee67a4d2c159e5ab8c3e90fa98d0dda83702ac370a959a4f9099091c2306b34cface465df5aff9ce292c495c5f4fa655894364041914a0cb173741c0686d4a721867838c68d93b29d"
+local COUNCIL_TEST_TITLES = "HT1~1800000002~Realm~0~^^Test Councillor=Council Speaker;Department of War^INV_Sword_04^Other Mod=Operations Director,Third Mod=;Department of Coin^133784^Fourth Mod=Keeper of Coin~b8c35b36dc39bceaf69efe1a2a451d8caa23566d4d54659e7fb4510ed4047dbd48dbb69acb844cacb1964b593133faa28c81ae5b43574ae7395745d2730a03d8f9adba7b60d2ea2ed5e2630ba21585c2f155db654963d690ee2d7841ee5cf06eab66677df241806266d55fd4d7fc316bf30b33fb005369dfc88cb050f9be66b3bd4f59043e044e4ae5d5c2f4104d2b665d2d301f11340f7069c40bd75d5e47445d15ab6d4c4b70f9f47dcf81e1966ec7b938be47657308a9725f4899ac6088f2b13af2e97e73f073ab91d257ff6cf82c47b9f195d1d8773edb2aa820e691703b414b53c9bd4a84881cb4acd4d5ad303459b3c795bb433cbb26cffae358a92029"
+local COUNCIL_TEST_NAMES2 = "HS1~1800000003~Realm~Test Councillor,Other Mod~c22dad373135b2b9300ea00c07d19956f7bcee16ea5b1b1fc8ce78b7f3ee8e7b1820f8fd3a6901831b1dd6c75d8566a8450ac7367453f19b3d9d39604ccbd27c3d493a229a1957eb838b174fb84f06909fa1d4b602c356f2bc8978f6efdf48818fabe2e2fc5e7a879def0a43cb48288c65e2b799cab35d01998fcda019acb4628ab910d593318aca57304cb3359360ed269b8957c5d61a0ff5df47e8ab38632ba8c47b683fbac377850fcafd03e83e2cecc83e3b6353c20b64cf5089a5825a3df8d88dbf9dca1a3291c5a9098feee887b37adec8dead4c06a8c38d5f158aaf7b266ca98dbb5d0f1e432949c8453f553edc67fde6ee0556f0c9d3aa031d1f1a8a"
+local COUNCIL_TEST_PUBLIC = "HT1~1800000005~Realm~1~^^Test Councillor=Council Speaker;Department of War^INV_Sword_04^Other Mod=Operations Director,Third Mod=;Department of Coin^133784^Fourth Mod=Keeper of Coin~8dcff5504013f56ccd91085a4cb1b687760eb95014d3d9c5a441ea90a4996f8352f347b1b09c3aef3e9defb9e8dfe0b4f33224250b48483119c0dce9fd042b3f13299d7a219fb7d40806a07fbf8a946efb8b6e4f488c0c2562bb912b411e49e25eabf87bb2e54cf9c0975ea75d180bc75d5584ec7d6fc8936bf1412fc0e50f0124533141d1ac6f8fe51ded801b1c8e0bb7be116081ace3085fb1dcd8cad3e8adba7b6057a72e0f5b4f0a545b07157d8591563b9e0309ccf95bd763eafc3c391ff33dca7c2abca2c860a145623eda387b9406192784d9b41ad31e2f90a1747eec8a29386758fa8e4edc581d1addb1acb1fceba51d2176c5adb1e70997408bae10"
+local COUNCIL_TEST_ELSEWHERE = "HT1~1800000007~OtherRealm~1~^^Test Councillor=Council Speaker;Department of War^INV_Sword_04^Other Mod=Operations Director,Third Mod=;Department of Coin^133784^Fourth Mod=Keeper of Coin~5d356b2f8adc31a2760f37caa69c887ed69af0129f59d92ccca4e346f7d82adb88fee50591b55785a6f87e7ea1c3fdda7282fc34ad18c5e914fbcf00c12a7db7761719739ed9d1fe781e2e0bd8032339420c06d9bb1b036aa72e429e83bd29b037a9d6bd2a2ba1e011879c670e4c5b0f70b50fbfe9f56ee63620e4d0224c8ea2e092e81886cf34f6292a2ad67fe4e5bfee4226f36cc31a905a56a7c3ee7f26aa51353237135c504b3fe88c366634ecfeb89a48de508dc56b2f0416c021f600fa828c1ebebcffa2b0c3d58174a95f932ea669f13d49c0c1e083554faf6cd16d4511a18ca9637c9ee0d05176366eba9c91fbb93e92a9eb1fdd7d30ed915a6593e5"
+
+-- These tests' council: the test key in place of the author's, every council store put back
+-- after, and the Realm tree closed again.
+local function WithTestCouncil(fn)
+	local W = ns.Workshop
+	local saved = { council = ns.rdb.council, titles = ns.rdb.councilTitles, heard = ns.rdb.councilIcons, mine = ns.db.councilIcons,
+		me = ns.me, signed = ns.COUNCIL_SIGNED, ownTitles = ns.COUNCIL_TITLES, guilds = ns.rdb.guilds, now = ns.Now,
+		chunked = ns.Comm.SendChunked, verify = ns.Sign.Verify, ui = ns.UI, online = ns.Roster.online, after = ns.After }
+	local ok, err = pcall(function()
+		ns.rdb.council, ns.rdb.councilTitles, ns.rdb.councilIcons, ns.db.councilIcons = nil, nil, nil, nil
+		ns.COUNCIL_SIGNED, ns.COUNCIL_TITLES = nil, nil
+		ns.me = "Tester-Realm"
+		W.ResetVerify()
+		ns.Sign.WithKey(COUNCIL_TEST_N, COUNCIL_TEST_MU, 86, fn)
+	end)
+	ns.rdb.council, ns.rdb.councilTitles, ns.rdb.councilIcons, ns.db.councilIcons = saved.council, saved.titles, saved.heard, saved.mine
+	ns.me, ns.COUNCIL_SIGNED, ns.COUNCIL_TITLES, ns.rdb.guilds, ns.Now = saved.me, saved.signed, saved.ownTitles, saved.guilds, saved.now
+	ns.Comm.SendChunked, ns.Sign.Verify, ns.UI, ns.Roster.online, ns.After = saved.chunked, saved.verify, saved.ui, saved.online, saved.after
+	ns.Views.ExpandAll(false)
+	W.ResetVerify()
+	if not ok then error(err, 0) end
+end
+
+test("0.9.9 the High Council's titles: a second signed list, taken when signed, refused when changed, older or too big", function()
+	WithTestCouncil(function()
+		local W = ns.Workshop
+		eq(W.TakeCouncil(COUNCIL_TEST_NAMES4), true, "the test key's name list")
+		-- Changed anywhere: refused by the signature (the author's file path: no rate limit).
+		local text, sig = COUNCIL_TEST_TITLES:match("^(.*)~(%x+)$")
+		local function Changed(from, to)
+			local changed, n = text:gsub(from, to, 1)
+			eq(n, 1, from)
+			return changed .. "~" .. sig
+		end
+		local changed = {
+			{ "time", Changed("^HT1~1800000002~", "HT1~1800000009~") },
+			{ "realm group", Changed("~Realm~", "~Other~") },
+			{ "public flag", Changed("~Realm~0~", "~Realm~1~") },
+			{ "title", Changed("Operations Director", "Grand Admiral") },
+			{ "department", Changed("Department of War", "Department of Fun") },
+			{ "department icon", Changed("INV_Sword_04", "INV_Sword_05") },
+			{ "councillor", Changed("Fourth Mod", "Faker Guy") },
+			{ "department moved", Changed("Other Mod=Operations Director,", "") },
+			{ "signature", text .. "~" .. sig:sub(1, -2) .. (sig:sub(-1) == "0" and "1" or "0") },
+			{ "another list's signature", text .. "~" .. COUNCIL_TEST_PUBLIC:match("~(%x+)$") },
+		}
+		for _, c in ipairs(changed) do eq(W.TakeTitles(c[2]), false, c[1]) end
+		eq(ns.rdb.councilTitles, nil, "nothing kept")
+		-- Too big (whatever it carries): refused before any signature check.
+		local checks, verify = 0, ns.Sign.Verify
+		ns.Sign.Verify = function(...) checks = checks + 1 return verify(...) end
+		local big = "HT1~1900000000~Realm~1~^^" .. ("Faker Guy=Anything,"):rep(160) .. "~" .. sig
+		assert(#big > W.TITLES_BLOB, #big)
+		eq(W.TakeTitles(big), false); eq(checks, 0, "not even checked")
+		-- Signed: taken whole, the councillors outside any department first as signed.
+		eq(W.TakeTitles(COUNCIL_TEST_TITLES), true)
+		eq(checks, 1)
+		local t = ns.rdb.councilTitles
+		eq(t.at, 1800000002); eq(t.public, false); eq(t.realm, "Realm"); eq(t.blob, COUNCIL_TEST_TITLES, "kept as signed, to pass along")
+		eq(#t.depts, 3)
+		eq(t.depts[1].name, ""); eq(t.depts[1].members[1].name, "Test Councillor"); eq(t.depts[1].members[1].title, "Council Speaker")
+		eq(t.depts[2].name, "Department of War"); eq(t.depts[2].icon, "INV_Sword_04")
+		eq(t.depts[2].members[1].title, "Operations Director"); eq(t.depts[2].members[2].name, "Third Mod")
+		eq(t.depts[2].members[2].title, nil, "no title")
+		eq(t.depts[3].icon, 133784, "an icon's file number")
+		local other = ns.CouncilTitle("Other Mod-Realm")
+		eq(other.title, "Operations Director"); eq(other.dept, "Department of War"); eq(other.icon, "INV_Sword_04")
+		local speaker = ns.CouncilTitle("test councillor")
+		eq(speaker.title, "Council Speaker"); eq(speaker.dept, nil, "outside any department")
+		-- Only a newer one: not the same again, and never an older one back.
+		eq(W.TakeTitles(COUNCIL_TEST_TITLES, "Any Player-Realm"), false, "the same")
+		eq(checks, 1, "the list held is not checked again")
+		eq(W.TakeTitles(COUNCIL_TEST_PUBLIC), true, "a newer one")
+		eq(W.TakeTitles(COUNCIL_TEST_TITLES), false, "the older one")
+		eq(ns.rdb.councilTitles.public, true)
+	end)
+end)
+
+test("0.9.9 the High Council's titles: past the addon's limits, the rest is left out", function()
+	WithTestCouncil(function()
+		local W = ns.Workshop
+		-- What a signed list never carries (the signing script refuses it first; its own round
+		-- trip, tests/sign-roundtrip.sh, checks that), read as the addon reads any list: the
+		-- signature check is left out here.
+		ns.Sign.Verify = function() return true end
+		local members = {}
+		for i = 1, 60 do members[#members + 1] = "Mod " .. i .. "=Title " .. i end
+		local depts = { "^^" .. table.concat(members, ",", 1, 5) .. ",Long Title=" .. ("t"):rep(49) .. ",Mod 1=Again" }
+		depts[2] = ("D"):rep(41) .. "^^Long Dept=Title"
+		for i = 1, 10 do depts[#depts + 1] = "Department " .. i .. "^" .. (i == 1 and "..\\x" or "INV_Sword_04") .. "^" .. table.concat(members, ",", 5 * i + 1, 5 * i + 5) end
+		local blob = "HT1~1900000000~Realm~1~" .. table.concat(depts, ";") .. "~" .. ("ab"):rep(256)
+		assert(#blob <= W.TITLES_BLOB, #blob)
+		eq(W.TakeTitles(blob), true)
+		local t = ns.rdb.councilTitles
+		local named, count, byName = 0, 0, {}
+		for _, d in ipairs(t.depts) do
+			if d.name ~= "" then named = named + 1 end
+			for _, m in ipairs(d.members) do count, byName[m.name] = count + 1, m end
+		end
+		eq(byName["Long Title"], nil, "a title of more than 48 bytes")
+		eq(byName["Mod 1"].title, "Title 1", "a councillor once, the first time")
+		eq(t.depts[2].name, "Department 1", "a department's name of more than 40 bytes: left out")
+		eq(t.depts[2].icon, nil, "an icon that is not a game icon: none, the department stays")
+		eq(named, W.DEPTS_MAX, "8 departments at most, the first ones")
+		eq(t.depts[#t.depts].name, "Department " .. W.DEPTS_MAX)
+		eq(count, W.COUNCIL_MAX, "30 councillors at most, the first ones")
+		eq(byName["Mod 30"].title, "Title 30"); eq(byName["Mod 31"], nil)
+	end)
+end)
+
+test("0.9.9 the High Council's titles: on the channel only, for this realm group only, for names on the name list only", function()
+	WithTestCouncil(function()
+		local W = ns.Workshop
+		W.TakeCouncil(COUNCIL_TEST_NAMES2) -- Test Councillor and Other Mod
+		W.HandleTitles("WHISPER", "Any Player-Realm", "HT~" .. COUNCIL_TEST_TITLES)
+		W.HandleTitles("GUILD", "Any Player-Realm", "HT~" .. COUNCIL_TEST_TITLES)
+		eq(ns.rdb.councilTitles, nil, "not by whisper, not over the guild")
+		W.HandleTitles("CHANNEL", "Any Player-Realm", "HT~" .. COUNCIL_TEST_TITLES)
+		eq(ns.rdb.councilTitles.at, 1800000002, "the channel")
+		-- Titles for the councillors of the name list alone: Third and Fourth Mod are not on it,
+		-- and the Department of Coin is left with nobody.
+		eq(ns.CouncilTitle("Other Mod").title, "Operations Director")
+		eq(ns.CouncilTitle("Third Mod"), nil); eq(ns.CouncilTitle("Fourth Mod"), nil)
+		local loose, depts = W.CouncilTree()
+		eq(#loose, 1); eq(loose[1].name, "Test Councillor"); eq(loose[1].title, "Council Speaker")
+		eq(#depts, 1); eq(depts[1].name, "Department of War"); eq(#depts[1].members, 1); eq(depts[1].members[1].name, "Other Mod")
+		-- A councillor the titles leave out: outside any department, after the list's own.
+		ns.rdb.council = nil
+		W.TakeCouncil(COUNCIL_TEST_NAMES4)
+		ns.rdb.council.names["zed mod"] = "Zed Mod"
+		loose = W.CouncilTree()
+		eq(#loose, 2); eq(loose[1].name, "Test Councillor"); eq(loose[2].name, "Zed Mod"); eq(loose[2].title, nil)
+		-- Another realm group's titles list (newer, and public): as if none had come.
+		eq(W.TakeTitles(COUNCIL_TEST_ELSEWHERE), true)
+		eq(ns.CouncilTitles(), nil); eq(ns.CouncilTitle("Other Mod"), nil)
+		eq(ns.CouncilVisible(), false, "its public flag counts for nothing here")
+		loose, depts = W.CouncilTree()
+		eq(#depts, 0); eq(#loose, 5, "the name list alone")
+		for _, m in ipairs(loose) do eq(m.title, nil, m.name) end
+	end)
+end)
+
+test("0.9.9 the High Council's lists: relayed together, and a relay of both from one sender gets both checked", function()
+	WithTestCouncil(function()
+		local W, S = ns.Workshop, ns.Sign
+		local verify, checks, clock, sent = S.Verify, 0, 1000000, {}
+		ns.Now = function() return clock end
+		ns.After = function(_, _, f) f() end
+		ns.Comm.SendChunked = function(msg) sent[#sent + 1] = msg end
+		S.Verify = function(...) checks = checks + 1 return verify(...) end
+		-- The author's client: both lists from his file at login, and sent on at once.
+		ns.COUNCIL_SIGNED, ns.COUNCIL_TITLES = COUNCIL_TEST_NAMES4, COUNCIL_TEST_TITLES
+		W.CouncilLogin()
+		eq(sent[1], "HS~" .. COUNCIL_TEST_NAMES4); eq(sent[2], "HT~" .. COUNCIL_TEST_TITLES)
+		ns.COUNCIL_SIGNED, ns.COUNCIL_TITLES = nil, nil
+		-- Another client hears that relay: the names, then the titles, from one sender in the
+		-- same second. Both are checked (0.9.9: once a minute per sender and per kind of list).
+		ns.rdb.council, ns.rdb.councilTitles, checks = nil, nil, 0
+		W.HandleCouncil("CHANNEL", "Relay Guy-Realm", sent[1])
+		W.HandleTitles("CHANNEL", "Relay Guy-Realm", sent[2])
+		eq(checks, 2, "both lists checked")
+		eq(ns.IsHighCouncillor("Fourth Mod-Realm"), true); eq(ns.rdb.councilTitles.at, 1800000002)
+		-- Still once a minute per sender: a newer titles list from him, this soon, is not checked.
+		W.HandleTitles("CHANNEL", "Relay Guy-Realm", "HT~" .. COUNCIL_TEST_PUBLIC)
+		eq(checks, 2, "once a minute per sender"); eq(ns.rdb.councilTitles.public, false)
+		clock = clock + 61
+		W.HandleTitles("CHANNEL", "Relay Guy-Realm", "HT~" .. COUNCIL_TEST_PUBLIC)
+		eq(checks, 3); eq(ns.rdb.councilTitles.public, true, "a minute later: checked and taken")
+		-- A forged titles list: checked once, never again, from anyone.
+		local forged = "HT~HT1~1900000000~Realm~1~^^Faker Guy=Boss~" .. ("ab"):rep(256)
+		clock = clock + 61
+		W.HandleTitles("CHANNEL", "Faker Guy-Realm", forged)
+		W.HandleTitles("CHANNEL", "Other Faker-Realm", forged)
+		eq(checks, 4, "a false list is not checked again")
+		-- VERIFY_MAX checks a minute in all, both kinds of list together.
+		clock = clock + 61
+		for i = 1, 10 do
+			W.HandleCouncil("CHANNEL", "Bot" .. i .. "-Realm", ("HS~HS1~%d~Realm~Fake Name~%s"):format(2000000000 + i, ("ab"):rep(256)))
+			W.HandleTitles("CHANNEL", "Bot" .. i .. "-Realm", ("HT~HT1~%d~Realm~1~^^Fake Name=Boss~%s"):format(2000000000 + i, ("ab"):rep(256)))
+		end
+		eq(checks, 4 + W.VERIFY_MAX, "a few a minute in all")
+		-- Any client passes both along, as signed.
+		sent = {}
+		W.RelayCouncil(true)
+		eq(#sent, 2); eq(sent[1], "HS~" .. COUNCIL_TEST_NAMES4); eq(sent[2], "HT~" .. COUNCIL_TEST_PUBLIC)
+	end)
+end)
+
+test("0.9.9 the High Council's titles cross the channel under their own type", function()
+	WithTestCouncil(function()
+		CouncilOnChannel(function(_, Hear)
+			ns.rdb.council, ns.rdb.councilTitles = nil, nil
+			Hear("Any Player-Realm", "HS~" .. COUNCIL_TEST_NAMES4)
+			Hear("Any Player-Realm", "HT~" .. COUNCIL_TEST_TITLES)
+			eq(ns.IsHighCouncillor("Third Mod-Realm"), true, "the names")
+			eq(ns.rdb.councilTitles and ns.rdb.councilTitles.blob, COUNCIL_TEST_TITLES, "the titles, in pieces through the addon messages")
+			-- The list alone, without its type (as a 0.9.8 client would never send it): not taken.
+			ns.rdb.councilTitles = nil
+			Hear("Other Player-Realm", COUNCIL_TEST_TITLES)
+			eq(ns.rdb.councilTitles, nil)
+		end)
+	end)
+end)
+
+test("0.9.9 the council mark in the Olympus chats: the mark, then the councillor's own icon; the Treasurer's coin first", function()
+	WithTestCouncil(function()
+		ns.rdb.council = { at = 1, names = { ["test councillor"] = "Test Councillor", ["pyralis ashandar"] = "Pyralis Ashandar" } }
+		local MARK, COLOR, coin = ns.HIGH_COUNCIL_MARK, "|c" .. ns.HIGH_COUNCIL_COLOR, ns.COIN:gsub(" $", "")
+		eq(ns.HIGH_COUNCIL_SKULL, "Interface\\TargetingFrame\\UI-TargetingFrame-Skull", "the target frame's skull")
+		local function Line(sender, guild) return ns.Channels.FormatLine("A", sender, guild or "Olympus II", nil, "hello") end
+		-- No icon picked: the mark alone (no default icon since 0.9.9).
+		eq(ns.CouncilIcon("Test Councillor-Realm"), "")
+		local line = Line("Test Councillor-Realm")
+		assert(line:find("[" .. MARK .. COLOR .. "Test Councillor|r]", 1, true), line)
+		-- Their own icon: after the mark.
+		ns.Workshop.HandleIcon("CHANNEL", "Test Councillor-Realm", "HI~134400")
+		line = Line("Test Councillor-Realm")
+		assert(line:find("[" .. MARK .. "|T134400:0|t" .. COLOR .. "Test Councillor|r]", 1, true), line)
+		-- Named without the realm (the titles list), or heard from another realm of the group:
+		-- the icon heard from them all the same.
+		eq(ns.CouncilMark("Test Councillor"), MARK .. "|T134400:0|t")
+		ns.rdb.council.names["other mod"] = "Other Mod"
+		ns.Workshop.HandleIcon("CHANNEL", "Other Mod-Realm2", "HI~5")
+		eq(ns.CouncilMark("Other Mod"), MARK .. "|T5:0|t")
+		eq(ns.CouncilMark("Random Guy-Realm"), "", "not a councillor")
+		-- A councillor who is the Treasurer: his coin first, then the mark.
+		line = Line("Pyralis Ashandar-Realm", "Olympus")
+		assert(line:find("[" .. coin .. MARK .. COLOR .. "Pyralis Ashandar|r]", 1, true), line)
+		-- Everyone sees the mark in the chats, whoever reads (not only the council, 0.9.8's rule).
+		eq(ns.CouncilVisible(), false)
+		assert(Line("Test Councillor-Realm"):find(MARK, 1, true))
+	end)
+end)
+
+-- The Realm's census for these tests: <Olympus> with the King and the Treasurer, and <Olympus
+-- II> whose Lord is Other Mod (offline 3 days) and a Captain Test Councillor (online).
+local function CouncilCensus()
+	local now = os.time()
+	ns.rdb.guilds = {
+		["Olympus"] = Vouched({ total = 1000, online = 110, zones = {}, t = now, leader = "Asmongold Asmongler", leaderOnline = true, realm = "Realm",
+			officers = { { name = "Pyralis Ashandar", online = true, days = 0, class = "PR", level = 20 } } }, "W1-Realm", "W2-Realm"),
+		["Olympus II"] = Vouched({ total = 300, online = 30, zones = {}, t = now, leader = "Other Mod", leaderOnline = false, leaderDays = 3,
+			leaderClass = "WA", leaderLevel = 25, realm = "Realm",
+			officers = { { name = "Test Councillor", online = true, days = 0, class = "MA", level = 30 } } }, "W3-Realm", "W4-Realm"),
+	}
+	-- Fourth Mod: seen online in our own guild's roster.
+	ns.Roster.online = { { name = "Fourth Mod", level = 22, class = "PR", rank = "Member", rankIndex = 3 } }
+end
+local function Find(lines, text)
+	for i, l in ipairs(lines) do if l.text and l.text:find(text, 1, true) then return l, i end end
+	return nil
+end
+
+test("0.9.9 the Realm: the High Council under the King and the Treasurer, only for whoever may see it", function()
+	WithTestCouncil(function()
+		local W, L = ns.Workshop, ns.L
+		CouncilCensus()
+		W.TakeCouncil(COUNCIL_TEST_NAMES4)
+		W.TakeTitles(COUNCIL_TEST_TITLES)
+		local HEADER = L.COUNCIL_CENSUS:format(4)
+		ns.Views.ExpandAll(true)
+		-- Before launch: a soldier sees nothing of it, not even the marks in the guild rows.
+		local lines = ns.Views.RealmLines()
+		eq(Find(lines, HEADER), nil, "no council section")
+		eq(Find(lines, ns.HIGH_COUNCIL_MARK), nil, "no mark anywhere")
+		eq(Find(lines, "Operations Director"), nil, "no title")
+		-- A councillor sees it: right under the Treasurer, above the guilds.
+		ns.me = "Third Mod-Realm"
+		lines = ns.Views.RealmLines()
+		local header, at = Find(lines, HEADER)
+		assert(header, "the council's header")
+		local _, treasurer = Find(lines, L.TREASURER .. ": ")
+		local _, firstGuild = Find(lines, "<Olympus>")
+		assert(treasurer and at > treasurer, "under the Treasurer")
+		assert(firstGuild and at < firstGuild, "above the guilds")
+		assert(header.text:find("[-] " .. ns.HIGH_COUNCIL_MARK, 1, true), header.text)
+		local shown = {}
+		header.tooltip({ AddLine = function(_, s) shown[#shown + 1] = s end })
+		eq(shown[2], L.COUNCIL_CENSUS_TIP, "what the council is")
+		-- Open: the councillors outside any department, then each department and its own, in order.
+		local want = { "Test Councillor", "Department of War", "Other Mod", "Third Mod", "Department of Coin", "Fourth Mod" }
+		for i, text in ipairs(want) do
+			local l = lines[at + i]
+			assert(l and l.text:find(text, 1, true), text .. " at " .. i .. ": " .. tostring(l and l.text))
+		end
+		local speaker, war, other, third, coinDept, fourth = lines[at + 1], lines[at + 2], lines[at + 3], lines[at + 4], lines[at + 5], lines[at + 6]
+		eq(speaker.indent, 1); eq(war.indent, 1); eq(other.indent, 2)
+		assert(speaker.text:find(ns.HIGH_COUNCIL_MARK .. " ", 1, true) and speaker.text:find("|cff9d9d9dCouncil Speaker|r", 1, true), speaker.text)
+		assert(war.text:find("|TInterface\\Icons\\INV_Sword_04:0|t", 1, true), war.text)
+		assert(coinDept.text:find("|T133784:0|t", 1, true), coinDept.text)
+		assert(other.text:find("Operations Director", 1, true), other.text)
+		assert(not third.text:find(" - ", 1, true), "no title: " .. third.text)
+		-- Where the census knows them: a Lord's days away, a Captain online, someone seen in our
+		-- roster; nothing for someone it never saw.
+		assert(other.right and other.right:find(L.OFFLINE_DAYS:format(3), 1, true), tostring(other.right))
+		eq(speaker.right, "|cff40ff40" .. L.ONLINE_NOW .. "|r")
+		eq(fourth.right, "|cff40ff40" .. L.ONLINE_NOW .. "|r")
+		eq(third.right, nil)
+		-- A click opens what the census knows (the Lord of <Olympus II>), or the name alone.
+		local opened
+		ns.UI = { ShowPerson = function(p) opened = p end, Refresh = function() end }
+		other.onClick()
+		eq(opened.name, "Other Mod"); eq(opened.guild, "Olympus II"); eq(opened.rank, L.LORD); eq(opened.days, 3)
+		third.onClick()
+		eq(opened.name, "Third Mod"); eq(opened.guild, nil)
+		-- Closed: the header alone.
+		header.onClick()
+		lines = ns.Views.RealmLines()
+		header, at = Find(lines, HEADER)
+		assert(header.text:find("[+] ", 1, true), header.text)
+		eq(Find(lines, "Council Speaker"), nil)
+		header.onClick()
+		-- The marks in the guild rows: after the Lord's and the Captain's names.
+		lines = ns.Views.RealmLines()
+		local lord, captain
+		for _, l in ipairs(lines) do
+			if l.key == "Other Mod" and l.indent == 1 and l.text:find(L.LORD, 1, true) then lord = l end
+			if l.key == "Test Councillor" and l.indent == 2 and l.text:find("UI-Group-AssistantIcon", 1, true) then captain = l end
+		end
+		local function After(l, name)
+			local a, b = l and l.text:find(name, 1, true), l and l.text:find(" " .. ns.HIGH_COUNCIL_MARK, 1, true)
+			return a and b and b > a
+		end
+		assert(After(lord, "Other Mod"), lord and lord.text)
+		assert(After(captain, "Test Councillor"), captain and captain.text)
+		-- The author's own client (it holds the signed lists) sees it too.
+		ns.me = "Tester-Realm"
+		eq(Find(ns.Views.RealmLines(), HEADER), nil)
+		ns.COUNCIL_SIGNED = COUNCIL_TEST_NAMES4
+		assert(Find(ns.Views.RealmLines(), HEADER), "the author's client")
+		ns.COUNCIL_SIGNED = nil
+		-- Launch: the titles list signed public, and the whole army sees it.
+		W.TakeTitles(COUNCIL_TEST_PUBLIC)
+		lines = ns.Views.RealmLines()
+		assert(Find(lines, HEADER), "public")
+		assert(Find(lines, "Operations Director"), "with the titles")
+	end)
+end)
+
+test("0.9.9 the person card: a councillor's mark after the name and their title, for whoever may see the council", function()
+	WithUI(function()
+		WithTestCouncil(function()
+			local W, L = ns.Workshop, ns.L
+			W.TakeCouncil(COUNCIL_TEST_NAMES4)
+			W.TakeTitles(COUNCIL_TEST_TITLES)
+			local UI = LoadUI()
+			local function Card(p)
+				UI.ShowPerson(p)
+				local f, rows = OlympusPersonFrame, {}
+				for _, fs in ipairs(f.lines) do if (fs:GetText() or "") ~= "" then rows[#rows + 1] = fs:GetText() end end
+				return f.name:GetText(), table.concat(rows, "\n")
+			end
+			local other = { name = "Other Mod", realm = "Realm", guild = "Olympus II", rank = L.LORD, online = false, days = 3 }
+			-- A soldier, before launch: nothing.
+			local name, rows = Card(other)
+			assert(not name:find(ns.HIGH_COUNCIL_MARK, 1, true) and not rows:find(L.COUNCIL_PERSON, 1, true), name .. "\n" .. rows)
+			-- A councillor: the mark after the name, "High Councillor - title (department)".
+			ns.me = "Test Councillor-Realm"
+			name, rows = Card(other)
+			assert(name:find("Other Mod " .. ns.HIGH_COUNCIL_MARK, 1, true), name)
+			assert(rows:find(L.COUNCIL_PERSON .. " - Operations Director (Department of War)", 1, true), rows)
+			-- Outside any department; no title at all.
+			rows = select(2, Card({ name = "Test Councillor", realm = "Realm", online = true }))
+			assert(rows:find(L.COUNCIL_PERSON .. " - Council Speaker|r", 1, true), rows)
+			rows = select(2, Card({ name = "Third Mod", realm = "Realm" }))
+			assert(rows:find(L.COUNCIL_PERSON .. " (Department of War)|r", 1, true), rows)
+			-- Not a councillor: nothing.
+			name, rows = Card({ name = "Random Guy", realm = "Realm" })
+			assert(not name:find(ns.HIGH_COUNCIL_MARK, 1, true) and not rows:find(L.COUNCIL_PERSON, 1, true), rows)
+		end)
+	end)
 end)
 
 print(("\n%d passed, %d failed"):format(passed, failed))

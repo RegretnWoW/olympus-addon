@@ -612,6 +612,14 @@ end
 --   HS1~<time>~<realm group>~<First Surname>,...~<signature>   (signed: all before the last ~)
 -- On the channel it travels as HS~<the signed list> (0.9.8): Comm hands a message to its
 -- handler only when "~" follows the two letters of its type, and the list starts "HS1~".
+-- Departments and titles (0.9.9, Max's) come in a second signed list, so 0.9.8 clients keep
+-- the name list they know; it travels as HT~<the signed list>, taken and passed along the same
+-- way, and shows titles for names on the name list only (Core.lua):
+--   HT1~<time>~<realm group>~<public 0|1>~<departments>~<signature>
+--   <departments>: <name>^<icon>^<First Surname>=<title>,...;<name>^<icon>^...
+-- A department's name may be empty (councillors outside any department: the council's own);
+-- its icon is what ns.CouncilIconValue takes, or nothing. "public" says whether the army sees
+-- the council in the census yet (ns.CouncilVisible).
 ---------------------------------------------------------------------------
 
 Workshop.COUNCIL_MAX = 30
@@ -632,14 +640,17 @@ Workshop.CouncilNames = CouncilNames
 -- A signature check is the heaviest thing the addon does (0.9.8, Konig's review): lists heard on
 -- the channel are checked at most once a minute per sender and VERIFY_MAX times a minute in all,
 -- and a list already found false is not checked again. The author's own file is not limited.
+-- Once a minute per sender and per kind of list (0.9.9): a relay sends the names and the titles
+-- one after the other, and one gap for both would leave the titles unchecked at every relay.
 Workshop.VERIFY_GAP, Workshop.VERIFY_MAX = 60, 6
 local verifiedFrom, verifyTimes, falseLists, falseCount = {}, {}, {}, 0
-local function MayVerify(sender, blob, now)
+local function MayVerify(sender, kind, blob, now)
 	if falseLists[blob] then return false end
-	if sender and now - (verifiedFrom[sender] or -math.huge) < Workshop.VERIFY_GAP then return false end
+	local key = sender and (sender .. "~" .. kind)
+	if key and now - (verifiedFrom[key] or -math.huge) < Workshop.VERIFY_GAP then return false end
 	for i = #verifyTimes, 1, -1 do if now - verifyTimes[i] >= 60 then table.remove(verifyTimes, i) end end
 	if #verifyTimes >= Workshop.VERIFY_MAX then return false end
-	if sender then verifiedFrom[sender] = now end
+	if key then verifiedFrom[key] = now end
 	verifyTimes[#verifyTimes + 1] = now
 	return true
 end
@@ -658,7 +669,7 @@ function Workshop.TakeCouncil(blob, sender)
 	-- client a signature check for nothing (0.9.8).
 	local c = ns.rdb.council
 	if type(c) == "table" and (tonumber(c.at) or 0) >= at then return false end
-	if sender and not MayVerify(sender, blob, ns.Now()) then return false end
+	if sender and not MayVerify(sender, "HS", blob, ns.Now()) then return false end
 	if not ns.Sign or not ns.Sign.Verify(text, sig) then
 		if sender then
 			RememberFalse(blob)
@@ -683,13 +694,75 @@ function Workshop.HandleCouncil(dist, sender, text)
 end
 ns.Comm.Handle("HS", function(...) Workshop.HandleCouncil(...) end)
 
--- Passing the list along: the author's client each 10 minutes; any other one now and then, so
--- about RELAYS clients a half hour, whatever the army's size.
+-- The departments and titles (0.9.9): what the addon keeps of them, whatever the list says. A
+-- signed list never breaks these (the signing script refuses it first); past them, the rest is
+-- left out: TITLES_BLOB bytes in all (or none of it), COUNCIL_MAX councillors, DEPTS_MAX named
+-- departments of DEPT_NAME bytes, titles of TITLE_MAX bytes; a councillor once, the first time.
+Workshop.TITLES_BLOB, Workshop.DEPTS_MAX, Workshop.DEPT_NAME, Workshop.TITLE_MAX = 3000, 8, 40, 48
+local function Trim(s) return (s:gsub("^%s+", ""):gsub("%s+$", "")) end
+local function ReadDepartments(text)
+	local depts, named, count, seen = {}, 0, 0, {}
+	for entry in text:gmatch("[^;]+") do
+		local name, icon, list = entry:match("^([^%^]*)%^([^%^]*)%^([^%^]*)$")
+		name = name and Trim(name)
+		if name and #name <= Workshop.DEPT_NAME and (name == "" or named < Workshop.DEPTS_MAX) then
+			if name ~= "" then named = named + 1 end
+			local d = { name = name, icon = ns.CouncilIconValue(icon), members = {} }
+			for m in list:gmatch("[^,]+") do
+				local who, title = m:match("^([^=]*)=([^=]*)$")
+				who, title = who and Trim(who), title and Trim(title)
+				if who and who ~= "" and #who <= 48 and #title <= Workshop.TITLE_MAX and not seen[who:lower()]
+					and count < Workshop.COUNCIL_MAX then
+					seen[who:lower()], count = true, count + 1
+					d.members[#d.members + 1] = { name = who, title = title ~= "" and title or nil }
+				end
+			end
+			depts[#depts + 1] = d
+		end
+	end
+	return depts, count
+end
+
+-- A signed titles list, from the author's file or the channel: checked and kept like the names
+-- (only a newer one; the same budget of signature checks).
+function Workshop.TakeTitles(blob, sender)
+	if type(blob) ~= "string" or #blob > Workshop.TITLES_BLOB then return false end
+	local text, at, realm, public, list, sig = blob:match("^(HT1~(%d+)~([^~]*)~([01])~([^~]*))~(%x+)$")
+	at = tonumber(at)
+	if not at then return false end
+	local t = ns.rdb.councilTitles
+	if type(t) == "table" and (tonumber(t.at) or 0) >= at then return false end
+	if sender and not MayVerify(sender, "HT", blob, ns.Now()) then return false end
+	if not ns.Sign or not ns.Sign.Verify(text, sig) then
+		if sender then
+			RememberFalse(blob)
+			ns.Log("High Council: a titles list from %s failed its signature", tostring(sender))
+		end
+		return false
+	end
+	local depts, n = ReadDepartments(list)
+	ns.rdb.councilTitles = { at = at, public = public == "1", realm = realm ~= "" and realm or nil, depts = depts, blob = blob }
+	ns.Log("High Council: a signed titles list of %d names in %d parts (%s)", n, #depts, tostring(at))
+	ns.Fire("DATA_CHANGED")
+	return true
+end
+
+function Workshop.HandleTitles(dist, sender, text)
+	if dist ~= "CHANNEL" or type(text) ~= "string" then return end
+	Workshop.TakeTitles(text:match("^HT~(HT1~.*)$") or text, ns.FullName(sender))
+end
+ns.Comm.Handle("HT", function(...) Workshop.HandleTitles(...) end)
+
+-- Passing the lists along, the names and the titles together: the author's client each 10
+-- minutes; any other one now and then, so about RELAYS clients a half hour, whatever the
+-- army's size.
 function Workshop.RelayCouncil(force)
-	local c = ns.rdb and ns.rdb.council
-	if type(c) ~= "table" or type(c.blob) ~= "string" then return end
+	local c, t = ns.rdb and ns.rdb.council, ns.rdb and ns.rdb.councilTitles
+	local names = type(c) == "table" and type(c.blob) == "string" and c.blob or nil
+	local titles = type(t) == "table" and type(t.blob) == "string" and t.blob or nil
+	if not names and not titles then return end
 	local now = ns.Now()
-	local mine = ns.COUNCIL_SIGNED ~= nil
+	local mine = ns.COUNCIL_SIGNED ~= nil or ns.COUNCIL_TITLES ~= nil
 	local every = mine and 600 or Workshop.RELAY_EVERY
 	if not force and now - lastCouncilSent < every then return end
 	lastCouncilSent = now
@@ -697,12 +770,41 @@ function Workshop.RelayCouncil(force)
 		local users = ns.King and ns.King.AddonsOnline and ns.King.AddonsOnline() or 1
 		if Workshop.random() > math.min(1, Workshop.RELAYS / users) then return end
 	end
-	ns.Comm.SendChunked("HS~" .. c.blob)
+	if names then ns.Comm.SendChunked("HS~" .. names) end
+	if titles then ns.Comm.SendChunked("HT~" .. titles) end
 end
 
 function Workshop.EditCouncil(verb)
 	local names = CouncilNames()
 	ns.Print(L.COUNCIL_LIST:format(#names > 0 and table.concat(names, ", ") or "-"))
+end
+
+-- The council as the census shows it (0.9.9, Views.lua): the councillors outside any department
+-- first (the titles list's own, then anyone on the name list it leaves out, by name), then each
+-- department in the list's order with its councillors in theirs. Names on the name list only;
+-- a department left with nobody is left out.
+--   loose = { { name, title }, ... }, depts = { { name, icon, members = { { name, title }, ... } }, ... }
+function Workshop.CouncilTree()
+	local loose, depts, placed = {}, {}, {}
+	local t = ns.CouncilTitles()
+	for _, d in ipairs(t and t.depts or {}) do
+		local own = type(d) == "table" and d.name == ""
+		local into = own and loose or {}
+		for _, m in ipairs(type(d) == "table" and type(d.members) == "table" and d.members or {}) do
+			local key = type(m) == "table" and type(m.name) == "string" and m.name:lower()
+			if key and not placed[key] and ns.IsHighCouncillor(m.name) then
+				placed[key] = true
+				into[#into + 1] = { name = m.name, title = type(m.title) == "string" and m.title ~= "" and m.title or nil }
+			end
+		end
+		if not own and #into > 0 and type(d.name) == "string" then
+			depts[#depts + 1] = { name = d.name, icon = ns.CouncilIconValue(d.icon), members = into }
+		end
+	end
+	for _, name in ipairs(CouncilNames()) do
+		if not placed[name:lower()] and ns.IsHighCouncillor(name) then loose[#loose + 1] = { name = name } end
+	end
+	return loose, depts
 end
 
 -- Asking a High Councillor for help (Max's): the councillors who opted in (/oly council help on)
@@ -804,14 +906,15 @@ StaticPopupDialogs["OLYMPUS_COUNCIL_ASK"] = {
 }
 
 ---------------------------------------------------------------------------
--- The councillors' own icons (0.9.8, the High Council's wish): each councillor picks the icon
--- before their name in the Olympus chats from the game's icons, as the macro window does (in a
+-- The councillors' own icons (0.9.8, the High Council's wish): each councillor picks an icon
+-- for their name in the Olympus chats from the game's icons, as the macro window does (in a
 -- window of ours: Blizzard's macro icon window, opened from addon code, would run tainted). Their
 -- client says which on the channel when it changes, then about every ICON_EVERY. Every client
 -- keeps it for councillors only (ns.IsHighCouncillor of the sender the server stamped), and only
 -- a file number or a plain icon name under Interface\Icons (ns.CouncilIconValue): nothing else
--- can reach the chat line. None heard yet: the default skull (Core.lua).
---   HI~<file number or icon name>   |   HI~0   (back to the default skull)
+-- can reach the chat line. Since 0.9.9 it is optional flavour after the council's fixed mark
+-- (Core.lua); none heard yet: the mark alone.
+--   HI~<file number or icon name>   |   HI~0   (no icon: the mark alone)
 ---------------------------------------------------------------------------
 
 Workshop.ICON_EVERY = 1200 -- about every 20 minutes (the council ticker runs once a minute)
@@ -823,8 +926,8 @@ local gameIcons       -- the game's icons while it is open (let go when it close
 local shownIcons      -- the ones the filter leaves
 local iconPage, iconChoice = 1, nil
 
--- Our own icon (per character, like the council's names), or nil for the default skull. False
--- is the default chosen on purpose: it is still said ("0"), so the old one fades everywhere.
+-- Our own icon (per character, like the council's names), or nil for none. False is "none"
+-- chosen on purpose: it is still said ("0"), so the old one fades everywhere.
 local function MyIcon()
 	local mine = ns.db and ns.db.councilIcons
 	return ns.CouncilIconValue(type(mine) == "table" and ns.me and mine[ns.me] or nil)
@@ -832,7 +935,7 @@ end
 Workshop.MyIcon = MyIcon
 
 -- Our icon on the channel: at once when forced (a change), else every ICON_EVERY. Only a
--- councillor's client says it, and only once they picked one (or the default back).
+-- councillor's client says it, and only once they picked one (or none, on purpose).
 function Workshop.SayIcon(force)
 	if not ns.IsHighCouncillor(ns.me) then return false end
 	local mine = ns.db and ns.db.councilIcons
@@ -844,8 +947,8 @@ function Workshop.SayIcon(force)
 	return true
 end
 
--- A councillor's choice (the picker's OK): kept on this character and said at once; nil puts
--- the default skull back.
+-- A councillor's choice (the picker's OK): kept on this character and said at once; nil takes
+-- the icon away (the mark stays).
 function Workshop.SetCouncilIcon(v)
 	if not ns.IsHighCouncillor(ns.me) then
 		ns.Print(L.COUNCIL_ICON_ONLY)
@@ -956,14 +1059,16 @@ function Workshop.RefreshIconPicker()
 	picker.prev:SetEnabled(iconPage > 1)
 	picker.next:SetEnabled(iconPage < pages)
 	picker.empty:SetShown(#list == 0)
-	-- The preview: the icon large, and our name as the chats will show it.
-	local texture = ns.CouncilIconTexture(iconChoice) or ns.HIGH_COUNCIL_SKULL
-	picker.preview:SetTexture(texture)
-	picker.sample:SetText("[" .. L.CHAN_ALL .. "] [|T" .. texture .. ":0|t|c" .. ns.HIGH_COUNCIL_COLOR .. (ns.DisplayName(ns.me) or "?") .. "|r]")
-	picker.chosenName:SetText(iconChoice and IconLabel(iconChoice) or L.COUNCIL_ICON_DEFAULT)
+	-- The preview: the icon large (the mark when none is picked), and our name as the chats will
+	-- show it: the mark always, the icon after it (0.9.9).
+	local texture = ns.CouncilIconTexture(iconChoice)
+	picker.preview:SetTexture(texture or ns.HIGH_COUNCIL_SKULL)
+	picker.sample:SetText("[" .. L.CHAN_ALL .. "] [" .. ns.HIGH_COUNCIL_MARK .. (texture and ("|T" .. texture .. ":0|t") or "")
+		.. "|c" .. ns.HIGH_COUNCIL_COLOR .. (ns.DisplayName(ns.me) or "?") .. "|r]")
+	picker.chosenName:SetText(iconChoice and IconLabel(iconChoice) or L.COUNCIL_ICON_MARK_ONLY)
 end
 
--- A click on an icon (or the default skull, nil): the preview only, until OK.
+-- A click on an icon (or No icon, nil): the preview only, until OK.
 function Workshop.PickIcon(icon)
 	iconChoice = ns.CouncilIconValue(icon)
 	Workshop.RefreshIconPicker()
@@ -1098,7 +1203,7 @@ local function MakePicker()
 	f.next:SetScript("OnClick", function() ns.SafeCall("council icon page", Workshop.IconPage, iconPage + 1) end)
 	f.page = f:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
 	f.page:SetPoint("TOP", 0, gridBottom - 13)
-	-- The default skull, Cancel and OK. OK with nothing changed only closes.
+	-- No icon (the mark alone), Cancel and OK. OK with nothing changed only closes.
 	f.default = PickerButton(f, L.COUNCIL_ICON_DEFAULT, 120)
 	f.default:SetPoint("BOTTOMLEFT", 24, 18)
 	f.default:SetScript("OnClick", function() ns.SafeCall("council icon pick", Workshop.PickIcon, nil) end)
@@ -1156,15 +1261,16 @@ function Workshop.ResetIcons()
 	lastIconSent = -math.huge
 end
 
--- At login. The author's machine holds the signed list (CouncilList.lua, never published): his
--- client takes it and sends the newest it holds at once. Any other client passes the list
--- along a whole RELAY_EVERY after login at the earliest (0.9.8): until the census says how
--- many addons are online, each would count itself alone and relay for sure, the whole army
--- at once after a server restart.
+-- At login. The author's machine holds the signed lists (CouncilList.lua, never published: the
+-- names, and the titles since 0.9.9): his client takes them and sends the newest it holds at
+-- once. Any other client passes the lists along a whole RELAY_EVERY after login at the earliest
+-- (0.9.8): until the census says how many addons are online, each would count itself alone and
+-- relay for sure, the whole army at once after a server restart.
 function Workshop.CouncilLogin()
 	lastCouncilSent = ns.Now()
-	if ns.COUNCIL_SIGNED then
-		Workshop.TakeCouncil(ns.COUNCIL_SIGNED)
+	if ns.COUNCIL_SIGNED then Workshop.TakeCouncil(ns.COUNCIL_SIGNED) end
+	if ns.COUNCIL_TITLES then Workshop.TakeTitles(ns.COUNCIL_TITLES) end
+	if ns.COUNCIL_SIGNED or ns.COUNCIL_TITLES then
 		ns.After(15, "council", function() Workshop.RelayCouncil(true) end)
 	end
 	ns.Every(60, "council", function()

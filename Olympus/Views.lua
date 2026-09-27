@@ -590,9 +590,112 @@ local function ChatLines()
 	return lines
 end
 
+---------------------------------------------------------------------------
+-- The High Council in the Realm (0.9.9, Max's): under the King and the Treasurer, the
+-- moderators by department with their titles (Workshop.CouncilTree), for whoever may see them
+-- (ns.CouncilVisible: until launch, the councillors and the author alone).
+---------------------------------------------------------------------------
+
+local COUNCIL_ROW = {} -- its open/closed key in `expanded`: no guild's name can be a table
+
+-- What the census knows of these names (a set of short names, lower case): each guild's Lord
+-- and Captains from its report, then who was seen online (our roster, /who), the first found.
+-- Short name -> a person as the rows open them.
+local function Known(s, wanted)
+	local out = {}
+	local function Add(guild, p)
+		local key = type(p.name) == "string" and ns.ShortName(p.name):lower()
+		if key and wanted[key] and not out[key] then
+			p.guild = guild
+			out[key] = p
+		end
+	end
+	for _, e in ipairs(s.guilds) do
+		local g = e.g
+		if g.leader then
+			Add(e.name, { name = g.leader, realm = g.realm, class = g.leaderClass, level = g.leaderLevel, zone = g.leaderZone,
+				rank = L.LORD, online = g.leaderOnline, days = g.leaderDays })
+		end
+		for _, o in ipairs(g.officers or {}) do
+			Add(e.name, { name = o.name, realm = g.realm, class = o.class, level = o.level, zone = o.zone, rank = L.CAPTAIN, online = o.online, days = o.days })
+		end
+	end
+	local mine = GetGuildInfo("player")
+	for _, m in ipairs(mine and ns.Roster.online or {}) do
+		Add(mine, { name = m.name, class = m.class, level = m.level, zone = m.zone, rank = m.rank, online = true })
+	end
+	-- (As Views.MembersOf reads /who: the guild's own search, then the round.)
+	local sweep = ns.Who and ns.Who.sweep
+	for _, e in ipairs(s.guilds) do
+		local own = ns.Who and ns.Who.GuildSeen and ns.Who.GuildSeen(e.name)
+		for _, source in ipairs({ own or {}, sweep and sweep.list or {} }) do
+			for _, p in ipairs(source) do
+				if p.guild == e.name and p.name then
+					Add(e.name, { name = ns.DisplayName(ns.FullName(p.name)), level = p.level, class = ns.Roster.ClassCode(p.class),
+						zone = p.zone and ns.Zones.KeyForName(p.zone), online = true })
+				end
+			end
+		end
+	end
+	return out
+end
+
+local function Council(s) return "|c" .. ns.HIGH_COUNCIL_COLOR .. s .. "|r" end
+
+local function CouncilLines(lines, s)
+	local loose, depts = ns.Workshop.CouncilTree()
+	local n = #loose
+	for _, d in ipairs(depts) do n = n + #d.members end
+	if n == 0 then return end
+	local open = expanded[COUNCIL_ROW]
+	lines[#lines + 1] = {
+		text = (open and "[-] " or "[+] ") .. ns.HIGH_COUNCIL_MARK .. " " .. Council(L.COUNCIL_CENSUS:format(n)),
+		onClick = function()
+			expanded[COUNCIL_ROW] = not expanded[COUNCIL_ROW] or nil
+			ns.UI.Refresh()
+		end,
+		tooltip = function(tt)
+			tt:AddLine(L.COUNCIL_CENSUS:format(n), 0.69, 0.28, 0.97)
+			tt:AddLine(L.COUNCIL_CENSUS_TIP, 1, 1, 1, true)
+		end,
+	}
+	if not open then return end
+	local wanted = {}
+	for _, m in ipairs(loose) do wanted[m.name:lower()] = true end
+	for _, d in ipairs(depts) do for _, m in ipairs(d.members) do wanted[m.name:lower()] = true end end
+	local known = Known(s, wanted)
+	-- "<mark><own icon> Name - Title": where the census knows them, when they were last on, and a
+	-- click opens what it knows.
+	local function Member(m, indent)
+		local p = known[m.name:lower()]
+		local person = p or { name = m.name }
+		lines[#lines + 1] = {
+			key = person.name,
+			indent = indent,
+			text = ns.CouncilMark(m.name) .. " " .. Council(Plain(m.name)) .. (m.title and (" - " .. Grey(Plain(m.title))) or ""),
+			right = p and Presence(p.online, p.days) or nil,
+			onClick = function() ns.UI.ShowPerson(person) end,
+		}
+	end
+	for _, m in ipairs(loose) do Member(m, 1) end
+	for _, d in ipairs(depts) do
+		local icon = ns.CouncilIconTexture(d.icon)
+		lines[#lines + 1] = { indent = 1, text = (icon and ("|T" .. icon .. ":0|t ") or "") .. Gold(Plain(d.name)) }
+		for _, m in ipairs(d.members) do Member(m, 2) end
+	end
+end
+
 local function RealmLines(s)
 	if chatTier then return ChatLines() end
 	local lines = {}
+	-- A councillor's mark and own icon after their name in the rows below (0.9.9), for whoever
+	-- may see the council here.
+	local councilShown = ns.CouncilVisible()
+	local function Tag(name, home)
+		local full = ns.FullName(name, home)
+		if not councilShown or not ns.IsHighCouncillor(full) then return "" end
+		return " " .. ns.CouncilMark(full)
+	end
 	-- The King holds court in our zone (Court.lua), then his layer (Hop.lua).
 	local court = ns.Court and ns.Court.Line and ns.Court.Line()
 	if court then lines[#lines + 1] = court end
@@ -631,6 +734,8 @@ local function RealmLines(s)
 			if type(shared) == "string" then lines[#lines + 1] = { indent = 1, text = Grey(shared) } end
 		end
 	end
+	-- The High Council, under them (0.9.9).
+	if councilShown then CouncilLines(lines, s) end
 	-- The Olympus chats, one click away (the channels our rank reads), above the guilds.
 	if #ChatTiers() > 0 then
 		if lines[#lines] then lines[#lines].gapAfter = true end
@@ -666,7 +771,8 @@ local function RealmLines(s)
 					guild = e.name, rank = L.LORD, online = g.leaderOnline, days = g.leaderDays }
 				lines[#lines + 1] = {
 					key = g.leader,
-					indent = 1, text = Mark(g.leader, g.realm, g.leaderOnline) .. CROWN .. Gold(L.LORD) .. "  " .. ClassColored(g.leader, lord.class and ns.CLASS_FILES[lord.class]),
+					indent = 1, text = Mark(g.leader, g.realm, g.leaderOnline) .. CROWN .. Gold(L.LORD) .. "  " .. ClassColored(g.leader, lord.class and ns.CLASS_FILES[lord.class])
+						.. Tag(g.leader, g.realm),
 					right = Presence(g.leaderOnline, g.leaderDays),
 					onClick = function() ns.UI.ShowPerson(lord) end,
 				}
@@ -679,7 +785,7 @@ local function RealmLines(s)
 				lines[#lines + 1] = {
 					key = o.name,
 					indent = 2, text = Mark(o.name, g.realm, o.online) .. ASSIST .. ClassColored(o.name, o.class and ns.CLASS_FILES[o.class])
-						.. (ns.IsTreasurer(o.name, e.name) and ("  " .. ns.COIN .. Grey(L.TREASURER)) or ""),
+						.. Tag(o.name, g.realm) .. (ns.IsTreasurer(o.name, e.name) and ("  " .. ns.COIN .. Grey(L.TREASURER)) or ""),
 					right = (o.level and Grey(L.LEVEL_N:format(o.level)) .. "  " or "") .. Presence(o.online, o.days),
 					onClick = function() ns.UI.ShowPerson(person) end,
 				}
@@ -700,7 +806,7 @@ local function RealmLines(s)
 				local person = { name = m.name, class = m.class, level = m.level, zone = m.zone, guild = e.name, rank = m.rank, online = true }
 				lines[#lines + 1] = {
 					key = m.name,
-					indent = 2, text = ClassColored(m.name, m.class and ns.CLASS_FILES[m.class]) .. (m.rank and ("  " .. Grey(m.rank)) or "")
+					indent = 2, text = ClassColored(m.name, m.class and ns.CLASS_FILES[m.class]) .. Tag(m.name) .. (m.rank and ("  " .. Grey(m.rank)) or "")
 						.. (ns.IsTreasurer(m.name, e.name) and ("  " .. ns.COIN .. Grey(L.TREASURER)) or ""),
 					right = m.level and Grey(L.LEVEL_N:format(m.level)) or nil,
 					onClick = function() ns.UI.ShowPerson(person) end,
@@ -832,6 +938,7 @@ end
 
 function Views.ExpandAll(on)
 	for _, e in ipairs(ns.Data.Summary().guilds) do expanded[e.name] = on or nil end
+	expanded[COUNCIL_ROW] = on or nil -- (the High Council's too)
 end
 
 ---------------------------------------------------------------------------

@@ -1571,7 +1571,11 @@ function UI.ShowPerson(p)
 	-- The name, guild and rank may come from other players' reports: plain text, whatever
 	-- they carry (0.9.2; Comm.lua already strips every escape code from what arrives).
 	local name, guild = ns.Codec.Plain(p.name), p.guild and ns.Codec.Plain(p.guild)
-	f.name:SetText(color and ("|c%s%s|r"):format(color.colorStr, name) or name)
+	-- A High Councillor: the mark and their own icon after the name, and their title below
+	-- (0.9.9), for whoever may see the council in the census (ns.CouncilVisible).
+	local full = ns.FullName(p.name, p.realm)
+	local councillor = ns.CouncilVisible() and ns.IsHighCouncillor(full)
+	f.name:SetText((color and ("|c%s%s|r"):format(color.colorStr, name) or name) .. (councillor and (" " .. ns.CouncilMark(full)) or ""))
 	FitText(f.name, f.nameRoom or (f:GetWidth() - 28), f.nameFonts or { "GameFontNormalLarge", "GameFontNormal" })
 	if f.guild then
 		f.guild:SetText(guild and ("<" .. guild .. ">") or "")
@@ -1583,6 +1587,12 @@ function UI.ShowPerson(p)
 	if p.level or className ~= "" then rows[#rows + 1] = (p.level and (L.LEVEL_N:format(p.level) .. " ") or "") .. className end
 	if p.rank then rows[#rows + 1] = "|cffffd200" .. ns.Codec.Plain(p.rank) .. "|r" end
 	if ns.IsTreasurer(p.name, p.guild) then rows[#rows + 1] = "|cffffd200" .. ns.COIN .. L.TREASURER_TITLE .. "|r" end
+	if councillor then
+		-- "High Councillor - <title> (<department>)", as the signed titles list gives them.
+		local t = ns.CouncilTitle(full) or {}
+		rows[#rows + 1] = ns.HIGH_COUNCIL_MARK .. " |c" .. ns.HIGH_COUNCIL_COLOR .. L.COUNCIL_PERSON
+			.. (t.title and (" - " .. ns.Codec.Plain(t.title)) or "") .. (t.dept and (" (" .. ns.Codec.Plain(t.dept) .. ")") or "") .. "|r"
+	end
 	if p.online then
 		rows[#rows + 1] = "|cff40ff40" .. L.ONLINE_NOW .. "|r" .. (p.zone and ("  -  " .. ns.Zones.NameForKey(p.zone)) or "")
 	elseif p.online == false then
