@@ -11356,5 +11356,43 @@ test("0.9.9 the King's stream: councillors and the author see the whole names as
 	end)
 end)
 
+test("0.9.9 the King's stream: /oly council (list) in chat cuts the names short too, until the eye shows them", function()
+	WithKingsCouncil(function(W, L)
+		local savedPrint, printed = ns.Print, {}
+		local ok, err = pcall(function()
+			ns.Print = function(m) printed[#printed + 1] = tostring(m) end
+			local function Said(cmd)
+				printed = {}
+				SlashCmdList.OLYMPUS(cmd)
+				return table.concat(printed, "\n")
+			end
+			local whole = L.COUNCIL_LIST:format("Fourth Mod, Kai, Other Mod, Test Councillor, Third Mod, " .. MULTIBYTE_COUNCILLOR)
+			local hidden = L.COUNCIL_LIST:format("Four****, Kai****, Othe****, Test****, Thir****, \195\139\195\182wy****")
+			-- The King, names hidden (every session's start): each name cut short, whatever the verb
+			-- (/oly help shows "council list"; the bare command and any other verb list them too).
+			AsKing()
+			eq(ns.CouncilMasked(), true)
+			for _, cmd in ipairs({ "council list", "council", "council add Someone" }) do eq(Said(cmd), hidden, cmd) end
+			-- The eye in the Realm: the whole names, until clicked again.
+			ns.UI = { Refresh = function() end, CloseCouncilCards = function() end }
+			local _, rows = CouncilSection(ns.Views.RealmLines())
+			rows[1].onClick()
+			eq(Said("council list"), whole, "shown")
+			_, rows = CouncilSection(ns.Views.RealmLines())
+			rows[1].onClick()
+			eq(Said("council list"), hidden, "hidden again")
+			-- A councillor and the author's client: the whole names, as before. Asmon's view: hidden.
+			ns.me = "Third Mod-Realm"
+			eq(Said("council list"), whole, "a councillor")
+			ns.me, ns.COUNCIL_SIGNED = "Tester-Realm", COUNCIL_TEST_NAMES4
+			eq(Said("council list"), whole, "the author")
+			ns.devThrone = true
+			eq(Said("council list"), hidden, "Asmon's view")
+		end)
+		ns.Print = savedPrint
+		if not ok then error(err, 0) end
+	end)
+end)
+
 print(("\n%d passed, %d failed"):format(passed, failed))
 os.exit(failed == 0 and 0 or 1)

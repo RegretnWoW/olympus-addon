@@ -774,8 +774,13 @@ function Workshop.RelayCouncil(force)
 	if titles then ns.Comm.SendChunked("HT~" .. titles) end
 end
 
+-- /oly council (list): the names in chat; on the King's screen while the councillors' names are
+-- hidden there (his stream, ns.CouncilMasked), each cut short as in the Realm (0.9.9).
 function Workshop.EditCouncil(verb)
 	local names = CouncilNames()
+	if ns.CouncilMasked() then
+		for i, name in ipairs(names) do names[i] = ns.MaskName(name) end
+	end
 	ns.Print(L.COUNCIL_LIST:format(#names > 0 and table.concat(names, ", ") or "-"))
 end
 
