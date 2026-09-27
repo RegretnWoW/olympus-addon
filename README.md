@@ -411,8 +411,10 @@ plus the addon versions of each guild's users. On demand he can ask for a roll c
 addon online (a share of them when the army is large) answers, by addon whisper to him only,
 with its version, game client, and whether it joined the channel, is its guild's reporter and
 has the channel sealed with a key. Nothing about the character (no guild, level or class), no
-position, no chat, nothing else. He can also ask a player on an old version to update: a fixed
-window with the two version numbers and nothing else. Only his character on his realm group
+position, no chat, nothing else. He may ask one player alone the same way, by addon whisper:
+the same answer, and each addon answers him once every 4 minutes at most, however he asks.
+He can also ask a player on an old version to update: a fixed window with the two version
+numbers and nothing else. Only his character on his realm group
 can do either: every addon checks the sender's name, which nobody else can carry. `/oly
 rollcall off` refuses both. The addon's error catcher keeps only Olympus's own errors (for
 `/oly bug`), never another addon's.
