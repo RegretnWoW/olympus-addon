@@ -1,0 +1,13 @@
+{
+  "name": "olympus-link-web",
+  "private": true,
+  "description": "Olympus Link: the scanner/link page, the reference Worker and the watcher's inbox tool. No dependencies.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "test": "node --test test"
+  }
+}
