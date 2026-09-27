@@ -673,14 +673,45 @@ function ns.CouncilTitle(name)
 	return nil
 end
 
+-- The King's own screen (0.9.9, the author's, for Asmon's stream): the King's client, or the
+-- author's "Asmon's view" (King.Preview) so he can try it. Nobody else's.
+function ns.KingsScreen()
+	local K = ns.King
+	if type(K) ~= "table" or type(K.IsKing) ~= "function" then return false end
+	return K.IsKing() == true or (type(K.Preview) == "function" and K.Preview() == true)
+end
+
 -- Who sees the High Council in the census, its marks there and its titles (0.9.9, the author's
--- call): until launch the councillors themselves and the author's own client (the one holding
--- the signed lists, CouncilList.lua); everyone once the signed titles list says it is public.
--- The Olympus chats show the mark to everyone, as in 0.9.8.
+-- call): until launch the councillors themselves, the author's own client (the one holding the
+-- signed lists, CouncilList.lua) and the King's (names hidden, below); everyone once the signed
+-- titles list says it is public. The Olympus chats show the mark to everyone, as in 0.9.8.
 function ns.CouncilVisible()
-	if ns.COUNCIL_SIGNED ~= nil or ns.COUNCIL_TITLES ~= nil or ns.IsHighCouncillor(ns.me) then return true end
+	if ns.COUNCIL_SIGNED ~= nil or ns.COUNCIL_TITLES ~= nil or ns.IsHighCouncillor(ns.me) or ns.KingsScreen() then return true end
 	local t = ns.CouncilTitles()
 	return t ~= nil and t.public == true
+end
+
+-- The King streams: on his screen the councillors' names stay hidden (0.9.9). The High Council
+-- in the Realm shows each name cut short (ns.MaskName), and no council mark, icon or title goes
+-- with a name anywhere else (census rows, person card, Olympus chats), until he clicks the eye
+-- under the council's header. Never saved: every login and /reload starts hidden again.
+local councilNamesShown = false
+function ns.CouncilNamesShown() return councilNamesShown end
+function ns.SetCouncilNamesShown(on) councilNamesShown = on == true end
+function ns.CouncilMasked() return not councilNamesShown and ns.KingsScreen() end
+
+-- A councillor's name while hidden: its first four characters (UTF-8: a character is a lead
+-- byte and the continuation bytes after it), or all of a shorter name, then "****".
+function ns.MaskName(name)
+	local s, chars, cut = tostring(name or ""), 0, nil
+	for i = 1, #s do
+		local b = s:byte(i)
+		if b < 0x80 or b >= 0xC0 then
+			chars = chars + 1
+			if chars > 4 then cut = i - 1 break end
+		end
+	end
+	return (cut and s:sub(1, cut) or s) .. "****"
 end
 
 -- The Crown: guild masters of any Olympus guild, and the officers of the King's guild.

@@ -789,6 +789,10 @@ L.COUNCIL_ICON_MARK_ONLY = "No icon: the mark alone"
 L.COUNCIL_CENSUS = "High Council (%d)"
 L.COUNCIL_CENSUS_TIP = "The moderators of the Olympus army, chosen by Asmongold's team."
 L.COUNCIL_PERSON = "High Councillor"
+-- 0.9.9: the councillors' names hidden on the King's screen (his stream)
+L.COUNCIL_NAMES_SHOW = "Show names"
+L.COUNCIL_NAMES_HIDE = "Hide names"
+L.COUNCIL_NAMES_TIP = "Councillors' names are hidden on your screen so they don't show on stream."
 -- 0.9.9: help button
 L.HELP_BTN = "Help"
 L.HELP_BTN_TIP = "What each tab is for, the privacy switches, the addon's links and a bug report."
@@ -1551,6 +1555,10 @@ if GetLocale and GetLocale() == "ptBR" then
 	L.COUNCIL_CENSUS = "High Council (%d)"
 	L.COUNCIL_CENSUS_TIP = "Os moderadores do exército Olympus, escolhidos pela equipe do Asmongold."
 	L.COUNCIL_PERSON = "High Councillor"
+	-- 0.9.9: the councillors' names hidden on the King's screen (his stream)
+	L.COUNCIL_NAMES_SHOW = "Mostrar nomes"
+	L.COUNCIL_NAMES_HIDE = "Esconder nomes"
+	L.COUNCIL_NAMES_TIP = "Os nomes dos High Councillors ficam escondidos na sua tela para não aparecerem na live."
 	-- 0.9.9: help button
 	L.HELP_BTN = "Ajuda"
 	L.HELP_BTN_TIP = "Para que serve cada aba, as opções de privacidade, os links do addon e o relatório de bug."

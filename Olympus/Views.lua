@@ -598,6 +598,8 @@ end
 ---------------------------------------------------------------------------
 
 local COUNCIL_ROW = {} -- its open/closed key in `expanded`: no guild's name can be a table
+-- The eye that shows the councillors' names on the King's screen (a game icon, Interface\Icons).
+Views.EYE_ICON = "Interface\\Icons\\INV_Misc_Eye_01"
 
 -- What the census knows of these names (a set of short names, lower case): each guild's Lord
 -- and Captains from a fresh report, then who was seen online (our roster, /who), then the Lords
@@ -670,21 +672,44 @@ local function CouncilLines(lines, s)
 		end,
 	}
 	if not open then return end
+	-- The King's screen (his stream): the names hidden until he clicks the eye, and hidden again
+	-- on the next click (ns.CouncilMasked, Core.lua).
+	local masked = ns.CouncilMasked()
+	if ns.KingsScreen() then
+		local label = masked and L.COUNCIL_NAMES_SHOW or L.COUNCIL_NAMES_HIDE
+		lines[#lines + 1] = {
+			indent = 1,
+			text = "|T" .. Views.EYE_ICON .. ":0|t " .. Gold(label),
+			onClick = function()
+				local show = not ns.CouncilNamesShown()
+				ns.SetCouncilNamesShown(show)
+				if not show and ns.UI.CloseCouncilCards then ns.UI.CloseCouncilCards() end
+				ns.UI.Refresh()
+			end,
+			tooltip = function(tt)
+				tt:AddLine(label, 1, 0.82, 0)
+				tt:AddLine(L.COUNCIL_NAMES_TIP, 1, 1, 1, true)
+			end,
+		}
+	end
 	local wanted = {}
 	for _, m in ipairs(loose) do wanted[m.name:lower()] = true end
 	for _, d in ipairs(depts) do for _, m in ipairs(d.members) do wanted[m.name:lower()] = true end end
 	local known, old = Known(s, wanted)
 	-- "<mark><own icon> Name - Title": where the census knows them, when they were last on, and a
-	-- click opens what it knows.
+	-- click opens what it knows. Hidden (the King's stream): "<mark> Name****", the title, where
+	-- they are, and no click (the card would carry the whole name).
 	local function Member(m, indent)
 		local p = known[m.name:lower()]
 		local person = p or { name = m.name }
 		lines[#lines + 1] = {
-			key = person.name,
+			key = not masked and person.name or nil,
 			indent = indent,
-			text = ns.CouncilMark(m.name) .. " " .. Council(Plain(m.name)) .. (m.title and (" - " .. Grey(Plain(m.title))) or ""),
+			text = (masked and (ns.HIGH_COUNCIL_MARK .. " " .. Council(ns.MaskName(Plain(m.name))))
+					or (ns.CouncilMark(m.name) .. " " .. Council(Plain(m.name))))
+				.. (m.title and (" - " .. Grey(Plain(m.title))) or ""),
 			right = p and Presence(p.online, p.days, old[m.name:lower()]) or nil,
-			onClick = function() ns.UI.ShowPerson(person) end,
+			onClick = not masked and function() ns.UI.ShowPerson(person) end or nil,
 		}
 	end
 	for _, m in ipairs(loose) do Member(m, 1) end
@@ -699,11 +724,13 @@ local function RealmLines(s)
 	if chatTier then return ChatLines() end
 	local lines = {}
 	-- A councillor's mark and own icon after their name in the rows below (0.9.9), for whoever
-	-- may see the council here.
+	-- may see the council here; none on the King's screen while the names are hidden (his
+	-- stream: a whole name next to the mark would give the councillor away).
 	local councilShown = ns.CouncilVisible()
+	local councilTagged = councilShown and not ns.CouncilMasked()
 	local function Tag(name, home)
 		local full = ns.FullName(name, home)
-		if not councilShown or not ns.IsHighCouncillor(full) then return "" end
+		if not councilTagged or not ns.IsHighCouncillor(full) then return "" end
 		return " " .. ns.CouncilMark(full)
 	end
 	-- The King holds court in our zone (Court.lua), then his layer (Hop.lua).

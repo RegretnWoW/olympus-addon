@@ -11080,5 +11080,281 @@ test("0.9.9: the decree timer alone follows a switch of style: off the world map
 	end)
 end)
 
+---------------------------------------------------------------------------
+-- 0.9.9: the King streams. On his screen (and in the author's Asmon's view) the High Council's
+-- names are cut to four characters and "****", no council mark goes with a whole name, and an
+-- eye under the council's header shows them until clicked again or the next session.
+---------------------------------------------------------------------------
+
+-- The test council (NAMES4 and its titles, not public yet), and two more names on the list: a
+-- name of three letters and one whose first characters take two bytes each.
+local MULTIBYTE_COUNCILLOR = "\195\139\195\182wyn Mod" -- "Ëöwyn Mod"
+local KINGS_COUNCIL = { "Test Councillor", "Other Mod", "Third Mod", "Fourth Mod", "Kai", MULTIBYTE_COUNCILLOR }
+local function WithKingsCouncil(fn)
+	local saved = { guild = GetGuildInfo, dev = ns.devThrone, view = ns.db.devKingView }
+	local ok, err = pcall(WithTestCouncil, function()
+		local W = ns.Workshop
+		ns.devThrone, ns.db.devKingView = nil, nil
+		ns.SetCouncilNamesShown(false)
+		W.TakeCouncil(COUNCIL_TEST_NAMES4)
+		W.TakeTitles(COUNCIL_TEST_TITLES)
+		ns.rdb.council.names["kai"] = "Kai"
+		ns.rdb.council.names[MULTIBYTE_COUNCILLOR:lower()] = MULTIBYTE_COUNCILLOR
+		CouncilCensus()
+		ns.Views.ExpandAll(true)
+		fn(W, ns.L)
+	end)
+	GetGuildInfo, ns.devThrone, ns.db.devKingView = saved.guild, saved.dev, saved.view
+	ns.SetCouncilNamesShown(false)
+	if not ok then error(err, 0) end
+end
+-- No line that carries a whole councillor's name carries the council's mark or colour too.
+local function NoMarkedName(lines, what)
+	for _, l in ipairs(lines) do
+		local text = tostring(l.text or "")
+		for _, name in ipairs(KINGS_COUNCIL) do
+			local at = text:find(name, 1, true)
+			if at and text:sub(at + #name, at + #name + 3) ~= "****" then
+				assert(not text:find(ns.HIGH_COUNCIL_MARK, 1, true) and not text:find(ns.HIGH_COUNCIL_COLOR, 1, true),
+					what .. ": " .. name .. " with the mark: " .. text)
+			end
+		end
+	end
+end
+-- The council's header, and the indented lines under it.
+local function CouncilSection(lines)
+	local header, at = Find(lines, ns.L.COUNCIL_CENSUS:format(#KINGS_COUNCIL))
+	assert(header, "the council's header")
+	local out = {}
+	for i = at + 1, #lines do
+		if not lines[i].indent then break end
+		out[#out + 1] = lines[i]
+	end
+	return header, out
+end
+
+test("0.9.9 the King's stream: a councillor's name is its first four characters and ****", function()
+	eq(ns.MaskName("Test Councillor"), "Test****")
+	eq(ns.MaskName("Abcd"), "Abcd****", "four exactly")
+	eq(ns.MaskName("Kai"), "Kai****", "a shorter name keeps what it has")
+	eq(ns.MaskName(MULTIBYTE_COUNCILLOR), "\195\139\195\182wy****", "characters, not bytes")
+	eq(ns.MaskName("\230\151\165\230\156\172\232\170\158\229\144\141\229\137\141"), "\230\151\165\230\156\172\232\170\158\229\144\141****", "three bytes each")
+	eq(ns.MaskName("\195\139"), "\195\139****", "one character of two bytes")
+	eq(ns.MaskName(""), "****")
+end)
+
+test("0.9.9 the King's stream: his Realm shows the High Council before launch, names hidden, titles and departments shown", function()
+	WithKingsCouncil(function(W, L)
+		-- A soldier: nothing before launch, as before.
+		eq(ns.CouncilVisible(), false)
+		eq(Find(ns.Views.RealmLines(), L.COUNCIL_CENSUS:format(#KINGS_COUNCIL)), nil, "no council section for a soldier")
+		-- The King: the section, before the public flag.
+		AsKing()
+		eq(ns.CouncilVisible(), true, "the King sees the council")
+		eq(ns.CouncilMasked(), true, "names hidden")
+		local lines = ns.Views.RealmLines()
+		local header, rows = CouncilSection(lines)
+		assert(header.text:find("[-] " .. ns.HIGH_COUNCIL_MARK, 1, true), header.text)
+		-- Right under the header: the eye, "Show names", and what it is for.
+		local eye = rows[1]
+		assert(eye.text:find("|T" .. ns.Views.EYE_ICON .. ":0|t", 1, true) and eye.text:find(L.COUNCIL_NAMES_SHOW, 1, true), eye.text)
+		eq(ns.Views.EYE_ICON, "Interface\\Icons\\INV_Misc_Eye_01")
+		local tip = {}
+		eye.tooltip({ AddLine = function(_, s) tip[#tip + 1] = s end })
+		eq(tip[2], L.COUNCIL_NAMES_TIP)
+		-- Each name cut short, the mark, the title; the departments as they are.
+		local want = { "Test****", "Kai****", "\195\139\195\182wy****", "Department of War", "Othe****", "Thir****", "Department of Coin", "Four****" }
+		for i, text in ipairs(want) do
+			local l = rows[i + 1]
+			assert(l and l.text:find(text, 1, true), text .. " at " .. i .. ": " .. tostring(l and l.text))
+		end
+		eq(#rows, #want + 1, "nothing else")
+		local speaker, war, other, fourth = rows[2], rows[5], rows[6], rows[9]
+		assert(speaker.text:find(ns.HIGH_COUNCIL_MARK .. " |c" .. ns.HIGH_COUNCIL_COLOR .. "Test****|r - |cff9d9d9dCouncil Speaker|r", 1, true), speaker.text)
+		assert(other.text:find("Operations Director", 1, true) and fourth.text:find("Keeper of Coin", 1, true), other.text)
+		assert(war.text:find("|TInterface\\Icons\\INV_Sword_04:0|t", 1, true), war.text)
+		-- Where the census knows them, still; a click opens nothing (a card carries the whole name).
+		eq(speaker.right, "|cff40ff40" .. L.ONLINE_NOW .. "|r")
+		for i = 2, #rows do
+			eq(rows[i].onClick, nil, "no click: " .. rows[i].text); eq(rows[i].key, nil, "no card to keep lit")
+		end
+		-- No whole name with the mark anywhere: the Lord and the Captain of <Olympus II>, a member in
+		-- our roster, the council's rows.
+		NoMarkedName(lines, "the King's Realm")
+		local lord, captain
+		for _, l in ipairs(lines) do
+			if l.key == "Other Mod" and l.indent == 1 then lord = l end
+			if l.key == "Test Councillor" and l.indent == 2 then captain = l end
+		end
+		assert(lord and lord.text:find("Other Mod", 1, true) and not lord.text:find(ns.HIGH_COUNCIL_MARK, 1, true), lord and lord.text)
+		assert(captain and not captain.text:find(ns.HIGH_COUNCIL_MARK, 1, true), captain and captain.text)
+		-- The Olympus chats: the councillor's line as anyone's, no mark, no council colour.
+		local line = ns.Channels.FormatLine("A", "Test Councillor-Realm", "Olympus II", "MA", "hello")
+		assert(line:find("Test Councillor", 1, true), line)
+		assert(not line:find(ns.HIGH_COUNCIL_MARK, 1, true) and not line:find(ns.HIGH_COUNCIL_COLOR, 1, true), line)
+	end)
+end)
+
+test("0.9.9 the King's stream: the eye shows every name and mark until clicked again", function()
+	WithKingsCouncil(function(W, L)
+		AsKing()
+		local refreshed, closed, opened = 0, 0, nil
+		ns.UI = { Refresh = function() refreshed = refreshed + 1 end, CloseCouncilCards = function() closed = closed + 1 end,
+			ShowPerson = function(p) opened = p end }
+		local _, rows = CouncilSection(ns.Views.RealmLines())
+		rows[1].onClick()
+		eq(ns.CouncilNamesShown(), true); eq(ns.CouncilMasked(), false); eq(refreshed, 1); eq(closed, 0)
+		-- Shown: the whole names with the mark and the councillor's own icon, a click opens the card.
+		W.HandleIcon("CHANNEL", "Test Councillor-Realm", "HI~134400")
+		local lines = ns.Views.RealmLines()
+		_, rows = CouncilSection(lines)
+		assert(rows[1].text:find(L.COUNCIL_NAMES_HIDE, 1, true), "the eye now hides them: " .. rows[1].text)
+		assert(rows[2].text:find(ns.HIGH_COUNCIL_MARK .. "|T134400:0|t |c" .. ns.HIGH_COUNCIL_COLOR .. "Test Councillor|r", 1, true), rows[2].text)
+		assert(rows[4].text:find(MULTIBYTE_COUNCILLOR, 1, true), rows[4].text)
+		rows[6].onClick()
+		eq(opened.name, "Other Mod"); eq(opened.guild, "Olympus II")
+		eq(rows[6].key, "Other Mod")
+		-- The marks in the census rows and the chats come back with them.
+		local lord
+		for _, l in ipairs(lines) do if l.key == "Other Mod" and l.indent == 1 then lord = l end end
+		local nameAt, markAt = lord.text:find("Other Mod", 1, true), lord.text:find(" " .. ns.HIGH_COUNCIL_MARK, 1, true)
+		assert(nameAt and markAt and markAt > nameAt, lord.text)
+		local line = ns.Channels.FormatLine("A", "Test Councillor-Realm", "Olympus II", nil, "hello")
+		assert(line:find("[" .. ns.HIGH_COUNCIL_MARK .. "|T134400:0|t|c" .. ns.HIGH_COUNCIL_COLOR .. "Test Councillor|r]", 1, true), line)
+		-- Clicked again: hidden again, and a councillor's card left open is closed.
+		rows[1].onClick()
+		eq(ns.CouncilNamesShown(), false); eq(ns.CouncilMasked(), true); eq(refreshed, 2); eq(closed, 1)
+		lines = ns.Views.RealmLines()
+		_, rows = CouncilSection(lines)
+		assert(rows[1].text:find(L.COUNCIL_NAMES_SHOW, 1, true), rows[1].text)
+		assert(rows[2].text:find("Test****", 1, true) and not rows[2].text:find("|T134400", 1, true), rows[2].text)
+		NoMarkedName(lines, "hidden again")
+		assert(not ns.Channels.FormatLine("A", "Test Councillor-Realm", "Olympus II", nil, "hello"):find(ns.HIGH_COUNCIL_MARK, 1, true))
+		-- Closed, the header alone: no eye either.
+		ns.Views.ExpandAll(false)
+		lines = ns.Views.RealmLines()
+		local header = Find(lines, L.COUNCIL_CENSUS:format(#KINGS_COUNCIL))
+		assert(header.text:find("[+] ", 1, true), header.text)
+		eq(Find(lines, L.COUNCIL_NAMES_SHOW), nil, "no eye while closed")
+	end)
+end)
+
+test("0.9.9 the King's stream: the person card shows no mark or title while the names are hidden", function()
+	WithUI(function()
+		WithKingsCouncil(function(W, L)
+			local UI = LoadUI()
+			local function Card(p)
+				UI.ShowPerson(p)
+				local f, rows = OlympusPersonFrame, {}
+				for _, fs in ipairs(f.lines) do if (fs:GetText() or "") ~= "" then rows[#rows + 1] = fs:GetText() end end
+				return f.name:GetText(), table.concat(rows, "\n")
+			end
+			local other = { name = "Other Mod", realm = "Realm", guild = "Olympus II", rank = L.LORD, online = false, days = 3 }
+			AsKing()
+			local name, rows = Card(other)
+			assert(name:find("Other Mod", 1, true), name)
+			assert(not name:find(ns.HIGH_COUNCIL_MARK, 1, true) and not rows:find(L.COUNCIL_PERSON, 1, true), name .. "\n" .. rows)
+			assert(not rows:find("Operations Director", 1, true), rows)
+			-- The eye: the mark and "High Councillor - title (department)", as the council sees them.
+			local _, section = CouncilSection(ns.Views.RealmLines())
+			section[1].onClick()
+			name, rows = Card(other)
+			assert(name:find("Other Mod " .. ns.HIGH_COUNCIL_MARK, 1, true), name)
+			assert(rows:find(L.COUNCIL_PERSON .. " - Operations Director (Department of War)", 1, true), rows)
+			-- Hidden again with that card still open: it closes. Anyone else's card stays.
+			_, section = CouncilSection(ns.Views.RealmLines())
+			section[1].onClick()
+			eq(OlympusPersonFrame:IsShown(), false, "the councillor's card closed")
+			Card({ name = "Random Guy", realm = "Realm" })
+			UI.CloseCouncilCards()
+			eq(OlympusPersonFrame:IsShown(), true, "not a councillor's")
+		end)
+	end)
+end)
+
+test("0.9.9 the King's stream: a new session starts with the names hidden, and nothing of it is saved", function()
+	WithKingsCouncil(function()
+		AsKing()
+		local function Copy(t) local out = {} for k, v in pairs(t) do out[k] = v end return out end
+		local db, rdb = Copy(ns.db), Copy(ns.rdb)
+		local _, rows = CouncilSection(ns.Views.RealmLines())
+		ns.UI = { Refresh = function() end }
+		rows[1].onClick()
+		eq(ns.CouncilMasked(), false, "shown in this session")
+		for k, v in pairs(ns.db) do eq(v, db[k], "db." .. tostring(k)) end
+		for k, v in pairs(ns.rdb) do eq(v, rdb[k], "rdb." .. tostring(k)) end
+		for k in pairs(db) do assert(ns.db[k] ~= nil, "db." .. tostring(k)) end
+		for k in pairs(rdb) do assert(ns.rdb[k] ~= nil, "rdb." .. tostring(k)) end
+		-- A /reload: the code loads again over the same SavedVariables.
+		local savedSlash, savedEvents = {}, #EVENT_SCRIPTS
+		for k, v in pairs(SlashCmdList) do savedSlash[k] = v end
+		local ok, err = pcall(function()
+			local fresh = setmetatable({}, { __index = ns })
+			assert(loadfile(ADDON_DIR .. "Core.lua"))("Olympus", fresh)
+			eq(fresh.CouncilMasked(), false, "King.lua's stand-in: nobody's screen is the King's")
+			fresh.King = ns.King -- (King.lua loads after Core.lua and takes its stand-in's place)
+			eq(fresh.CouncilNamesShown(), false)
+			eq(fresh.CouncilMasked(), true, "hidden again after a /reload")
+		end)
+		for k in pairs(SlashCmdList) do SlashCmdList[k] = savedSlash[k] end
+		for i = #EVENT_SCRIPTS, savedEvents + 1, -1 do EVENT_SCRIPTS[i] = nil end
+		if not ok then error(err, 0) end
+	end)
+end)
+
+test("0.9.9 the King's stream: councillors and the author see the whole names as before; Asmon's view hides them", function()
+	WithKingsCouncil(function(W, L)
+		local function Rows()
+			local lines = ns.Views.RealmLines()
+			local _, rows = CouncilSection(lines)
+			return rows, lines
+		end
+		-- A councillor: the whole names with the mark, a click opens the card, no eye.
+		ns.me = "Third Mod-Realm"
+		eq(ns.KingsScreen(), false); eq(ns.CouncilMasked(), false)
+		local rows, lines = Rows()
+		assert(rows[1].text:find(ns.HIGH_COUNCIL_MARK .. " |c" .. ns.HIGH_COUNCIL_COLOR .. "Test Councillor|r", 1, true), rows[1].text)
+		assert(rows[1].onClick, "a click opens the card")
+		eq(Find(lines, L.COUNCIL_NAMES_SHOW), nil, "no eye"); eq(Find(lines, "****"), nil, "nothing hidden")
+		local lord
+		for _, l in ipairs(lines) do if l.key == "Other Mod" and l.indent == 1 then lord = l end end
+		assert(lord.text:find(" " .. ns.HIGH_COUNCIL_MARK, 1, true), lord.text)
+		-- The author's client (it holds the signed lists), Asmon's view off: the same.
+		ns.me = "Tester-Realm"
+		ns.COUNCIL_SIGNED = COUNCIL_TEST_NAMES4
+		rows, lines = Rows()
+		assert(rows[1].text:find("Test Councillor|r", 1, true), rows[1].text)
+		eq(Find(lines, L.COUNCIL_NAMES_SHOW), nil, "no eye")
+		assert(ns.Channels.FormatLine("A", "Test Councillor-Realm", "Olympus II", nil, "hi"):find(ns.HIGH_COUNCIL_MARK, 1, true))
+		-- Asmon's view (the author's preview of the King's screen): hidden, with the eye.
+		ns.devThrone = true
+		eq(ns.King.Preview(), true)
+		eq(ns.CouncilMasked(), true)
+		rows, lines = Rows()
+		assert(rows[1].text:find(L.COUNCIL_NAMES_SHOW, 1, true), rows[1].text)
+		assert(rows[2].text:find("Test****", 1, true), rows[2].text)
+		NoMarkedName(lines, "Asmon's view")
+		assert(not ns.Channels.FormatLine("A", "Test Councillor-Realm", "Olympus II", nil, "hi"):find(ns.HIGH_COUNCIL_MARK, 1, true))
+		ns.devThrone, ns.COUNCIL_SIGNED = nil, nil
+		-- A soldier: still no section before launch, and the chats' mark as in 0.9.8.
+		eq(ns.CouncilVisible(), false)
+		eq(Find(ns.Views.RealmLines(), L.COUNCIL_CENSUS:format(#KINGS_COUNCIL)), nil)
+		assert(ns.Channels.FormatLine("A", "Test Councillor-Realm", "Olympus II", nil, "hi"):find(ns.HIGH_COUNCIL_MARK, 1, true))
+		-- Launch (the public flag): the soldier sees the whole names, still no eye.
+		W.TakeTitles(COUNCIL_TEST_PUBLIC)
+		rows, lines = Rows()
+		assert(rows[1].text:find("Test Councillor|r", 1, true), rows[1].text)
+		eq(Find(lines, L.COUNCIL_NAMES_SHOW), nil)
+		-- The strings in Portuguese.
+		local savedLocale, pt = GetLocale, {}
+		GetLocale = function() return "ptBR" end
+		local ok, err = pcall(function() assert(loadfile(ADDON_DIR .. "Locales.lua"))("Olympus", pt) end)
+		GetLocale = savedLocale
+		if not ok then error(err, 0) end
+		eq(pt.L.COUNCIL_NAMES_SHOW, "Mostrar nomes"); eq(pt.L.COUNCIL_NAMES_HIDE, "Esconder nomes")
+		assert(pt.L.COUNCIL_NAMES_TIP ~= L.COUNCIL_NAMES_TIP and pt.L.COUNCIL_NAMES_TIP:find("live", 1, true), pt.L.COUNCIL_NAMES_TIP)
+	end)
+end)
+
 print(("\n%d passed, %d failed"):format(passed, failed))
 os.exit(failed == 0 and 0 or 1)

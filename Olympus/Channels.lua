@@ -134,8 +134,11 @@ function Channels.FormatLine(tier, sender, guild, class, text)
 	local color = file and RAID_CLASS_COLORS and RAID_CLASS_COLORS[file]
 	if color and color.colorStr then name = "|c" .. color.colorStr .. name .. "|r" end
 	-- The High Council (the moderators, Core.lua): the fixed mark, their own icon after it if
-	-- they picked one (0.9.9), and their colour. For everyone, as in 0.9.8.
-	if ns.IsHighCouncillor(sender) then name = ns.CouncilMark(sender) .. "|c" .. ns.HIGH_COUNCIL_COLOR .. ns.DisplayName(sender) .. "|r" end
+	-- they picked one (0.9.9), and their colour. For everyone, as in 0.9.8, but the King while
+	-- the councillors' names are hidden on his screen (his stream, ns.CouncilMasked): a plain line.
+	if ns.IsHighCouncillor(sender) and not ns.CouncilMasked() then
+		name = ns.CouncilMark(sender) .. "|c" .. ns.HIGH_COUNCIL_COLOR .. ns.DisplayName(sender) .. "|r"
+	end
 	-- The Treasurer: the gold coin he carries in tooltips and the census (0.9.9).
 	if ns.IsTreasurer(sender, guild) then name = ns.COIN:gsub(" $", "") .. name end
 	return "[" .. Label(tier) .. "] |Hplayer:" .. (ns.TellName(sender) or "?") .. "|h[" .. name .. "]|h <"

@@ -1619,9 +1619,10 @@ function UI.ShowPerson(p)
 	-- they carry (0.9.2; Comm.lua already strips every escape code from what arrives).
 	local name, guild = ns.Codec.Plain(p.name), p.guild and ns.Codec.Plain(p.guild)
 	-- A High Councillor: the mark and their own icon after the name, and their title below
-	-- (0.9.9), for whoever may see the council in the census (ns.CouncilVisible).
+	-- (0.9.9), for whoever may see the council in the census (ns.CouncilVisible); not on the
+	-- King's screen while the councillors' names are hidden there (ns.CouncilMasked).
 	local full = ns.FullName(p.name, p.realm)
-	local councillor = ns.CouncilVisible() and ns.IsHighCouncillor(full)
+	local councillor = ns.CouncilVisible() and not ns.CouncilMasked() and ns.IsHighCouncillor(full)
 	f.name:SetText((color and ("|c%s%s|r"):format(color.colorStr, name) or name) .. (councillor and (" " .. ns.CouncilMark(full)) or ""))
 	FitText(f.name, f.nameRoom or (f:GetWidth() - 28), f.nameFonts or { "GameFontNormalLarge", "GameFontNormal" })
 	if f.guild then
@@ -1672,6 +1673,15 @@ function UI.ShowPerson(p)
 	f:Show()
 	-- Placed again on every show, so it can step above the Issue Reporter every time.
 	ns.SafeCall("issue reporter", ClearOfIssueReporter, function() return StepAboveIssueReporter(f, { f }) end)
+end
+
+-- The King hides the councillors' names again (the eye in the Realm, Views.lua): a councillor's
+-- card left open from while they were shown closes, with the mark and title it carries.
+function UI.CloseCouncilCards()
+	for _, f in pairs(personFrames) do
+		local p = f.person
+		if p and p.name and f:IsShown() and ns.IsHighCouncillor(ns.FullName(p.name, p.realm)) then f:Hide() end
+	end
 end
 
 function UI.IsShown() return main and main:IsShown() end
