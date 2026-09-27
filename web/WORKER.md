@@ -14,15 +14,20 @@ D1.
 A player proves that a World of Warcraft character is theirs by typing, in game, a code the
 backend signed for their Discord account. Players who are already trusted (a High Councillor
 at launch; later, when you allow it, three randomly drawn verified players) confirm it in game:
-their addon signs a confirmation with a key of its own. The finished, signed proof reaches the
-Worker in one of two ways, and the Worker gives the Discord role.
+their addon signs a confirmation with a key of its own, and says how it checked the player's
+guild. The finished, signed proof reaches the Worker in one of two ways, and the Worker gives
+the Discord role.
 
 ```
  Discord /link, or the page after "Continue with Discord"
-   └─> code  OLC1.<R>.<username>.<exp>.<mode>.<sig>        (signed with the backend key)
+   └─> code  OLC2.<R>.<username>.<exp>.<mode>.<T>.<sig>    (signed with the backend key)
+
+ confirmers announce themselves in game with their certificate (signed with the backend key):
+   DV~1~OLK1.<keyId>.<public key>.<c|p>.<exp>.<sig>
 
  in game: the player types  /oly discord <code>, sees "@username", clicks Accept
-   requester ──DR──> an online confirmer ──DA──> requester    (the confirmer's key signs OLY4)
+   requester ──DR (with the tag)──> an online confirmer ──DA──> requester
+   (the confirmer's key signs OLY4; the requester checks the signature with the certified key)
 
  the finished proof (OLB4), two ways:
    watcher path:  requester ──DB──> your watcher character (a High Councillor, "watcher on")
@@ -32,11 +37,16 @@ Worker in one of two ways, and the Worker gives the Discord role.
  the Worker checks everything, then gives ROLE_ID in GUILD_ID
 ```
 
+- The code is the player's alone. Its signature is the secret that ties each link to the
+  player who typed it (the tag, below): the QR code and the game's copy box never carry it, so
+  a stream that shows the QR code gives nobody a link of their own. The page hides the code
+  until it is clicked and tells players to keep it, and the Olympus Link window, off stream.
 - Nothing needs you online: confirmations need only confirmers online. The finished proof
   waits in the player's addon for 7 days until a watcher is online, then in your watcher's
   SavedVariables until you upload them.
-- Nothing is lost when the Worker is down: the page says so, the addon keeps the proof, and
-  either path delivers it later (the Worker takes a proof up to 7 days after its code expired).
+- Nothing is lost when the Worker or Discord is down: the page says so, the addon keeps the
+  proof, the code is released again, and either path delivers it later (the Worker takes a
+  proof up to 7 days after its code expired).
 - The Worker stores only public keys. The backend's private key is a Worker secret; each
   confirmer's private key stays in that confirmer's game. Confirmer keys can only confirm.
 
@@ -65,11 +75,15 @@ It prints a seed and a public key, once, and writes nothing to disk.
   screenshot. The Worker imports it into WebCrypto as an Ed25519 JWK (`d` the seed, `x` the
   public key) and checks at the first code that the two belong together.
 - The public key (64 hex digits) goes into the Worker var `LINK_BACKEND_PUBLIC`, and to Daniel
-  for the addon (`ns.LINK_BACKEND_KEYS` in `Olympus/Link.lua`): the addon refuses any code whose
-  signature does not check against one of those keys, before it shows or sends anything.
+  for the addon (`ns.LINK_BACKEND_KEYS` in `Olympus/Link.lua`): the addon refuses any code, and
+  any confirmer's certificate, whose signature does not check against one of those keys.
+- The same key signs the confirmers' certificates. The Worker does it when you register a key
+  (step 8). To sign them on your own computer instead (`link-keys.py cert`), keep the seed in a
+  file only you can read and give the tool its path; the tool never prints it.
 - Rotating it: make a new key, have its public key added to `ns.LINK_BACKEND_KEYS` next to the
   old one (the addon takes two for this), wait until that addon version is out, then switch the
-  Worker's `LINK_BACKEND_SEED` and `LINK_BACKEND_PUBLIC`. Codes already handed out stay valid
+  Worker's `LINK_BACKEND_SEED` and `LINK_BACKEND_PUBLIC` and renew every confirmer's
+  certificate (step 8) before the old key leaves the addon. Codes already handed out stay valid
   until they expire.
 
 ### 2. The database
@@ -79,10 +93,11 @@ wrangler d1 create olympus-link
 wrangler d1 execute olympus-link --remote --file web/worker/schema.sql
 ```
 
-Five tables: `codes` (every code issued, single use), `keys` (confirmer public keys, one
-active per Discord account), `used` (the proofs that counted), `members` (linked characters)
-and `inbox_uploads` (every bundle received: the audit trail and the page's rate limit). The
-full schema is in "The D1 schema" below.
+Five tables: `codes` (every code issued, single use, with its draw threshold), `keys`
+(confirmer public keys, one active per Discord account, with the end of their certificate),
+`used` (the proofs that counted), `members` (linked characters, with how their guild was
+checked) and `inbox_uploads` (every bundle received: the audit trail and the page's rate
+limit). The full schema is in "The D1 schema" below.
 
 ### 3. The code
 
@@ -142,6 +157,7 @@ database_id = "<from wrangler d1 create>"
 
 [vars]
 LINK_MODE = "c"                          # councillors only at launch; "a" when the pool is large enough
+LINK_GUILD_POLICY = "verified"           # or "claimed": see "The guild check" below
 LINK_ORIGIN = "https://your.site"        # the page's origin: no path, no trailing slash
 LINK_BACKEND_PUBLIC = "<64 hex from link-keys.py backend>"
 DISCORD_PUBLIC_KEY = "<Developer Portal > General Information > Public Key>"
@@ -156,7 +172,8 @@ wrangler secret put DISCORD_BOT_TOKEN    # probably there already
 ```
 
 `LINK_ADMIN_TOKEN` (at least 32 characters) is for your own tools only: the watcher inbox
-upload and, if your bot runs on the gateway, its `/link` requests.
+upload, the confirmer keys (`/api/link/keys`) and, if your bot runs on the gateway, its `/link`
+requests.
 
 ### 6. The page
 
@@ -172,6 +189,10 @@ the game's texts ("Fernmelder's watcher", `ns.LINK_WATCHER_OWNER`). The part aft
 reaches a server: a phone that scans the QR code opens the page, which reads the link from its
 own address, asks the player to sign in if needed, and sends it.
 
+The code step shows the command hidden (Copy works without showing it; a click shows it) and
+tells the player to keep the code and the game's Olympus Link window off stream and out of
+screenshots.
+
 The page loads nothing but its own files, Google Fonts and Discord avatars (its
 Content-Security-Policy says so). `?demo=login` (and `scanned`, `start`, `code`, `wait`, `screen`,
 `scanning`, `phone`, `other`, `pick`, `found`, `done`, `error`) shows each step with made-up
@@ -181,7 +202,8 @@ browser's language otherwise).
 ### 7. The `/link` command in Discord (the watcher path's code)
 
 A player who never opens the site types `/link` in the Olympus server and gets their code in a
-reply only they see. Two ways, depending on how your bot receives commands:
+reply only they see (it also tells them to keep it off stream). Two ways, depending on how
+your bot receives commands:
 
 - **Over HTTP** (the application's Interactions Endpoint URL): set it to
   `https://your.site/api/discord/interactions`. The Worker checks Discord's signature on every
@@ -213,7 +235,8 @@ curl -X POST "https://discord.com/api/v10/applications/$APP_ID/guilds/$GUILD_ID/
 
 ### 8. Confirmer keys
 
-Each confirmer has a key of their own, made on your computer and registered in D1:
+Each confirmer has a key of their own, made on your computer, and a certificate for it signed
+with the backend key. The confirmer types two lines in game: the key, then the certificate.
 
 ```sh
 python3 scripts/link-keys.py confirmer <id> c --owner <their Discord id> --username <their username> --bootstrap
@@ -225,14 +248,37 @@ python3 scripts/link-keys.py confirmer <id> p --owner <their Discord id> --usern
   the confirming character is one of the key owner's linked characters; `--bootstrap` lifts that
   for the first councillor keys, since at launch nobody has linked a character yet.
 - The tool prints the line the confirmer types in game (`/oly discord key <id> <seed>`), which
-  you send them privately (a direct message, never a channel); the public key; and the SQL that
-  registers it (`wrangler d1 execute olympus-link --remote --command "..."`). In game,
-  `/oly discord key` shows them the id and the public key, to compare with yours. The addon
-  never prints, sends or logs the seed.
-- One active key per Discord account: the database refuses a second. Rotating: the tool also
-  prints the `UPDATE keys SET revoked = 1 ...` to run first, in the same batch. Revoking:
-  `python3 scripts/link-keys.py revoke <id>`, and the confirmer types `/oly discord key off`.
-  A revoked key's confirmations stop counting at once, including ones not delivered yet.
+  you send them privately (a direct message, never a channel); the public key; and two ways to
+  register it:
+  - **With the Worker** (the backend seed stays in the Worker): the tool prints the `curl`
+    that posts the key to `POST /api/link/keys` with your admin token. The answer's `command`
+    is the second line for the confirmer: `/oly discord cert <certificate>`.
+  - **In D1 directly**: the `INSERT` it prints, then the certificate with
+    `python3 scripts/link-keys.py cert <id> <public key> <c|p> <days> --backend-seed-file <file>`
+    (or `LINK_BACKEND_SEED_FILE` / `LINK_BACKEND_SEED` in the environment), which prints the
+    `/oly discord cert` line and the `UPDATE` that records the certificate's end in D1. Given
+    the backend seed the same way, `confirmer` prints the certificate at once.
+- In game, `/oly discord key` shows the id and the public key, to compare with yours; the addon
+  checks that the certificate names the public half of the key typed before it. It never
+  prints, sends or logs the seed. Both lines fit the game's chat (under 255 characters), and so
+  does the announcement that carries the certificate (`DV~1~<certificate>`).
+- The certificate is how every player's addon knows, without the bot, that a confirmer's key
+  is registered and whether it is a councillor's: it asks only confirmers with a valid,
+  unexpired certificate (a `c` one only from a councillor of the signed list), and checks each
+  confirmation's signature with the certified key before it counts it. It lasts 365 days by
+  default (`days` in the request, `--days` for the tool): renew it before it ends
+  (`{"key_id": "<id>", "renew": true}`, or `link-keys.py cert` again), and the confirmer types
+  the new `/oly discord cert` line. A key whose certificate has ended leaves the draw.
+- One active key per Discord account: the database refuses a second. **Rotating** (a new key
+  for the same person): register the new one with `"replace": true` (or run the `UPDATE ...
+  replaced_at` the tool prints before its `INSERT`). The old key leaves the draw at once but
+  still checks the confirmations it signed, so links waiting for the watcher keep counting.
+  Send the confirmer the new lines; once they typed them in game, revoke the old key. In that
+  order: rotate the key in game first, then revoke. **Revoking**: `{"key_id": "<id>",
+  "revoke": true}`, or `python3 scripts/link-keys.py revoke <id>`, and the confirmer types
+  `/oly discord key off`. A revoked key's confirmations stop counting at once, including ones
+  not delivered yet: a leaked key is revoked at once, without waiting. A link carries up to
+  two councillor confirmations, so one revoked councillor key does not sink it.
   `python3 scripts/link-keys.py public < seed.txt` prints the public key of a seed.
 - Keys only confirm: they cannot issue codes, a player key cannot link anyone alone, and the
   addon signs on its own only within its limits (one proof a minute and 5 a day per requesting
@@ -242,8 +288,9 @@ python3 scripts/link-keys.py confirmer <id> p --owner <their Discord id> --usern
 ### 9. Your watcher
 
 On one of your High Councillor characters, type `/oly discord watcher on`. While it is online,
-players whose proof is ready deliver it to it, and it keeps up to 500 in its SavedVariables
-(`OlympusDB.discord.inbox`). WoW writes that file on `/reload`, logout or quit. Then:
+players whose proof is ready deliver it to it, and it keeps them in its SavedVariables
+(`OlympusDB.discord.inbox`, 500 at most). WoW writes that file on `/reload`, logout or quit.
+Then:
 
 ```sh
 # macOS
@@ -254,16 +301,45 @@ $env:LINK_ADMIN_TOKEN="..."; node web/tools/read-inbox.mjs "C:\Program Files (x8
 
 Without `--post` it prints the same JSON (`{"bundles": [...]}`, oldest first) for you to look
 at or send another way. It reads the file with a small SavedVariables parser (no packages),
-skips malformed entries, and prints the inbox only: never the confirmer key kept in the same
-file. Uploading twice is harmless: a link that already counted answers `already`. It only
-posts over `https` (or to `localhost`), since the admin token rides along.
+takes every inbox entry however the addon keys it (by code, or by code and sender), sends each
+link once, skips malformed entries, and prints the inbox only: never the confirmer key kept in
+the same file. Uploading twice is harmless: a link that already counted answers `already`. It
+only posts over `https` (or to `localhost`), since the admin token rides along.
 
 ### 10. From councillors only to drawn players
 
 Launch with `LINK_MODE = "c"`: only councillor confirmations count, and every code says so (the
 addon then asks councillors only). When enough verified players have keys, set it to `"a"`:
-new codes also accept three drawn players when no councillor is online. Codes already issued
-keep the mode they were signed with.
+new codes also accept three drawn players when no councillor is online, and each carries the
+draw's threshold `T` so the addon asks exactly the players this Worker will count. Codes
+already issued keep the mode and `T` they were signed with.
+
+## The guild check
+
+Each confirmation says how the confirmer checked the guild the player claims, and signs it:
+
+- `r`: the claimed guild is the confirmer's own guild, and its roster, read by the confirmer's
+  addon, lists the player;
+- `w`: the confirmer's game ran a `/who` less than 15 minutes ago that showed the player in
+  exactly that guild;
+- `c`: claimed only. The confirmer still checked that it is an Olympus guild of its own
+  faction, but could not see the player in it.
+
+The player's addon keeps asking other confirmers (within their limits) to get at least one `r`
+or `w`, and carries up to four confirmations. `LINK_GUILD_POLICY` says what the Worker needs:
+
+- `"verified"` (the default): at least one confirmation that counts (a councillor's, or a drawn
+  player's in mode `a`) checked the guild (`r` or `w`). At launch only councillors confirm, so
+  in practice this links the members of the councillors' own guild (Olympus I), found in its
+  roster, and anyone a councillor saw in a `/who` in the last 15 minutes. A player of another
+  Olympus guild who was not seen is told to type the code again while a councillor is around
+  (answer `guild-unverified`: the code stays unused).
+- `"claimed"`: any valid confirmation. The character is still proved to be the player's (that
+  is what the confirmations sign), but the guild on the role is taken as the player named it.
+  More players get through at launch; fewer guarantees about the guild.
+
+Either way, `members.gv` records how the guild was checked (`r`, `w` or `c`), so you can tell
+the two apart later or switch the policy without losing track.
 
 ## The API
 
@@ -276,12 +352,13 @@ All JSON. The page's calls carry the session cookie; the tools' carry the admin 
 | `POST /api/link/submit` | page | `{"bundle": "OLB4~..."}` | `200 {"status", "reason", "message", "R", "characters"}`; `429` after 10 an hour |
 | `POST /api/link/inbox` | watcher tool | `{"bundles": [{"R", "bundle", "from", "t"}]}` (500 at most) | `200 {"results": [{"R", "status", "reason", "message"}]}` |
 | `POST /api/link/bot-code` | gateway bot | `{"id", "username"}` | `200 {"token", "command", "exp", "mode", "reply"}` |
+| `POST /api/link/keys` | you | `{"key_id", "public_key", "owner_discord_id", "owner_username", "kind", "bootstrap", "days", "replace"}`, or `{"key_id", "renew": true, "days"}`, or `{"key_id", "revoke": true}` | `200 {"status": "ok", "key_id", "kind", "public_key", "cert", "cert_exp", "command", "replaced"}` (`{"status": "ok", "revoked": true}` for a revoke); `409 {"reason": "key-id-used" \| "public-key-used" \| "owner-has-key" \| "revoked"}`, `404 {"reason": "unknown-key"}`, `400 {"reason": "format"}` |
 | `POST /api/discord/interactions` | Discord | an interaction | `PING`, or `/link` answered ephemerally |
 
 `status` is `linked` (reason `linked`, or `already` when that link had already counted),
-`rejected` (reason `format`, `unknown-code`, `other-user`, `code-used`, `expired`,
-`not-enough`, `not-in-server`) or `error` (`discord`, `server`: nothing was used, try again).
-The page shows each one in English or Portuguese with what to do next.
+`rejected` (reason `format`, `unknown-code`, `other-user`, `tag`, `code-used`, `expired`,
+`not-enough`, `guild-unverified`, `not-in-server`) or `error` (`discord`, `server`: nothing was
+used, try again). The page shows each one in English or Portuguese with what to do next.
 
 The page's four calls live in `web/public/backend.js`: `me()`, `code()`, `submit(bundle)` and
 `loginUrl()`. Change them there if your routes differ.
@@ -289,25 +366,42 @@ The page's four calls live in `web/public/backend.js`: `me()`, `code()`, `submit
 ## The formats
 
 - **Code token** (the backend signs it, the player pastes it):
-  `OLC1.<R>.<username>.<exp>.<mode>.<sig>`. `R`: 10 characters of Crockford base32
+  `OLC2.<R>.<username>.<exp>.<mode>.<T>.<sig>`. `R`: 10 characters of Crockford base32
   (`0123456789ABCDEFGHJKMNPQRSTVWXYZ`) from `crypto.getRandomValues`, single use. `username`:
   the Discord username, `[a-z0-9_.]{2,32}` (it may hold dots: read the token from both ends).
-  `exp`: unix time, 24 hours after issue. `mode`: `c` or `a`. `sig`: base64url without padding
-  (86 characters) of the backend's Ed25519 signature over the ASCII bytes
-  `OLC1.<R>.<username>.<exp>.<mode>`. `/oly discord <token>` is 163 bytes at most, within the
-  game's 255.
+  `exp`: unix time, 24 hours after issue. `mode`: `c` or `a`. `T`: the draw's threshold, 8
+  lowercase hex (below), `00000000` in mode `c`. `sig`: base64url without padding (86
+  characters) of the backend's Ed25519 signature over the ASCII bytes
+  `OLC2.<R>.<username>.<exp>.<mode>.<T>`. `/oly discord <token>` is 172 bytes at most, within
+  the game's 255. The addon also takes it after `/oly discord` or `/olympus discord` pasted
+  into its code box.
+- **The draw**: a player key's prefix for code `R` is the first 8 hex of
+  `SHA-256(R + "~" + keyId)`. When it issues a code in mode `a`, the Worker sorts the prefixes of
+  the active player keys (not revoked or replaced, a certificate that has not ended, 7 days old,
+  and a Discord account 30 days old) and signs `T`: the prefix at index M, counting from 0, with
+  M = max(20, ceil(3% of those keys)), or `ffffffff` when there are M keys or fewer. A key is
+  drawn for `R` when its prefix is below `T` (compared as text): the M lowest. The addon asks
+  only drawn, online, certified player keys, lowest first, five at once.
+- **Key certificate** (the backend signs it, the confirmer types it):
+  `OLK1.<keyId>.<public key>.<tier>.<exp>.<sig>`. The public key in base64url (43
+  characters), `tier` `c` or `p`, `exp` unix time, `sig` the backend's Ed25519 over the ASCII
+  bytes `OLK1.<keyId>.<public key>.<tier>.<exp>`. At most 170 characters: the confirmer's
+  addon announces it as `DV~1~<certificate>`.
+- **Tag**: the first 16 lowercase hex of `SHA-256(<the code token's sig> + "~" + <requester>)`,
+  the requester as `Name-Realm`. The requester's addon makes it from the command it was given
+  and sends it with its request; the Worker makes it again from the token it stored.
 - **Confirmation** (a confirmer's addon signs it, UTF-8):
-  `OLY4~<requester>~<guild>~<faction>~<nonce>~<R>~<issued>~<keyId>~<confirmer>`. Names are
-  `Name-Realm` as the game writes them (the requester as the game server stamped its whisper,
-  the confirmer itself); guild at most 40 bytes, an Olympus guild; faction `Alliance` or
-  `Horde`, the confirmer's own; nonce 16 lowercase hex digits; issued the confirmer's server
-  time.
-- **Bundle**: `OLB4~<requester>~<guild>~<faction>~<nonce>~<R>~<p1>;<p2>;...`, each proof
-  `<issued>,<keyId>,<confirmer>,<sig>`, 1 to 4 proofs, 1600 bytes at most. A field holds no
-  `~`, `;`, `,`, `|` or control character; a name is at most 64 bytes and its realm (after the
-  last dash) has no dash or space.
+  `OLY4~<requester>~<guild>~<gv>~<faction>~<nonce>~<R>~<tag>~<issued>~<keyId>~<confirmer>`.
+  Names are `Name-Realm` as the game writes them (the requester as the game server stamped its
+  whisper, the confirmer itself); guild at most 40 bytes, an Olympus guild; `gv` `r`, `w` or
+  `c` ("The guild check"); faction `Alliance` or `Horde`, the confirmer's own; nonce 16
+  lowercase hex digits; issued the confirmer's server time.
+- **Bundle**: `OLB4~<requester>~<guild>~<faction>~<nonce>~<R>~<tag>~<p1>;<p2>;...`, each proof
+  `<issued>,<keyId>,<confirmer>,<gv>,<sig>`, 1 to 4 proofs, 1600 bytes at most. A field holds
+  no `~`, `;`, `,`, `|` or control character; a name is at most 64 bytes and its realm (after
+  the last dash) has no dash or space.
 - **Link** (the QR code and the game's copy box): `<the page's address>#b=<bundle,
-  percent-encoded>`.
+  percent-encoded>`. It never holds the token.
 
 ## What the Worker checks
 
@@ -315,7 +409,9 @@ For every bundle, from the page or the inbox:
 
 1. It is well formed (the rules above; the page and the addon read exactly the same).
 2. The code `R` exists. From the page, it belongs to the signed-in account; from the inbox, the
-   account is the code's owner. It is unused (a link that already counted answers `already`).
+   account is the code's owner. The tag is the one made from that code's own token and the
+   bundle's requester (else `tag`: whoever saw `R` in a QR code cannot use it for another
+   character). The code is unused (a link that already counted answers `already`).
 3. Its confirmations were signed within the code's life (from issue, less 5 minutes of clock
    difference, to `exp`), none more than 5 minutes ahead of the Worker's clock. The bundle may
    arrive up to 7 days after `exp`, since the addon keeps it that long for the watcher; after
@@ -327,125 +423,200 @@ For every bundle, from the page or the inbox:
    the key owner's characters; and (R, keyId) never counted before.
 5. It accepts with **one valid councillor proof**. In mode `a` it also accepts **three valid
    player proofs** from three different owners, none the requester, signed within 5 minutes of
-   each other, each key at least 7 days old, each owner's Discord account at least 30 days old
-   (read from the Discord id), and each key ranked below M in this code's draw: all active
-   player keys sorted by `SHA-256(R + "~" + keyId)` (hex, lowest first),
-   M = max(20, ceil(3% of the active player keys)). The addon asks online players in that same
-   order.
-6. Then it claims the code (so two deliveries cannot both count), gives `ROLE_ID` in
+   each other, each key drawn for this code (its prefix below the `T` stored with the code),
+   and, when the code was issued, each key at least 7 days old, not yet replaced, and each
+   owner's Discord account at least 30 days old (read from the Discord id).
+6. With `LINK_GUILD_POLICY = "verified"`, one of the proofs that count (a councillor's, or a
+   drawn player's in mode `a`) checked the guild (`r` or `w`), else `guild-unverified`.
+7. Then it claims the code (so two deliveries cannot both count), gives `ROLE_ID` in
    `GUILD_ID`, and records the character in `members`, moving it if it was linked to another
-   account (which loses the role when it has no character left). If Discord refuses (the
-   player is not in the server, or Discord is down), the code is released and nothing is
-   recorded, so the same link works on the next try.
+   account (which loses the role when it has no character left). If Discord refuses or cannot
+   be reached (the player is not in the server, Discord is down, the network fails), or D1
+   cannot record the link, the code is released and nothing is recorded, so the same link
+   works on the next try.
 
 Why the draw and these limits stop anyone packing the random pool: R comes from the backend's
-random generator and only the M lowest-ranked keys of `SHA-256(R~keyId)` over the whole pool can
+random generator and only the M lowest prefixes of `SHA-256(R~keyId)` over the whole pool can
 count, so an attacker cannot pick the keys that confirm a code and needs a large share of the
-pool to hold three of those places, with only 3 codes a day per Discord account to try. One key
-per Discord account, keys at least 7 days old, accounts at least 30 days old and signatures
-within 5 minutes make that share slow and costly to build and stop a few friends from signing
-for each other at leisure, while councillors-only mode keeps the pool out of play until it is
-large.
+pool to hold three of those places, with only 3 codes a day per Discord account to try. `T` is
+fixed and signed when the code is issued, and a key counts only if it was 7 days old by then,
+so keys registered after seeing `R` cannot join the draw. One key per Discord account, keys at
+least 7 days old, accounts at least 30 days old and signatures within 5 minutes make that
+share slow and costly to build and stop a few friends from signing for each other at leisure,
+while councillors-only mode keeps the pool out of play until it is large.
 
 Limits and logs: 3 codes per Discord account a day (a reload gets the same unused code back);
 the page may submit 10 times an hour per account; every bundle received is logged in
 `inbox_uploads`; the admin token is compared in constant time; a Worker whose
-`LINK_BACKEND_SEED` and `LINK_BACKEND_PUBLIC` do not match refuses to issue codes.
+`LINK_BACKEND_SEED` and `LINK_BACKEND_PUBLIC` do not match refuses to issue codes and
+certificates.
 
 ## Test vectors
 
 These come from `web/test/fixtures/vectors.json`, made by `web/test/fixtures/make-vectors.py`
 with Python's `cryptography`. They are throwaway keys whose seeds are the SHA-256 of public
-labels (`"olympus-link test key: " + label`): never register one. The same vectors check the
-addon (`Olympus/Ed25519.lua` signs the `ed25519` ones byte for byte:
-`web/test/fixtures/lua-signatures.json`), the page and this Worker, whose tests
+labels (`"olympus-link-test:" + label`, the label being the key id or `backend`, the same rule
+as the addon's `tests/fixtures/make-link-vectors.py`, so both sides hold the same keys): never
+register one. The same vectors check the addon (`Olympus/Ed25519.lua` signs the `ed25519` ones
+byte for byte: `web/test/fixtures/lua-signatures.json`), the page and this Worker, whose tests
 (`web/test/worker.test.mjs`) load the schema into SQLite, insert these codes and keys, and send
-these bundles. Ed25519 is deterministic: any correct implementation gives these exact
-signatures from these seeds. `must_fail` has a non-canonical S (S + L) that every check must
-refuse.
+these bundles; `web/test/addon-fixtures.test.mjs` checks the addon's own sample codes,
+certificates and links the same way. Ed25519 is deterministic: any correct implementation
+gives these exact signatures from these seeds. `must_fail` has a non-canonical S (S + L) that
+every check must refuse.
 
-To check your Worker by hand: insert the `codes` and `keys` below (for the players' bundle,
-also each confirmer character in `members` under its key's owner), set the Worker's clock
-between the proofs' `issued` and `exp`, and `acceptBundle` answers `linked` for each bundle.
+To check your Worker by hand: insert the `codes` (with their `draw_t` and `token`) and `keys`
+below (for the players' bundle, also each confirmer character in `members` under its key's
+owner), set the Worker's clock between the proofs' `issued` and `exp`, and `acceptBundle`
+answers `linked` for each bundle. `tag_of` is the text whose SHA-256 starts with the tag;
+`draw.thresholds` gives `T` for pools of keys `pool0000`, `pool0001`... of several sizes.
 
 <!-- block: vectors -->
 ```json
 {
   "backend": {
-    "public_hex": "bb0f6260296c0709dfd2ac13d98880b7b17e817fdf13a78752f095d26601094e",
-    "token": "OLC1.7K3M9Q2XWD.some_player.1790086400.c.CeE2kc8l85hCPotkn6GNumGOUJCM0G1kN97OTqT8Hkr7hnSBhx055DnfAlmzDWERDq_bCYPSLZtWydonBTTcCA",
-    "signed": "OLC1.7K3M9Q2XWD.some_player.1790086400.c"
+    "public_hex": "070a599da007dbca7a54999daeab8eec7bd9e1cd4dd53659322552bc33f2225b",
+    "token": "OLC2.7K3M9QX2TB.some.player.1800000000.c.00000000.TmJVCJJtjs5W_sOXnQm3G10J3y5xwVQkii6zRhi0EO-5AmL__PtEg1Ao7VaiUivi1Jslf4i1OJUxMDDNXtG4Ag",
+    "signed": "OLC2.7K3M9QX2TB.some.player.1800000000.c.00000000"
   },
   "codes": [
     {
-      "R": "7K3M9Q2XWD",
+      "R": "7K3M9QX2TB",
       "discord_id": "200000000000000001",
-      "username": "some_player",
+      "username": "some.player",
       "mode": "c",
-      "created": 1790000000,
-      "exp": 1790086400
+      "draw_t": "00000000",
+      "created": 1799913600,
+      "exp": 1800000000,
+      "token": "OLC2.7K3M9QX2TB.some.player.1800000000.c.00000000.TmJVCJJtjs5W_sOXnQm3G10J3y5xwVQkii6zRhi0EO-5AmL__PtEg1Ao7VaiUivi1Jslf4i1OJUxMDDNXtG4Ag"
     },
     {
       "R": "H4N8PZ6R1B",
       "discord_id": "200000000000000002",
       "username": "tester.two",
       "mode": "a",
-      "created": 1790000000,
-      "exp": 1790086400
+      "draw_t": "ffffffff",
+      "created": 1799913600,
+      "exp": 1800000000,
+      "token": "OLC2.H4N8PZ6R1B.tester.two.1800000000.a.ffffffff.j00E_PzaPZ9AqZY3Dwq1RX_D-q5Geaq5E67Rsm-j_5XMJxkoepPoSoqi4GCQiEv9j-EkMYDFnzACydM3bATvAQ"
     }
   ],
   "keys": [
     {
-      "key_id": "testcouncil1",
+      "key_id": "council01",
       "kind": "c",
       "bootstrap": 1,
       "owner_discord_id": "100000000000000001",
       "created": 1780000000,
-      "public_hex": "27ee00698f0fa7c47c6a44514afe41b9e80bce0451a35a6d02a8b229d28a6836"
+      "public_hex": "ec8625fa537ee50453146f50c298eb2922590c60ded7b54ade9e85702a70219b",
+      "cert_exp": 1830000000,
+      "cert": "OLK1.council01.7IYl-lN-5QRTFG9QwpjrKSJZDGDe17VK3p6FcCpwIZs.c.1830000000.arYTictUuQ8GAtyDKuatSY5u4TcmBIk3TOkSRnj9wQeGZf1f2uloU-udjLiOpak4aQFRthop8705u3HU0Yw8Dw"
     },
     {
-      "key_id": "testplayer01",
+      "key_id": "player01",
       "kind": "p",
       "bootstrap": 0,
       "owner_discord_id": "100000000000000011",
       "created": 1780000000,
-      "public_hex": "d4d525c6c10192ebb2a30cd23be812530b299c233658515bef9792608280ba80"
+      "public_hex": "6237dcc3647b0995f0815a34a06541548363f74da2a4f7541415d582245d421a",
+      "cert_exp": 1830000000,
+      "cert": "OLK1.player01.Yjfcw2R7CZXwgVo0oGVBVINj902ipPdUFBXVgiRdQho.p.1830000000.n2pUb9BAK9CPrT-xGpJ_66YBnKW1amfjwcqmEcHhRhP8C1RL6fsKAWlZGTKjX88EEahzU9lCHlVHhUGM47xeBg"
     },
     {
-      "key_id": "testplayer02",
+      "key_id": "player02",
       "kind": "p",
       "bootstrap": 0,
       "owner_discord_id": "100000000000000012",
       "created": 1780000000,
-      "public_hex": "92e3613f58e15b53cd152d3e699fa8c4ab556c6f98070e99f0ba009bae2eb971"
+      "public_hex": "86dcd40827cbcb608b4419cc4afb1a68eb36b8002b208f05998a0dba2b4f4cba",
+      "cert_exp": 1830000000,
+      "cert": "OLK1.player02.htzUCCfLy2CLRBnMSvsaaOs2uAArII8FmYoNuitPTLo.p.1830000000._XlSBnNuy2SJwh4e9s5shqR3WzRdeMd1ecRpLPOWbbPUVudFTJN0mdyVb-P-ijE09A0DJOBmyvbHhoJzpTcNCQ"
     },
     {
-      "key_id": "testplayer03",
+      "key_id": "player03",
       "kind": "p",
       "bootstrap": 0,
       "owner_discord_id": "100000000000000013",
       "created": 1780000000,
-      "public_hex": "59ddc2f44373e9fc9140dfd98c63369c8f9d074ddafc612ea19061665f40de79"
+      "public_hex": "24b7aace15afb8c48409285ea8e2baac0884b6e8e6aa644189259ac57c607c7d",
+      "cert_exp": 1830000000,
+      "cert": "OLK1.player03.JLeqzhWvuMSECSheqOK6rAiEtujmqmRBiSWaxXxgfH0.p.1830000000.wIOxnEwfrX3YL5EJWO7iPcjUp9EQP4DrhoPlKYXi8zFb0Gv9oc97hp1aib4f9pXi5hwrOvE9nbPCagZFMjlZAQ"
     }
   ],
   "bundles": [
     {
       "name": "one councillor",
-      "bundle": "OLB4~Some Player-ClassicBetaPvP~Olympus~Alliance~0123456789abcdef~7K3M9Q2XWD~1790000123,testcouncil1,Test Councillor-ClassicBetaPvP,G6DtgIOM0e9eDraq2p4SV-Zi7yRX2Qssl4ybESmA-shCD18yJrG8EamXrJoJVPX2kM80PuaerPujc7xwcSeIDA",
+      "tag": "5f2f66f046a1db8a",
+      "tag_of": "TmJVCJJtjs5W_sOXnQm3G10J3y5xwVQkii6zRhi0EO-5AmL__PtEg1Ao7VaiUivi1Jslf4i1OJUxMDDNXtG4Ag~Some Player-ClassicBetaPvP",
+      "bundle": "OLB4~Some Player-ClassicBetaPvP~Olympus II~Alliance~0123456789abcdef~7K3M9QX2TB~5f2f66f046a1db8a~1799990100,council01,Test Councillor-ClassicBetaPvP,w,wYG_TW3fCOBxV9hteWMsnq2R8sBus8YaG-Dyb4SePjkl9a9Ub27i1okdpFxUh5aQASIZKKcXQbv0ocuXxvObBA",
       "signed": [
-        "OLY4~Some Player-ClassicBetaPvP~Olympus~Alliance~0123456789abcdef~7K3M9Q2XWD~1790000123~testcouncil1~Test Councillor-ClassicBetaPvP"
+        "OLY4~Some Player-ClassicBetaPvP~Olympus II~w~Alliance~0123456789abcdef~7K3M9QX2TB~5f2f66f046a1db8a~1799990100~council01~Test Councillor-ClassicBetaPvP"
       ]
     },
     {
       "name": "three drawn players, non-ASCII requester",
-      "bundle": "OLB4~Tëst Plâyer-ClassicBetaPvP~Olympus Vanguard~Horde~a1b2c3d4e5f60718~H4N8PZ6R1B~1790000200,testplayer01,Other Player-ClassicBetaPvP,Ohu-x_Mzg8_DpTBh-LCsII_dTZf6m2aVAbxFzpiUMQoHWlPTtqTOO6oi5sfB1hYaqVvpAtPElk86xejnIewUCA;1790000245,testplayer02,Third Player-ClassicBetaPvP2,Vpe_hh5ndX01NifSGOA-wP4ZNmDLs38w8WyOc7Kvp14RLQ0XXDv7_zFzvyev7S-gVnJhU3DncZLLHubyq0UjAQ;1790000301,testplayer03,Fourth Player-ClassicBetaPvP,3yGfTMxDRTV0vp_GOjVJfAHscRJTnNGTABcV3tMKKYwYVwHQdd4QbdGc_Ev2pqy84_PEFVD-KlPSFnTPbTWBAA",
+      "tag": "9c5ac51afcd0bbee",
+      "tag_of": "j00E_PzaPZ9AqZY3Dwq1RX_D-q5Geaq5E67Rsm-j_5XMJxkoepPoSoqi4GCQiEv9j-EkMYDFnzACydM3bATvAQ~Tëst Plâyer-ClassicBetaPvP",
+      "bundle": "OLB4~Tëst Plâyer-ClassicBetaPvP~Olympus Vanguard~Horde~a1b2c3d4e5f60718~H4N8PZ6R1B~9c5ac51afcd0bbee~1799990200,player01,Other Player-ClassicBetaPvP,r,jRr01ESNDrVEohLRRZYhLAVPD9ue32uDrRA2GQByQq2dsCQ-6o79nFWcL__shopaQ2Umy1aV9f8sDIaMQLzyBw;1799990245,player02,Third Player-ClassicBetaPvP2,c,K7sW12b4A_uTxycWnR8rRE1Ip3wzAxA2GYOgNMitKtbx1KfI6IxWMJLEu2oEoJ042TuWxlbk_RU6k81b4kuEAA;1799990301,player03,Fourth Player-ClassicBetaPvP,c,7sEYRUmeAZOZyqJUGu8_hZ_O2Mn8mFuWIKdWMTJ_0Zs4KYzelPEDfnjfq3bcU-uYal7tiPtuBY6zijo0mJCqDQ",
       "signed": [
-        "OLY4~Tëst Plâyer-ClassicBetaPvP~Olympus Vanguard~Horde~a1b2c3d4e5f60718~H4N8PZ6R1B~1790000200~testplayer01~Other Player-ClassicBetaPvP",
-        "OLY4~Tëst Plâyer-ClassicBetaPvP~Olympus Vanguard~Horde~a1b2c3d4e5f60718~H4N8PZ6R1B~1790000245~testplayer02~Third Player-ClassicBetaPvP2",
-        "OLY4~Tëst Plâyer-ClassicBetaPvP~Olympus Vanguard~Horde~a1b2c3d4e5f60718~H4N8PZ6R1B~1790000301~testplayer03~Fourth Player-ClassicBetaPvP"
+        "OLY4~Tëst Plâyer-ClassicBetaPvP~Olympus Vanguard~r~Horde~a1b2c3d4e5f60718~H4N8PZ6R1B~9c5ac51afcd0bbee~1799990200~player01~Other Player-ClassicBetaPvP",
+        "OLY4~Tëst Plâyer-ClassicBetaPvP~Olympus Vanguard~c~Horde~a1b2c3d4e5f60718~H4N8PZ6R1B~9c5ac51afcd0bbee~1799990245~player02~Third Player-ClassicBetaPvP2",
+        "OLY4~Tëst Plâyer-ClassicBetaPvP~Olympus Vanguard~c~Horde~a1b2c3d4e5f60718~H4N8PZ6R1B~9c5ac51afcd0bbee~1799990301~player03~Fourth Player-ClassicBetaPvP"
       ]
     }
   ],
+  "draw": {
+    "R": "H4N8PZ6R1B",
+    "prefix": {
+      "player01": "feffce2f",
+      "player02": "86382936",
+      "player03": "99930512",
+      "player04": "758d883f",
+      "player05": "abd28f09",
+      "abcdef": "ce741b41",
+      "zz9999zz": "0b540f3c",
+      "player000042": "3034d2c2"
+    },
+    "pool": "pool%04d",
+    "thresholds": [
+      {
+        "n": 5,
+        "M": 20,
+        "T": "ffffffff",
+        "drawn": 5
+      },
+      {
+        "n": 20,
+        "M": 20,
+        "T": "ffffffff",
+        "drawn": 20
+      },
+      {
+        "n": 21,
+        "M": 20,
+        "T": "f569a39a",
+        "drawn": 20
+      },
+      {
+        "n": 400,
+        "M": 20,
+        "T": "0c109a37",
+        "drawn": 20
+      },
+      {
+        "n": 700,
+        "M": 21,
+        "T": "08e4d52a",
+        "drawn": 21
+      },
+      {
+        "n": 1000,
+        "M": 30,
+        "T": "069cb5ea",
+        "drawn": 30
+      }
+    ]
+  },
   "ed25519": [
     {
       "name": "seed 00..1f, empty message",
@@ -463,24 +634,24 @@ between the proofs' `issued` and `exp`, and `acceptBundle` answers `linked` for 
     },
     {
       "name": "backend key, code token",
-      "seed_hex": "66c9370fb53f6de55b6dd1e44fbb59af4017cde20766aadcafc4d97aff585625",
-      "public_hex": "bb0f6260296c0709dfd2ac13d98880b7b17e817fdf13a78752f095d26601094e",
-      "message": "OLC1.7K3M9Q2XWD.some_player.1790086400.c",
-      "signature_b64url": "CeE2kc8l85hCPotkn6GNumGOUJCM0G1kN97OTqT8Hkr7hnSBhx055DnfAlmzDWERDq_bCYPSLZtWydonBTTcCA"
+      "seed_hex": "f8b562176148cbec194b0b09e63cf8f6bb0e156e6ea8620e8d2a7b53c4e5e77e",
+      "public_hex": "070a599da007dbca7a54999daeab8eec7bd9e1cd4dd53659322552bc33f2225b",
+      "message": "OLC2.7K3M9QX2TB.some.player.1800000000.c.00000000",
+      "signature_b64url": "TmJVCJJtjs5W_sOXnQm3G10J3y5xwVQkii6zRhi0EO-5AmL__PtEg1Ao7VaiUivi1Jslf4i1OJUxMDDNXtG4Ag"
     },
     {
       "name": "councillor key, OLY4 confirmation",
-      "seed_hex": "cab94e6fdde165424b69948a51a63d08f40ece0e5c378eb65bccd34582f4b9b0",
-      "public_hex": "27ee00698f0fa7c47c6a44514afe41b9e80bce0451a35a6d02a8b229d28a6836",
-      "message": "OLY4~Some Player-ClassicBetaPvP~Olympus~Alliance~0123456789abcdef~7K3M9Q2XWD~1790000123~testcouncil1~Test Councillor-ClassicBetaPvP",
-      "signature_b64url": "G6DtgIOM0e9eDraq2p4SV-Zi7yRX2Qssl4ybESmA-shCD18yJrG8EamXrJoJVPX2kM80PuaerPujc7xwcSeIDA"
+      "seed_hex": "a8d5c4d53573bdff5005fdfa934dc9b8b322fcc91ec40e299e9e4ccb3e7b5497",
+      "public_hex": "ec8625fa537ee50453146f50c298eb2922590c60ded7b54ade9e85702a70219b",
+      "message": "OLY4~Some Player-ClassicBetaPvP~Olympus II~w~Alliance~0123456789abcdef~7K3M9QX2TB~5f2f66f046a1db8a~1799990100~council01~Test Councillor-ClassicBetaPvP",
+      "signature_b64url": "wYG_TW3fCOBxV9hteWMsnq2R8sBus8YaG-Dyb4SePjkl9a9Ub27i1okdpFxUh5aQASIZKKcXQbv0ocuXxvObBA"
     },
     {
       "name": "player key, OLY4 with non-ASCII requester",
-      "seed_hex": "e60782cfce4b5e9a952befe95bd9279a3fa0a4f94ab389cbe4a9c1bd243e03bf",
-      "public_hex": "d4d525c6c10192ebb2a30cd23be812530b299c233658515bef9792608280ba80",
-      "message": "OLY4~Tëst Plâyer-ClassicBetaPvP~Olympus Vanguard~Horde~a1b2c3d4e5f60718~H4N8PZ6R1B~1790000200~testplayer01~Other Player-ClassicBetaPvP",
-      "signature_b64url": "Ohu-x_Mzg8_DpTBh-LCsII_dTZf6m2aVAbxFzpiUMQoHWlPTtqTOO6oi5sfB1hYaqVvpAtPElk86xejnIewUCA"
+      "seed_hex": "88a9e14163bcd02a9c2f77cdaacdfdb9a417591fbe216fbbdeeba29cc2806574",
+      "public_hex": "6237dcc3647b0995f0815a34a06541548363f74da2a4f7541415d582245d421a",
+      "message": "OLY4~Tëst Plâyer-ClassicBetaPvP~Olympus Vanguard~r~Horde~a1b2c3d4e5f60718~H4N8PZ6R1B~9c5ac51afcd0bbee~1799990200~player01~Other Player-ClassicBetaPvP",
+      "signature_b64url": "jRr01ESNDrVEohLRRZYhLAVPD9ue32uDrRA2GQByQq2dsCQ-6o79nFWcL__shopaQ2Umy1aV9f8sDIaMQLzyBw"
     }
   ],
   "must_fail": {
@@ -507,9 +678,11 @@ CREATE TABLE IF NOT EXISTS codes (
   discord_id TEXT NOT NULL,                        -- whose code it is
   username   TEXT NOT NULL,                        -- their Discord username, as signed in the token
   mode       TEXT NOT NULL CHECK (mode IN ('c', 'a')),
+  draw_t     TEXT NOT NULL                         -- T, signed in the token: a player key is drawn when its prefix < T
+             CHECK (length(draw_t) = 8 AND draw_t NOT GLOB '*[^0-9a-f]*'),
   created    INTEGER NOT NULL,
   exp        INTEGER NOT NULL,
-  token      TEXT NOT NULL,                        -- the signed token (public: the player pastes it)
+  token      TEXT NOT NULL,                        -- the signed token: its signature makes each link's tag, keep it private
   source     TEXT NOT NULL,                        -- 'site' or 'discord'
   used       INTEGER                               -- when it linked a character; NULL until then
 );
@@ -524,14 +697,16 @@ CREATE TABLE IF NOT EXISTS keys (
   owner_discord_id TEXT NOT NULL                   -- a Discord id: digits only
                    CHECK (length(owner_discord_id) BETWEEN 5 AND 25 AND owner_discord_id NOT GLOB '*[^0-9]*'),
   owner_username   TEXT,
-  kind             TEXT NOT NULL CHECK (kind IN ('c', 'p')), -- councillor or drawn player
+  kind             TEXT NOT NULL CHECK (kind IN ('c', 'p')), -- councillor or drawn player (the certificate's tier)
   bootstrap        INTEGER NOT NULL DEFAULT 0,     -- 1: a councillor key trusted before its owner linked a character
   created          INTEGER NOT NULL,
+  cert_exp         INTEGER,                        -- when its latest certificate expires; NULL: none issued
+  replaced_at      INTEGER,                        -- a newer key of the same owner came: out of the draw, still checks until revoked
   revoked          INTEGER NOT NULL DEFAULT 0,
   revoked_at       INTEGER
 );
--- One active key per Discord account: rotating is "revoke the old one, insert the new one".
-CREATE UNIQUE INDEX IF NOT EXISTS keys_one_per_owner ON keys (owner_discord_id) WHERE revoked = 0;
+-- One active key per Discord account: rotating replaces it, and revoking ends it.
+CREATE UNIQUE INDEX IF NOT EXISTS keys_one_per_owner ON keys (owner_discord_id) WHERE revoked = 0 AND replaced_at IS NULL;
 
 -- Proofs already counted: (code, key) pairs.
 CREATE TABLE IF NOT EXISTS used (
@@ -546,6 +721,8 @@ CREATE TABLE IF NOT EXISTS members (
   character  TEXT PRIMARY KEY,
   discord_id TEXT NOT NULL,
   guild      TEXT NOT NULL,
+  gv         TEXT NOT NULL DEFAULT 'c'             -- how the guild was checked in game: 'r' roster, 'w' /who, 'c' claimed
+             CHECK (gv IN ('r', 'w', 'c')),
   faction    TEXT NOT NULL,
   r          TEXT NOT NULL,                        -- the code that linked it
   linked     INTEGER NOT NULL
@@ -584,15 +761,18 @@ connect to your login (step 4).
 //   LINK_BACKEND_SEED    secret: the backend's Ed25519 seed, base64url (scripts/link-keys.py backend)
 //   LINK_BACKEND_PUBLIC  var: its public key, 64 hex (the same one is in the addon's ns.LINK_BACKEND_KEYS)
 //   LINK_MODE            var: "c" councillors only (launch), "a" councillors or three drawn players
+//   LINK_GUILD_POLICY    var: "verified" (the default): a link needs a confirmer who checked the
+//                        guild in game (its roster or a recent /who); "claimed": the guild is taken as named
 //   LINK_ORIGIN          var: the page's origin, e.g. "https://example.org" (checked on the page's POSTs)
-//   LINK_ADMIN_TOKEN     secret: bearer token of the watcher tool (/inbox) and of a gateway bot (/bot-code)
+//   LINK_ADMIN_TOKEN     secret: bearer token of your tools: the watcher inbox (/inbox), a gateway
+//                        bot (/bot-code) and the confirmer keys (/keys)
 //   DISCORD_BOT_TOKEN    secret: the bot that gives the role (Manage Roles, above ROLE_ID)
 //   DISCORD_PUBLIC_KEY   var: the application's public key, for the /link slash command over HTTP
 //   GUILD_ID, ROLE_ID    vars: the Olympus server and the role linked members get
 //
 // Routes: GET /api/link/me, POST /api/link/code, POST /api/link/submit, POST /api/link/inbox,
-// POST /api/link/bot-code, POST /api/discord/interactions. Anything else returns null from
-// handleLink, so it can sit in front of an existing Worker's router.
+// POST /api/link/bot-code, POST /api/link/keys, POST /api/discord/interactions. Anything else
+// returns null from handleLink, so it can sit in front of an existing Worker's router.
 
 export const LINK = {
 	TOKEN_LIFE: 24 * 3600, // a code works for a day...
@@ -602,10 +782,12 @@ export const LINK = {
 	CLOCK_SKEW: 300, // game server clock vs ours
 	WINDOW: 300, // three player proofs within 5 minutes of each other
 	PLAYERS_NEEDED: 3,
-	KEY_MIN_AGE: 7 * 24 * 3600,
-	ACCOUNT_MIN_AGE: 30 * 24 * 3600,
+	KEY_MIN_AGE: 7 * 24 * 3600, // a player key counts for codes issued 7 days after it...
+	ACCOUNT_MIN_AGE: 30 * 24 * 3600, // ...and its owner's Discord account is 30 days older than the code
 	SUBMITS_PER_HOUR: 10,
 	MAX_BUNDLES: 500,
+	CERT_DAYS: 365, // a key certificate's life, unless the request says otherwise...
+	CERT_DAYS_MAX: 3650, // ...up to this
 };
 
 const R_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
@@ -614,11 +796,19 @@ const USERNAME_RE = /^[a-z0-9_.]{2,32}$/;
 const DISCORD_ID_RE = /^[0-9]{5,25}$/;
 const KEYID_RE = /^[a-z0-9]{6,16}$/;
 const NONCE_RE = /^[0-9a-f]{16}$/;
+const TAG_RE = /^[0-9a-f]{16}$/;
+const DRAW_RE = /^[0-9a-f]{8}$/;
 const ISSUED_RE = /^[1-9][0-9]{0,11}$/;
 const SIG_RE = /^[A-Za-z0-9_-]{86}$/;
+const PUBLIC_HEX_RE = /^[0-9a-f]{64}$/;
+const PUBLIC_B64_RE = /^[A-Za-z0-9_-]{43}$/;
 const FORBIDDEN = /[|~;,\u0000-\u001f\u007f]/;
+const GV_RE = /^[rwc]$/; // how a confirmer checked the guild: r its own roster, w a recent /who, c claimed only
+const CHECKED = (gv) => gv === 'r' || gv === 'w';
 const MAX_PROOFS = 4;
 const MAX_BUNDLE_BYTES = 1600;
+const NO_DRAW = '00000000'; // T of a mode "c" code: no player key is drawn
+const ALL_DRAWN = 'ffffffff'; // T when there are M player keys or fewer
 
 const enc = new TextEncoder();
 const now = () => Math.floor(Date.now() / 1000);
@@ -654,6 +844,8 @@ export async function handleLink(request, env, ctx, { getUser = sessionUser } = 
 				return await routeInbox(request, env);
 			case 'POST /api/link/bot-code':
 				return await routeBotCode(request, env);
+			case 'POST /api/link/keys':
+				return await routeKeys(request, env);
 			case 'POST /api/discord/interactions':
 				return await routeInteractions(request, env);
 			default:
@@ -715,15 +907,26 @@ async function routeInbox(request, env) {
 		const text = (typeof item === 'string' ? item : typeof entry.bundle === 'string' ? entry.bundle : '').trim();
 		const t = now();
 		const parsed = parseBundle(text);
-		const result =
-			parsed.ok && typeof entry.R === 'string' && entry.R !== parsed.bundle.R
-				? reject('format', 'The inbox key does not match the link.', parsed.bundle.R)
-				: await acceptBundle(env, text, { t });
-		await logUpload(env, 'watcher', text, result, {
-			from: typeof entry.from === 'string' ? entry.from.slice(0, 100) : null,
-			received: Number.isFinite(entry.t) ? Math.floor(entry.t) : null,
-			uploaded: t,
-		});
+		let result;
+		try {
+			result =
+				parsed.ok && typeof entry.R === 'string' && entry.R !== parsed.bundle.R
+					? reject('format', 'The inbox key does not match the link.', parsed.bundle.R)
+					: await acceptBundle(env, text, { t });
+		} catch (err) {
+			// One link that fails on our side does not stop the others: this one is sent again later.
+			console.error('olympus-link: inbox entry', err && err.stack ? err.stack : err);
+			result = { status: 'error', reason: 'server', message: 'Something went wrong on our side: send it again.', R: parsed.ok ? parsed.bundle.R : null };
+		}
+		try {
+			await logUpload(env, 'watcher', text, result, {
+				from: typeof entry.from === 'string' ? entry.from.slice(0, 100) : null,
+				received: Number.isFinite(entry.t) ? Math.floor(entry.t) : null,
+				uploaded: t,
+			});
+		} catch (err) {
+			console.error('olympus-link: inbox log', err && err.stack ? err.stack : err);
+		}
 		results.push({ R: result.R || (typeof entry.R === 'string' ? entry.R : null), status: result.status, reason: result.reason, message: result.message });
 	}
 	return json({ results });
@@ -776,15 +979,17 @@ export async function issueCode(env, user, source) {
 	if (count && count.n >= LINK.CODES_PER_DAY) return { error: 'limit' };
 	const mode = env.LINK_MODE === 'a' ? 'a' : 'c';
 	const exp = t + LINK.TOKEN_LIFE;
+	const pool = mode === 'a' ? await drawPool(env, t) : null;
 	for (let attempt = 0; attempt < 5; attempt++) {
 		const R = randomR();
-		const payload = `OLC1.${R}.${username}.${exp}.${mode}`;
+		const T = pool ? await thresholdOf(R, pool) : NO_DRAW;
+		const payload = `OLC2.${R}.${username}.${exp}.${mode}.${T}`;
 		const token = `${payload}.${await backendSign(env, payload)}`;
 		try {
-			await env.DB.prepare('INSERT INTO codes (r, discord_id, username, mode, created, exp, token, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-				.bind(R, id, username, mode, t, exp, token, source)
+			await env.DB.prepare('INSERT INTO codes (r, discord_id, username, mode, draw_t, created, exp, token, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+				.bind(R, id, username, mode, T, t, exp, token, source)
 				.run();
-			return { token, exp, mode, R };
+			return { token, exp, mode, R, T };
 		} catch (err) {
 			if (!/unique|constraint/i.test(String(err && err.message))) throw err; // an R taken: draw again
 		}
@@ -804,7 +1009,7 @@ function codeReply(r) {
 		'```',
 		`/oly discord ${r.token}`,
 		'```',
-		`It works once, for your account only, for the next ${hours} h. The confirmations happen in game; your role arrives when the link reaches the bot.`,
+		`It works once, for your account only, for the next ${hours} h. Keep it to yourself: not on stream, not in a screenshot, and neither the game's Olympus Link window. The confirmations happen in game; your role arrives when the link reaches the bot.`,
 	].join('\n');
 }
 
@@ -812,6 +1017,58 @@ function codeError(reason) {
 	if (reason === 'limit') return 'You already got 3 codes today: use the last one, or try again tomorrow.';
 	if (reason === 'username') return 'Your Discord username cannot be used in a code. Change it to the new style (lowercase, no #1234) and try again.';
 	return 'Sign in with Discord first.';
+}
+
+// The signature at the end of a code token: what each link's tag is made from.
+function tokenSig(token) {
+	return String(token).slice(String(token).lastIndexOf('.') + 1);
+}
+
+// ---------------------------------------------------------------------------
+// The draw: a player key's prefix for code R is the first 8 hex of SHA-256(R~keyId). At issue,
+// T is the prefix at index M (0-based) of the active player keys' sorted prefixes, with
+// M = max(20, ceil(3% of them)), or "ffffffff" when there are M keys or fewer: the key is drawn
+// when its prefix < T. T is signed into the code and stored with it, so the addon asks the
+// same keys this Worker counts.
+
+export async function drawPrefix(R, keyId) {
+	return (await sha256Hex(`${R}~${keyId}`)).slice(0, 8);
+}
+
+export function drawLimit(activePlayerKeys) {
+	return Math.max(20, Math.ceil((activePlayerKeys * 3) / 100));
+}
+
+// The active player keys at time t: not revoked or replaced, a certificate valid now, old
+// enough and from an old enough Discord account (the ones that could count for a new code).
+export async function drawPool(env, t) {
+	const rows = (
+		await env.DB.prepare("SELECT key_id, owner_discord_id, created FROM keys WHERE kind = 'p' AND revoked = 0 AND replaced_at IS NULL AND cert_exp > ?")
+			.bind(t)
+			.all()
+	).results || [];
+	return rows.filter((k) => !tooYoung(k, t)).map((k) => k.key_id);
+}
+
+export async function thresholdOf(R, keyIds) {
+	const prefixes = (await Promise.all(keyIds.map((id) => drawPrefix(R, id)))).sort();
+	const m = drawLimit(prefixes.length);
+	return prefixes.length > m ? prefixes[m] : ALL_DRAWN;
+}
+
+export async function drawThreshold(env, R, t = now()) {
+	return thresholdOf(R, await drawPool(env, t));
+}
+
+// Why a player key is too young to count at time `at` (a code's issue), or null.
+function tooYoung(key, at) {
+	if (key.created + LINK.KEY_MIN_AGE > at) return 'key younger than 7 days';
+	if (snowflakeTime(key.owner_discord_id) + LINK.ACCOUNT_MIN_AGE * 1000 > at * 1000) return 'Discord account younger than 30 days';
+	return null;
+}
+
+export function snowflakeTime(id) {
+	return Number((BigInt(id) >> 22n) + 1420070400000n);
 }
 
 // ---------------------------------------------------------------------------
@@ -823,25 +1080,26 @@ export function parseBundle(text) {
 	if (typeof text !== 'string' || !text.startsWith('OLB4~')) return { ok: false, error: 'prefix' };
 	if (enc.encode(text).length > MAX_BUNDLE_BYTES) return { ok: false, error: 'size' };
 	const f = text.split('~');
-	if (f.length !== 7) return { ok: false, error: 'fields' };
-	const [, requester, guild, faction, nonce, R, proofText] = f;
+	if (f.length !== 8) return { ok: false, error: 'fields' };
+	const [, requester, guild, faction, nonce, R, tag, proofText] = f;
 	if (!validCharacter(requester)) return { ok: false, error: 'requester' };
 	if (!field(guild, 40)) return { ok: false, error: 'guild' };
 	if (faction !== 'Alliance' && faction !== 'Horde') return { ok: false, error: 'faction' };
 	if (!NONCE_RE.test(nonce)) return { ok: false, error: 'nonce' };
 	if (!R_RE.test(R)) return { ok: false, error: 'code' };
+	if (!TAG_RE.test(tag)) return { ok: false, error: 'tag' };
 	const parts = proofText ? proofText.split(';') : [];
 	if (parts.length < 1 || parts.length > MAX_PROOFS) return { ok: false, error: 'proofs' };
 	const proofs = [];
 	for (const part of parts) {
 		const p = part.split(',');
-		if (p.length !== 4) return { ok: false, error: 'proof' };
-		const [issued, keyId, confirmer, sig] = p;
-		if (!ISSUED_RE.test(issued) || !KEYID_RE.test(keyId) || !validCharacter(confirmer)) return { ok: false, error: 'proof' };
+		if (p.length !== 5) return { ok: false, error: 'proof' };
+		const [issued, keyId, confirmer, gv, sig] = p;
+		if (!ISSUED_RE.test(issued) || !KEYID_RE.test(keyId) || !validCharacter(confirmer) || !GV_RE.test(gv)) return { ok: false, error: 'proof' };
 		if (!SIG_RE.test(sig) || b64urlEncode(b64urlDecode(sig)) !== sig) return { ok: false, error: 'sig' };
-		proofs.push({ issued: Number(issued), keyId, confirmer, sig });
+		proofs.push({ issued: Number(issued), keyId, confirmer, gv, sig });
 	}
-	return { ok: true, bundle: { requester, guild, faction, nonce, R, proofs } };
+	return { ok: true, bundle: { requester, guild, faction, nonce, R, tag, proofs } };
 }
 
 // A field of the signed text: not empty, at most `max` bytes, no separator, pipe or control.
@@ -855,10 +1113,21 @@ function validCharacter(s) {
 }
 
 export function signedMessage(b, p) {
-	return ['OLY4', b.requester, b.guild, b.faction, b.nonce, b.R, p.issued, p.keyId, p.confirmer].join('~');
+	return ['OLY4', b.requester, b.guild, p.gv, b.faction, b.nonce, b.R, b.tag, p.issued, p.keyId, p.confirmer].join('~');
 }
 
-// The whole check. Returns { status: 'linked' | 'rejected', reason, message, R, characters }.
+// The tag that binds a link to the command it was made with: the first 16 hex of
+// SHA-256(<the token's sig>~<requester>). The QR code and the copy box never carry the token,
+// so whoever sees them cannot make a link of their own with the code.
+export async function linkTag(sig, requester) {
+	return (await sha256Hex(`${sig}~${requester}`)).slice(0, 16);
+}
+
+export function guildPolicy(env) {
+	return env.LINK_GUILD_POLICY === 'claimed' ? 'claimed' : 'verified';
+}
+
+// The whole check. Returns { status: 'linked' | 'rejected' | 'error', reason, message, R, characters }.
 // opts.userId: the signed-in user, who must own the code (the page); absent for the watcher.
 export async function acceptBundle(env, text, opts = {}) {
 	const t = opts.t || now();
@@ -868,6 +1137,9 @@ export async function acceptBundle(env, text, opts = {}) {
 	const code = await env.DB.prepare('SELECT * FROM codes WHERE r = ?').bind(b.R).first();
 	if (!code) return reject('unknown-code', 'This link was made with a code the bot never issued.', b.R);
 	if (opts.userId && code.discord_id !== opts.userId) return reject('other-user', 'This link was made with a code of another Discord account.', b.R);
+	if (b.tag !== (await linkTag(tokenSig(code.token), b.requester))) {
+		return reject('tag', 'This link was not made by the player who typed this code in the game.', b.R);
+	}
 	if (code.used !== null && code.used !== undefined) {
 		const same = await env.DB.prepare('SELECT 1 AS x FROM members WHERE character = ? AND discord_id = ? AND r = ?').bind(b.requester, code.discord_id, b.R).first();
 		if (same) return { status: 'linked', reason: 'already', message: `${b.requester} is already linked.`, R: b.R, characters: await charactersOf(env, code.discord_id) };
@@ -878,36 +1150,62 @@ export async function acceptBundle(env, text, opts = {}) {
 	const checks = [];
 	for (const p of b.proofs) checks.push(await checkProof(env, b, p, code, t));
 	const valid = checks.filter((c) => c.ok);
-	const councillor = valid.find((c) => c.key.kind === 'c');
-	let counted = councillor ? [councillor] : null;
 	let why = checks.filter((c) => !c.ok).map((c) => `${c.proof.keyId}: ${c.why}`);
-	if (!counted && code.mode === 'a') {
-		const drawn = await drawnPlayers(env, b.R, valid.filter((c) => c.key.kind === 'p'), t);
-		counted = drawn.picked;
-		why = why.concat(drawn.why);
+	// Councillors: one is enough (one that checked the guild is recorded first). Every
+	// councillor and every drawn player that could count vouches for the guild.
+	const councillors = valid.filter((c) => c.key.kind === 'c').sort((x, y) => CHECKED(y.proof.gv) - CHECKED(x.proof.gv));
+	let counted = councillors.length ? [councillors[0]] : null;
+	let vouching = councillors;
+	if (code.mode === 'a') {
+		const drawn = await drawnPlayers(code, valid.filter((c) => c.key.kind === 'p'));
+		vouching = vouching.concat(drawn.eligible);
+		if (!counted) {
+			counted = drawn.picked;
+			why = why.concat(drawn.why);
+		}
 	}
 	if (!counted) {
 		const need = code.mode === 'a' ? `one councillor or ${LINK.PLAYERS_NEEDED} drawn players` : 'one councillor';
 		return reject('not-enough', `Not enough valid confirmations (needs ${need}).${why.length ? ` ${why.join('; ')}.` : ''}`, b.R);
 	}
+	const checked = vouching.find((c) => CHECKED(c.proof.gv));
+	const gv = checked ? checked.proof.gv : 'c';
+	if (!checked && guildPolicy(env) === 'verified') {
+		return reject('guild-unverified', `None of the confirmations checked ${b.guild} in game (a confirmer of that guild with its roster, or one who saw the player in it in a /who).`, b.R);
+	}
 
-	// Claim the code first (two deliveries of the same link may race), then the role.
+	// Claim the code first (two deliveries of the same link may race), then the role. Anything
+	// that fails after the claim releases it, so the same link works on the next try.
 	const claim = await env.DB.prepare('UPDATE codes SET used = ? WHERE r = ? AND used IS NULL').bind(t, b.R).run();
 	if (!claim.meta || claim.meta.changes !== 1) return reject('code-used', 'This code was already used.', b.R);
+	const release = async () => {
+		try {
+			await env.DB.prepare('UPDATE codes SET used = NULL WHERE r = ? AND used = ?').bind(b.R, t).run();
+		} catch (err) {
+			console.error('olympus-link: could not release code', b.R, err && err.stack ? err.stack : err);
+		}
+	};
 	const role = await discordRole(env, 'PUT', code.discord_id);
 	if (!role.ok) {
-		await env.DB.prepare('UPDATE codes SET used = NULL WHERE r = ?').bind(b.R).run();
+		await release();
 		if (role.reason === 'not-in-server') return reject('not-in-server', 'Join the Olympus Discord server first, then send the link again.', b.R);
 		return { status: 'error', reason: 'discord', message: 'Discord did not take the role change: try again in a minute.', R: b.R };
 	}
-	const previous = await env.DB.prepare('SELECT discord_id FROM members WHERE character = ?').bind(b.requester).first();
-	await env.DB.batch([
-		...counted.map((c) => env.DB.prepare('INSERT OR IGNORE INTO used (r, key_id, t) VALUES (?, ?, ?)').bind(b.R, c.proof.keyId, t)),
-		env.DB.prepare(
-			'INSERT INTO members (character, discord_id, guild, faction, r, linked) VALUES (?, ?, ?, ?, ?, ?) ' +
-				'ON CONFLICT(character) DO UPDATE SET discord_id = excluded.discord_id, guild = excluded.guild, faction = excluded.faction, r = excluded.r, linked = excluded.linked',
-		).bind(b.requester, code.discord_id, b.guild, b.faction, b.R, t),
-	]);
+	let previous;
+	try {
+		previous = await env.DB.prepare('SELECT discord_id FROM members WHERE character = ?').bind(b.requester).first();
+		await env.DB.batch([
+			...counted.map((c) => env.DB.prepare('INSERT OR IGNORE INTO used (r, key_id, t) VALUES (?, ?, ?)').bind(b.R, c.proof.keyId, t)),
+			env.DB.prepare(
+				'INSERT INTO members (character, discord_id, guild, gv, faction, r, linked) VALUES (?, ?, ?, ?, ?, ?, ?) ' +
+					'ON CONFLICT(character) DO UPDATE SET discord_id = excluded.discord_id, guild = excluded.guild, gv = excluded.gv, faction = excluded.faction, r = excluded.r, linked = excluded.linked',
+			).bind(b.requester, code.discord_id, b.guild, gv, b.faction, b.R, t),
+		]);
+	} catch (err) {
+		console.error('olympus-link: could not record the link', b.R, err && err.stack ? err.stack : err);
+		await release();
+		return { status: 'error', reason: 'server', message: 'The link could not be recorded: send it again in a minute.', R: b.R };
+	}
 	if (previous && previous.discord_id !== code.discord_id) {
 		const left = await env.DB.prepare('SELECT COUNT(*) AS n FROM members WHERE discord_id = ?').bind(previous.discord_id).first();
 		if (!left || left.n === 0) await discordRole(env, 'DELETE', previous.discord_id); // the character moved away
@@ -941,26 +1239,20 @@ async function checkProof(env, b, p, code, t) {
 	return { ok: true, proof: p, key };
 }
 
-// Mode "a": three drawn players, all of them old enough, ranked < M in this code's draw, from
-// three owners, signed within 5 minutes of each other.
-async function drawnPlayers(env, R, valid, t) {
+// Mode "a": three drawn players from three owners, signed within 5 minutes of each other. A
+// player key counts when it was 7 days old and its owner's Discord account 30 days old when the
+// code was issued, it was not replaced before that, and it is drawn: its prefix < the code's T.
+async function drawnPlayers(code, valid) {
 	const why = [];
-	const old = [];
+	const eligible = [];
 	for (const c of valid) {
-		if (t - c.key.created < LINK.KEY_MIN_AGE) why.push(`${c.proof.keyId}: key younger than 7 days`);
-		else if (t * 1000 - snowflakeTime(c.key.owner_discord_id) < LINK.ACCOUNT_MIN_AGE * 1000) why.push(`${c.proof.keyId}: Discord account younger than 30 days`);
-		else old.push(c);
+		const young = tooYoung(c.key, code.created);
+		if (young) why.push(`${c.proof.keyId}: ${young}`);
+		else if (c.key.replaced_at && c.key.replaced_at <= code.created) why.push(`${c.proof.keyId}: replaced by a newer key`);
+		else if (!((await drawPrefix(code.r, c.proof.keyId)) < code.draw_t)) why.push(`${c.proof.keyId}: not drawn for this code`);
+		else eligible.push(c);
 	}
-	if (old.length < LINK.PLAYERS_NEEDED) return { picked: null, why };
-	const rank = await drawRanks(env, R);
-	const limit = drawLimit(rank.size);
-	const inDraw = [];
-	for (const c of old) {
-		const r = rank.get(c.proof.keyId);
-		if (r === undefined || r >= limit) why.push(`${c.proof.keyId}: not drawn for this code`);
-		else inDraw.push(c);
-	}
-	inDraw.sort((a, b) => a.proof.issued - b.proof.issued);
+	const inDraw = [...eligible].sort((a, b) => a.proof.issued - b.proof.issued);
 	for (let i = 0; i < inDraw.length; i++) {
 		const picked = [];
 		const owners = new Set();
@@ -968,27 +1260,11 @@ async function drawnPlayers(env, R, valid, t) {
 			if (owners.has(inDraw[j].key.owner_discord_id)) continue;
 			owners.add(inDraw[j].key.owner_discord_id);
 			picked.push(inDraw[j]);
-			if (picked.length === LINK.PLAYERS_NEEDED) return { picked, why };
+			if (picked.length === LINK.PLAYERS_NEEDED) return { picked, eligible, why };
 		}
 	}
 	if (inDraw.length >= LINK.PLAYERS_NEEDED) why.push('the player confirmations are more than 5 minutes apart');
-	return { picked: null, why };
-}
-
-// Every active player key's place in the draw of R: SHA-256(R .. "~" .. keyId), lowest first.
-export async function drawRanks(env, R) {
-	const rows = (await env.DB.prepare("SELECT key_id FROM keys WHERE kind = 'p' AND revoked = 0").all()).results || [];
-	const hashed = await Promise.all(rows.map(async (row) => [row.key_id, await sha256Hex(`${R}~${row.key_id}`)]));
-	hashed.sort((a, b) => (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0));
-	return new Map(hashed.map(([id], i) => [id, i]));
-}
-
-export function drawLimit(activePlayerKeys) {
-	return Math.max(20, Math.ceil(activePlayerKeys * 0.03));
-}
-
-export function snowflakeTime(id) {
-	return Number((BigInt(id) >> 22n) + 1420070400000n);
+	return { picked: null, eligible, why };
 }
 
 async function charactersOf(env, discordId) {
@@ -1013,13 +1289,127 @@ async function logUpload(env, source, text, result, extra) {
 }
 
 // ---------------------------------------------------------------------------
+// Confirmer keys and their certificates
+//
+// A certificate tells every requester's addon, without the bot online, that a key is
+// registered and whether it is a councillor's (c) or a drawn player's (p):
+//   OLK1.<keyId>.<public key, 43 base64url>.<tier>.<exp>.<sig>
+// sig: the backend key's Ed25519 over the ASCII bytes of everything before the last dot. The
+// confirmer types it in game (/oly discord cert <certificate>) and its addon announces it.
+
+export async function makeCertificate(env, keyId, publicHex, tier, exp) {
+	const payload = `OLK1.${keyId}.${b64urlEncode(hexToBytes(publicHex))}.${tier}.${exp}`;
+	return `${payload}.${await backendSign(env, payload)}`;
+}
+
+// { keyId, publicHex, tier, exp, sig, payload } or null.
+export function parseCertificate(text) {
+	const m = /^OLK1\.([a-z0-9]{6,16})\.([A-Za-z0-9_-]{43})\.([cp])\.([1-9][0-9]{0,11})\.([A-Za-z0-9_-]{86})$/.exec(String(text));
+	if (!m) return null;
+	const [, keyId, pub, tier, exp, sig] = m;
+	if (b64urlEncode(b64urlDecode(pub)) !== pub || b64urlEncode(b64urlDecode(sig)) !== sig) return null;
+	return { keyId, publicHex: bytesToHex(b64urlDecode(pub)), tier, exp: Number(exp), sig, payload: m[0].slice(0, m[0].length - sig.length - 1) };
+}
+
+// The certificate when the backend key `publicHex` signed it, else null.
+export async function verifyCertificate(publicHex, text) {
+	const c = parseCertificate(text);
+	if (!c || !(await ed25519Verify(publicHex, b64urlDecode(c.sig), enc.encode(c.payload)))) return null;
+	return c;
+}
+
+// Your key tool (admin token): register a confirmer's public key and get its certificate,
+// renew a certificate, or revoke a key. The seed never comes here: it stays with the confirmer.
+//   {"key_id", "public_key", "owner_discord_id", "owner_username", "kind", "bootstrap", "days", "replace"}
+//   {"key_id", "renew": true, "days"}
+//   {"key_id", "revoke": true}
+async function routeKeys(request, env) {
+	if (!(await adminAuthorized(request, env))) return json({ status: 'error', reason: 'auth' }, 401);
+	const body = await readJson(request, 4 * 1024);
+	const t = now();
+	const fail = (reason, message, status = 400) => json({ status: 'error', reason, message }, status);
+	if (!body || typeof body !== 'object' || typeof body.key_id !== 'string' || !KEYID_RE.test(body.key_id)) return fail('format', 'key_id: 6 to 16 of a-z and 0-9.');
+	const keyId = body.key_id;
+	const days = body.days === undefined ? LINK.CERT_DAYS : body.days;
+	if (!Number.isInteger(days) || days < 1 || days > LINK.CERT_DAYS_MAX) return fail('format', `days: a whole number from 1 to ${LINK.CERT_DAYS_MAX}.`);
+	const certExp = t + days * 86400;
+	const existing = await env.DB.prepare('SELECT * FROM keys WHERE key_id = ?').bind(keyId).first();
+
+	if (body.revoke === true) {
+		if (!existing) return fail('unknown-key', 'No such key.', 404);
+		await env.DB.prepare('UPDATE keys SET revoked = 1, revoked_at = ? WHERE key_id = ? AND revoked = 0').bind(t, keyId).run();
+		return json({ status: 'ok', key_id: keyId, revoked: true });
+	}
+	if (body.renew === true) {
+		if (!existing) return fail('unknown-key', 'No such key.', 404);
+		if (existing.revoked) return fail('revoked', 'This key is revoked: make a new one.', 409);
+		const cert = await makeCertificate(env, keyId, existing.public_key, existing.kind, certExp);
+		await env.DB.prepare('UPDATE keys SET cert_exp = ? WHERE key_id = ?').bind(certExp, keyId).run();
+		return json(keyAnswer(existing, cert, certExp, null));
+	}
+
+	const pub = typeof body.public_key === 'string' ? publicKeyHex(body.public_key) : null;
+	const owner = String(body.owner_discord_id || '');
+	const username = body.owner_username === undefined || body.owner_username === null ? null : String(body.owner_username);
+	const kind = body.kind;
+	const bootstrap = body.bootstrap === true ? 1 : 0;
+	if (!pub) return fail('format', 'public_key: 64 hex digits (or 43 of base64url).');
+	if (!DISCORD_ID_RE.test(owner)) return fail('format', "owner_discord_id: the confirmer's Discord id.");
+	if (username !== null && !USERNAME_RE.test(username)) return fail('format', 'owner_username: a Discord username.');
+	if (kind !== 'c' && kind !== 'p') return fail('format', 'kind: "c" (a High Councillor) or "p" (a drawn player).');
+	if (bootstrap && kind !== 'c') return fail('format', 'Only a councillor key can be a bootstrap key.');
+	if (existing) return fail('key-id-used', 'This key id exists already: ids are never reused.', 409);
+	if (await env.DB.prepare('SELECT 1 AS x FROM keys WHERE public_key = ?').bind(pub).first()) return fail('public-key-used', 'This public key is registered already.', 409);
+	const active = await env.DB.prepare('SELECT key_id FROM keys WHERE owner_discord_id = ? AND revoked = 0 AND replaced_at IS NULL').bind(owner).first();
+	if (active && body.replace !== true) {
+		return fail('owner-has-key', `This account's active key is ${active.key_id}: send "replace": true to rotate it.`, 409);
+	}
+	const cert = await makeCertificate(env, keyId, pub, kind, certExp);
+	const insert = env.DB.prepare(
+		'INSERT INTO keys (key_id, public_key, owner_discord_id, owner_username, kind, bootstrap, created, cert_exp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+	).bind(keyId, pub, owner, username, kind, bootstrap, t, certExp);
+	// Rotating: the old key leaves the draw at once and still checks the proofs it signed until
+	// you revoke it, once the confirmer typed the new key and certificate in game.
+	if (active) await env.DB.batch([env.DB.prepare('UPDATE keys SET replaced_at = ? WHERE key_id = ?').bind(t, active.key_id), insert]);
+	else await insert.run();
+	return json(keyAnswer({ key_id: keyId, kind, public_key: pub }, cert, certExp, active ? active.key_id : null));
+}
+
+function keyAnswer(key, cert, certExp, replaced) {
+	return {
+		status: 'ok',
+		key_id: key.key_id,
+		kind: key.kind,
+		public_key: key.public_key,
+		cert,
+		cert_exp: certExp,
+		command: `/oly discord cert ${cert}`,
+		replaced,
+	};
+}
+
+function publicKeyHex(s) {
+	const t = s.trim();
+	if (PUBLIC_HEX_RE.test(t.toLowerCase())) return t.toLowerCase();
+	if (PUBLIC_B64_RE.test(t) && b64urlEncode(b64urlDecode(t)) === t) return bytesToHex(b64urlDecode(t));
+	return null;
+}
+
+// ---------------------------------------------------------------------------
 // Discord
 
+// { ok } or { ok: false, reason }: never throws (a network error is Discord being down).
 async function discordRole(env, method, discordId) {
-	const res = await fetch(`https://discord.com/api/v10/guilds/${env.GUILD_ID}/members/${discordId}/roles/${env.ROLE_ID}`, {
-		method,
-		headers: { Authorization: `Bot ${env.DISCORD_BOT_TOKEN}`, 'X-Audit-Log-Reason': 'Olympus Link' },
-	});
+	let res;
+	try {
+		res = await fetch(`https://discord.com/api/v10/guilds/${env.GUILD_ID}/members/${discordId}/roles/${env.ROLE_ID}`, {
+			method,
+			headers: { Authorization: `Bot ${env.DISCORD_BOT_TOKEN}`, 'X-Audit-Log-Reason': 'Olympus Link' },
+		});
+	} catch (err) {
+		console.error('olympus-link: Discord role', method, 'fetch failed:', err && err.message ? err.message : err);
+		return { ok: false, reason: 'discord' };
+	}
 	if (res.ok) return { ok: true };
 	let code = 0;
 	try {
@@ -1148,4 +1538,6 @@ node --test web/test          # from the repository root (Node 22.13 or newer)
 
 They run the page's logic, this Worker (D1 is `node:sqlite` with the schema above, Discord a
 stub), the key tool, the inbox tool and the QR reading against the shared vectors, and nothing
-touches the network.
+touches the network. Where the addon's `tests/fixtures` are in the checkout, they also check
+the addon's sample codes, certificates and links; `OLYMPUS_ADDON_FIXTURES=<folder>` points at
+another copy of them.

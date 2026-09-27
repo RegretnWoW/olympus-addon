@@ -7,9 +7,11 @@ CREATE TABLE IF NOT EXISTS codes (
   discord_id TEXT NOT NULL,                        -- whose code it is
   username   TEXT NOT NULL,                        -- their Discord username, as signed in the token
   mode       TEXT NOT NULL CHECK (mode IN ('c', 'a')),
+  draw_t     TEXT NOT NULL                         -- T, signed in the token: a player key is drawn when its prefix < T
+             CHECK (length(draw_t) = 8 AND draw_t NOT GLOB '*[^0-9a-f]*'),
   created    INTEGER NOT NULL,
   exp        INTEGER NOT NULL,
-  token      TEXT NOT NULL,                        -- the signed token (public: the player pastes it)
+  token      TEXT NOT NULL,                        -- the signed token: its signature makes each link's tag, keep it private
   source     TEXT NOT NULL,                        -- 'site' or 'discord'
   used       INTEGER                               -- when it linked a character; NULL until then
 );
@@ -24,14 +26,16 @@ CREATE TABLE IF NOT EXISTS keys (
   owner_discord_id TEXT NOT NULL                   -- a Discord id: digits only
                    CHECK (length(owner_discord_id) BETWEEN 5 AND 25 AND owner_discord_id NOT GLOB '*[^0-9]*'),
   owner_username   TEXT,
-  kind             TEXT NOT NULL CHECK (kind IN ('c', 'p')), -- councillor or drawn player
+  kind             TEXT NOT NULL CHECK (kind IN ('c', 'p')), -- councillor or drawn player (the certificate's tier)
   bootstrap        INTEGER NOT NULL DEFAULT 0,     -- 1: a councillor key trusted before its owner linked a character
   created          INTEGER NOT NULL,
+  cert_exp         INTEGER,                        -- when its latest certificate expires; NULL: none issued
+  replaced_at      INTEGER,                        -- a newer key of the same owner came: out of the draw, still checks until revoked
   revoked          INTEGER NOT NULL DEFAULT 0,
   revoked_at       INTEGER
 );
--- One active key per Discord account: rotating is "revoke the old one, insert the new one".
-CREATE UNIQUE INDEX IF NOT EXISTS keys_one_per_owner ON keys (owner_discord_id) WHERE revoked = 0;
+-- One active key per Discord account: rotating replaces it, and revoking ends it.
+CREATE UNIQUE INDEX IF NOT EXISTS keys_one_per_owner ON keys (owner_discord_id) WHERE revoked = 0 AND replaced_at IS NULL;
 
 -- Proofs already counted: (code, key) pairs.
 CREATE TABLE IF NOT EXISTS used (
@@ -46,6 +50,8 @@ CREATE TABLE IF NOT EXISTS members (
   character  TEXT PRIMARY KEY,
   discord_id TEXT NOT NULL,
   guild      TEXT NOT NULL,
+  gv         TEXT NOT NULL DEFAULT 'c'             -- how the guild was checked in game: 'r' roster, 'w' /who, 'c' claimed
+             CHECK (gv IN ('r', 'w', 'c')),
   faction    TEXT NOT NULL,
   r          TEXT NOT NULL,                        -- the code that linked it
   linked     INTEGER NOT NULL

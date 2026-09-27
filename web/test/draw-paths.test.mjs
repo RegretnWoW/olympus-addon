@@ -1,26 +1,50 @@
-// The draw ranking, the Discord account age, the SavedVariables path per system and the
-// system detection (web/public/core.js; the Worker's drawRanks/drawLimit agree).
+// The draw (prefixes, the threshold T), the Discord account age, the SavedVariables path per
+// system and the system detection (web/public/core.js; the Worker's draw functions agree).
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { drawOrder, drawLimit, sha256Hex, snowflakeTime, savedVariablesPath, detectOS, isMobileOS, canShareScreen, pathSystem, GAMES } from '../public/core.js';
-import { drawLimit as workerLimit, snowflakeTime as workerSnowflake } from '../worker/link-worker.js';
+import { drawOrder, drawLimit, drawPrefix, drawThreshold, isDrawn, sha256Hex, snowflakeTime, savedVariablesPath, detectOS, isMobileOS, canShareScreen, pathSystem, GAMES } from '../public/core.js';
+import { drawLimit as workerLimit, drawPrefix as workerPrefix, thresholdOf, snowflakeTime as workerSnowflake } from '../worker/link-worker.js';
 import { vectors } from './helpers.mjs';
 
-test('draw: SHA-256(R~keyId) and the order match python\'s', async () => {
+test('draw: the prefixes of SHA-256(R~keyId) and the order match python\'s', async () => {
 	const d = vectors.draw;
-	for (const id of d.key_ids) assert.equal(await sha256Hex(`${d.R}~${id}`), d.sha256_hex[id], id);
+	for (const id of d.key_ids) {
+		assert.equal(await sha256Hex(`${d.R}~${id}`), d.sha256_hex[id], id);
+		assert.equal(await drawPrefix(d.R, id), d.prefix[id], id);
+		assert.equal(await workerPrefix(d.R, id), d.prefix[id], id);
+	}
 	assert.deepEqual(await drawOrder(d.R, d.key_ids), d.order);
 	assert.deepEqual(await drawOrder(d.R, [...d.key_ids].reverse()), d.order);
 	// Another code draws another order.
-	assert.notDeepEqual(await drawOrder('7K3M9Q2XWD', d.key_ids), d.order);
+	assert.notDeepEqual(await drawOrder('7K3M9QX2TB', d.key_ids), d.order);
 });
 
 test('draw: M = max(20, ceil(3% of the active player keys))', () => {
-	for (const [n, m] of [[0, 20], [5, 20], [666, 20], [667, 21], [1000, 30], [10000, 300], [10001, 301]]) {
+	for (const [n, m] of [[0, 20], [5, 20], [666, 20], [667, 21], [700, 21], [1000, 30], [1001, 31], [10000, 300], [10001, 301]]) {
 		assert.equal(drawLimit(n), m, `n=${n}`);
 		assert.equal(workerLimit(n), m, `worker n=${n}`);
 	}
+});
+
+test('draw: T for pools of several sizes matches python\'s, and draws the M lowest', async () => {
+	const d = vectors.draw;
+	for (const v of d.thresholds) {
+		const pool = Array.from({ length: v.n }, (_, i) => `pool${String(i).padStart(4, '0')}`);
+		assert.equal(await drawThreshold(d.R, pool), v.T, `n=${v.n}`);
+		assert.equal(await thresholdOf(d.R, pool), v.T, `worker n=${v.n}`);
+		const prefixes = await Promise.all(pool.map((id) => drawPrefix(d.R, id)));
+		assert.equal(prefixes.filter((p) => isDrawn(p, v.T)).length, v.drawn, `n=${v.n}`);
+		assert.equal(v.drawn, Math.min(v.n, v.M));
+	}
+	// Up to M keys: everyone is drawn. Mode c: nobody.
+	assert.equal(await drawThreshold(d.R, ['player01']), 'ffffffff');
+	assert.equal(isDrawn(d.prefix.player01, '00000000'), false);
+	assert.equal(isDrawn(d.prefix.player01, 'ffffffff'), true);
+	assert.equal(isDrawn('FFFFFFFF', 'ffffffff'), false);
+	// The vectors' mode a code: its T is python's for its five player keys.
+	const a = vectors.backend.tokens.find((t) => t.mode === 'a');
+	assert.equal(await drawThreshold(a.R, vectors.keys.filter((k) => k.kind === 'p').map((k) => k.key_id)), a.T);
 });
 
 test('Discord account age from the snowflake', () => {

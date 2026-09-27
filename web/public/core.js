@@ -4,61 +4,81 @@
 
 // ---------------------------------------------------------------------------
 // Code tokens, issued by the backend and pasted in game:
-//   OLC1.<R>.<username>.<exp>.<mode>.<sig>
+//   OLC2.<R>.<username>.<exp>.<mode>.<T>.<sig>
 // R: 10 Crockford base32 characters; username: the Discord username, [a-z0-9_.]{2,32} (it may
 // hold dots, so the token is read from both ends); exp: unix time; mode: "c" councillors only,
-// "a" councillors or drawn players; sig: base64url Ed25519 by the backend over the ASCII bytes
-// of everything before the last dot.
+// "a" councillors or drawn players; T: the draw's threshold, 8 lowercase hex ("00000000" in mode
+// c; see the draw below); sig: base64url Ed25519 by the backend over the ASCII bytes of
+// everything before the last dot. The signature also binds each link to the command it was
+// made with (the tag, below): the token is the player's alone, never shown on stream.
 
 export const R_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 export const R_RE = /^[0-9A-HJKMNP-TV-Z]{10}$/;
 export const USERNAME_RE = /^[a-z0-9_.]{2,32}$/;
 export const SIG_RE = /^[A-Za-z0-9_-]{86}$/;
+export const DRAW_RE = /^[0-9a-f]{8}$/;
 export const COMMAND = '/oly discord';
 export const CHAT_LINE_MAX = 255; // bytes the game's chat box takes
+
+// What a player may paste around the token: "/oly discord" or "/olympus discord", any case.
+const COMMAND_PREFIX = /^\/(?:oly|olympus)\s+discord(?:\s+|$)/i;
 
 // { ok: true, token } or { ok: false, error }.
 export function parseToken(input) {
 	if (typeof input !== 'string') return { ok: false, error: 'empty' };
-	let s = input.trim();
-	if (s.toLowerCase().startsWith(`${COMMAND} `)) s = s.slice(COMMAND.length).trim();
+	const s = input.trim().replace(COMMAND_PREFIX, '').trim();
 	if (s === '') return { ok: false, error: 'empty' };
-	if (!s.startsWith('OLC1.')) return { ok: false, error: 'prefix' };
+	if (!s.startsWith('OLC2.')) return { ok: false, error: 'prefix' };
 	const f = s.split('.');
-	if (f.length < 6) return { ok: false, error: 'fields' };
+	if (f.length < 7) return { ok: false, error: 'fields' };
+	const n = f.length;
 	const R = f[1];
-	const sig = f[f.length - 1];
-	const mode = f[f.length - 2];
-	const exp = f[f.length - 3];
-	const username = f.slice(2, f.length - 3).join('.');
+	const sig = f[n - 1];
+	const T = f[n - 2];
+	const mode = f[n - 3];
+	const exp = f[n - 4];
+	const username = f.slice(2, n - 4).join('.');
 	if (!R_RE.test(R)) return { ok: false, error: 'code' };
 	if (!USERNAME_RE.test(username)) return { ok: false, error: 'username' };
 	if (!/^[1-9][0-9]{0,11}$/.test(exp)) return { ok: false, error: 'exp' };
 	if (mode !== 'c' && mode !== 'a') return { ok: false, error: 'mode' };
+	if (!DRAW_RE.test(T)) return { ok: false, error: 'draw' };
 	if (!SIG_RE.test(sig) || !canonicalB64url(sig, 64)) return { ok: false, error: 'sig' };
 	const payload = s.slice(0, s.length - sig.length - 1);
-	return { ok: true, token: { raw: s, R, username, exp: Number(exp), mode, sig, payload } };
+	return { ok: true, token: { raw: s, R, username, exp: Number(exp), mode, T, sig, payload } };
 }
 
 export function tokenCommand(token) {
 	return `${COMMAND} ${token}`;
 }
 
+// The command as the page shows it until the player clicks it: nothing of the token.
+export function maskedCommand() {
+	return `${COMMAND} OLC2.${'•'.repeat(24)}`;
+}
+
 // The longest "/oly discord <token>" there can be: must fit the chat line.
 export function worstCaseCommandLength() {
-	return utf8Length(tokenCommand(['OLC1', 'Z'.repeat(10), 'z'.repeat(32), '9'.repeat(12), 'a', 'A'.repeat(86)].join('.')));
+	return utf8Length(tokenCommand(['OLC2', 'Z'.repeat(10), 'z'.repeat(32), '9'.repeat(12), 'a', 'f'.repeat(8), 'A'.repeat(86)].join('.')));
 }
 
 // ---------------------------------------------------------------------------
-// Bundles: OLB4~<requester>~<guild>~<faction>~<nonce>~<R>~<p1>;<p2>;...
-// with each proof <issued>,<keyId>,<confirmer Name-Realm>,<sig>, at most 4. Each sig is the
-// confirmer's Ed25519 over the UTF-8 bytes of
-//   OLY4~<requester>~<guild>~<faction>~<nonce>~<R>~<issued>~<keyId>~<confirmer>
+// Bundles: OLB4~<requester>~<guild>~<faction>~<nonce>~<R>~<tag>~<p1>;<p2>;...
+// with each proof <issued>,<keyId>,<confirmer Name-Realm>,<gv>,<sig>, at most 4. Each sig is
+// the confirmer's Ed25519 over the UTF-8 bytes of
+//   OLY4~<requester>~<guild>~<gv>~<faction>~<nonce>~<R>~<tag>~<issued>~<keyId>~<confirmer>
+// gv: how that confirmer checked the guild: "r" it is the confirmer's own guild and its roster
+// lists the requester, "w" a /who younger than 15 minutes shows the requester in it, "c"
+// claimed only. tag: the first 16 lowercase hex of SHA-256(<the code token's sig>~<requester>):
+// only the player who pasted the command can make a link for its code, since the QR code and
+// the copy box never carry the token.
 
 export const MAX_PROOFS = 4;
 export const MAX_BUNDLE_BYTES = 1600;
 export const FACTIONS = ['Alliance', 'Horde'];
+export const GUILD_CHECKS = ['r', 'w', 'c'];
 export const NONCE_RE = /^[0-9a-f]{16}$/;
+export const TAG_RE = /^[0-9a-f]{16}$/;
 export const KEYID_RE = /^[a-z0-9]{6,16}$/;
 export const ISSUED_RE = /^[1-9][0-9]{0,11}$/;
 const FORBIDDEN = /[|~;,\u0000-\u001f\u007f]/;
@@ -91,38 +111,45 @@ export function parseBundle(text) {
 	if (!text.startsWith('OLB4~')) return { ok: false, error: 'prefix' };
 	if (utf8Length(text) > MAX_BUNDLE_BYTES) return { ok: false, error: 'size' };
 	const f = text.split('~');
-	if (f.length !== 7) return { ok: false, error: 'fields' };
-	const [, requester, guild, faction, nonce, R, proofText] = f;
+	if (f.length !== 8) return { ok: false, error: 'fields' };
+	const [, requester, guild, faction, nonce, R, tag, proofText] = f;
 	if (!validCharacter(requester)) return { ok: false, error: 'requester' };
 	if (!validGuild(guild)) return { ok: false, error: 'guild' };
 	if (!FACTIONS.includes(faction)) return { ok: false, error: 'faction' };
 	if (!NONCE_RE.test(nonce)) return { ok: false, error: 'nonce' };
 	if (!R_RE.test(R)) return { ok: false, error: 'code' };
+	if (!TAG_RE.test(tag)) return { ok: false, error: 'tag' };
 	if (proofText === '') return { ok: false, error: 'noProofs' };
 	const parts = proofText.split(';');
 	if (parts.length > MAX_PROOFS) return { ok: false, error: 'proofs' };
 	const proofs = [];
 	for (const part of parts) {
 		const p = part.split(',');
-		if (p.length !== 4) return { ok: false, error: 'proof' };
-		const [issued, keyId, confirmer, sig] = p;
+		if (p.length !== 5) return { ok: false, error: 'proof' };
+		const [issued, keyId, confirmer, gv, sig] = p;
 		if (!ISSUED_RE.test(issued)) return { ok: false, error: 'issued' };
 		if (!KEYID_RE.test(keyId)) return { ok: false, error: 'keyId' };
 		if (!validCharacter(confirmer)) return { ok: false, error: 'confirmer' };
+		if (!GUILD_CHECKS.includes(gv)) return { ok: false, error: 'gv' };
 		if (!SIG_RE.test(sig) || !canonicalB64url(sig, 64)) return { ok: false, error: 'sig' };
-		proofs.push({ issued: Number(issued), keyId, confirmer, sig });
+		proofs.push({ issued: Number(issued), keyId, confirmer, gv, sig });
 	}
-	return { ok: true, bundle: { requester, guild, faction, nonce, R, proofs } };
+	return { ok: true, bundle: { requester, guild, faction, nonce, R, tag, proofs } };
 }
 
 export function buildBundle(b) {
-	const proofs = b.proofs.map((p) => [p.issued, p.keyId, p.confirmer, p.sig].join(',')).join(';');
-	return ['OLB4', b.requester, b.guild, b.faction, b.nonce, b.R, proofs].join('~');
+	const proofs = b.proofs.map((p) => [p.issued, p.keyId, p.confirmer, p.gv, p.sig].join(',')).join(';');
+	return ['OLB4', b.requester, b.guild, b.faction, b.nonce, b.R, b.tag, proofs].join('~');
 }
 
 // The exact text a confirmer signed for one proof.
 export function signedMessage(b, p) {
-	return ['OLY4', b.requester, b.guild, b.faction, b.nonce, b.R, p.issued, p.keyId, p.confirmer].join('~');
+	return ['OLY4', b.requester, b.guild, p.gv, b.faction, b.nonce, b.R, b.tag, p.issued, p.keyId, p.confirmer].join('~');
+}
+
+// The tag of a request, as the requester's addon makes it from the command it was given.
+export async function linkTag(tokenSig, requester) {
+	return (await sha256Hex(`${tokenSig}~${requester}`)).slice(0, 16);
 }
 
 export function confirmationCount(b) {
@@ -241,23 +268,41 @@ export function canonicalB64url(s, length) {
 }
 
 // ---------------------------------------------------------------------------
-// The draw (mode "a"): players are ranked by SHA-256(R .. "~" .. keyId), lowest hex first.
-// The addon asks online players in this order; the Worker accepts only keys ranked < M among
-// all active player keys, M = max(20, ceil(3% of them)).
+// The draw (mode "a"): a player key's place for code R is its prefix, the first 8 hex of
+// SHA-256(R .. "~" .. keyId). When the backend issues a code it sorts the prefixes of all the
+// active player keys and signs T into the token: the prefix at index M (0-based), with
+// M = max(20, ceil(3% of them)), or "ffffffff" when there are M keys or fewer ("00000000" in
+// mode c). A key is drawn for R when its prefix < T: the M lowest. The addon asks drawn keys
+// only, lowest first; the Worker counts drawn keys only, with the T it stored with the code.
 
 export async function sha256Hex(text) {
 	const d = await globalThis.crypto.subtle.digest('SHA-256', encoder.encode(text));
 	return bytesToHex(new Uint8Array(d));
 }
 
-export async function drawOrder(R, keyIds) {
-	const ranked = await Promise.all(keyIds.map(async (id) => ({ id, h: await sha256Hex(`${R}~${id}`) })));
-	ranked.sort((a, b) => (a.h < b.h ? -1 : a.h > b.h ? 1 : 0));
-	return ranked.map((r) => r.id);
+export async function drawPrefix(R, keyId) {
+	return (await sha256Hex(`${R}~${keyId}`)).slice(0, 8);
 }
 
 export function drawLimit(activePlayerKeys) {
-	return Math.max(20, Math.ceil(activePlayerKeys * 0.03));
+	return Math.max(20, Math.ceil((activePlayerKeys * 3) / 100));
+}
+
+export async function drawThreshold(R, keyIds) {
+	const prefixes = (await Promise.all(keyIds.map((id) => drawPrefix(R, id)))).sort();
+	const m = drawLimit(prefixes.length);
+	return prefixes.length > m ? prefixes[m] : 'ffffffff';
+}
+
+export function isDrawn(prefix, T) {
+	return DRAW_RE.test(prefix) && DRAW_RE.test(T) && prefix < T;
+}
+
+// Keys in the order the addon asks them: lowest prefix first, then the key id.
+export async function drawOrder(R, keyIds) {
+	const ranked = await Promise.all(keyIds.map(async (id) => ({ id, p: await drawPrefix(R, id) })));
+	ranked.sort((a, b) => (a.p < b.p ? -1 : a.p > b.p ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+	return ranked.map((r) => r.id);
 }
 
 // A Discord id (snowflake) holds its account's creation time: milliseconds since 2015.

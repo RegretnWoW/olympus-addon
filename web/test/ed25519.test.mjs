@@ -30,7 +30,7 @@ test('SHA-512: NIST examples', () => {
 });
 
 test('cross-language vectors: byte-identical signatures, and Python\'s verify', () => {
-	assert.ok(vectors.ed25519.length >= 6);
+	assert.ok(vectors.ed25519.length >= 7);
 	for (const v of vectors.ed25519) {
 		assert.equal(Buffer.from(v.seed_b64url, 'base64url').toString('hex'), v.seed_hex, v.name);
 		assert.equal(v.seed_b64url.length, 43, v.name);
@@ -62,9 +62,26 @@ test('the backend\'s tokens verify with its public key', () => {
 		assert.equal(parsed.token.payload, t.payload);
 		assert.ok(verify(vectors.backend.public_hex, Buffer.from(t.payload, 'ascii'), Buffer.from(parsed.token.sig, 'base64url')));
 		assert.equal(sign(vectors.backend.seed_hex, t.payload).toString('base64url'), t.signature_b64url);
-		// Any change to the signed part breaks it.
-		const other = t.payload.replace(/\.[ca]$/, (m) => (m === '.c' ? '.a' : '.c'));
-		assert.equal(verify(vectors.backend.public_hex, Buffer.from(other, 'ascii'), Buffer.from(parsed.token.sig, 'base64url')), false);
+		// Any change to the signed part breaks it: the mode, or the draw's T.
+		for (const other of [t.payload.replace(/\.([ca])\.([0-9a-f]{8})$/, (m, mode, T) => `.${mode === 'c' ? 'a' : 'c'}.${T}`), t.payload.replace(/[0-9a-f]{8}$/, 'fffffffe')]) {
+			assert.notEqual(other, t.payload);
+			assert.equal(verify(vectors.backend.public_hex, Buffer.from(other, 'ascii'), Buffer.from(parsed.token.sig, 'base64url')), false);
+		}
+	}
+});
+
+test('key certificates: signed by the backend key over OLK1.<keyId>.<pub>.<tier>.<exp>', () => {
+	for (const k of vectors.keys) {
+		assert.equal(k.cert_payload, `OLK1.${k.key_id}.${Buffer.from(k.public_hex, 'hex').toString('base64url')}.${k.kind}.${k.cert_exp}`);
+		assert.equal(k.public_b64url.length, 43);
+		const sig = k.cert.slice(k.cert_payload.length + 1);
+		assert.equal(k.cert, `${k.cert_payload}.${sig}`);
+		assert.equal(sig.length, 86);
+		assert.ok(verify(vectors.backend.public_hex, Buffer.from(k.cert_payload, 'ascii'), Buffer.from(sig, 'base64url')), k.key_id);
+		assert.equal(sign(vectors.backend.seed_hex, k.cert_payload).toString('base64url'), sig);
+		// Another tier is another certificate.
+		const other = k.cert_payload.replace(`.${k.kind}.`, `.${k.kind === 'c' ? 'p' : 'c'}.`);
+		assert.equal(verify(vectors.backend.public_hex, Buffer.from(other, 'ascii'), Buffer.from(sig, 'base64url')), false);
 	}
 });
 
@@ -81,6 +98,10 @@ test('every proof of the sample bundles verifies with its confirmer key', () => 
 			const otherFaction = msg.replace(`~${b.faction}~`, `~${b.faction === 'Horde' ? 'Alliance' : 'Horde'}~`);
 			assert.notEqual(otherFaction, msg);
 			assert.equal(verify(keys[p.keyId].public_hex, Buffer.from(otherFaction, 'utf8'), Buffer.from(p.sig, 'base64url')), false);
+			// Nor another guild check, or another tag.
+			const otherCheck = signedMessage(b, { ...p, gv: p.gv === 'c' ? 'r' : 'c' });
+			const otherTag = signedMessage({ ...b, tag: 'f'.repeat(16) }, p);
+			for (const m of [otherCheck, otherTag]) assert.equal(verify(keys[p.keyId].public_hex, Buffer.from(m, 'utf8'), Buffer.from(p.sig, 'base64url')), false);
 		});
 	}
 });

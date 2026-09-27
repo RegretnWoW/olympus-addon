@@ -5,6 +5,7 @@
 import {
 	parseToken,
 	tokenCommand,
+	maskedCommand,
 	bundleFromText,
 	parseFragment,
 	checkBundle,
@@ -65,6 +66,7 @@ const state = {
 	user: null,
 	step: 'login',
 	token: null, // parsed code token of this browser
+	revealed: false, // the player clicked the hidden code to see it
 	gettingCode: false,
 	codeError: null,
 	tab: null,
@@ -166,6 +168,7 @@ async function getCode() {
 		const p = parseToken(token);
 		if (!p.ok) throw Object.assign(new Error('bad token'), { reason: 'server' });
 		state.token = p.token;
+		state.revealed = false;
 		store.set('localStorage', 'code', { token: p.token.raw, username: state.user.username });
 	} catch (err) {
 		state.codeError = err.reason === 'limit' ? T.codeLimit : err.reason === 'username' ? T.codeUsername : err.reason === 'login' ? T.errors.login : T.errors.server;
@@ -527,14 +530,25 @@ function viewCode() {
 	const command = tokenCommand(state.token.raw);
 	const copied = state.copied === 'copy';
 	const expires = new Intl.DateTimeFormat(T.locale, { weekday: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(state.token.exp * 1000));
+	// The code stays hidden until clicked (a stream or a screenshot never catches it); Copy
+	// copies it either way.
+	const text = state.revealed
+		? h('code', { class: 'command-text', id: 'cmd', 'aria-labelledby': 'cmd-label', tabindex: '0', 'data-key': 'cmd', text: command })
+		: h(
+				'button',
+				{ type: 'button', class: 'command-text command-hidden', id: 'cmd', 'aria-label': T.codeShow, 'data-key': 'reveal', onclick: () => { state.revealed = true; render({ focus: 'cmd' }); } },
+				h('span', { class: 'command-mask', 'aria-hidden': 'true', text: maskedCommand() }),
+				h('span', { class: 'command-reveal', text: T.codeReveal }),
+			);
 	out.push(
 		h('p', { class: 'field-label', id: 'cmd-label', text: T.codeLabel }),
 		h(
 			'div',
 			{ class: 'command' },
-			h('code', { class: 'command-text', id: 'cmd', 'aria-labelledby': 'cmd-label', tabindex: '0', text: command }),
+			text,
 			button(copied ? T.copied : T.copy, { kind: copied ? 'ok btn-copy' : 'gold btn-copy', onclick: () => copyText(command, 'copy'), 'data-key': 'copy', 'aria-live': 'polite' }, copied ? 'check' : 'copy'),
 		),
+		h('p', { class: 'notice notice-warn' }, icon('alert'), h('span', { text: T.codeStream })),
 		h('ol', { class: 'howto' }, h('li', { text: T.codeStep1 }), h('li', { text: T.codeStep2 }), h('li', { text: T.codeStep3 })),
 		h('p', { class: 'fine', text: fill(T.codeExpires, { time: expires }) }),
 		noticeView(),
@@ -553,6 +567,7 @@ function viewWait() {
 			h('li', {}, icon('qr', 'tl-icon'), h('p', { text: T.waitWindow })),
 			h('li', { class: 'tl-soft' }, icon('clock', 'tl-icon'), h('p', { text: T.waitWatcher })),
 		),
+		h('p', { class: 'notice notice-warn' }, icon('alert'), h('span', { text: T.waitStream })),
 		h('div', { class: 'actions' }, button(T.waitNext, { kind: 'primary btn-lg', onclick: () => go('read'), 'data-key': 'next' }, 'arrow')),
 		h('p', { class: 'fine', text: T.waitTip }),
 	];
@@ -869,16 +884,17 @@ function errorView() {
 	const r = state.result || { reason: 'server' };
 	const reason = T.errors[r.reason] ? r.reason : 'server';
 	let action;
+	const readAgain = ['not-enough', 'format', 'guild-unverified'].includes(reason);
 	if (reason === 'login') action = discordButton(T.loginButton);
-	else if (['unknown-code', 'other-user', 'code-used', 'expired'].includes(reason)) action = button(T.newCode, { kind: 'primary', onclick: newCode, 'data-key': 'retry' });
-	else if (reason === 'not-enough' || reason === 'format') action = button(T.readAgain, { kind: 'primary', onclick: readAnother, 'data-key': 'retry' });
+	else if (['unknown-code', 'other-user', 'code-used', 'expired', 'tag'].includes(reason)) action = button(T.newCode, { kind: 'primary', onclick: newCode, 'data-key': 'retry' });
+	else if (readAgain) action = button(T.readAgain, { kind: 'primary', onclick: readAnother, 'data-key': 'retry' });
 	else action = button(T.retry, { kind: 'primary', onclick: () => (state.found ? send() : location.reload()), 'data-key': 'retry' });
 	return h(
 		'div',
 		{ class: 'result result-error', role: 'alert', 'data-key': 'result', tabindex: '-1' },
 		h('div', { class: 'result-head' }, icon('alert', 'result-icon'), h('p', { class: 'result-title', text: T.errorTitle })),
 		h('p', { text: T.errors[reason] }),
-		h('div', { class: 'actions' }, action, state.found && reason !== 'not-enough' && reason !== 'format' ? button(T.readAnother, { kind: 'ghost', onclick: readAnother }) : null),
+		h('div', { class: 'actions' }, action, state.found && !readAgain ? button(T.readAnother, { kind: 'ghost', onclick: readAnother }) : null),
 	);
 }
 

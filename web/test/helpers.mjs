@@ -41,9 +41,10 @@ export function guideVectors() {
 	const v = vectors;
 	return {
 		backend: { public_hex: v.backend.public_hex, token: v.backend.tokens[0].token, signed: v.backend.tokens[0].payload },
-		codes: v.backend.tokens.map((t) => ({ R: t.R, discord_id: t.discord_id, username: t.username, mode: t.mode, created: t.created, exp: t.exp })),
-		keys: v.keys.slice(0, 4).map((k) => ({ key_id: k.key_id, kind: k.kind, bootstrap: k.bootstrap, owner_discord_id: k.owner_discord_id, created: k.created, public_hex: k.public_hex })),
-		bundles: v.bundles.slice(0, 2).map((b) => ({ name: b.name, bundle: b.bundle, signed: b.messages })),
+		codes: v.backend.tokens.map((t) => ({ R: t.R, discord_id: t.discord_id, username: t.username, mode: t.mode, draw_t: t.T, created: t.created, exp: t.exp, token: t.token })),
+		keys: v.keys.slice(0, 4).map((k) => ({ key_id: k.key_id, kind: k.kind, bootstrap: k.bootstrap, owner_discord_id: k.owner_discord_id, created: k.created, public_hex: k.public_hex, cert_exp: k.cert_exp, cert: k.cert })),
+		bundles: v.bundles.slice(0, 2).map((b) => ({ name: b.name, tag: b.tag, tag_of: b.tag_input, bundle: b.bundle, signed: b.messages })),
+		draw: { R: v.draw.R, prefix: v.draw.prefix, pool: v.draw.pool, thresholds: v.draw.thresholds },
 		ed25519: v.ed25519.slice(0, 5).map((e) => ({ name: e.name, seed_hex: e.seed_hex, public_hex: e.public_hex, ...(e.message !== undefined ? { message: e.message } : { message_hex: e.message_hex }), signature_b64url: e.signature_b64url })),
 		must_fail: { name: v.rejects[0].name, public_hex: v.rejects[0].public_hex, message_hex: v.rejects[0].message_hex, signature_hex: v.rejects[0].signature_hex },
 	};

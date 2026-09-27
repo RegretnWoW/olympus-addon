@@ -6,15 +6,18 @@
 //   LINK_BACKEND_SEED    secret: the backend's Ed25519 seed, base64url (scripts/link-keys.py backend)
 //   LINK_BACKEND_PUBLIC  var: its public key, 64 hex (the same one is in the addon's ns.LINK_BACKEND_KEYS)
 //   LINK_MODE            var: "c" councillors only (launch), "a" councillors or three drawn players
+//   LINK_GUILD_POLICY    var: "verified" (the default): a link needs a confirmer who checked the
+//                        guild in game (its roster or a recent /who); "claimed": the guild is taken as named
 //   LINK_ORIGIN          var: the page's origin, e.g. "https://example.org" (checked on the page's POSTs)
-//   LINK_ADMIN_TOKEN     secret: bearer token of the watcher tool (/inbox) and of a gateway bot (/bot-code)
+//   LINK_ADMIN_TOKEN     secret: bearer token of your tools: the watcher inbox (/inbox), a gateway
+//                        bot (/bot-code) and the confirmer keys (/keys)
 //   DISCORD_BOT_TOKEN    secret: the bot that gives the role (Manage Roles, above ROLE_ID)
 //   DISCORD_PUBLIC_KEY   var: the application's public key, for the /link slash command over HTTP
 //   GUILD_ID, ROLE_ID    vars: the Olympus server and the role linked members get
 //
 // Routes: GET /api/link/me, POST /api/link/code, POST /api/link/submit, POST /api/link/inbox,
-// POST /api/link/bot-code, POST /api/discord/interactions. Anything else returns null from
-// handleLink, so it can sit in front of an existing Worker's router.
+// POST /api/link/bot-code, POST /api/link/keys, POST /api/discord/interactions. Anything else
+// returns null from handleLink, so it can sit in front of an existing Worker's router.
 
 export const LINK = {
 	TOKEN_LIFE: 24 * 3600, // a code works for a day...
@@ -24,10 +27,12 @@ export const LINK = {
 	CLOCK_SKEW: 300, // game server clock vs ours
 	WINDOW: 300, // three player proofs within 5 minutes of each other
 	PLAYERS_NEEDED: 3,
-	KEY_MIN_AGE: 7 * 24 * 3600,
-	ACCOUNT_MIN_AGE: 30 * 24 * 3600,
+	KEY_MIN_AGE: 7 * 24 * 3600, // a player key counts for codes issued 7 days after it...
+	ACCOUNT_MIN_AGE: 30 * 24 * 3600, // ...and its owner's Discord account is 30 days older than the code
 	SUBMITS_PER_HOUR: 10,
 	MAX_BUNDLES: 500,
+	CERT_DAYS: 365, // a key certificate's life, unless the request says otherwise...
+	CERT_DAYS_MAX: 3650, // ...up to this
 };
 
 const R_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
@@ -36,11 +41,19 @@ const USERNAME_RE = /^[a-z0-9_.]{2,32}$/;
 const DISCORD_ID_RE = /^[0-9]{5,25}$/;
 const KEYID_RE = /^[a-z0-9]{6,16}$/;
 const NONCE_RE = /^[0-9a-f]{16}$/;
+const TAG_RE = /^[0-9a-f]{16}$/;
+const DRAW_RE = /^[0-9a-f]{8}$/;
 const ISSUED_RE = /^[1-9][0-9]{0,11}$/;
 const SIG_RE = /^[A-Za-z0-9_-]{86}$/;
+const PUBLIC_HEX_RE = /^[0-9a-f]{64}$/;
+const PUBLIC_B64_RE = /^[A-Za-z0-9_-]{43}$/;
 const FORBIDDEN = /[|~;,\u0000-\u001f\u007f]/;
+const GV_RE = /^[rwc]$/; // how a confirmer checked the guild: r its own roster, w a recent /who, c claimed only
+const CHECKED = (gv) => gv === 'r' || gv === 'w';
 const MAX_PROOFS = 4;
 const MAX_BUNDLE_BYTES = 1600;
+const NO_DRAW = '00000000'; // T of a mode "c" code: no player key is drawn
+const ALL_DRAWN = 'ffffffff'; // T when there are M player keys or fewer
 
 const enc = new TextEncoder();
 const now = () => Math.floor(Date.now() / 1000);
@@ -76,6 +89,8 @@ export async function handleLink(request, env, ctx, { getUser = sessionUser } = 
 				return await routeInbox(request, env);
 			case 'POST /api/link/bot-code':
 				return await routeBotCode(request, env);
+			case 'POST /api/link/keys':
+				return await routeKeys(request, env);
 			case 'POST /api/discord/interactions':
 				return await routeInteractions(request, env);
 			default:
@@ -137,15 +152,26 @@ async function routeInbox(request, env) {
 		const text = (typeof item === 'string' ? item : typeof entry.bundle === 'string' ? entry.bundle : '').trim();
 		const t = now();
 		const parsed = parseBundle(text);
-		const result =
-			parsed.ok && typeof entry.R === 'string' && entry.R !== parsed.bundle.R
-				? reject('format', 'The inbox key does not match the link.', parsed.bundle.R)
-				: await acceptBundle(env, text, { t });
-		await logUpload(env, 'watcher', text, result, {
-			from: typeof entry.from === 'string' ? entry.from.slice(0, 100) : null,
-			received: Number.isFinite(entry.t) ? Math.floor(entry.t) : null,
-			uploaded: t,
-		});
+		let result;
+		try {
+			result =
+				parsed.ok && typeof entry.R === 'string' && entry.R !== parsed.bundle.R
+					? reject('format', 'The inbox key does not match the link.', parsed.bundle.R)
+					: await acceptBundle(env, text, { t });
+		} catch (err) {
+			// One link that fails on our side does not stop the others: this one is sent again later.
+			console.error('olympus-link: inbox entry', err && err.stack ? err.stack : err);
+			result = { status: 'error', reason: 'server', message: 'Something went wrong on our side: send it again.', R: parsed.ok ? parsed.bundle.R : null };
+		}
+		try {
+			await logUpload(env, 'watcher', text, result, {
+				from: typeof entry.from === 'string' ? entry.from.slice(0, 100) : null,
+				received: Number.isFinite(entry.t) ? Math.floor(entry.t) : null,
+				uploaded: t,
+			});
+		} catch (err) {
+			console.error('olympus-link: inbox log', err && err.stack ? err.stack : err);
+		}
 		results.push({ R: result.R || (typeof entry.R === 'string' ? entry.R : null), status: result.status, reason: result.reason, message: result.message });
 	}
 	return json({ results });
@@ -198,15 +224,17 @@ export async function issueCode(env, user, source) {
 	if (count && count.n >= LINK.CODES_PER_DAY) return { error: 'limit' };
 	const mode = env.LINK_MODE === 'a' ? 'a' : 'c';
 	const exp = t + LINK.TOKEN_LIFE;
+	const pool = mode === 'a' ? await drawPool(env, t) : null;
 	for (let attempt = 0; attempt < 5; attempt++) {
 		const R = randomR();
-		const payload = `OLC1.${R}.${username}.${exp}.${mode}`;
+		const T = pool ? await thresholdOf(R, pool) : NO_DRAW;
+		const payload = `OLC2.${R}.${username}.${exp}.${mode}.${T}`;
 		const token = `${payload}.${await backendSign(env, payload)}`;
 		try {
-			await env.DB.prepare('INSERT INTO codes (r, discord_id, username, mode, created, exp, token, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-				.bind(R, id, username, mode, t, exp, token, source)
+			await env.DB.prepare('INSERT INTO codes (r, discord_id, username, mode, draw_t, created, exp, token, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+				.bind(R, id, username, mode, T, t, exp, token, source)
 				.run();
-			return { token, exp, mode, R };
+			return { token, exp, mode, R, T };
 		} catch (err) {
 			if (!/unique|constraint/i.test(String(err && err.message))) throw err; // an R taken: draw again
 		}
@@ -226,7 +254,7 @@ function codeReply(r) {
 		'```',
 		`/oly discord ${r.token}`,
 		'```',
-		`It works once, for your account only, for the next ${hours} h. The confirmations happen in game; your role arrives when the link reaches the bot.`,
+		`It works once, for your account only, for the next ${hours} h. Keep it to yourself: not on stream, not in a screenshot, and neither the game's Olympus Link window. The confirmations happen in game; your role arrives when the link reaches the bot.`,
 	].join('\n');
 }
 
@@ -234,6 +262,58 @@ function codeError(reason) {
 	if (reason === 'limit') return 'You already got 3 codes today: use the last one, or try again tomorrow.';
 	if (reason === 'username') return 'Your Discord username cannot be used in a code. Change it to the new style (lowercase, no #1234) and try again.';
 	return 'Sign in with Discord first.';
+}
+
+// The signature at the end of a code token: what each link's tag is made from.
+function tokenSig(token) {
+	return String(token).slice(String(token).lastIndexOf('.') + 1);
+}
+
+// ---------------------------------------------------------------------------
+// The draw: a player key's prefix for code R is the first 8 hex of SHA-256(R~keyId). At issue,
+// T is the prefix at index M (0-based) of the active player keys' sorted prefixes, with
+// M = max(20, ceil(3% of them)), or "ffffffff" when there are M keys or fewer: the key is drawn
+// when its prefix < T. T is signed into the code and stored with it, so the addon asks the
+// same keys this Worker counts.
+
+export async function drawPrefix(R, keyId) {
+	return (await sha256Hex(`${R}~${keyId}`)).slice(0, 8);
+}
+
+export function drawLimit(activePlayerKeys) {
+	return Math.max(20, Math.ceil((activePlayerKeys * 3) / 100));
+}
+
+// The active player keys at time t: not revoked or replaced, a certificate valid now, old
+// enough and from an old enough Discord account (the ones that could count for a new code).
+export async function drawPool(env, t) {
+	const rows = (
+		await env.DB.prepare("SELECT key_id, owner_discord_id, created FROM keys WHERE kind = 'p' AND revoked = 0 AND replaced_at IS NULL AND cert_exp > ?")
+			.bind(t)
+			.all()
+	).results || [];
+	return rows.filter((k) => !tooYoung(k, t)).map((k) => k.key_id);
+}
+
+export async function thresholdOf(R, keyIds) {
+	const prefixes = (await Promise.all(keyIds.map((id) => drawPrefix(R, id)))).sort();
+	const m = drawLimit(prefixes.length);
+	return prefixes.length > m ? prefixes[m] : ALL_DRAWN;
+}
+
+export async function drawThreshold(env, R, t = now()) {
+	return thresholdOf(R, await drawPool(env, t));
+}
+
+// Why a player key is too young to count at time `at` (a code's issue), or null.
+function tooYoung(key, at) {
+	if (key.created + LINK.KEY_MIN_AGE > at) return 'key younger than 7 days';
+	if (snowflakeTime(key.owner_discord_id) + LINK.ACCOUNT_MIN_AGE * 1000 > at * 1000) return 'Discord account younger than 30 days';
+	return null;
+}
+
+export function snowflakeTime(id) {
+	return Number((BigInt(id) >> 22n) + 1420070400000n);
 }
 
 // ---------------------------------------------------------------------------
@@ -245,25 +325,26 @@ export function parseBundle(text) {
 	if (typeof text !== 'string' || !text.startsWith('OLB4~')) return { ok: false, error: 'prefix' };
 	if (enc.encode(text).length > MAX_BUNDLE_BYTES) return { ok: false, error: 'size' };
 	const f = text.split('~');
-	if (f.length !== 7) return { ok: false, error: 'fields' };
-	const [, requester, guild, faction, nonce, R, proofText] = f;
+	if (f.length !== 8) return { ok: false, error: 'fields' };
+	const [, requester, guild, faction, nonce, R, tag, proofText] = f;
 	if (!validCharacter(requester)) return { ok: false, error: 'requester' };
 	if (!field(guild, 40)) return { ok: false, error: 'guild' };
 	if (faction !== 'Alliance' && faction !== 'Horde') return { ok: false, error: 'faction' };
 	if (!NONCE_RE.test(nonce)) return { ok: false, error: 'nonce' };
 	if (!R_RE.test(R)) return { ok: false, error: 'code' };
+	if (!TAG_RE.test(tag)) return { ok: false, error: 'tag' };
 	const parts = proofText ? proofText.split(';') : [];
 	if (parts.length < 1 || parts.length > MAX_PROOFS) return { ok: false, error: 'proofs' };
 	const proofs = [];
 	for (const part of parts) {
 		const p = part.split(',');
-		if (p.length !== 4) return { ok: false, error: 'proof' };
-		const [issued, keyId, confirmer, sig] = p;
-		if (!ISSUED_RE.test(issued) || !KEYID_RE.test(keyId) || !validCharacter(confirmer)) return { ok: false, error: 'proof' };
+		if (p.length !== 5) return { ok: false, error: 'proof' };
+		const [issued, keyId, confirmer, gv, sig] = p;
+		if (!ISSUED_RE.test(issued) || !KEYID_RE.test(keyId) || !validCharacter(confirmer) || !GV_RE.test(gv)) return { ok: false, error: 'proof' };
 		if (!SIG_RE.test(sig) || b64urlEncode(b64urlDecode(sig)) !== sig) return { ok: false, error: 'sig' };
-		proofs.push({ issued: Number(issued), keyId, confirmer, sig });
+		proofs.push({ issued: Number(issued), keyId, confirmer, gv, sig });
 	}
-	return { ok: true, bundle: { requester, guild, faction, nonce, R, proofs } };
+	return { ok: true, bundle: { requester, guild, faction, nonce, R, tag, proofs } };
 }
 
 // A field of the signed text: not empty, at most `max` bytes, no separator, pipe or control.
@@ -277,10 +358,21 @@ function validCharacter(s) {
 }
 
 export function signedMessage(b, p) {
-	return ['OLY4', b.requester, b.guild, b.faction, b.nonce, b.R, p.issued, p.keyId, p.confirmer].join('~');
+	return ['OLY4', b.requester, b.guild, p.gv, b.faction, b.nonce, b.R, b.tag, p.issued, p.keyId, p.confirmer].join('~');
 }
 
-// The whole check. Returns { status: 'linked' | 'rejected', reason, message, R, characters }.
+// The tag that binds a link to the command it was made with: the first 16 hex of
+// SHA-256(<the token's sig>~<requester>). The QR code and the copy box never carry the token,
+// so whoever sees them cannot make a link of their own with the code.
+export async function linkTag(sig, requester) {
+	return (await sha256Hex(`${sig}~${requester}`)).slice(0, 16);
+}
+
+export function guildPolicy(env) {
+	return env.LINK_GUILD_POLICY === 'claimed' ? 'claimed' : 'verified';
+}
+
+// The whole check. Returns { status: 'linked' | 'rejected' | 'error', reason, message, R, characters }.
 // opts.userId: the signed-in user, who must own the code (the page); absent for the watcher.
 export async function acceptBundle(env, text, opts = {}) {
 	const t = opts.t || now();
@@ -290,6 +382,9 @@ export async function acceptBundle(env, text, opts = {}) {
 	const code = await env.DB.prepare('SELECT * FROM codes WHERE r = ?').bind(b.R).first();
 	if (!code) return reject('unknown-code', 'This link was made with a code the bot never issued.', b.R);
 	if (opts.userId && code.discord_id !== opts.userId) return reject('other-user', 'This link was made with a code of another Discord account.', b.R);
+	if (b.tag !== (await linkTag(tokenSig(code.token), b.requester))) {
+		return reject('tag', 'This link was not made by the player who typed this code in the game.', b.R);
+	}
 	if (code.used !== null && code.used !== undefined) {
 		const same = await env.DB.prepare('SELECT 1 AS x FROM members WHERE character = ? AND discord_id = ? AND r = ?').bind(b.requester, code.discord_id, b.R).first();
 		if (same) return { status: 'linked', reason: 'already', message: `${b.requester} is already linked.`, R: b.R, characters: await charactersOf(env, code.discord_id) };
@@ -300,36 +395,62 @@ export async function acceptBundle(env, text, opts = {}) {
 	const checks = [];
 	for (const p of b.proofs) checks.push(await checkProof(env, b, p, code, t));
 	const valid = checks.filter((c) => c.ok);
-	const councillor = valid.find((c) => c.key.kind === 'c');
-	let counted = councillor ? [councillor] : null;
 	let why = checks.filter((c) => !c.ok).map((c) => `${c.proof.keyId}: ${c.why}`);
-	if (!counted && code.mode === 'a') {
-		const drawn = await drawnPlayers(env, b.R, valid.filter((c) => c.key.kind === 'p'), t);
-		counted = drawn.picked;
-		why = why.concat(drawn.why);
+	// Councillors: one is enough (one that checked the guild is recorded first). Every
+	// councillor and every drawn player that could count vouches for the guild.
+	const councillors = valid.filter((c) => c.key.kind === 'c').sort((x, y) => CHECKED(y.proof.gv) - CHECKED(x.proof.gv));
+	let counted = councillors.length ? [councillors[0]] : null;
+	let vouching = councillors;
+	if (code.mode === 'a') {
+		const drawn = await drawnPlayers(code, valid.filter((c) => c.key.kind === 'p'));
+		vouching = vouching.concat(drawn.eligible);
+		if (!counted) {
+			counted = drawn.picked;
+			why = why.concat(drawn.why);
+		}
 	}
 	if (!counted) {
 		const need = code.mode === 'a' ? `one councillor or ${LINK.PLAYERS_NEEDED} drawn players` : 'one councillor';
 		return reject('not-enough', `Not enough valid confirmations (needs ${need}).${why.length ? ` ${why.join('; ')}.` : ''}`, b.R);
 	}
+	const checked = vouching.find((c) => CHECKED(c.proof.gv));
+	const gv = checked ? checked.proof.gv : 'c';
+	if (!checked && guildPolicy(env) === 'verified') {
+		return reject('guild-unverified', `None of the confirmations checked ${b.guild} in game (a confirmer of that guild with its roster, or one who saw the player in it in a /who).`, b.R);
+	}
 
-	// Claim the code first (two deliveries of the same link may race), then the role.
+	// Claim the code first (two deliveries of the same link may race), then the role. Anything
+	// that fails after the claim releases it, so the same link works on the next try.
 	const claim = await env.DB.prepare('UPDATE codes SET used = ? WHERE r = ? AND used IS NULL').bind(t, b.R).run();
 	if (!claim.meta || claim.meta.changes !== 1) return reject('code-used', 'This code was already used.', b.R);
+	const release = async () => {
+		try {
+			await env.DB.prepare('UPDATE codes SET used = NULL WHERE r = ? AND used = ?').bind(b.R, t).run();
+		} catch (err) {
+			console.error('olympus-link: could not release code', b.R, err && err.stack ? err.stack : err);
+		}
+	};
 	const role = await discordRole(env, 'PUT', code.discord_id);
 	if (!role.ok) {
-		await env.DB.prepare('UPDATE codes SET used = NULL WHERE r = ?').bind(b.R).run();
+		await release();
 		if (role.reason === 'not-in-server') return reject('not-in-server', 'Join the Olympus Discord server first, then send the link again.', b.R);
 		return { status: 'error', reason: 'discord', message: 'Discord did not take the role change: try again in a minute.', R: b.R };
 	}
-	const previous = await env.DB.prepare('SELECT discord_id FROM members WHERE character = ?').bind(b.requester).first();
-	await env.DB.batch([
-		...counted.map((c) => env.DB.prepare('INSERT OR IGNORE INTO used (r, key_id, t) VALUES (?, ?, ?)').bind(b.R, c.proof.keyId, t)),
-		env.DB.prepare(
-			'INSERT INTO members (character, discord_id, guild, faction, r, linked) VALUES (?, ?, ?, ?, ?, ?) ' +
-				'ON CONFLICT(character) DO UPDATE SET discord_id = excluded.discord_id, guild = excluded.guild, faction = excluded.faction, r = excluded.r, linked = excluded.linked',
-		).bind(b.requester, code.discord_id, b.guild, b.faction, b.R, t),
-	]);
+	let previous;
+	try {
+		previous = await env.DB.prepare('SELECT discord_id FROM members WHERE character = ?').bind(b.requester).first();
+		await env.DB.batch([
+			...counted.map((c) => env.DB.prepare('INSERT OR IGNORE INTO used (r, key_id, t) VALUES (?, ?, ?)').bind(b.R, c.proof.keyId, t)),
+			env.DB.prepare(
+				'INSERT INTO members (character, discord_id, guild, gv, faction, r, linked) VALUES (?, ?, ?, ?, ?, ?, ?) ' +
+					'ON CONFLICT(character) DO UPDATE SET discord_id = excluded.discord_id, guild = excluded.guild, gv = excluded.gv, faction = excluded.faction, r = excluded.r, linked = excluded.linked',
+			).bind(b.requester, code.discord_id, b.guild, gv, b.faction, b.R, t),
+		]);
+	} catch (err) {
+		console.error('olympus-link: could not record the link', b.R, err && err.stack ? err.stack : err);
+		await release();
+		return { status: 'error', reason: 'server', message: 'The link could not be recorded: send it again in a minute.', R: b.R };
+	}
 	if (previous && previous.discord_id !== code.discord_id) {
 		const left = await env.DB.prepare('SELECT COUNT(*) AS n FROM members WHERE discord_id = ?').bind(previous.discord_id).first();
 		if (!left || left.n === 0) await discordRole(env, 'DELETE', previous.discord_id); // the character moved away
@@ -363,26 +484,20 @@ async function checkProof(env, b, p, code, t) {
 	return { ok: true, proof: p, key };
 }
 
-// Mode "a": three drawn players, all of them old enough, ranked < M in this code's draw, from
-// three owners, signed within 5 minutes of each other.
-async function drawnPlayers(env, R, valid, t) {
+// Mode "a": three drawn players from three owners, signed within 5 minutes of each other. A
+// player key counts when it was 7 days old and its owner's Discord account 30 days old when the
+// code was issued, it was not replaced before that, and it is drawn: its prefix < the code's T.
+async function drawnPlayers(code, valid) {
 	const why = [];
-	const old = [];
+	const eligible = [];
 	for (const c of valid) {
-		if (t - c.key.created < LINK.KEY_MIN_AGE) why.push(`${c.proof.keyId}: key younger than 7 days`);
-		else if (t * 1000 - snowflakeTime(c.key.owner_discord_id) < LINK.ACCOUNT_MIN_AGE * 1000) why.push(`${c.proof.keyId}: Discord account younger than 30 days`);
-		else old.push(c);
+		const young = tooYoung(c.key, code.created);
+		if (young) why.push(`${c.proof.keyId}: ${young}`);
+		else if (c.key.replaced_at && c.key.replaced_at <= code.created) why.push(`${c.proof.keyId}: replaced by a newer key`);
+		else if (!((await drawPrefix(code.r, c.proof.keyId)) < code.draw_t)) why.push(`${c.proof.keyId}: not drawn for this code`);
+		else eligible.push(c);
 	}
-	if (old.length < LINK.PLAYERS_NEEDED) return { picked: null, why };
-	const rank = await drawRanks(env, R);
-	const limit = drawLimit(rank.size);
-	const inDraw = [];
-	for (const c of old) {
-		const r = rank.get(c.proof.keyId);
-		if (r === undefined || r >= limit) why.push(`${c.proof.keyId}: not drawn for this code`);
-		else inDraw.push(c);
-	}
-	inDraw.sort((a, b) => a.proof.issued - b.proof.issued);
+	const inDraw = [...eligible].sort((a, b) => a.proof.issued - b.proof.issued);
 	for (let i = 0; i < inDraw.length; i++) {
 		const picked = [];
 		const owners = new Set();
@@ -390,27 +505,11 @@ async function drawnPlayers(env, R, valid, t) {
 			if (owners.has(inDraw[j].key.owner_discord_id)) continue;
 			owners.add(inDraw[j].key.owner_discord_id);
 			picked.push(inDraw[j]);
-			if (picked.length === LINK.PLAYERS_NEEDED) return { picked, why };
+			if (picked.length === LINK.PLAYERS_NEEDED) return { picked, eligible, why };
 		}
 	}
 	if (inDraw.length >= LINK.PLAYERS_NEEDED) why.push('the player confirmations are more than 5 minutes apart');
-	return { picked: null, why };
-}
-
-// Every active player key's place in the draw of R: SHA-256(R .. "~" .. keyId), lowest first.
-export async function drawRanks(env, R) {
-	const rows = (await env.DB.prepare("SELECT key_id FROM keys WHERE kind = 'p' AND revoked = 0").all()).results || [];
-	const hashed = await Promise.all(rows.map(async (row) => [row.key_id, await sha256Hex(`${R}~${row.key_id}`)]));
-	hashed.sort((a, b) => (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0));
-	return new Map(hashed.map(([id], i) => [id, i]));
-}
-
-export function drawLimit(activePlayerKeys) {
-	return Math.max(20, Math.ceil(activePlayerKeys * 0.03));
-}
-
-export function snowflakeTime(id) {
-	return Number((BigInt(id) >> 22n) + 1420070400000n);
+	return { picked: null, eligible, why };
 }
 
 async function charactersOf(env, discordId) {
@@ -435,13 +534,127 @@ async function logUpload(env, source, text, result, extra) {
 }
 
 // ---------------------------------------------------------------------------
+// Confirmer keys and their certificates
+//
+// A certificate tells every requester's addon, without the bot online, that a key is
+// registered and whether it is a councillor's (c) or a drawn player's (p):
+//   OLK1.<keyId>.<public key, 43 base64url>.<tier>.<exp>.<sig>
+// sig: the backend key's Ed25519 over the ASCII bytes of everything before the last dot. The
+// confirmer types it in game (/oly discord cert <certificate>) and its addon announces it.
+
+export async function makeCertificate(env, keyId, publicHex, tier, exp) {
+	const payload = `OLK1.${keyId}.${b64urlEncode(hexToBytes(publicHex))}.${tier}.${exp}`;
+	return `${payload}.${await backendSign(env, payload)}`;
+}
+
+// { keyId, publicHex, tier, exp, sig, payload } or null.
+export function parseCertificate(text) {
+	const m = /^OLK1\.([a-z0-9]{6,16})\.([A-Za-z0-9_-]{43})\.([cp])\.([1-9][0-9]{0,11})\.([A-Za-z0-9_-]{86})$/.exec(String(text));
+	if (!m) return null;
+	const [, keyId, pub, tier, exp, sig] = m;
+	if (b64urlEncode(b64urlDecode(pub)) !== pub || b64urlEncode(b64urlDecode(sig)) !== sig) return null;
+	return { keyId, publicHex: bytesToHex(b64urlDecode(pub)), tier, exp: Number(exp), sig, payload: m[0].slice(0, m[0].length - sig.length - 1) };
+}
+
+// The certificate when the backend key `publicHex` signed it, else null.
+export async function verifyCertificate(publicHex, text) {
+	const c = parseCertificate(text);
+	if (!c || !(await ed25519Verify(publicHex, b64urlDecode(c.sig), enc.encode(c.payload)))) return null;
+	return c;
+}
+
+// Your key tool (admin token): register a confirmer's public key and get its certificate,
+// renew a certificate, or revoke a key. The seed never comes here: it stays with the confirmer.
+//   {"key_id", "public_key", "owner_discord_id", "owner_username", "kind", "bootstrap", "days", "replace"}
+//   {"key_id", "renew": true, "days"}
+//   {"key_id", "revoke": true}
+async function routeKeys(request, env) {
+	if (!(await adminAuthorized(request, env))) return json({ status: 'error', reason: 'auth' }, 401);
+	const body = await readJson(request, 4 * 1024);
+	const t = now();
+	const fail = (reason, message, status = 400) => json({ status: 'error', reason, message }, status);
+	if (!body || typeof body !== 'object' || typeof body.key_id !== 'string' || !KEYID_RE.test(body.key_id)) return fail('format', 'key_id: 6 to 16 of a-z and 0-9.');
+	const keyId = body.key_id;
+	const days = body.days === undefined ? LINK.CERT_DAYS : body.days;
+	if (!Number.isInteger(days) || days < 1 || days > LINK.CERT_DAYS_MAX) return fail('format', `days: a whole number from 1 to ${LINK.CERT_DAYS_MAX}.`);
+	const certExp = t + days * 86400;
+	const existing = await env.DB.prepare('SELECT * FROM keys WHERE key_id = ?').bind(keyId).first();
+
+	if (body.revoke === true) {
+		if (!existing) return fail('unknown-key', 'No such key.', 404);
+		await env.DB.prepare('UPDATE keys SET revoked = 1, revoked_at = ? WHERE key_id = ? AND revoked = 0').bind(t, keyId).run();
+		return json({ status: 'ok', key_id: keyId, revoked: true });
+	}
+	if (body.renew === true) {
+		if (!existing) return fail('unknown-key', 'No such key.', 404);
+		if (existing.revoked) return fail('revoked', 'This key is revoked: make a new one.', 409);
+		const cert = await makeCertificate(env, keyId, existing.public_key, existing.kind, certExp);
+		await env.DB.prepare('UPDATE keys SET cert_exp = ? WHERE key_id = ?').bind(certExp, keyId).run();
+		return json(keyAnswer(existing, cert, certExp, null));
+	}
+
+	const pub = typeof body.public_key === 'string' ? publicKeyHex(body.public_key) : null;
+	const owner = String(body.owner_discord_id || '');
+	const username = body.owner_username === undefined || body.owner_username === null ? null : String(body.owner_username);
+	const kind = body.kind;
+	const bootstrap = body.bootstrap === true ? 1 : 0;
+	if (!pub) return fail('format', 'public_key: 64 hex digits (or 43 of base64url).');
+	if (!DISCORD_ID_RE.test(owner)) return fail('format', "owner_discord_id: the confirmer's Discord id.");
+	if (username !== null && !USERNAME_RE.test(username)) return fail('format', 'owner_username: a Discord username.');
+	if (kind !== 'c' && kind !== 'p') return fail('format', 'kind: "c" (a High Councillor) or "p" (a drawn player).');
+	if (bootstrap && kind !== 'c') return fail('format', 'Only a councillor key can be a bootstrap key.');
+	if (existing) return fail('key-id-used', 'This key id exists already: ids are never reused.', 409);
+	if (await env.DB.prepare('SELECT 1 AS x FROM keys WHERE public_key = ?').bind(pub).first()) return fail('public-key-used', 'This public key is registered already.', 409);
+	const active = await env.DB.prepare('SELECT key_id FROM keys WHERE owner_discord_id = ? AND revoked = 0 AND replaced_at IS NULL').bind(owner).first();
+	if (active && body.replace !== true) {
+		return fail('owner-has-key', `This account's active key is ${active.key_id}: send "replace": true to rotate it.`, 409);
+	}
+	const cert = await makeCertificate(env, keyId, pub, kind, certExp);
+	const insert = env.DB.prepare(
+		'INSERT INTO keys (key_id, public_key, owner_discord_id, owner_username, kind, bootstrap, created, cert_exp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+	).bind(keyId, pub, owner, username, kind, bootstrap, t, certExp);
+	// Rotating: the old key leaves the draw at once and still checks the proofs it signed until
+	// you revoke it, once the confirmer typed the new key and certificate in game.
+	if (active) await env.DB.batch([env.DB.prepare('UPDATE keys SET replaced_at = ? WHERE key_id = ?').bind(t, active.key_id), insert]);
+	else await insert.run();
+	return json(keyAnswer({ key_id: keyId, kind, public_key: pub }, cert, certExp, active ? active.key_id : null));
+}
+
+function keyAnswer(key, cert, certExp, replaced) {
+	return {
+		status: 'ok',
+		key_id: key.key_id,
+		kind: key.kind,
+		public_key: key.public_key,
+		cert,
+		cert_exp: certExp,
+		command: `/oly discord cert ${cert}`,
+		replaced,
+	};
+}
+
+function publicKeyHex(s) {
+	const t = s.trim();
+	if (PUBLIC_HEX_RE.test(t.toLowerCase())) return t.toLowerCase();
+	if (PUBLIC_B64_RE.test(t) && b64urlEncode(b64urlDecode(t)) === t) return bytesToHex(b64urlDecode(t));
+	return null;
+}
+
+// ---------------------------------------------------------------------------
 // Discord
 
+// { ok } or { ok: false, reason }: never throws (a network error is Discord being down).
 async function discordRole(env, method, discordId) {
-	const res = await fetch(`https://discord.com/api/v10/guilds/${env.GUILD_ID}/members/${discordId}/roles/${env.ROLE_ID}`, {
-		method,
-		headers: { Authorization: `Bot ${env.DISCORD_BOT_TOKEN}`, 'X-Audit-Log-Reason': 'Olympus Link' },
-	});
+	let res;
+	try {
+		res = await fetch(`https://discord.com/api/v10/guilds/${env.GUILD_ID}/members/${discordId}/roles/${env.ROLE_ID}`, {
+			method,
+			headers: { Authorization: `Bot ${env.DISCORD_BOT_TOKEN}`, 'X-Audit-Log-Reason': 'Olympus Link' },
+		});
+	} catch (err) {
+		console.error('olympus-link: Discord role', method, 'fetch failed:', err && err.message ? err.message : err);
+		return { ok: false, reason: 'discord' };
+	}
 	if (res.ok) return { ok: true };
 	let code = 0;
 	try {

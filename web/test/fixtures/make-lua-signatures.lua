@@ -30,9 +30,9 @@ for entry in section:gmatch("{(.-)}") do
 		message = entry:match('"message_hex": "(%x*)"') or "",
 	}
 end
-assert(#vectors >= 6, "expected at least 6 vectors")
+assert(#vectors >= 7, "expected at least 7 vectors")
 
-local own = "OLY4~Lua Made-ClassicBetaPvP~Olympus~Alliance~00ff00ff00ff00ff~7K3M9Q2XWD~1790000999~testcouncil1~Test Councillor-ClassicBetaPvP"
+local own = "OLY4~Lua Made-ClassicBetaPvP~Olympus II~r~Alliance~00ff00ff00ff00ff~7K3M9QX2TB~0123456789abcdef~1799990999~council01~Test Councillor-ClassicBetaPvP"
 vectors[#vectors + 1] = { name = "made in Lua: an OLY4 confirmation of its own", seed = vectors[4].seed, message = Ed.ToHex(own) }
 
 local out = {

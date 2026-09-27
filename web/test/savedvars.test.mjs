@@ -17,7 +17,7 @@ const FIXTURE = fileURLToPath(new URL('./fixtures/Olympus.lua', import.meta.url)
 const TOOL = fileURLToPath(new URL('../tools/read-inbox.mjs', import.meta.url));
 const text = readFileSync(FIXTURE, 'utf8');
 const [B1, B3, B4] = vectors.bundles;
-const SEED = vectors.keys.find((k) => k.key_id === 'testcouncil1').seed_b64url;
+const SEED = vectors.keys.find((k) => k.key_id === 'council01').seed_b64url;
 
 test('the page: every bundle in the file, in order, once', () => {
 	const found = bundlesFromSavedVariables(text);
@@ -28,7 +28,7 @@ test('the page: every bundle in the file, in order, once', () => {
 
 test('the page: the bundle of this code first, else the only one, else a choice', () => {
 	const found = bundlesFromSavedVariables(text);
-	const mine = pickBundle(found, '7K3M9Q2XWD');
+	const mine = pickBundle(found, '7K3M9QX2TB');
 	assert.equal(mine.kind, 'one');
 	assert.equal(mine.choice.text, B1.bundle);
 	const two = pickBundle(found, 'H4N8PZ6R1B'); // two requests made with one code
@@ -75,13 +75,41 @@ test('the tool: a SavedVariables parser for what WoW writes', () => {
 test('the tool: the inbox, oldest first, malformed entries skipped', () => {
 	const { bundles, skipped } = inboxBundles(parseSavedVariables(text));
 	assert.deepEqual(bundles, [
-		{ R: B1.R, bundle: B1.bundle, from: 'Some Player-ClassicBetaPvP', t: 1790000130 },
-		{ R: B3.R, bundle: B3.bundle, from: 'Tëst Plâyer-ClassicBetaPvP', t: 1790000310 },
+		{ R: B1.R, bundle: B1.bundle, from: 'Some Player-ClassicBetaPvP', t: 1799990130 },
+		{ R: B3.R, bundle: B3.bundle, from: 'Tëst Plâyer-ClassicBetaPvP', t: 1799990310 },
 	]);
 	assert.deepEqual(skipped.sort(), ['QQQQQQQQQQ', 'RRRRRRRRRR']); // wrong R for its bundle; not a bundle
 	assert.deepEqual(inboxBundles(parseSavedVariables('OlympusDB = { }')), { bundles: [], skipped: [] });
 	assert.deepEqual(inboxBundles({}), { bundles: [], skipped: [] });
 	assert.deepEqual(readInbox(FIXTURE).bundles.map((b) => b.R), [B1.R, B3.R]);
+});
+
+test('the tool: entries kept per code and sender, or under any key, each link once', () => {
+	const e = (bundle, from, t) => ({ bundle, from, t });
+	const sv = {
+		OlympusDB: {
+			discord: {
+				inbox: {
+					[B3.R]: { [B3.requester]: e(B3.bundle, B3.requester, 1799990310), [B4.requester]: e(B4.bundle, B4.requester, 1799990340) },
+					[`${B1.R}~${B1.requester}`]: e(B1.bundle, B1.requester, 1799990130),
+					'7K3M9QX2TB~Someone Else-ClassicBetaPvP': e(B4.bundle, 'Someone Else-ClassicBetaPvP', 1799990350), // under another code
+					entry0042: e(B1.bundle, B1.requester, 1799990100), // the same link kept twice: once, the first time
+					[B3.R + 'x']: e(B3.bundle, B3.requester, 1), // not a code: a key like any other
+					deep: { a: { b: { c: e(B1.bundle, 'x', 1) } } }, // deeper than the addon writes
+				},
+			},
+		},
+	};
+	const { bundles, skipped } = inboxBundles(sv);
+	assert.deepEqual(bundles.map((b) => [b.R, b.from, b.t]), [
+		[B3.R, B3.requester, 1],
+		[B1.R, B1.requester, 1799990100],
+		[B4.R, B4.requester, 1799990340],
+	]);
+	assert.deepEqual(skipped, ['7K3M9QX2TB~Someone Else-ClassicBetaPvP']);
+	// A link of the old format (no tag) is not one the Worker takes: skipped.
+	const old = B1.bundle.split('~').filter((_, i) => i !== 6).join('~');
+	assert.deepEqual(inboxBundles({ OlympusDB: { discord: { inbox: { [B1.R]: e(old, B1.requester, 5) } } } }).skipped, [B1.R]);
 });
 
 test('the tool: prints the POST body, never the key', () => {

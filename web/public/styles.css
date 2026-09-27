@@ -590,6 +590,39 @@ button.step-go:hover .step-label {
 .command-text:focus-visible {
 	border-radius: 0;
 	box-shadow: inset 0 0 0 2px var(--gold);
+	outline: none;
+}
+
+/* The code before a click: a button that shows nothing of it. */
+.command-hidden {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	margin: 0;
+	border: 0;
+	background: transparent;
+	text-align: left;
+	cursor: pointer;
+	user-select: none;
+	-webkit-user-select: none;
+}
+
+.command-hidden:hover .command-reveal {
+	color: var(--gold-hi);
+}
+
+.command-mask {
+	color: var(--text-3);
+	letter-spacing: 0.04em;
+	word-break: break-all;
+}
+
+.command-reveal {
+	font-family: var(--font);
+	font-size: 13px;
+	color: var(--text-2);
+	word-break: normal;
+	overflow-wrap: break-word;
 }
 
 .btn-copy {

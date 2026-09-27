@@ -2,7 +2,7 @@
 // the same site as the page. Four functions:
 //   me()           the signed-in Discord user { id, username, global_name, avatar }, or null
 //   loginUrl(back) the site's Discord login, coming back to `back`
-//   code()         a code token for the signed-in user (a string: OLC1...)
+//   code()         a code token for the signed-in user (a string: OLC2...)
 //   submit(bundle) { status: 'linked' | 'rejected' | 'error', reason, message, characters }
 // With ?demo=<state> in the page's address a demo answers instead: fake data, and nothing is
 // ever sent anywhere (for screenshots and trying the page).
@@ -74,11 +74,11 @@ export function createBackend({ demo = null, fetchImpl = globalThis.fetch && glo
 export const DEMO_STATES = ['login', 'scanned', 'start', 'code', 'wait', 'screen', 'scanning', 'phone', 'other', 'pick', 'found', 'done', 'error'];
 
 export const DEMO_DATA = {
-	user: { id: '100000000000000099', username: 'some_player', global_name: 'Some Player', avatar: null },
-	token: 'OLC1.7K3M9Q2XWD.some_player.1790086400.c.CeE2kc8l85hCPotkn6GNumGOUJCM0G1kN97OTqT8Hkr7hnSBhx055DnfAlmzDWERDq_bCYPSLZtWydonBTTcCA',
+	user: { id: '100000000000000099', username: 'some.player', global_name: 'Some Player', avatar: null },
+	token: 'OLC2.7K3M9QX2TB.some.player.1800000000.c.00000000.TmJVCJJtjs5W_sOXnQm3G10J3y5xwVQkii6zRhi0EO-5AmL__PtEg1Ao7VaiUivi1Jslf4i1OJUxMDDNXtG4Ag',
 	bundles: [
-		'OLB4~Some Player-ClassicBetaPvP~Olympus~Alliance~0123456789abcdef~7K3M9Q2XWD~1790000123,testcouncil1,Test Councillor-ClassicBetaPvP,G6DtgIOM0e9eDraq2p4SV-Zi7yRX2Qssl4ybESmA-shCD18yJrG8EamXrJoJVPX2kM80PuaerPujc7xwcSeIDA',
-		'OLB4~Tëst Plâyer-ClassicBetaPvP~Olympus Vanguard~Horde~a1b2c3d4e5f60718~H4N8PZ6R1B~1790000200,testplayer01,Other Player-ClassicBetaPvP,Ohu-x_Mzg8_DpTBh-LCsII_dTZf6m2aVAbxFzpiUMQoHWlPTtqTOO6oi5sfB1hYaqVvpAtPElk86xejnIewUCA;1790000245,testplayer02,Third Player-ClassicBetaPvP2,Vpe_hh5ndX01NifSGOA-wP4ZNmDLs38w8WyOc7Kvp14RLQ0XXDv7_zFzvyev7S-gVnJhU3DncZLLHubyq0UjAQ;1790000301,testplayer03,Fourth Player-ClassicBetaPvP,3yGfTMxDRTV0vp_GOjVJfAHscRJTnNGTABcV3tMKKYwYVwHQdd4QbdGc_Ev2pqy84_PEFVD-KlPSFnTPbTWBAA',
+		'OLB4~Some Player-ClassicBetaPvP~Olympus II~Alliance~0123456789abcdef~7K3M9QX2TB~5f2f66f046a1db8a~1799990100,council01,Test Councillor-ClassicBetaPvP,w,wYG_TW3fCOBxV9hteWMsnq2R8sBus8YaG-Dyb4SePjkl9a9Ub27i1okdpFxUh5aQASIZKKcXQbv0ocuXxvObBA',
+		'OLB4~Tëst Plâyer-ClassicBetaPvP~Olympus Vanguard~Horde~a1b2c3d4e5f60718~H4N8PZ6R1B~9c5ac51afcd0bbee~1799990200,player01,Other Player-ClassicBetaPvP,r,jRr01ESNDrVEohLRRZYhLAVPD9ue32uDrRA2GQByQq2dsCQ-6o79nFWcL__shopaQ2Umy1aV9f8sDIaMQLzyBw;1799990245,player02,Third Player-ClassicBetaPvP2,c,K7sW12b4A_uTxycWnR8rRE1Ip3wzAxA2GYOgNMitKtbx1KfI6IxWMJLEu2oEoJ042TuWxlbk_RU6k81b4kuEAA;1799990301,player03,Fourth Player-ClassicBetaPvP,c,7sEYRUmeAZOZyqJUGu8_hZ_O2Mn8mFuWIKdWMTJ_0Zs4KYzelPEDfnjfq3bcU-uYal7tiPtuBY6zijo0mJCqDQ',
 	],
 };
 

@@ -6,10 +6,11 @@
 //                                                     # sends them; the token from LINK_ADMIN_TOKEN
 //
 // A High Councillor in watcher mode ("/oly discord watcher on") keeps the finished links players
-// deliver to it in OlympusDB.discord.inbox[R] = { bundle, from, t }. WoW writes that file when
+// deliver to it in OlympusDB.discord.inbox, as entries { bundle, from, t } (keyed by the code,
+// or by the code and the player who sent it: this tool reads either). WoW writes that file when
 // the game saves (a /reload, logging out or quitting). The output is exactly the body that
-// POST /api/link/inbox takes (web/WORKER.md), oldest first:
-//   {"bundles": [{"R": "...", "bundle": "OLB4~...", "from": "Name-Realm", "t": 1790000000}]}
+// POST /api/link/inbox takes (web/WORKER.md), oldest first, each link once:
+//   {"bundles": [{"R": "...", "bundle": "OLB4~...", "from": "Name-Realm", "t": 1800000000}]}
 // Nothing else of the file is printed: not the confirmer key a councillor keeps in the same file.
 
 import { readFileSync } from 'node:fs';
@@ -169,27 +170,51 @@ export function parseSavedVariables(text) {
 	}
 }
 
-// The inbox of a parsed file: well-formed entries only, oldest first.
+// Every entry of the inbox: a table with a "bundle" string, found at any depth up to 3 under
+// OlympusDB.discord.inbox, whatever the addon keys it by (the code R, the code and the sender,
+// ...). Each { path, entry }, path being the keys that lead to it.
+function* inboxEntries(node, path = [], depth = 0) {
+	if (!node || typeof node !== 'object' || depth > 3) return;
+	if (typeof node.bundle === 'string') {
+		yield { path, entry: node };
+		return;
+	}
+	for (const [k, v] of Object.entries(node)) yield* inboxEntries(v, [...path, k], depth + 1);
+}
+
+// A key that starts with a code (R) must be that link's code.
+const KEY_R = /^([0-9A-HJKMNP-TV-Z]{10})(?![0-9A-Za-z])/;
+
+// The inbox of a parsed file: well-formed links only, each once, oldest first. `skipped` names
+// the entries left out (their keys joined by "/").
 export function inboxBundles(saved) {
 	const inbox = saved && saved.OlympusDB && saved.OlympusDB.discord && saved.OlympusDB.discord.inbox;
 	const bundles = [];
 	const skipped = [];
 	if (!inbox || typeof inbox !== 'object') return { bundles, skipped };
-	for (const [R, e] of Object.entries(inbox)) {
-		const bundle = e && typeof e.bundle === 'string' ? e.bundle : '';
+	const seen = new Map();
+	for (const { path, entry } of inboxEntries(inbox)) {
+		const bundle = entry.bundle;
 		const fields = bundle.split('~');
-		if (!R_RE.test(R) || !bundle.startsWith('OLB4~') || fields.length !== 7 || fields[5] !== R) {
-			skipped.push(R);
+		const R = fields[5];
+		const keysAgree = path.every((k) => {
+			const m = KEY_R.exec(k);
+			return !m || m[1] === R;
+		});
+		if (!bundle.startsWith('OLB4~') || fields.length !== 8 || !R_RE.test(R) || !keysAgree) {
+			skipped.push(path.join('/'));
 			continue;
 		}
-		bundles.push({
-			R,
-			bundle,
-			from: typeof e.from === 'string' ? e.from : null,
-			t: Number.isFinite(e.t) ? e.t : null,
-		});
+		const item = { R, bundle, from: typeof entry.from === 'string' ? entry.from : null, t: Number.isFinite(entry.t) ? entry.t : null };
+		const before = seen.get(bundle);
+		if (before) {
+			if ((item.t ?? Infinity) < (before.t ?? Infinity)) Object.assign(before, item); // kept twice: the first time counts
+			continue;
+		}
+		seen.set(bundle, item);
+		bundles.push(item);
 	}
-	bundles.sort((a, b) => (a.t ?? 0) - (b.t ?? 0) || (a.R < b.R ? -1 : 1));
+	bundles.sort((a, b) => (a.t ?? 0) - (b.t ?? 0) || (a.R < b.R ? -1 : a.R > b.R ? 1 : 0));
 	return { bundles, skipped };
 }
 

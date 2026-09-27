@@ -104,3 +104,24 @@ test('languages: English by default, Portuguese for "pt", the same keys in both'
 	assert.equal(fill('{n} of {total}', { n: 2, total: 5 }), '2 of 5');
 	assert.equal(fill('{missing}', {}), '{missing}');
 });
+
+test('the code step warns about streams, in both languages', () => {
+	assert.match(strings.en.codeStream, /on stream/);
+	assert.match(strings.en.codeStream, /Olympus Link window/);
+	assert.match(strings.pt.codeStream, /em live/);
+	assert.match(strings.pt.codeStream, /janela do Olympus Link/);
+	assert.match(strings.en.waitStream, /off the stream/);
+	assert.match(strings.pt.waitStream, /fora da transmissão/);
+	assert.match(strings.en.codeReveal, /Click to show/);
+});
+
+test('every answer the Worker can give has its words, in both languages', async () => {
+	const src = (await import('node:fs')).readFileSync(new URL('../worker/link-worker.js', import.meta.url), 'utf8');
+	const reasons = new Set([...src.matchAll(/reject\('([a-z-]+)'/g), ...src.matchAll(/reason: '([a-z-]+)'/g)].map((m) => m[1]));
+	for (const r of ['tag', 'guild-unverified', 'not-enough', 'discord', 'server']) assert.ok(reasons.has(r), r);
+	for (const r of reasons) {
+		if (['auth', 'origin', 'already', 'linked'].includes(r)) continue; // the tools', the page's own origin, and success
+		assert.ok(strings.en.errors[r], `en: ${r}`);
+		assert.ok(strings.pt.errors[r], `pt: ${r}`);
+	}
+});
