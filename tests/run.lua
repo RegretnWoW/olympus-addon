@@ -9900,5 +9900,18 @@ test("0.9.8 signature checks are rate-limited: once a minute per sender, a few a
 	if not ok then error(err, 0) end
 end)
 
+test("0.9.9: the Treasurer's lines in the Olympus chats carry his gold coin, nobody else's", function()
+	local coin = ns.COIN:gsub(" $", "")
+	local function Line(sender, guild) return ns.Channels.FormatLine("A", sender, guild, nil, "hello") end
+	local line = Line("Pyralis Ashandar-Realm", "Olympus")
+	assert(line:find("[" .. coin .. "Pyralis Ashandar]", 1, true), line)
+	-- Same name in another guild, or another name in <Olympus>: no coin.
+	assert(not Line("Pyralis Ashandar-Realm", "Olympus II"):find(coin, 1, true))
+	assert(not Line("Pyralis Ashandor-Realm", "Olympus"):find(coin, 1, true))
+	assert(not Line("Pyralis Ashandar-Realm", nil):find(coin, 1, true))
+	-- The coin can't be written in: the text still goes through the chat filter.
+	assert(not Line("Bob-Realm", "Olympus"):find(coin, 1, true))
+end)
+
 print(("\n%d passed, %d failed"):format(passed, failed))
 os.exit(failed == 0 and 0 or 1)

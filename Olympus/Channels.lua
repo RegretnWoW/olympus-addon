@@ -136,6 +136,8 @@ function Channels.FormatLine(tier, sender, guild, class, text)
 	-- The High Council (the moderators, Core.lua): their own icon (a skull until they pick one,
 	-- 0.9.8) and their colour.
 	if ns.IsHighCouncillor(sender) then name = ns.CouncilIcon(sender) .. "|c" .. ns.HIGH_COUNCIL_COLOR .. ns.DisplayName(sender) .. "|r" end
+	-- The Treasurer: the gold coin he carries in tooltips and the census (0.9.9).
+	if ns.IsTreasurer(sender, guild) then name = ns.COIN:gsub(" $", "") .. name end
 	return "[" .. Label(tier) .. "] |Hplayer:" .. (ns.TellName(sender) or "?") .. "|h[" .. name .. "]|h <"
 		.. tostring(guild or "?"):gsub("|", "||") .. ">: " .. Codec.SanitizeChat(text)
 end
