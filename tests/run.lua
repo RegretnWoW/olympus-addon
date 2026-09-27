@@ -11108,9 +11108,23 @@ do
 		W.random = function(a, b) if a then ids = ids + 1; return math.min(ids, b or ids) end return 0.5 end
 	end
 	local function Census(w, users) ns.rdb.guilds = { ["Olympus II"] = { t = w.clock, users = users, online = users, versions = {} } } end
-	-- A player's answer to the ask `id` (their guild, flags and errors as a 0.8 client sent them).
-	local function Say(W, id, name, version, guild, flags, errors)
+	-- A player's answer to the ask `id`, as 0.9.9's Answer() builds it: its version, client and
+	-- flags, no guild, window or errors (since 0.9.2: the author knows guilds from his roster and
+	-- the census's reports).
+	local function Say(W, id, name, version, flags)
+		W.HandleAnswer("WHISPER", name, ("V2~%d~%s~~Forever~~%s~0~0~"):format(id, version, flags or "c"))
+	end
+	-- ...and as a client older than 0.9.2 sent it, its guild and errors too.
+	local function SayOld(W, id, name, version, guild, flags, errors)
 		W.HandleAnswer("WHISPER", name, ("V2~%d~%s~%s~Forever~~%s~%d~0~"):format(id, version, guild or "", flags or "c", errors or 0))
+	end
+	-- The author's own guild roster (ns.Roster.byName) while fn runs.
+	local function WithRoster(byName, fn)
+		local saved = ns.Roster.byName
+		ns.Roster.byName = byName
+		local ok, err = pcall(fn)
+		ns.Roster.byName = saved
+		if not ok then error(err, 0) end
 	end
 	-- His first name alone, on our realm: someone else.
 	local NOT_AUTHOR = ns.AUTHOR:match("^%S+") .. "-Realm"
@@ -11122,15 +11136,18 @@ do
 	end
 
 	test("0.9.9 Workshop search: by name, guild or version, any case and UTF-8 letters too, every answer that matches", function()
-		WithWorkshop(AUTHOR_FULL, function(w, W)
+		WithWorkshop(AUTHOR_FULL, function(w, W) WithRoster({ [AUTHOR_FULL] = 0, ["Bob-Realm"] = 4 }, function()
 			Counting(W)
 			Census(w, 40)
+			-- Their guilds as the author knows them: Bob is in his own (his roster), Ann leads
+			-- Olympus IV (its report); Carl's client, older than 0.9.2, still sends its own.
+			ns.rdb.guilds["Olympus IV"] = { t = w.clock, leader = "Ann", realm = "Realm" }
 			W.RollCall()
 			local id = W.State().id
-			Say(W, id, "Ann-Realm", ns.VERSION, "Olympus IV")
-			Say(W, id, "Bob-Realm", "0.9.8", "Olympus II")
-			Say(W, id, "Élodie-Realm", ns.VERSION, "", "")
-			Say(W, id, "Carl-Realm", ns.VERSION, "Sons of Olympus")
+			Say(W, id, "Ann-Realm", ns.VERSION)
+			Say(W, id, "Bob-Realm", "0.9.8")
+			Say(W, id, "Élodie-Realm", ns.VERSION, "")
+			SayOld(W, id, "Carl-Realm", ns.VERSION, "Sons of Olympus")
 			-- No search: the box on top, then everyone who answered, problems first, then by name.
 			local lines = W.Build()
 			local box, at = Find(lines, ns.L.WORKSHOP_SEARCH)
@@ -11159,6 +11176,8 @@ do
 			lines = W.Build()
 			eq(Names(lines), "Bob-Realm,Ann-Realm")
 			eq(Find(lines, ASK), nil, "a piece of a guild's name is nobody to ask")
+			W.SetSearch("sons of")
+			eq(Names(W.Build()), "Carl-Realm", "the guild an older client sent")
 			W.SetSearch("0.9.8")
 			lines = W.Build()
 			eq(Names(lines), "Bob-Realm")
@@ -11190,7 +11209,7 @@ do
 			local report = W.ReportText()
 			assert(report:find("Carl", 1, true) and report:find(ns.L.WORKSHOP_EVERYONE:format(4), 1, true), report)
 			assert(not report:find(ns.L.WORKSHOP_SEARCH, 1, true) and not report:find("|c", 1, true), report)
-		end)
+		end) end)
 	end)
 
 	test("0.9.9 Workshop: everyone who answered, 25 at a time, with Show more, Show all and Show fewer", function()
@@ -11199,7 +11218,7 @@ do
 			Census(w, 100)
 			W.RollCall()
 			local id = W.State().id
-			for i = 1, 60 do Say(W, id, ("P%02d-Realm"):format(i), i % 20 == 0 and "0.9.1" or ns.VERSION, "Olympus II") end
+			for i = 1, 60 do Say(W, id, ("P%02d-Realm"):format(i), i % 20 == 0 and "0.9.1" or ns.VERSION) end
 			local lines = W.Build()
 			eq(Many(lines), 25, "the first 25")
 			local names = Names(lines)
@@ -11219,7 +11238,7 @@ do
 			eq(Many(lines), 60, "all of them")
 			eq(Find(lines, ns.L.SHOW_ALL:format(60)), nil); assert(Find(lines, ns.L.SHOW_FEWER))
 			-- More answers come while all are shown: they show too.
-			Say(W, id, "P61-Realm", ns.VERSION, "Olympus II")
+			Say(W, id, "P61-Realm", ns.VERSION)
 			eq(Many(W.Build()), 61)
 			Find(W.Build(), ns.L.SHOW_FEWER).onClick()
 			lines = W.Build()
@@ -11271,12 +11290,14 @@ do
 			-- Roll call meanwhile: no, the rounds are the roll calls.
 			W.RollCall()
 			eq(#Rolls(), 1); eq(w.printed[#w.printed], ns.L.WORKSHOP_ROLL_WAIT:format(5))
-			-- Answers to any round count; the census grows to 100000: the share stays at its floor, 5%.
+			-- Answers to any round count; the census grows to 8000: the share stays at its floor, 5%.
+			-- (95% of a census past MAX_ANSWERS_FULL is more than it keeps: it stops then, below.)
 			Say(W, W.State().id, "Ann-Realm", ns.VERSION)
-			users = 100000
+			users = 8000
 			Next()
 			eq(#Rolls(), 2); assert(Rolls()[2].msg:find("^V1~%d+~5$"), Rolls()[2].msg)
-			assert(Find(W.Build(), ns.L.WORKSHOP_FULL_PROGRESS:format(2, 1, 100000, 0)))
+			eq(W.Share(100000), 5)
+			assert(Find(W.Build(), ns.L.WORKSHOP_FULL_PROGRESS:format(2, 1, 8000, 0)))
 			users = 3000
 			-- Twenty rounds, then its last answers get their 5 minutes, and it ends.
 			for _ = 3, W.ROLL_ROUNDS do Next() end
@@ -11440,6 +11461,160 @@ do
 		if not ok then error(err, 0) end
 	end)
 
+	-- Review of 0.9.9: MAX_ANSWERS (3000) held the full roll call of an army past it short of its
+	-- 95% for ever, and threw away the answer of the player the author asked alone once full.
+	test("0.9.9 Workshop: the answers kept make room for a full roll call of a large army and for the player asked alone", function()
+		WithWorkshop(AUTHOR_FULL, function(w, W)
+			Counting(W)
+			local timers = {}
+			W.after = function(s, where, f)
+				if where == "full roll call" then timers[#timers + 1] = { s = s, f = f } else f() end
+			end
+			local function Next()
+				local t = assert(table.remove(timers, 1), "a round waiting")
+				w.clock = w.clock + t.s
+				t.f()
+			end
+			local function Rolls()
+				local n = 0
+				for _, m in ipairs(w.sent) do if m.msg:find("^V1~") then n = n + 1 end end
+				return n
+			end
+			-- 4000 addon users: more than MAX_ANSWERS, and 95% of them (3800) too. The answers come
+			-- 250 a round, and every one is kept: it ends at 95%, in round 16.
+			Census(w, 4000)
+			eq(W.StartFull(), true)
+			eq(W.Cap(), 4400, "the census and a tenth")
+			local n = 0
+			while W.FullRunning() and n < 4000 do
+				for _ = 1, 250 do
+					n = n + 1
+					Say(W, W.State().id, ("R%04d-Realm"):format(n), ns.VERSION)
+					if not W.FullRunning() then break end
+				end
+				if W.FullRunning() then Census(w, 4000); Next() end
+			end
+			eq(W.FullRunning(), false); eq(n, 3800, "done at 95%"); eq(W.State().count, 3800)
+			eq(w.printed[#w.printed], ns.L.WORKSHOP_FULL_ENOUGH:format(16, 3800, 4000, 95))
+			eq(W.Cap(), W.MAX_ANSWERS, "over: back to MAX_ANSWERS")
+
+			-- More answers than MAX_ANSWERS kept: the player the author asks alone still shows,
+			-- in the place of the oldest answer; anyone else answering that ask is not kept.
+			W.SetSearch("Some Mod")
+			Find(W.Build(), ns.L.WORKSHOP_ASK_ONE:format("Some Mod")).onClick()
+			local ask = w.whispered[#w.whispered]
+			eq(ask.to, "Some Mod-Realm")
+			local askId = tonumber(ask.msg:match("^V1~(%d+)~100$"))
+			Say(W, askId, "Stranger Danger-Realm", ns.VERSION)
+			eq(W.State().answers["Stranger Danger-Realm"], nil, "not the one asked")
+			Say(W, askId, "Some Mod-Realm", ns.VERSION, "")
+			assert(W.State().answers["Some Mod-Realm"], "the moderator's answer is kept")
+			eq(W.State().count, 3800, "in the place of the oldest")
+			local lines = W.Build()
+			eq(Names(lines), "Some Mod-Realm")
+			eq(Find(lines, ns.L.WORKSHOP_ASK_ONE:format("Some Mod")), nil, "found: nobody left to ask")
+			W.SetSearch("")
+
+			-- Answers from before a full roll call do not count in it: once the answers kept are
+			-- full, they make room (2000 users: MAX_ANSWERS is more than the census and a tenth),
+			-- but the one of a player asked alone (off the channel, the rounds never reach them).
+			W.Reset(); Counting(W); timers = {}; w.sent = {}
+			w.clock = w.clock + W.ROLL_EVERY
+			Census(w, 2000)
+			W.RollCall()
+			for i = 1, W.MAX_ANSWERS - 1 do Say(W, W.State().id, ("S%04d-Realm"):format(i), ns.VERSION) end
+			eq(W.AskOne("Some Mod"), true)
+			Say(W, tonumber(w.whispered[#w.whispered].msg:match("^V1~(%d+)~100$")), "Some Mod-Realm", ns.VERSION, "")
+			eq(W.State().count, W.MAX_ANSWERS)
+			w.clock = w.clock + W.ROLL_EVERY
+			Census(w, 2000)
+			eq(W.StartFull(), true); eq(Rolls(), 2); eq(W.Cap(), W.MAX_ANSWERS)
+			for i = 1, 1900 do Say(W, W.State().id, ("N%04d-Realm"):format(i), ns.VERSION) end
+			eq(W.FullRunning(), false)
+			eq(w.printed[#w.printed], ns.L.WORKSHOP_FULL_ENOUGH:format(1, 1900, 2000, 95))
+			eq(W.State().count, 1901, "the older answers made room")
+			assert(W.State().answers["Some Mod-Realm"], "all but the one asked alone")
+			eq(W.State().answers["S0001-Realm"], nil)
+
+			-- 95% of a census past MAX_ANSWERS_FULL is more than it keeps: no full roll call, and
+			-- one running stops when the census grows past it, saying why.
+			W.Reset(); Counting(W); timers = {}; w.sent = {}
+			w.clock = w.clock + W.ROLL_EVERY
+			Census(w, 11000)
+			eq(W.StartFull(), false); eq(W.FullRunning(), false); eq(#w.sent, 0)
+			eq(w.printed[#w.printed], ns.L.WORKSHOP_FULL_TOO_MANY:format(95, 11000, W.MAX_ANSWERS_FULL))
+			Census(w, 9000)
+			eq(W.StartFull(), true); eq(W.Cap(), 9900); eq(Rolls(), 1)
+			Census(w, 11000)
+			Next()
+			eq(W.FullRunning(), false); eq(Rolls(), 1, "no round for it"); eq(#timers, 0)
+			eq(w.printed[#w.printed], ns.L.WORKSHOP_FULL_LARGE:format(1, 0, 11000, 0, 95, W.MAX_ANSWERS_FULL))
+			local line = Find(W.Build(), ns.L.WORKSHOP_FULL_PROGRESS:format(1, 0, 11000, 0))
+			eq(line.right, "|cff9d9d9d" .. ns.L.WORKSHOP_FULL_END_LARGE .. "|r")
+		end)
+	end)
+
+	-- Review of 0.9.9: since 0.9.2 an answer carries no guild (Answer), so a guild's name found
+	-- nothing, and a one-word one offered to whisper a roll call to a player of that name.
+	test("0.9.9 Workshop search by guild: the author's roster and the census's reports tell an answer's guild; a guild's name is nobody to ask", function()
+		local answer
+		-- A 0.9.9 client in <Mudhollow> answers the author's roll call: no guild in it.
+		WithWorkshop("Some Guildie-Realm", function(w, W)
+			GetGuildInfo = function() return "Mudhollow", "Member", 3 end
+			W.HandleRoll("WHISPER", AUTHOR_FULL, "V1~77~100")
+			eq(#w.whispered, 1); eq(w.whispered[1].to, AUTHOR_FULL)
+			answer = w.whispered[1].msg
+			eq(answer:match("^V2~77~[^~]*~([^~]*)~"), "", "no guild: " .. answer)
+		end)
+		WithWorkshop(AUTHOR_FULL, function(w, W) WithRoster({ [AUTHOR_FULL] = 0, ["Olympian Friend-Realm"] = 4 }, function()
+			W.random = function(a, b) if a then return 77 end return 0.5 end
+			Census(w, 40)
+			ns.rdb.guilds["Mudhollow"] = { t = w.clock, leader = "Some Guildie", officers = { { name = "Other Officer" } }, realm = "Realm" }
+			ns.rdb.guilds["Stonehollow"] = { t = w.clock, leader = "Nobody Here", realm = "Realm" }
+			W.RollCall()
+			eq(W.State().id, 77)
+			W.HandleAnswer("WHISPER", "Some Guildie-Realm", answer)
+			eq(W.State().answers["Some Guildie-Realm"].guild, "", "the answer holds none")
+			Say(W, 77, "Olympian Friend-Realm", ns.VERSION)
+			Say(W, 77, "Lone Wanderer-Realm", ns.VERSION)
+			-- The guild's name, any case, whole or a piece: its players who answered, nobody to ask.
+			W.SetSearch("Mudhollow")
+			local lines = W.Build()
+			eq(Names(lines), "Some Guildie-Realm")
+			eq(Find(lines, ASK), nil, "a guild's name is nobody to ask")
+			eq(Find(lines, "Some Guildie").text, "Some Guildie  |cff9d9d9d<Mudhollow>|r")
+			W.SetSearch("mudHOL")
+			lines = W.Build()
+			eq(Names(lines), "Some Guildie-Realm"); eq(Find(lines, ASK), nil)
+			-- His own guild: from his roster.
+			W.SetSearch("olympus ii")
+			lines = W.Build()
+			eq(Names(lines), "Olympian Friend-Realm"); eq(Find(lines, ASK), nil)
+			-- A guild the census knows and nobody of it answered: still nobody to ask.
+			W.SetSearch("stoneHOLLOW")
+			lines = W.Build()
+			eq(Names(lines), ""); assert(Find(lines, ns.L.WORKSHOP_NO_MATCH)); eq(Find(lines, ASK), nil)
+			-- Its leader, who did not answer, is a player: asked alone.
+			W.SetSearch("Nobody Here")
+			assert(Find(W.Build(), ns.L.WORKSHOP_ASK_ONE:format("Nobody Here")))
+			-- Everyone who answered: the guilds on their rows, none for a player nobody places.
+			W.SetSearch("")
+			lines = W.Build()
+			eq(Find(lines, "Olympian Friend").text, "Olympian Friend  |cff9d9d9d<Olympus II>|r")
+			eq(Find(lines, "Lone Wanderer").text, "Lone Wanderer")
+			-- The player's card gets it too.
+			local savedUI, shown = ns.UI, nil
+			ns.UI = setmetatable({ ShowPerson = function(p) shown = p end }, { __index = savedUI })
+			local ok, err = pcall(function()
+				Find(W.Build(), "Some Guildie").onClick()
+				Find(W.Build(), ns.L.WORKSHOP_CARD).onClick()
+			end)
+			ns.UI = savedUI
+			assert(ok, err)
+			eq(shown.name, "Some Guildie"); eq(shown.guild, "Mudhollow")
+		end) end)
+	end)
+
 	test("0.9.9 Workshop: the search, the full roll call and Ask <name> are the author's alone", function()
 		WithWorkshop("Tester-Realm", function(w, W)
 			Census(w, 40)
@@ -11546,7 +11721,8 @@ do
 			"WORKSHOP_ASK_ONE", "WORKSHOP_ASK_ONE_TIP", "WORKSHOP_ASK_ONE_AGO", "WORKSHOP_ASK_ONE_SENT", "WORKSHOP_ASK_ONE_WAIT",
 			"WORKSHOP_FULL_BTN", "WORKSHOP_FULL_STOP", "WORKSHOP_FULL_BTN_TIP", "WORKSHOP_FULL_START", "WORKSHOP_FULL_PROGRESS",
 			"WORKSHOP_FULL_NEXT", "WORKSHOP_FULL_ENOUGH", "WORKSHOP_FULL_ROUNDS", "WORKSHOP_FULL_STOPPED", "WORKSHOP_FULL_END_ENOUGH",
-			"WORKSHOP_FULL_END_ROUNDS", "WORKSHOP_FULL_END_STOPPED" }) do
+			"WORKSHOP_FULL_END_ROUNDS", "WORKSHOP_FULL_END_STOPPED", "WORKSHOP_FULL_TOO_MANY", "WORKSHOP_FULL_LARGE",
+			"WORKSHOP_FULL_END_LARGE" }) do
 			assert(type(ns.L[key]) == "string", "English " .. key)
 			assert(type(pt.L[key]) == "string" and pt.L[key] ~= ns.L[key], "Portuguese " .. key)
 			-- The same format arguments in both.
