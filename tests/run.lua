@@ -74,7 +74,7 @@ end
 -- Load addon files like WoW does: each gets (addonName, sharedTable)
 ---------------------------------------------------------------------------
 local ns = {}
-for _, file in ipairs({ "Bootstrap", "Locales", "Core", "Diagnostics", "Dialog", "Codec", "Zones", "Who", "Data", "Roster", "Comm", "Map", "Layers", "Hop", "Positions", "Decree", "Channels", "Inspect", "King", "Vox", "Court", "Treasury", "Bank", "Acts", "Workshop", "Recruit", "Views" }) do
+for _, file in ipairs({ "Bootstrap", "Locales", "Core", "Diagnostics", "Dialog", "Codec", "Sign", "Zones", "Who", "Data", "Roster", "Comm", "Map", "Layers", "Hop", "Positions", "Decree", "Channels", "Inspect", "King", "Vox", "Court", "Treasury", "Bank", "Acts", "Workshop", "Recruit", "Views" }) do
 	local chunk = assert(loadfile(ADDON_DIR .. file .. ".lua"))
 	chunk("Olympus", ns)
 end
@@ -8986,20 +8986,6 @@ test("0.9.5 the Issue Reporter: shown until the player hides it, then hidden at 
 end)
 
 -- 0.9.6: the High Council and the gamepad escape list
-test("0.9.6 the High Council: a skull and a colour in the Olympus chats, on their realm group only", function()
-	local realm, list = ns.HIGH_COUNCIL_REALM, ns.HIGH_COUNCIL
-	ns.HIGH_COUNCIL_REALM, ns.HIGH_COUNCIL = "Realm", { ns.CouncilHash("Test Councillor") }
-	local ok, err = pcall(function()
-		eq(ns.IsHighCouncillor("Test Councillor-Realm"), true); eq(ns.IsHighCouncillor("test councillor"), true, "any case")
-		eq(ns.IsHighCouncillor("Test Councillor-OtherRealm"), false, "a namesake elsewhere")
-		eq(ns.IsHighCouncillor("Random Guy-Realm"), false)
-		local line = ns.Channels.FormatLine("A", "Test Councillor-Realm", "Olympus", nil, "hello")
-		assert(line:find(ns.HIGH_COUNCIL_ICON, 1, true) and line:find(ns.HIGH_COUNCIL_COLOR, 1, true), line)
-		assert(not ns.Channels.FormatLine("A", "Random Guy-Realm", "Olympus", nil, "hi"):find(ns.HIGH_COUNCIL_ICON, 1, true))
-	end)
-	ns.HIGH_COUNCIL_REALM, ns.HIGH_COUNCIL = realm, list
-	if not ok then error(err, 0) end
-end)
 
 test("0.9.6 gamepad UI: our windows are not on the escape list Blizzard's gamepad menus sweep", function()
 	local saved, gp = UISpecialFrames, ns.GamepadUI
@@ -9032,6 +9018,885 @@ test("0.9.6 a donation says what the donor gave in all", function()
 	end)
 	ns.Print, ns.rdb.treasury, ns.PlayAlert, T.Share = saved.print, saved.book, saved.alert, saved.share
 	T.Reset()
+	if not ok then error(err, 0) end
+end)
+
+
+test("0.9.7 the donation ranking: 100 donors fit the Treasurer's message and all reach the King", function()
+	local T = ns.Treasury
+	local saved = { book = ns.rdb.treasury, share = T.Share, print = ns.Print, alert = ns.PlayAlert, guild = GetGuildInfo }
+	local ok, err = pcall(function()
+		T.Share, ns.Print, ns.PlayAlert = function() end, function() end, function() end
+		GetGuildInfo = function() return "OLYMPUS", "Treasurer", 2 end
+		local function Name(i) return "Donor " .. string.char(65 + math.floor((i - 1) / 26)) .. string.char(97 + (i - 1) % 26) .. "name" end
+		for i = 1, 120 do T.Record(Name(i), 10000 + i, "trade", nil, { quiet = true }) end
+		local msg = T.Message()
+		assert(#msg <= ns.Codec.CHUNK * ns.Codec.MAX_CHUNKS, "fits the pieces: " .. #msg)
+		T.HandleReport("CHANNEL", "Pyralis Ashandar-Realm", msg)
+		eq(#T.Report().rank, 100, "the top 100")
+	end)
+	ns.rdb.treasury, T.Share, ns.Print, ns.PlayAlert, GetGuildInfo = saved.book, saved.share, saved.print, saved.alert, saved.guild
+	T.Reset()
+	if not ok then error(err, 0) end
+end)
+
+test("0.9.7 the High Council: a list the author signs on his computer, checked by every client, passed along by any", function()
+	local vGap, vMax = ns.Workshop.VERIFY_GAP, ns.Workshop.VERIFY_MAX
+	ns.Workshop.VERIFY_GAP, ns.Workshop.VERIFY_MAX = 0, 1000 -- (the rate limit has its own test)
+	ns.Workshop.ResetVerify()
+	local W = ns.Workshop
+	local LIST1 = "HS1~1790000000~Realm~Test Councillor,Other Mod~5c8eac0d271a53cc73bb79e40ad0b9390f81c0d90fc0c3bd9e3ba804f15a59dea651a95e6221c7e6e9c53cf0067fc2f6a990ccb59ab39df6ad6a7f2a40a6be7680b6133cfa5ae6261d9925a545b0ec180b0edf899040bf0ceb973f0db455187d954d4ce8340364335397dc0cb928fe0d5dd5e7add436ed5984a8e1d0db470f46c77f8ffff98f6e32c287c15032f97b7b2f5bc70d4164bad8e8beccb02a1cb78ba2511487c423b62d18c0e8b47ab26a0dfe6144fae7b0b2e311d756b64b93c9f3914c82a51202a295215c0da66afa515417d305e19f31c065d084d222c00b45294849db4d4910732c49b7bf79fbd6197fe04c0db8a803265ab6d64b3566252ab7"
+	local LIST2 = "HS1~1790000100~Realm~Test Councillor~43c2479504493a7c32dc1ab4356e9045933e657aa33747d49b2fc5195af0656d6a991efe985187c7c09df8ec4cf91483e05923e79880f5b6130ac0450e2ed225e8f95051e5ea36f3f62302764303cd85d2a6fc28ecf020178e4d90fbfd78fad2c7e04584577b3ae1f2d7c0d978ffc37992f303d673c676e1f43b894673402c4cb542671a9013b3ddc50c004d986472aa5bd5142d8980e2e719ced7f9b25d0c83f997fcb811f610d808961d7ae403d4e4090114e5b923982efaf2aebe35ccaaf19f284d9f5d9e8ed428a1b8de6c0e3b124317d4729085ce13de192eabebf2a1dac15424898e3439f246fca7a158c7a8e6b89acf7b2b7ab4e4435b3612a4d4e1fc"
+	local saved = { council = ns.rdb.council, chunked = ns.Comm.SendChunked, whisper = ns.Comm.Whisper, help = ns.db.councilHelp, me = ns.me }
+	local sent, whispered = {}, {}
+	local ok, err = pcall(function()
+		ns.Comm.SendChunked = function(msg) sent[#sent + 1] = msg end
+		ns.Comm.Whisper = function(to, msg) whispered[#whispered + 1] = to .. " " .. msg end
+		ns.rdb.council = nil
+		eq(ns.IsHighCouncillor("Test Councillor-Realm"), false, "nobody until a signed list arrives")
+		-- Forged or changed lists: refused, whoever sends them.
+		W.HandleCouncil("CHANNEL", "Faker Guy-Realm", (LIST1:gsub("Other Mod", "Faker Guy")))
+		W.HandleCouncil("CHANNEL", "Faker Guy-Realm", LIST1:sub(1, -2) .. (LIST1:sub(-1) == "0" and "1" or "0"))
+		W.HandleCouncil("CHANNEL", "Faker Guy-Realm", "HS1~1790000200~Realm~Faker Guy~" .. string.rep("ab", 256))
+		eq(ns.IsHighCouncillor("Faker Guy-Realm"), false, "no forged list")
+		-- The signed list, from anyone (a relay carries no authority: the signature does).
+		W.HandleCouncil("CHANNEL", "Any Player-Realm", LIST1)
+		eq(ns.IsHighCouncillor("Test Councillor-Realm"), true); eq(ns.IsHighCouncillor("other mod"), true, "any case")
+		eq(ns.IsHighCouncillor("Test Councillor-OtherRealm"), false, "its realm group only")
+		local line = ns.Channels.FormatLine("A", "Test Councillor-Realm", "Olympus", nil, "hello")
+		assert(line:find(ns.HIGH_COUNCIL_ICON, 1, true) and line:find(ns.HIGH_COUNCIL_COLOR, 1, true), line)
+		-- A newer signed list replaces it; an older one never comes back.
+		W.HandleCouncil("CHANNEL", "Any Player-Realm", LIST2)
+		eq(ns.IsHighCouncillor("Other Mod-Realm"), false, "removed")
+		W.HandleCouncil("CHANNEL", "Replayer-Realm", LIST1)
+		eq(ns.IsHighCouncillor("Other Mod-Realm"), false, "an old list replayed changes nothing")
+		-- Any client passes the newest list along, as it is.
+		W.RelayCouncil(true)
+		eq(sent[#sent], "HS~" .. LIST2, "(0.9.8: under the HS~ type)")
+		-- Help requests go to councillors who take them.
+		W.HandleAvailable("CHANNEL", "Test Councillor-Realm")
+		W.HandleAvailable("CHANNEL", "Random Guy-Realm")
+		ns.me = "Player One-Realm"
+		W.AskCouncil("lost my tabard")
+		assert(whispered[#whispered]:find("^Test Councillor%-Realm HR~lost my tabard$"), whispered[#whispered])
+		local before = #whispered
+		W.AskCouncil("again")
+		eq(#whispered, before, "once every few minutes")
+	end)
+	ns.rdb.council, ns.Comm.SendChunked, ns.Comm.Whisper, ns.db.councilHelp, ns.me = saved.council, saved.chunked, saved.whisper, saved.help, saved.me
+	if not ok then error(err, 0) end
+	ns.Workshop.VERIFY_GAP, ns.Workshop.VERIFY_MAX = vGap, vMax
+end)
+
+test("0.9.7 SHA-256 and the signature check on known values", function()
+	local function hex(b) return (b:gsub(".", function(c) return ("%02x"):format(c:byte()) end)) end
+	eq(hex(ns.Sign.SHA256("abc")), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+	eq(hex(ns.Sign.SHA256("")), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+	eq(hex(ns.Sign.SHA256(string.rep("a", 1000))), "41edece42d63e8d9bf515a9ba6932e1c20cbc9f5a5d134645adb5db1b9737ea3")
+	eq(ns.Sign.Verify("HS1~1~Realm~X", "00"), false); eq(ns.Sign.Verify("x", "zz"), false)
+end)
+
+-- 0.9.8: review-fixes (the High Council's list on the channel, the signature check, the signing
+-- script's lists, the leaderboards' "Show more")
+local COUNCIL_LIST1 = "HS1~1790000000~Realm~Test Councillor,Other Mod~5c8eac0d271a53cc73bb79e40ad0b9390f81c0d90fc0c3bd9e3ba804f15a59dea651a95e6221c7e6e9c53cf0067fc2f6a990ccb59ab39df6ad6a7f2a40a6be7680b6133cfa5ae6261d9925a545b0ec180b0edf899040bf0ceb973f0db455187d954d4ce8340364335397dc0cb928fe0d5dd5e7add436ed5984a8e1d0db470f46c77f8ffff98f6e32c287c15032f97b7b2f5bc70d4164bad8e8beccb02a1cb78ba2511487c423b62d18c0e8b47ab26a0dfe6144fae7b0b2e311d756b64b93c9f3914c82a51202a295215c0da66afa515417d305e19f31c065d084d222c00b45294849db4d4910732c49b7bf79fbd6197fe04c0db8a803265ab6d64b3566252ab7"
+
+-- Workshop.lua loaded again into the namespace of a FreshComm: its handlers answer the real
+-- CHAT_MSG_ADDON path of that Comm. Our dialogs are put back after.
+local function CouncilOnChannel(fn)
+	local W = ns.Workshop
+	local saved = { council = ns.rdb.council, chunked = ns.Comm.SendChunked, ci = C_ChatInfo, dialogs = {} }
+	for k, v in pairs(StaticPopupDialogs) do saved.dialogs[k] = v end
+	local ok, err = pcall(function()
+		local cns, Deliver = FreshComm()
+		local wns = setmetatable({ On = function() end }, { __index = cns })
+		assert(loadfile(ADDON_DIR .. "Workshop.lua"))("Olympus", wns)
+		local id = 0
+		local function Hear(sender, msg)
+			id = id + 1
+			for _, c in ipairs(ns.Codec.Chunk(msg, "9" .. id)) do Deliver("CHANNEL", sender, c) end
+		end
+		fn(W, Hear)
+	end)
+	ns.rdb.council, ns.Comm.SendChunked, C_ChatInfo = saved.council, saved.chunked, saved.ci
+	wipe(StaticPopupDialogs)
+	for k, v in pairs(saved.dialogs) do StaticPopupDialogs[k] = v end
+	if not ok then error(err, 0) end
+end
+
+test("0.9.8 the High Council's list crosses the channel: relayed by one client, taken by the next", function()
+	local vGap, vMax = ns.Workshop.VERIFY_GAP, ns.Workshop.VERIFY_MAX
+	ns.Workshop.VERIFY_GAP, ns.Workshop.VERIFY_MAX = 0, 1000 -- (the rate limit has its own test)
+	ns.Workshop.ResetVerify()
+	CouncilOnChannel(function(W, Hear)
+		local sent = {}
+		ns.Comm.SendChunked = function(msg) sent[#sent + 1] = msg end
+		ns.rdb.council = nil
+		eq(W.TakeCouncil(COUNCIL_LIST1), true, "the author's file")
+		W.RelayCouncil(true)
+		eq(sent[1], "HS~" .. COUNCIL_LIST1, "sent under a type Comm hands to its handler")
+		-- Another client: nothing yet, then the relay's pieces through the addon messages.
+		ns.rdb.council = nil
+		Hear("Faker Guy-Realm", "HS~" .. COUNCIL_LIST1:gsub("Other Mod", "Faker Guy"))
+		eq(ns.IsHighCouncillor("Faker Guy-Realm"), false, "a changed list is refused on the way too")
+		Hear("Any Player-Realm", sent[1])
+		eq(ns.IsHighCouncillor("Test Councillor-Realm"), true, "the list arrived")
+		eq(ns.rdb.council.blob, COUNCIL_LIST1, "kept as signed, to pass along")
+	end)
+	ns.Workshop.VERIFY_GAP, ns.Workshop.VERIFY_MAX = vGap, vMax
+end)
+
+test("0.9.8 the High Council: a list already held is not checked again at every relay", function()
+	local W, S = ns.Workshop, ns.Sign
+	local saved = { council = ns.rdb.council, verify = S.Verify }
+	local ok, err = pcall(function()
+		local checks = 0
+		S.Verify = function(...) checks = checks + 1; return saved.verify(...) end
+		ns.rdb.council = nil
+		eq(W.TakeCouncil(COUNCIL_LIST1), true); eq(checks, 1)
+		eq(W.TakeCouncil(COUNCIL_LIST1), false, "the same list")
+		eq(W.TakeCouncil((COUNCIL_LIST1:gsub("^HS1~1790000000", "HS1~1789999999"))), false, "an older one")
+		eq(checks, 1, "neither costs a signature check")
+		eq(W.TakeCouncil((COUNCIL_LIST1:gsub("^HS1~1790000000", "HS1~1790000001"))), false, "a newer one is checked, and refused")
+		eq(checks, 2)
+		eq(ns.rdb.council.at, 1790000000, "the signed list stays")
+	end)
+	ns.rdb.council, S.Verify = saved.council, saved.verify
+	if not ok then error(err, 0) end
+end)
+
+test("0.9.8 the High Council: no client relays the list before the census says how many addons are online", function()
+	local W = ns.Workshop
+	local saved = { council = ns.rdb.council, chunked = ns.Comm.SendChunked, now = ns.Now, random = W.random, signed = ns.COUNCIL_SIGNED,
+		guilds = ns.rdb.guilds, after = ns.After }
+	local ok, err = pcall(function()
+		local clock, sent = os.time() + 200000, {}
+		ns.Now = function() return clock end
+		ns.Comm.SendChunked = function(msg) sent[#sent + 1] = msg end
+		ns.After = function(_, _, f) f() end
+		W.random = function() return 0.5 end
+		ns.COUNCIL_SIGNED, ns.rdb.guilds, ns.rdb.council = nil, {}, nil
+		W.TakeCouncil(COUNCIL_LIST1)
+		W.CouncilLogin()
+		-- Just logged in, no census yet: the client would count itself alone and relay for sure.
+		clock = clock + 60; W.RelayCouncil()
+		eq(#sent, 0, "not in its first minutes")
+		clock = clock + W.RELAY_EVERY; W.RelayCouncil()
+		eq(#sent, 1, "then, alone in the census: for sure")
+		-- A large army (a fresh report counts 300 addons): about RELAYS of its clients each half hour.
+		local function Census() ns.rdb.guilds = { ["Olympus II"] = { total = 1000, online = 500, users = 300, zones = {}, t = clock } } end
+		clock = clock + W.RELAY_EVERY; Census()
+		eq(ns.King.AddonsOnline(), 300)
+		W.RelayCouncil()
+		eq(#sent, 1, "3 in 300, not this one")
+		W.random = function() return 0.005 end
+		clock = clock + 60; Census(); W.RelayCouncil()
+		eq(#sent, 1, "one try each half hour")
+		clock = clock + W.RELAY_EVERY; Census(); W.RelayCouncil()
+		eq(#sent, 2, "this one")
+		-- The author's client sends his list at every login, even one it held already.
+		ns.COUNCIL_SIGNED = COUNCIL_LIST1
+		W.CouncilLogin()
+		eq(#sent, 3); eq(sent[3], "HS~" .. COUNCIL_LIST1)
+	end)
+	ns.rdb.council, ns.Comm.SendChunked, ns.Now, W.random, ns.COUNCIL_SIGNED = saved.council, saved.chunked, saved.now, saved.random, saved.signed
+	ns.rdb.guilds, ns.After = saved.guilds, saved.after
+	if not ok then error(err, 0) end
+end)
+
+test("0.9.8 the High Council keeps its realm group when this client learns a realm linked to it", function()
+	local saved = { council = ns.rdb.council, links = ns.db.links }
+	local ok, err = pcall(function()
+		local BETA = "ClassicBetaPvP+ClassicBetaPvP2"
+		ns.rdb.council = { at = 1, names = { ["test councillor"] = "Test Councillor" }, realm = BETA }
+		ns.db.links = nil
+		eq(ns.IsHighCouncillor("Test Councillor-ClassicBetaPvP2"), true, "Forever's two realms, as seeded")
+		eq(ns.IsHighCouncillor("Test Councillor-Realm"), false, "a namesake elsewhere")
+		-- A guild spans a third realm: this client's group becomes the three of them.
+		local grown = BETA .. "+ClassicBetaPvP3"
+		ns.db.links = { ClassicBetaPvP = grown, ClassicBetaPvP2 = grown, ClassicBetaPvP3 = grown }
+		eq(ns.IsHighCouncillor("Test Councillor-ClassicBetaPvP"), true, "still a councillor")
+		eq(ns.IsHighCouncillor("Test Councillor-ClassicBetaPvP3"), true, "the realm linked to the group")
+		eq(ns.IsHighCouncillor("Test Councillor-Realm"), false, "still nobody's elsewhere")
+		eq(ns.IsHighCouncillor("Random Guy-ClassicBetaPvP"), false)
+	end)
+	ns.rdb.council, ns.db.links = saved.council, saved.links
+	if not ok then error(err, 0) end
+end)
+
+test("0.9.8 a help request is cut between two letters, never inside one", function()
+	local W = ns.Workshop
+	local saved = { council = ns.rdb.council, whisper = ns.Comm.Whisper, now = ns.Now, me = ns.me, print = ns.Print }
+	local whispered = {}
+	local ok, err = pcall(function()
+		local clock = os.time() + 100000 -- (past the gap any earlier request left)
+		ns.Now = function() return clock end
+		ns.Print = function() end
+		ns.Comm.Whisper = function(to, msg) whispered[#whispered + 1] = msg end
+		ns.rdb.council = { at = 1, names = { ["test councillor"] = "Test Councillor" }, realm = "Realm" }
+		W.HandleAvailable("CHANNEL", "Test Councillor-Realm")
+		ns.me = "Player One-Realm"
+		W.AskCouncil("a" .. ("\195\169"):rep(100)) -- "a" and 100 "é" (two bytes each)
+		local text = whispered[1] and whispered[1]:match("^HR~(.*)$")
+		assert(text, "sent")
+		eq(#text, 179, "the last whole letter within 180 bytes")
+		eq(text, "a" .. ("\195\169"):rep(89))
+		-- The box: Enter sends and closes it, as our other boxes do.
+		clock = clock + W.HELP_GAP + 1
+		W.HandleAvailable("CHANNEL", "Test Councillor-Realm")
+		local closed = false
+		local box = { GetText = function() return "stuck in a wall" end, GetParent = function() return { Hide = function() closed = true end } end }
+		StaticPopupDialogs.OLYMPUS_COUNCIL_ASK.EditBoxOnEnterPressed(box)
+		eq(whispered[2], "HR~stuck in a wall", "Enter sends"); eq(closed, true, "and closes the box")
+	end)
+	ns.rdb.council, ns.Comm.Whisper, ns.Now, ns.me, ns.Print = saved.council, saved.whisper, saved.now, saved.me, saved.print
+	if not ok then error(err, 0) end
+end)
+
+test("0.9.8 /oly help lists the High Council's commands", function()
+	local savedPrint, out = print, {}
+	print = function(s) out[#out + 1] = tostring(s) end
+	local ok, err = pcall(SlashCmdList.OLYMPUS, "help")
+	print = savedPrint
+	if not ok then error(err, 0) end
+	local text = table.concat(out, "\n")
+	assert(text:find("/oly helpme", 1, true) and text:find("/oly council", 1, true), text)
+end)
+
+test("0.9.8 the signature check: one length, leading zeros, a test key, and the arithmetic on known values", function()
+	local S = ns.Sign
+	-- A throwaway key made by scripts/council-sign.py (its private half was never kept), and a
+	-- list it signed whose signature starts with a zero byte.
+	local TEST_N = "c8e6c33f1d75bb4b06190b28b946d5f8440315ba2e2ad38cd6a2325772ef12cee10c27e81caf3b4c5a47e2ab8bc5ba5c688d99cb6dd5c9abac927d0dd4d017a9ef55d3a6c126cf7ba2faf2afebd2f973a28e2c592d13b982093d36132d177a8bca2eb2ed8f6c58c951240dab7ffe3fa6ce9971cfb03524631839cc25d2b99e922e0ee0d1f8dc4a946014af5c5ae8dd090ebafc24053a8aed7df253800c7760cd5e8095075216cbb3eadc29c751d098a73afa195d5364559a9eb00fbdfc354268d9ed11063cae8821bf3ce2465b3ce1543f1a710315777dc2c6222721126b9a312e487c447a5bcdf1b4ffa5f65f4c2f009630fdc40d4b20dd58ce69ce8167c5c7"
+	local TEST_MU = "14635b1dfd40bac3d110b398c18f87366ba96315539df9b33239d602428414f5d5e96e1ab2a928cedfd87ebf6ef9d76b671a043c91c4d763b61bab4049dfa72dca33f4950a04e109ba8f5e0d97c7665b70012990a69821e0ab6d47cd6d4119fe7056a2f53995c7a1fc88efecb50c3f031be55f95dd1a6e2593e4b2b2c7feca3e4817433751ee14bca4462035812efafc9f4bd38f4fd0781751978f12e6257633c787f601268981fc4685279e405ae200c44b6c052f4528245d07defd6ef4d6c7c39a6a61c87f297a9a48088d27b41f845b0de148ddf12bec81eebf71ef993939918efc15a235a33d57832970d92cbf0e7d5204a1213bf56690dfdb1f5b8895757ae5dd685"
+	local TEXT, SIG = "HS1~1790000238~Realm~Zero Byte", "00cfead76a2add2f7850706f7544452acf52a9497b2b6f37c66e7511491a276de6e18d1cc1958a2a28f0a55682f3781b585c3160e15d26269026591d91e093e1b02d3c1e6f6c33cecd34e7bde7a52091b1bb5f9dfd97eeba09954a15109c2f463a82dba5d5a61d25d1071b376381101975e46473a2c5ef98bca01fbf00572a67e15bbadde105806d1531ba0cf0abdd6a2ad7aca7a3e136a0ab7d4364f5f459da3418bd6c6c804fa3949387fa9c9430627ce4a8d9685489c56c7f50f1d7d9cdf749b3840e5ca4350e1489df8d7f11afbc85a1053f9777296acdc0a1a9b6e5610f542567818332f64ac922d45ed0ca3363e5d723241f98e42e0842e6bda32e1dc0"
+	eq(SIG:sub(1, 2), "00")
+	S.WithKey(TEST_N, TEST_MU, 86, function()
+		eq(S.Verify(TEXT, SIG), true, "a signature with a leading zero byte")
+		eq(S.Verify(TEXT, SIG:sub(3)), false, "the same number, shorter: refused (one spelling each)")
+		eq(S.Verify(TEXT, "00" .. SIG), false, "longer: refused")
+		eq(S.Verify(TEXT .. "x", SIG), false)
+	end)
+	eq(S.Verify(TEXT, SIG), false, "the author's key is back, and refuses it")
+	assert(not pcall(S.WithKey, TEST_N, TEST_MU, 86, function() error("inside") end))
+	local text1, sig1 = COUNCIL_LIST1:match("^(.*)~(%x+)$")
+	eq(S.Verify(text1, sig1), true, "the author's key is back after an error too")
+	-- s^3 mod N (the author's N): values whose answer is known, and Python's pow(s, 3, N).
+	local N = "84a62410ffd1872739d169af98d461defee07628fcd907cef84b5ca39f9a840b6b518b2a246319ec2cbd4477ee30a2a17924c3540e647687eea614f9a05bf9a305274b28f0add3de7a3aae32e4c950030cfc2336221e705110cecc4622e0d86fb15340d1e76dfdad6813f81039dce9eff82224ecab8c6b9822957b5e724d67f8de14b8188e3f0cedf8a29dd1fb33aa7e24be0630ce6bb2bf31b3e1508a6976b225ce4ec73ead73cf74c8ef4034ae8fa94b0c8adc1f8f7d40e50c5cc3080e502120c122ae2af9f0066923ee5822a639e88b1cd8b9a469e91abd260401578d4c5a9900af45c7bb8e938a8b22bc60cec354a6986918d19658ce14d98b27d7ad0e8f"
+	eq(S.Open(N), nil, "s = N"); eq(S.Open(N:sub(1, -2) .. "e"), N:sub(1, -2) .. "e", "(N-1)^3 = -1")
+	eq(S.Open(N:sub(1, -2) .. "d"), N:sub(1, -2) .. "7", "(N-2)^3 = -8")
+	eq(S.Open("0"), nil); eq(S.Open("1"), "1"); eq(S.Open("2"), "8"); eq(S.Open("0002"), "8", "leading zeros")
+	eq(S.Open("4" .. ("0"):rep(170)), "4" .. ("0"):rep(511), "2^2046: just below N, nothing to reduce")
+	eq(S.Open("8" .. ("0"):rep(170)), "720d93cd008b6a8a528bc2f13582da63035e9d850974e893171dea15213073ddbe0b5e8192d6b23b79c83298356e181b9491b603d4d29c68340dc1131eec1316f08a1e852df68464914ff56751a40ff6d90b965d99a4af0ccd939b2d975d76b0ec063d8a49b606f7c7c417cf5269423017999139fd5abd37983f8de4a917c81565c1d7b65542d9361618268a0e65008591c5ed6d94bce7c26ae45c0e60c39be98e9513aa43f7a491a1a5323f61f451041eda5f6ba151883d50dae9b6e7d50f9c9dbc97f57f122fecc49434f7980d52465ea975d312c244afc88df3fbf9581af034fdf22ea8cd5445605e97cadd93b6020c36c4b58b3cf595c1735e8878f8d453", "2^2049 mod N")
+	eq(S.Open("8" .. ("0"):rep(511)), "390e9062d2c37fd48e1369874e72c810a9085ed254c449dfb801a7a4db2589905aeb4d53f4ac4365c41037cb97fea2a7f65e84c274a63043202023a5a3d10c758c4b9c3f18b9364d4fe04f8b85deb490f32ae063aec3481a4393be33092c41d950ba6af73dfe835bff656c5d5c854edb8e1f35f0a2193cfd4d89557311776e2fc6253ed0e834d30000cbd1ff8b469c1ed1653cd1715944bf8e9c589da500dc38ae341697f217d55460fc3e0efc8df6c4dc0312fc01d98536e521877de8749fd75c057ebf45530d49e66fcc07fda4a868e63019590d255f18c5f22ec6211ba4daf86f38477b79da0ee7749fb398041e3d4f41729617af7b65c1714f818802f4b3", "(2^2047)^3 mod N")
+	eq(S.Open("54681d1d58d09ebe3755a05155d8f041fb01e6be086207a49f22dd71a5cdc5329722b4f4f5c51fd1c4e3d4c3c4f02c7115c92d723e12e07ec5314aaa7d1e939e251b74b3a9c3c91fca45b2e1727895c7211821a7cb763d977340b95127a2ccd8e4d5f3f40b5e62c05c25765b2858124bb436454b1b38082017396a74afa00e286e587bf19213ce8f53ac00cf6b3fcae9e5160d1d2072d2013b6af9afdad73e55415560132e1bcf1733c5d0c991caa20f421c0600a2617aa14544b337d46003c6b789c2ff9b1d15be81d9f26054401ff74eee7908eb85c5dd4773ddf7ecf906578e38ce592c0eac0bf7526613832d9376ab218839ac7e72e85dc756618af3"), "1a22adf78159f64890bcb948dd2539c32ddb9921fb6577f6e74629a8c9009006a1067bb227b96f06a86959c7ae71f86d515d22e0e27a0fb3ffc30a1ca83ca0d1e8fd5377149e1b8cd563daf7b0c1137b8eafe440f4ebd7548fac5dd0c085cff9e9323b83e5e15d1ca7622f0943065b0a4e1c6cdddd72eab79eb6445e3eee3d177dd808453311aa0edd2f4398a5ef1834710e929082ad7681b94db524cca19ee5c53ea4946704f309b8a415e2c06b1d0fd92580b63986ee0ff8b00003d2185aa59dfffffe171585543c190508146e478743d2c48072263884a1b56795a9f524f0b76265f983f41ec92d85cb482c9b432dd7d418549f6a96cf4e5bb7ec308c49", "a random s with leading zero bytes")
+	-- SHA-256 around the padding's edges (Python's hashlib).
+	local function hex(b) return (b:gsub(".", function(c) return ("%02x"):format(c:byte()) end)) end
+	local want = { [55] = "8aa994584139d128848eeebc4e815639ba5ab6e6e39574195a63ac4f14f7c43b", [56] = "ad574708f75c044c9b85de64cb568ee7711ff4f36448c6242f053ba8f6cc2b63", [63] = "280ed3e8ff1df845b2e7dfe6ac6cee817bef20e783cc65abc41b818b4d2fe076", [64] = "c6ab9724ade5b6a7a1edfffb12f3aa9181351355af8fd08c919952ad211339dd", [65] = "788367c73c7ddf4c53f65e68cc0d943e6227ab55b0e78ba63ace822b1c6301c0", [119] = "3d610547d68216dedf7435a4fb6260353911f6b3fd3f18805ddb8be285d726fe", [120] = "1f80156a804cb7862ad113e8200e9d74499723e7c7854d5f48776d3148e09656", [128] = "cc548ca2dec1f6fe4f58b2e27aa9c7521607df1130d140b55a4dad0665302356" }
+	for _, len in ipairs({ 55, 56, 63, 64, 65, 119, 120, 128 }) do
+		local bytes = {}
+		for i = 0, len - 1 do bytes[#bytes + 1] = string.char((i * 31 + 7) % 256) end
+		eq(hex(S.SHA256(table.concat(bytes))), want[len], len .. " bytes")
+	end
+end)
+
+-- The rows the Treasury tab shows for the ranking: "1. name" ... and the "Show more" line.
+local function RankRows(lines)
+	local shown, more = 0, nil
+	for _, l in ipairs(lines) do
+		if type(l.text) == "string" and l.text:find("%d+%. Donor ") then shown = shown + 1 end
+		if l.onClick and type(l.text) == "string" and l.text:find(ns.L.SHOW_MORE:match("^[^%%]+"), 1, true) then more = l end
+	end
+	return shown, more
+end
+
+test("0.9.8 the donation ranking: 25 more a click, up to the 100 sent (the Treasurer's page and the King's)", function()
+	WithThrone(function(w, K)
+		local T = ns.Treasury
+		local savedAlert = ns.PlayAlert
+		local ok, err = pcall(function()
+			ns.PlayAlert = function() end
+			AsTreasurer()
+			local function Name(i) return "Donor " .. string.char(65 + math.floor((i - 1) / 26)) .. string.char(97 + (i - 1) % 26) .. "name" end
+			for i = 1, 120 do T.Record(Name(i), 10000 + i, "trade", nil, { quiet = true }) end
+			T.Show("summary")
+			for _, want in ipairs({ 25, 50, 75 }) do
+				local shown, more = RankRows((T.Build()))
+				eq(shown, want, "rows shown")
+				assert(more, "a Show more line under " .. want)
+				eq(more.text:find(ns.L.SHOW_MORE:format(25, want, 100), 1, true) ~= nil, true, more.text)
+				more.onClick()
+			end
+			local shown, more = RankRows((T.Build()))
+			eq(shown, 100, "the 100 sent"); eq(more, nil, "nothing more at the cap")
+			T.Show("summary")
+			eq((RankRows((T.Build()))), 25, "a new visit starts at 25")
+			-- The King's copy of the ranking: the same pages.
+			local msg = T.Message()
+			AsKing()
+			T.HandleReport("CHANNEL", "Pyralis Ashandar-Realm", msg)
+			eq(#T.Report().rank, 100)
+			T.Show("summary")
+			shown, more = RankRows((T.Build()))
+			eq(shown, 25); assert(more, "the King's Show more")
+			more.onClick()
+			eq((RankRows((T.Build()))), 50, "25 more on the King's page")
+		end)
+		ns.PlayAlert = savedAlert
+		if not ok then error(err, 0) end
+	end)
+end)
+
+test("0.9.8 the level race: 25 more a click, up to its top 100", function()
+	local V = ns.Views
+	local saved = { guilds = ns.rdb.guilds, shown = V.raceShown }
+	local ok, err = pcall(function()
+		-- Five guilds of 25 racers each: 125, the race keeps 100.
+		local now, guilds = os.time(), {}
+		for gi = 1, 5 do
+			local top = {}
+			for i = 1, 25 do top[i] = { name = ("Racer %s%s"):format(string.char(64 + gi), string.char(96 + i)), level = 10 + i, class = "MA" } end
+			guilds["Olympus " .. string.rep("I", gi)] = { total = 100, online = 10, zones = {}, t = now, leader = "Lead" .. gi, officers = {}, top = top }
+		end
+		ns.rdb.guilds = guilds
+		V.raceShown = V.RACE_PAGE
+		local function Rows()
+			local shown, more = 0, nil
+			for _, l in ipairs(V.RealmLines()) do
+				if type(l.text) == "string" and l.text:find("^%d+%. ") and l.text:find("Racer ", 1, true) then shown = shown + 1 end
+				if l.onClick and type(l.text) == "string" and l.text:find(ns.L.SHOW_MORE:match("^[^%%]+"), 1, true) then more = l end
+			end
+			return shown, more
+		end
+		for _, want in ipairs({ 25, 50, 75 }) do
+			local shown, more = Rows()
+			eq(shown, want, "racers shown")
+			assert(more, "a Show more line under " .. want)
+			eq(more.text:find(ns.L.SHOW_MORE:format(25, want, 100), 1, true) ~= nil, true, more.text)
+			more.onClick()
+		end
+		local shown, more = Rows()
+		eq(shown, 100, "the top 100"); eq(more, nil, "nothing more at the cap")
+	end)
+	ns.rdb.guilds, V.raceShown = saved.guilds, saved.shown
+	if not ok then error(err, 0) end
+end)
+
+-- 0.9.8: gamepad
+do
+	test("0.9.8 gamepad UI: the game's who lists are never silenced and nothing searches on its own; mouse and keyboard as before", function()
+		WithWho(function(server)
+			local saved = ns.GamepadUI
+			local ok, err = pcall(function()
+				-- The gamepad UI: Forever's who list keeps its event, is not even asked about it,
+				-- and Blizzard's SendWho is not hooked.
+				ns.GamepadUI = function() return true end
+				LFGWhoListFrame = ListenerFrame("LFGWhoListFrame", true)
+				local asked, isRegistered = 0, LFGWhoListFrame.IsEventRegistered
+				function LFGWhoListFrame:IsEventRegistered(event) asked = asked + 1 return isRegistered(self, event) end
+				local sendWho = C_FriendList.SendWho
+				eq(ns.Who.Auto(), false, "a click in our window searches nothing")
+				eq(ns.Who.SearchGuild("OLYMPUS VII"), false, "nor does opening a guild's row")
+				eq(ns.Who.Search(true), false, "no quiet search at all")
+				eq(#server.sent, 0)
+				eq(server.Click(), true, "Refresh still searches")
+				eq(table.concat(server.sent, "|"), 'g-"Olympus"')
+				eq(server.toUi[#server.toUi], true, "the answer to the game's who list, as a /who with it open")
+				server.Answer(Players(1, 5))
+				eq(#ns.Recruit.found, 5, "and read from there all the same")
+				server.Run()
+				eq(#LFGWhoListFrame.calls, 0, "never silenced nor given anything back")
+				assert(ns.Who.StatusLine():find("listening: not asked (gamepad UI)", 1, true), ns.Who.StatusLine())
+				eq(asked, 0, "not asked about its events either")
+				eq(C_FriendList.SendWho, sendWho, "Blizzard's SendWho left as it is")
+				assert(table.concat(server.printed, "\n"):find(ns.L.WHO_GAMEPAD, 1, true), "the player is told where the answer shows")
+				-- Mouse and keyboard: silenced for our search and given the event back, as always.
+				ns.GamepadUI = function() return false end
+				ns.Who.Reset()
+				LFGWhoListFrame = ListenerFrame("LFGWhoListFrame", true)
+				eq(server.Click(), true)
+				eq(table.concat(LFGWhoListFrame.calls, " "), "unregister")
+				server.Answer(Players(1, 3)); server.Run()
+				eq(table.concat(LFGWhoListFrame.calls, " "), "unregister register")
+				eq(ns.Who.Auto(), false, "within the cooldown")
+				server.clock = server.clock + ns.Who.COOLDOWN + 1
+				eq(ns.Who.Auto(), true, "and quiet searches from clicks")
+			end)
+			ns.GamepadUI = saved
+			if not ok then error(err, 0) end
+		end)
+	end)
+
+	test("0.9.8 gamepad UI: the escape list is never rewritten under Blizzard's names; mouse and keyboard as before", function()
+		local saved, gp = UISpecialFrames, ns.GamepadUI
+		local ok, err = pcall(function()
+			-- Put there with mouse and keyboard, other names after it (Blizzard's, other addons').
+			UISpecialFrames = { "StaticPopup1" }
+			ns.GamepadUI = function() return false end
+			ns.EscapeCloses("OlympusTestFrame")
+			UISpecialFrames[3] = "InspectFrame"
+			eq(table.concat(UISpecialFrames, " "), "StaticPopup1 OlympusTestFrame InspectFrame")
+			-- The gamepad UI: nothing moves down a place (each name moved would be one Olympus wrote).
+			ns.GamepadUI = function() return true end
+			ns.EscapeCloses("OlympusTestFrame")
+			eq(table.concat(UISpecialFrames, " "), "StaticPopup1 OlympusTestFrame InspectFrame", "left as it was")
+			-- Ours is the last name: it goes, nothing after it moves.
+			UISpecialFrames[3] = nil
+			ns.EscapeCloses("OlympusTestFrame")
+			eq(table.concat(UISpecialFrames, " "), "StaticPopup1", "the last one: taken off")
+			ns.EscapeCloses("OlympusTestFrame")
+			eq(table.concat(UISpecialFrames, " "), "StaticPopup1", "and never added back")
+		end)
+		UISpecialFrames, ns.GamepadUI = saved, gp
+		if not ok then error(err, 0) end
+	end)
+
+	test("0.9.8 gamepad UI: the Issue Reporter is the game's there: no hook, no button, never hidden by us", function()
+		WithUI(function()
+			local uns = setmetatable({}, { __index = ns })
+			assert(loadfile(ADDON_DIR .. "UI.lua"))("Olympus", uns)
+			local UI = uns.UI
+			local saved = { r = PTR_IssueReporter, hide = ns.db.hideIssueReporter, gp = ns.GamepadUI, print = ns.Print, create = CreateFrame }
+			local printed, children = {}, 0
+			local ok, err = pcall(function()
+				local r = { shown = true, hooks = {} }
+				function r:IsShown() return self.shown end
+				function r:Hide() self.shown = false end
+				function r:Show() self.shown = true; for _, f in ipairs(self.hooks) do f(self) end end
+				function r:IsProtected() return false end
+				function r:HookScript(what, f) if what == "OnShow" then self.hooks[#self.hooks + 1] = f end end
+				PTR_IssueReporter = r
+				CreateFrame = function(kind, name, parent, ...)
+					if parent == r then children = children + 1 end
+					return saved.create(kind, name, parent, ...)
+				end
+				ns.Print = function(m) printed[#printed + 1] = m end
+				UI.ResetIssueReporter()
+				ns.db.hideIssueReporter = true
+				ns.GamepadUI = function() return true end
+				eq(UI.ApplyIssueReporter(), false, "left alone")
+				eq(#r.hooks, 0, "not hooked"); eq(children, 0, "no button of ours on it")
+				eq(r.shown, true, "never hidden by us")
+				UI.SetIssueReporterHidden(true)
+				eq(r.shown, true); eq(#r.hooks, 0)
+				assert(table.concat(printed, "\n"):find(ns.L.ISSUE_GAMEPAD, 1, true), "the player is told why")
+				-- Hooked with mouse and keyboard, then switched to the gamepad UI: the hook does nothing.
+				ns.GamepadUI = function() return false end
+				eq(UI.ApplyIssueReporter(), true)
+				eq(r.shown, false, "mouse and keyboard: hidden as chosen")
+				eq(#r.hooks, 1); eq(children, 1, "its Hide button")
+				ns.GamepadUI = function() return true end
+				r:Show()
+				eq(r.shown, true, "the game's gamepad menu shows it: our hook leaves it shown")
+			end)
+			PTR_IssueReporter, ns.db.hideIssueReporter, ns.GamepadUI, ns.Print, CreateFrame = saved.r, saved.hide, saved.gp, saved.print, saved.create
+			UI.ResetIssueReporter()
+			if not ok then error(err, 0) end
+		end)
+	end)
+
+	test("0.9.8 a blocked action: kept with its stack and what the gamepad reads, first in /oly bug, one chat line with the gamepad UI", function()
+		local saved = { gp = ns.GamepadUI, print = ns.Print, stack = debugstack, secure = issecurevariable, list = ns.db.actionsBlocked,
+			gsu = GamepadSharedUtility, specials = UISpecialFrames, sessions = ns.db.sessions }
+		local printed = {}
+		local ok, err = pcall(function()
+			ns.ResetBlocked(); ns.db.actionsBlocked = nil
+			ns.Print = function(m) printed[#printed + 1] = m end
+			debugstack = function() return "[C]: in function 'SetPreferredGamepadInteractTarget'\nMainActionBarFrame.lua:255: in function 'UpdateInteractIcons'" end
+			-- The binding stack Blizzard's gamepad code asks first: its first slot written by us.
+			local manager = { bindingSetStack = { { name = "FrameControlsManagerBindings", treatBindsAsCore = false } }, currentCoreBindingActive = true }
+			GamepadSharedUtility = { InputBindingManager = manager }
+			UISpecialFrames = { "StaticPopup1" }
+			issecurevariable = function(t, key)
+				if t == manager.bindingSetStack and key == 1 then return false, "Olympus" end
+				return true
+			end
+			local function Fire(...) for _, f in ipairs(EVENT_SCRIPTS) do f(nil, ...) end end
+			-- Mouse and keyboard: kept, nothing said in chat.
+			ns.GamepadUI = function() return false end
+			Fire("ADDON_ACTION_BLOCKED", "Olympus", "FocusUnit()")
+			eq(#printed, 0, "mouse and keyboard: no chat line")
+			-- The gamepad UI: kept once per call and counted; one line in chat, once a session.
+			ns.GamepadUI = function() return true end
+			Fire("ADDON_ACTION_FORBIDDEN", "Olympus", "SetPreferredGamepadInteractTarget()")
+			Fire("ADDON_ACTION_FORBIDDEN", "Olympus", "SetPreferredGamepadInteractTarget()")
+			Fire("ADDON_ACTION_FORBIDDEN", "OtherAddon", "SetPreferredGamepadInteractTarget()")
+			eq(#printed, 1, "one line")
+			assert(printed[1]:find(ns.L.BLOCKED_GAMEPAD, 1, true), printed[1])
+			local list = ns.db.actionsBlocked
+			eq(#list, 2, "one per call; another addon's is not ours to keep")
+			local b = list[2]
+			eq(b.func, "SetPreferredGamepadInteractTarget()"); eq(b.count, 2); eq(b.gamepad, true)
+			assert(b.stack:find("UpdateInteractIcons", 1, true), "its stack")
+			assert(b.taint:find("bindingSetStack[1] by Olympus", 1, true), b.taint)
+			eq(list[1].gamepad, false)
+			-- /oly bug: first in the report (a report sent in game is cut at its end), newest first.
+			local report = ns.BuildBugReport()
+			local at = report:find("Blocked by the game:", 1, true)
+			assert(at and at < report:find("Olympus v", 1, true), "before the status lines")
+			assert(report:find("[2x] ADDON_ACTION_FORBIDDEN SetPreferredGamepadInteractTarget()", 1, true))
+			assert(report:find("[2x] ADDON_ACTION_FORBIDDEN", 1, true) < report:find("[1x] ADDON_ACTION_BLOCKED FocusUnit()", 1, true))
+			assert(report:find("gamepad UI: on  |  blocked this session: 3", 1, true), "and in the status lines")
+			-- The next session: the same call counted on, its evidence taken again, and it is the newest.
+			ns.db.sessions = (ns.db.sessions or 0) + 1
+			debugstack = function() return "Blizzard_ChatFrameBase/Shared/ChatFrameEditBox.lua:267: in function 'ParseText'" end
+			Fire("ADDON_ACTION_BLOCKED", "Olympus", "FocusUnit()")
+			Fire("ADDON_ACTION_BLOCKED", "Olympus", "FocusUnit()")
+			eq(#list, 2); eq(list[2].func, "FocusUnit()"); eq(list[2].count, 3)
+			eq(list[2].gamepad, true, "seen with the gamepad UI this time")
+			assert(list[2].stack:find("ParseText", 1, true), "this session's stack")
+		end)
+		ns.GamepadUI, ns.Print, debugstack, issecurevariable, ns.db.actionsBlocked = saved.gp, saved.print, saved.stack, saved.secure, saved.list
+		GamepadSharedUtility, UISpecialFrames, ns.db.sessions = saved.gsu, saved.specials, saved.sessions
+		ns.ResetBlocked()
+		if not ok then error(err, 0) end
+	end)
+
+	test("0.9.8 the taint probe: which values of the gamepad's path an addon wrote, and whose", function()
+		local saved = { secure = issecurevariable, specials = UISpecialFrames }
+		local ok, err = pcall(function()
+			issecurevariable = nil
+			eq(ns.TaintProbe(), "taint: not checked (no issecurevariable)")
+			UISpecialFrames = { "StaticPopup1", "OlympusFrame" }
+			-- A client that takes only names: the list's slots are skipped, the rest still checked.
+			-- (issecurevariable("name") for a global, issecurevariable(table, key) for a field.)
+			issecurevariable = function(t, key)
+				if key == nil then t, key = nil, t end
+				if type(key) ~= "string" then error("bad argument") end
+				if t == nil and key == "RunNextFrame" then return false, "SomeAddon" end
+				return true
+			end
+			local line = ns.TaintProbe()
+			assert(line:find("^taint: RunNextFrame by SomeAddon %(%d+ checked%)$"), line)
+			issecurevariable = function(t, key)
+				if t == UISpecialFrames and key == 2 then return false, "Olympus" end
+				return true
+			end
+			line = ns.TaintProbe()
+			assert(line:find("UISpecialFrames[2]=OlympusFrame by Olympus", 1, true), line)
+			issecurevariable = function() return true end
+			assert(ns.TaintProbe():find("^taint: none of %d+ values the gamepad UI reads$"), ns.TaintProbe())
+		end)
+		issecurevariable, UISpecialFrames = saved.secure, saved.specials
+		if not ok then error(err, 0) end
+	end)
+end
+
+-- 0.9.8: council-icon
+
+-- A council of two for these tests (the signed list has its own test above); everything the
+-- tests touch is put back.
+local function WithCouncil(fn)
+	local saved = { council = ns.rdb.council, heard = ns.rdb.councilIcons, mine = ns.db.councilIcons, me = ns.me,
+		send = ns.Comm.Send, print = ns.Print, now = ns.Now, gp = ns.GamepadUI }
+	local ok, err = pcall(function()
+		ns.rdb.council = { at = 1, names = { ["test councillor"] = "Test Councillor", ["other mod"] = "Other Mod" } }
+		ns.rdb.councilIcons, ns.db.councilIcons = nil, nil
+		ns.Print, ns.Comm.Send = function() end, function() end
+		if ns.Workshop.ResetIcons then ns.Workshop.ResetIcons() end
+		fn()
+	end)
+	ns.rdb.council, ns.rdb.councilIcons, ns.db.councilIcons, ns.me = saved.council, saved.heard, saved.mine, saved.me
+	ns.Comm.Send, ns.Print, ns.Now, ns.GamepadUI = saved.send, saved.print, saved.now, saved.gp
+	if ns.Workshop.ResetIcons then ns.Workshop.ResetIcons() end
+	if not ok then error(err, 0) end
+end
+
+test("0.9.8 council icons: only a councillor's own announcement counts, and only a file number or a plain icon name", function()
+	WithCouncil(function()
+		local W = ns.Workshop
+		local function Line(sender) return ns.Channels.FormatLine("A", sender, "Olympus", nil, "hello") end
+		-- Nobody announced: the default skull (one of the game's icons), then their colour.
+		local line = Line("Test Councillor-Realm")
+		assert(line:find("|TInterface\\Icons\\INV_Misc_Bone_HumanSkull_01:0|t|c" .. ns.HIGH_COUNCIL_COLOR .. "Test Councillor|r", 1, true), line)
+		-- Someone not on the council: refused, and still refused once they are on it.
+		W.HandleIcon("CHANNEL", "Random Guy-Realm", "HI~134400")
+		ns.rdb.council.names["random guy"] = "Random Guy"
+		line = Line("Random Guy-Realm")
+		assert(line:find(ns.HIGH_COUNCIL_ICON, 1, true) and not line:find("134400", 1, true), line)
+		-- A councillor anywhere but the channel: refused.
+		W.HandleIcon("WHISPER", "Test Councillor-Realm", "HI~134400")
+		W.HandleIcon("GUILD", "Test Councillor-Realm", "HI~134400")
+		assert(Line("Test Councillor-Realm"):find(ns.HIGH_COUNCIL_ICON, 1, true))
+		-- Anything but a file number or a plain name: refused, the skull stays.
+		for _, bad in ipairs({ "HI~134400:64:64|t|cffff0000Fake", "HI~134400:64:64tcffff0000Fake", "HI~Interface\\Icons\\X",
+			"HI~..\\..\\X", "HI~12345678901", "HI~2147483648", "HI~-5", "HI~1.5", "HI~ab cd", "HI~" .. string.rep("a", 65),
+			"HI~", "HI~00", "HI~134400~x" }) do
+			W.HandleIcon("CHANNEL", "Test Councillor-Realm", bad)
+			line = Line("Test Councillor-Realm")
+			assert(line:find(ns.HIGH_COUNCIL_ICON, 1, true), bad .. " -> " .. line)
+		end
+		eq(next(ns.rdb.councilIcons or {}), nil, "nothing kept")
+		-- A file number, then a plain icon name: theirs before their name, the colour stays.
+		W.HandleIcon("CHANNEL", "Test Councillor-Realm", "HI~134400")
+		line = Line("Test Councillor-Realm")
+		assert(line:find("[|T134400:0|t|c" .. ns.HIGH_COUNCIL_COLOR .. "Test Councillor|r]", 1, true), line)
+		assert(not line:find(ns.HIGH_COUNCIL_ICON, 1, true), "not the skull too")
+		assert(Line("Other Mod-Realm"):find(ns.HIGH_COUNCIL_ICON, 1, true), "the others keep the skull")
+		W.HandleIcon("CHANNEL", "Test Councillor-Realm", "HI~Spell_Holy_SealOfMight")
+		line = Line("Test Councillor-Realm")
+		assert(line:find("|TInterface\\Icons\\Spell_Holy_SealOfMight:0|t|c", 1, true), line)
+		-- What the SavedVariables hold is checked again when shown.
+		ns.rdb.councilIcons["Test Councillor-Realm"].icon = "x:64|t|cffff0000"
+		assert(Line("Test Councillor-Realm"):find(ns.HIGH_COUNCIL_ICON, 1, true), "a changed file shows the skull")
+		-- "0": back to the default skull.
+		W.HandleIcon("CHANNEL", "Test Councillor-Realm", "HI~134400")
+		W.HandleIcon("CHANNEL", "Test Councillor-Realm", "HI~0")
+		assert(Line("Test Councillor-Realm"):find(ns.HIGH_COUNCIL_ICON, 1, true))
+		eq(ns.rdb.councilIcons["Test Councillor-Realm"], nil)
+		-- Kept for COUNCIL_MAX councillors at most (the ones heard longest ago go), and only while
+		-- they are on the list.
+		local clock = 1000
+		ns.Now = function() return clock end
+		for i = 1, 40 do ns.rdb.council.names["mod " .. i] = "Mod " .. i end
+		for i = 1, 40 do
+			clock = clock + 1
+			W.HandleIcon("CHANNEL", "Mod " .. i .. "-Realm", "HI~" .. (1000 + i))
+		end
+		local n = 0
+		for _ in pairs(ns.rdb.councilIcons) do n = n + 1 end
+		eq(n, W.COUNCIL_MAX)
+		assert(Line("Mod 40-Realm"):find("|T1040:0|t", 1, true)); assert(Line("Mod 1-Realm"):find(ns.HIGH_COUNCIL_ICON, 1, true))
+		ns.rdb.council.names["mod 40"] = nil
+		W.HandleIcon("CHANNEL", "Mod 39-Realm", "HI~5")
+		eq(ns.rdb.councilIcons["Mod 40-Realm"], nil, "off the list: forgotten")
+	end)
+end)
+
+test("0.9.8 a councillor's own icon: kept on the character, on their own lines, said at once and then every 20 minutes", function()
+	WithCouncil(function()
+		local W = ns.Workshop
+		local sent, clock = {}, 5000
+		ns.Now = function() return clock end
+		ns.Comm.Send = function(dist, msg) sent[#sent + 1] = dist .. " " .. msg end
+		-- Not on the council: nothing kept, nothing said.
+		ns.me = "Random Guy-Realm"
+		eq(W.SetCouncilIcon(134400), false)
+		eq(W.SayIcon(true), false)
+		eq(#sent, 0); eq(ns.db.councilIcons, nil)
+		-- A councillor who picked none says nothing (the ticker asks each minute).
+		ns.me = "Test Councillor-Realm"
+		eq(W.SayIcon(), false); eq(#sent, 0)
+		-- Picked: kept on this character, said at once, and on our own lines.
+		eq(W.SetCouncilIcon(134400), true)
+		eq(ns.db.councilIcons["Test Councillor-Realm"], 134400)
+		eq(sent[#sent], "CHANNEL HI~134400")
+		assert(ns.Channels.FormatLine("A", ns.me, "Olympus", nil, "hi"):find("|T134400:0|t", 1, true))
+		-- Then about every 20 minutes.
+		clock = clock + 60
+		eq(W.SayIcon(), false)
+		clock = clock + W.ICON_EVERY
+		eq(W.SayIcon(), true); eq(#sent, 2); eq(sent[2], "CHANNEL HI~134400")
+		-- A value that is not an icon changes nothing.
+		eq(W.SetCouncilIcon("a|b"), false); eq(ns.db.councilIcons[ns.me], 134400); eq(#sent, 2)
+		-- The default skull back: said as "0", and still said later, so the old icon goes everywhere.
+		eq(W.SetCouncilIcon(nil), true)
+		eq(sent[#sent], "CHANNEL HI~0")
+		assert(ns.Channels.FormatLine("A", ns.me, "Olympus", nil, "hi"):find(ns.HIGH_COUNCIL_ICON, 1, true))
+		clock = clock + W.ICON_EVERY
+		eq(W.SayIcon(), true); eq(sent[#sent], "CHANNEL HI~0")
+	end)
+end)
+
+test("0.9.8 the council icon picker: a councillor's alone, filled from the game's icon lists, a page at a time", function()
+	WithUI(function()
+		WithCouncil(function()
+			local W = ns.Workshop
+			local saved = { GetLooseMacroIcons, GetLooseMacroItemIcons, GetMacroIcons, GetMacroItemIcons }
+			local ok, err = pcall(function()
+				local sent = {}
+				ns.Comm.Send = function(_, msg) sent[#sent + 1] = msg end
+				ns.GamepadUI = function() return false end
+				-- The client's lists: file numbers and names, with repeats and junk; one list this
+				-- client lacks, one that fails.
+				GetLooseMacroIcons = nil
+				GetLooseMacroItemIcons = function() error("not on this client") end
+				GetMacroIcons = function(t)
+					t[#t + 1] = 134400; t[#t + 1] = "Spell_Holy_SealOfMight"
+					for i = 1, 50 do t[#t + 1] = 200000 + i end
+				end
+				GetMacroItemIcons = function(t) t[#t + 1] = 134400; t[#t + 1] = "INV_Misc_Bone_HumanSkull_01"; t[#t + 1] = "bad|name"; t[#t + 1] = "..\\x" end
+				local list, names = W.GameIcons()
+				eq(#list, 53, "repeats and junk left out"); eq(names, true)
+				-- Not a councillor: no window at all.
+				ns.me = "Random Guy-Realm"
+				eq(W.ShowIconPicker(), false)
+				eq(rawget(_G, "OlympusCouncilIconFrame"), nil, "not even built")
+				-- A councillor: our own window on UIParent, the first page full, the skull in the preview.
+				ns.me = "Test Councillor-Realm"
+				eq(W.ShowIconPicker(), true)
+				local f = OlympusCouncilIconFrame
+				eq(f:IsShown(), true); eq(f.parent, UIParent)
+				eq(f.preview.texture, ns.HIGH_COUNCIL_SKULL)
+				local shown = 0
+				for _, b in ipairs(f.cells) do if b:IsShown() then shown = shown + 1 end end
+				eq(shown, W.ICON_COLS * W.ICON_ROWS)
+				eq(f.cells[1].art.texture, 134400)
+				eq(f.page:GetText(), ns.L.COUNCIL_ICON_PAGE:format(1, 2))
+				eq(f.filter:IsShown(), true, "the game gives names: they can be filtered")
+				eq(UISpecialFrames[#UISpecialFrames], "OlympusCouncilIconFrame", "Escape closes it with mouse and keyboard")
+				-- The next page; the filter.
+				f.next:Click()
+				eq(f.page:GetText(), ns.L.COUNCIL_ICON_PAGE:format(2, 2))
+				W.FilterIcons("SEAL")
+				eq(f.cells[1].icon, "Spell_Holy_SealOfMight"); eq(f.cells[2]:IsShown(), false)
+				-- A click shows it in the preview; only OK keeps it and says it.
+				f.cells[1]:Click()
+				eq(f.preview.texture, "Interface\\Icons\\Spell_Holy_SealOfMight")
+				eq(#sent, 0, "nothing said before OK")
+				f.ok:Click()
+				eq(f:IsShown(), false)
+				eq(ns.db.councilIcons[ns.me], "Spell_Holy_SealOfMight"); eq(sent[#sent], "HI~Spell_Holy_SealOfMight")
+				-- Again: Cancel and its X change nothing.
+				W.ShowIconPicker()
+				eq(f.chosenName:GetText(), "Spell_Holy_SealOfMight", "the icon in use")
+				f.cells[3]:Click(); f.cancel:Click()
+				eq(f:IsShown(), false); eq(ns.db.councilIcons[ns.me], "Spell_Holy_SealOfMight"); eq(#sent, 1)
+				-- The gamepad UI: never on the escape list its menus sweep; the X closes it.
+				ns.GamepadUI = function() return true end
+				W.ShowIconPicker()
+				for _, name in ipairs(UISpecialFrames) do assert(name ~= "OlympusCouncilIconFrame", "on the escape list") end
+				f.cells[4]:Click(); f.close:Click()
+				eq(f:IsShown(), false); eq(ns.db.councilIcons[ns.me], "Spell_Holy_SealOfMight")
+				-- A client with none of the lists: an empty window that says so, no error.
+				GetMacroIcons, GetMacroItemIcons, GetLooseMacroItemIcons = nil, nil, nil
+				W.ShowIconPicker()
+				eq(f.empty:IsShown(), true); eq(f.cells[1]:IsShown(), false); eq(f.filter:IsShown(), false)
+			end)
+			GetLooseMacroIcons, GetLooseMacroItemIcons, GetMacroIcons, GetMacroItemIcons = saved[1], saved[2], saved[3], saved[4]
+			if not ok then error(err, 0) end
+		end)
+	end)
+end)
+
+test("0.9.8 the Realm tab: a councillor's own button for their icon, next to Ask a High Councillor", function()
+	WithUI(function()
+		WithCouncil(function()
+			local w, UI = ForeverWorld(true)
+			CommunitiesFrame:Show(); w.buttons[1]:Click()
+			local function Buttons()
+				UI.SelectTab("realm")
+				local out = {}
+				for _, d in ipairs(OlympusFrameHD.detailButtons) do if d:IsShown() then out[#out + 1] = d end end
+				return out
+			end
+			ns.me = "Random Guy-Realm"
+			local list = Buttons()
+			eq(#list, 1); eq(list[1]:GetText(), ns.L.COUNCIL_ASK_BTN)
+			ns.me = "Test Councillor-Realm"
+			list = Buttons()
+			eq(#list, 2); eq(list[1]:GetText(), ns.L.COUNCIL_ASK_BTN); eq(list[2]:GetText(), ns.L.COUNCIL_ICON_BTN)
+			for _, d in ipairs(list) do eq(d:GetFontString():IsTruncated(), false, d:GetText()) end
+			list[2]:Click()
+			eq(OlympusCouncilIconFrame:IsShown(), true, "the picker")
+		end)
+	end)
+end)
+
+-- 0.9.8: review of the merge
+test("0.9.8 help requests: 'sent' only once a councillor says got it; a councillor who stops is withdrawn at once", function()
+	local W = ns.Workshop
+	local saved = { council = ns.rdb.council, whisper = ns.Comm.Whisper, send = ns.Comm.Send, after = ns.After, print = ns.Print, me = ns.me, help = ns.db.councilHelp }
+	local whispered, printed, timers = {}, {}, {}
+	local ok, err = pcall(function()
+		ns.rdb.council = { at = 1, names = { ["test councillor"] = "Test Councillor" }, realm = "Realm" }
+		ns.Comm.Whisper = function(to, msg) whispered[#whispered + 1] = to .. " " .. msg end
+		ns.Comm.Send = function() end
+		ns.After = function(_, _, fn) timers[#timers + 1] = fn end
+		ns.Print = function(m) printed[#printed + 1] = m end
+		W.ResetHelp()
+		W.HandleAvailable("CHANNEL", "Test Councillor-Realm", "HA~1")
+		eq(#W.Available(), 1)
+		W.HandleAvailable("CHANNEL", "Test Councillor-Realm", "HA~0")
+		eq(#W.Available(), 0, "withdrawn at once")
+		W.HandleAvailable("CHANNEL", "Test Councillor-Realm", "HA~1")
+		ns.me = "Player One-Realm"
+		W.AskCouncil("help please")
+		assert(not printed[#printed] or printed[#printed] ~= ns.L.COUNCIL_ASK_SENT, "not 'sent' before the ack")
+		W.HandleCouncilAck("WHISPER", "Random Guy-Realm", "HK~1")
+		assert(printed[#printed] ~= ns.L.COUNCIL_ASK_SENT, "an ack from a non-councillor counts for nothing")
+		W.HandleCouncilAck("WHISPER", "Test Councillor-Realm", "HK~1")
+		eq(printed[#printed], ns.L.COUNCIL_ASK_SENT)
+		-- No ack at all: told, and free to ask again at once.
+		ns.me = "Player Two-Realm"
+		eq(#timers, 1, "one wait for the ack")
+		timers[1]() -- (the first request's wait: already acked, nothing)
+		W.ResetHelp()
+		W.HandleAvailable("CHANNEL", "Test Councillor-Realm", "HA~1")
+		W.AskCouncil("anyone?")
+		timers[#timers]()
+		eq(printed[#printed], ns.L.COUNCIL_ASK_NOBODY)
+		local before = #whispered
+		W.AskCouncil("again")
+		eq(#whispered, before + 1, "may ask again at once")
+		-- Only a councillor can take requests.
+		ns.me = "Player Two-Realm"
+		W.SetCouncilHelp(true)
+		eq(printed[#printed], ns.L.COUNCIL_HELP_ONLY)
+	end)
+	ns.rdb.council, ns.Comm.Whisper, ns.Comm.Send, ns.After, ns.Print, ns.me, ns.db.councilHelp = saved.council, saved.whisper, saved.send, saved.after, saved.print, saved.me, saved.help
+	if ns.Workshop.ResetHelp then ns.Workshop.ResetHelp() end
+	if not ok then error(err, 0) end
+end)
+
+test("0.9.8 gold mailed to the Treasurer that reached one of his alts is written in his book when taken there", function()
+	local T = ns.Treasury
+	local saved = { mine = ns.db.myCharacters, me = ns.me, guild = GetGuildInfo, header = GetInboxHeaderInfo, invoice = GetInboxInvoiceInfo,
+		money = GetMoney, book = ns.rdb.treasury, share = T.Share, print = ns.Print, alert = ns.PlayAlert }
+	local ok, err = pcall(function()
+		T.Share, ns.Print, ns.PlayAlert = function() end, function() end, function() end
+		GetInboxInvoiceInfo = function() return nil end
+		GetInboxHeaderInfo = function() return nil, nil, "Romani Chudmeister", "for Olympus", 50000, nil, nil, nil, nil, false, nil, true, false end
+		local gold = 1000000
+		GetMoney = function() return gold end
+		-- His hunter, on his account, in another guild.
+		ns.me = "Pyralis Hunter-Realm"
+		GetGuildInfo = function() return "Olympus II", "Member", 3 end
+		ns.db.myCharacters = { ["someone else-realm"] = true }
+		eq(T.IsTreasurerAccount(), false, "an account the Treasurer never played")
+		ns.db.myCharacters = { ["pyralis ashandar-realm"] = true, ["pyralis hunter-realm"] = true }
+		eq(T.IsTreasurerAccount(), true)
+		local before = #(T.Totals().ranking)
+		T.MailTaking(1)
+		gold = gold + 50000
+		T.MoneyChanged()
+		local found
+		for _, g in ipairs(T.Totals().ranking) do if g.name == "Romani Chudmeister" then found = g.money end end
+		eq(found, 50000, "credited in the book")
+		-- The alt never sends the book: only the Treasurer's own character does.
+		eq(T.IsTreasurer(), false)
+	end)
+	ns.db.myCharacters, ns.me, GetGuildInfo, GetInboxHeaderInfo, GetInboxInvoiceInfo, GetMoney = saved.mine, saved.me, saved.guild, saved.header, saved.invoice, saved.money
+	ns.rdb.treasury, T.Share, ns.Print, ns.PlayAlert = saved.book, saved.share, saved.print, saved.alert
+	T.Reset()
+	if not ok then error(err, 0) end
+end)
+
+test("0.9.8 signature checks are rate-limited: once a minute per sender, a few a minute in all, a false list never twice", function()
+	local W, S = ns.Workshop, ns.Sign
+	local saved = { council = ns.rdb.council, verify = S.Verify, now = ns.Now }
+	local checks, clock = 0, 1000000
+	local ok, err = pcall(function()
+		W.ResetVerify()
+		ns.Now = function() return clock end
+		S.Verify = function() checks = checks + 1 return false end
+		ns.rdb.council = nil
+		local function List(at) return ("HS~HS1~%d~Realm~Fake Name~%s"):format(at, string.rep("ab", 256)) end
+		-- One spammer: one check a minute, whatever it sends.
+		for i = 1, 50 do W.HandleCouncil("CHANNEL", "Spammer-Realm", List(2000000 + i)) end
+		eq(checks, 1, "once a minute per sender")
+		-- The same false list again, from anyone: never checked twice.
+		clock = clock + 61
+		W.HandleCouncil("CHANNEL", "Other-Realm", List(2000001))
+		eq(checks, 1, "a false list is not checked again")
+		-- Many senders: VERIFY_MAX a minute in all.
+		for i = 1, 30 do W.HandleCouncil("CHANNEL", "Bot" .. i .. "-Realm", List(3000000 + i)) end
+		eq(checks, 1 + W.VERIFY_MAX, "a few a minute in all")
+		-- The author's own file is never limited.
+		S.Verify = saved.verify
+		W.ResetVerify()
+	end)
+	ns.rdb.council, S.Verify, ns.Now = saved.council, saved.verify, saved.now
+	W.ResetVerify()
 	if not ok then error(err, 0) end
 end)
 

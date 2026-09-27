@@ -15,6 +15,7 @@ fixture() {
 	printf 'error("syntax checks must not execute addon code")\n' > "$case_root/Olympus/nested folder/Extra.lua"
 	printf '## Interface: 16001\r\n\r\nMain.lua\r\nnested folder\\Extra.lua\r\n' > "$case_root/Olympus/Olympus.toc"
 	printf 'print("fixture suite ran")\n' > "$case_root/tests/run.lua"
+	printf 'printf "fixture round trip ran\\n"\n' > "$case_root/tests/sign-roundtrip.sh"
 }
 
 expect_failure() {
@@ -31,10 +32,16 @@ expect_failure() {
 }
 
 fixture 'valid project with spaces'
+printf 'print("python must not run")\n' > "$case_root/scripts/tool.py"
 "$bash_bin" "$case_root/scripts/check.sh" > "$case_root/result.txt" 2>&1
 grep -Fq 'fixture suite ran' "$case_root/result.txt"
+grep -Fq 'fixture round trip ran' "$case_root/result.txt"
 grep -Fq 'All repository checks passed.' "$case_root/result.txt"
-printf 'ok: valid project, CRLF TOC, Windows separators, spaces, no addon execution\n'
+if grep -Fq 'python must not run' "$case_root/result.txt" || [ -e "$case_root/scripts/__pycache__" ]; then
+	printf 'FAIL: the Python check ran a script or left bytecode in the project\n' >&2
+	exit 1
+fi
+printf 'ok: valid project, CRLF TOC, Windows separators, spaces, no addon or script execution\n'
 
 fixture 'missing dependency'
 mkdir "$case_root/bin"
@@ -57,3 +64,15 @@ expect_failure 'local/global lint failure' "'laterValue' is read as a global"
 fixture 'test failure'
 printf 'error("fixture test failed")\n' > "$case_root/tests/run.lua"
 expect_failure 'offline test failure' 'fixture test failed'
+
+fixture 'signing round trip failure'
+printf 'echo "fixture round trip failed" >&2\nexit 1\n' > "$case_root/tests/sign-roundtrip.sh"
+expect_failure 'signing round trip failure' 'fixture round trip failed'
+
+if command -v python3 >/dev/null 2>&1; then
+	fixture 'python syntax error'
+	printf 'def deliberately_invalid_python(:\n' > "$case_root/scripts/broken.py"
+	expect_failure 'Python syntax error in a script' 'broken.py'
+else
+	printf 'skip: Python syntax error (python3 not found)\n'
+fi

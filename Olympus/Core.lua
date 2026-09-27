@@ -2,7 +2,7 @@ local ADDON, ns = ...
 local L = ns.L
 
 ns.NAME = "Olympus"
-ns.VERSION = "0.9.7"
+ns.VERSION = "0.9.8"
 ns.PREFIX = "OLYMPUS"        -- addon message prefix (max 16 chars)
 ns.CHANNEL = "OlympusNet"    -- hidden chat channel shared by every Olympus guild (Alliance)
 ns.CHANNEL_HORDE = "OlympusNetH" -- the Horde's: the two factions never see each other's guilds
@@ -542,42 +542,67 @@ function ns.LearnKingRealm(sender)
 	ns.Log("the Horde's King is on %s (learned from his first message)", realm)
 end
 
--- The High Council (0.9.6): the Olympus moderators, by character name on the King's realm group
--- (names taken on other realms, launch realms included, are nobody's until this list is updated).
--- Shown with a skull and their own colour in the Olympus chats.
--- Their names are not written here (the code is public and the names would be sniped on the
--- launch realms): only a fingerprint of each (ns.CouncilHash), which the addon compares.
-ns.HIGH_COUNCIL = {
-	"3d02krdc", "el8w4yrn", "qdtuv3zv", "a8okb2md", "9fa7sbyl", "2zk0ivuu", "colro058", "3sfisy1g", "cugbpla9", "nd54v0z3",
-}
-ns.HIGH_COUNCIL_REALM = "ClassicBetaPvP"
-ns.HIGH_COUNCIL_ICON = "|TInterface\\TargetingFrame\\UI-RaidTargetingIcon_8:0|t"
+-- The High Council: the Olympus moderators, shown with their icon and their colour in the Olympus
+-- chats. No name is written in this code (it is public, and names get sniped on launch realms):
+-- the list is signed by the author on his own computer and checked by every client (Sign.lua,
+-- Workshop.lua).
+-- Each councillor picks their own icon from the game's (0.9.8, Workshop.lua); until one is
+-- heard, a skull from the game's icons (the raid marker's before 0.9.8).
+ns.HIGH_COUNCIL_SKULL = "Interface\\Icons\\INV_Misc_Bone_HumanSkull_01"
+ns.HIGH_COUNCIL_ICON = "|T" .. ns.HIGH_COUNCIL_SKULL .. ":0|t"
 ns.HIGH_COUNCIL_COLOR = "ffb048f8"
-function ns.CouncilHash(name)
-	local text = "olympus-council:" .. tostring(name or ""):lower()
-	local h1, h2 = 5381, 52711
-	for i = 1, #text do
-		local c = text:byte(i)
-		h1 = (h1 * 33 + c) % 2147483647
-		h2 = (h2 * 31 + c * 7) % 2147483647
-	end
-	local digits, out, n = "0123456789abcdefghijklmnopqrstuvwxyz", "", h1 * 1000 + (h2 % 1000)
-	for _ = 1, 8 do
-		local d = n % 36
-		out = digits:sub(d + 1, d + 1) .. out
-		n = math.floor(n / 36)
-	end
-	return out
-end
-local council, councilFrom
 function ns.IsHighCouncillor(name)
-	if type(name) ~= "string" then return false end
-	if councilFrom ~= ns.HIGH_COUNCIL then
-		council, councilFrom = {}, ns.HIGH_COUNCIL
-		for _, h in ipairs(ns.HIGH_COUNCIL) do council[h] = true end
+	local c = ns.rdb and ns.rdb.council
+	if type(name) ~= "string" or type(c) ~= "table" or type(c.names) ~= "table" then return false end
+	if not c.names[ns.ShortName(name):lower()] then return false end
+	-- Names are one per realm group: the list counts on the group of whoever published it.
+	-- The list names it "A+B": any realm of it, as this client groups realms (0.9.8: a realm
+	-- linked to that group since, which makes our group "A+B+C", no longer loses the list).
+	if c.realm == nil then return true end
+	for _, realm in ipairs(ns.GroupRealms(c.realm)) do
+		if OfGroup(name, realm) then return true end
 	end
-	if not council[ns.CouncilHash(ns.ShortName(name))] then return false end
-	return OfGroup(name, ns.HIGH_COUNCIL_REALM)
+	return false
+end
+
+-- A councillor's icon as it travels and is kept (0.9.8): a file number, or a plain icon name
+-- (letters, digits and _) under Interface\Icons. Anything else is nil: nothing but these two
+-- ever reaches the |T...|t of a chat line (no pipe, colon, slash or path of someone's choosing).
+function ns.CouncilIconValue(v)
+	if type(v) == "string" and v:match("^%d+$") then
+		if #v > 10 then return nil end
+		v = tonumber(v)
+	end
+	if type(v) == "number" then
+		return (v >= 1 and v < 2147483648 and v == math.floor(v)) and v or nil
+	end
+	if type(v) == "string" and #v <= 64 and v:match("^[%w_]+$") then return v end
+	return nil
+end
+
+-- The texture for a council icon (a file number, or its path under Interface\Icons), or nil.
+function ns.CouncilIconTexture(v)
+	v = ns.CouncilIconValue(v)
+	if type(v) == "string" then return "Interface\\Icons\\" .. v end
+	return v
+end
+
+-- The icon before a councillor's name in the Olympus chats: our own choice for our lines, what
+-- their client announced for anyone else's (Workshop.lua keeps it), else the default skull.
+-- Checked again here: the ones heard are kept in the SavedVariables too.
+function ns.CouncilIcon(name)
+	local v
+	local who = type(name) == "string" and ns.FullName(name) or nil
+	if who and who == ns.me then
+		local mine = ns.db and ns.db.councilIcons
+		v = type(mine) == "table" and mine[who] or nil
+	elseif who then
+		local heard = ns.rdb and ns.rdb.councilIcons
+		local e = type(heard) == "table" and heard[who]
+		v = type(e) == "table" and e.icon or nil
+	end
+	local texture = ns.CouncilIconTexture(v)
+	return texture and ("|T" .. texture .. ":0|t") or ns.HIGH_COUNCIL_ICON
 end
 
 -- The Crown: guild masters of any Olympus guild, and the officers of the King's guild.
@@ -873,16 +898,21 @@ end
 -- Escape closes our windows (UISpecialFrames), except with Blizzard's gamepad UI on: its menus
 -- close every window on that list, ours with them, while the player is using it (0.9.6). There
 -- they close with their own X.
+-- With the gamepad UI Olympus writes nothing to that list (0.9.8). Blizzard reads it with no
+-- protection (CloseSpecialWindows, from its menus and when the player loses control), and a
+-- name table.remove moves down a place is one Olympus wrote from then on. A name of ours put
+-- there before a switch to the gamepad UI leaves only when it is the last one: nothing moves.
 function ns.EscapeCloses(name)
 	if type(name) ~= "string" or not UISpecialFrames then return end
+	local gamepad = ns.GamepadUI()
 	for i, n in ipairs(UISpecialFrames) do
 		if n == name then
 			-- Switched to the gamepad UI since: off the list (checked each time it shows).
-			if ns.GamepadUI() then table.remove(UISpecialFrames, i) end
+			if gamepad and i == #UISpecialFrames then UISpecialFrames[i] = nil end
 			return
 		end
 	end
-	if not ns.GamepadUI() then table.insert(UISpecialFrames, name) end
+	if not gamepad then table.insert(UISpecialFrames, name) end
 end
 
 function ns.ShowDialog(which, a, b, data)
@@ -964,6 +994,7 @@ local function Help()
 	print(L.HELP_TREASURER)
 	print(L.HELP_INSPECTION)
 	print(L.HELP_ISSUE)
+	print(L.HELP_COUNCIL)
 	print("  /oly decrees - decrees")
 	print("  /oly arms [text] | /oly muster [text] - decree (officers; 'test' = local preview)")
 	print(L.HELP_CHAN_ALL)
@@ -1031,6 +1062,18 @@ SlashCmdList.OLYMPUS = function(input)
 			ns.Positions.SetEnabled(not ns.db.showMates)
 		elseif cmd == "share" then
 			ns.Positions.SetSharing(not ns.db.sharePosition)
+		elseif cmd == "council" then
+			-- The High Council's list (the author's or the King's character): add, remove, list.
+			local verb, arg = rest:match("^(%S*)%s*(.-)$")
+			verb = (verb or ""):lower()
+			if verb == "help" then
+				local a = arg:lower()
+				if a == "on" or a == "off" then ns.Workshop.SetCouncilHelp(a == "on")
+				else ns.Print(ns.db.councilHelp and L.COUNCIL_HELP_ON or L.COUNCIL_HELP_OFF) end
+			elseif verb == "icon" then ns.Workshop.ShowIconPicker() -- a councillor's own icon (0.9.8)
+			else ns.Workshop.EditCouncil(verb) end
+		elseif cmd == "helpme" then
+			if rest ~= "" then ns.Workshop.AskCouncil(rest) else ns.ShowDialog("OLYMPUS_COUNCIL_ASK") end
 		elseif cmd == "issuereporter" then
 			-- Blizzard's Issue Reporter box (beta and PTR clients): hidden at every login, or not.
 			local how = rest:lower()

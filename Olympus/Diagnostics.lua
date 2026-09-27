@@ -63,10 +63,112 @@ ns.On("INIT", function()
 	ns.allErrors, ns.db.allErrors = all, all -- same table: errors seen later this session are saved too
 end)
 
--- Blocked protected calls (taint) are not Lua errors, so log them separately.
--- The first ones with where they came from (the handler runs inside the blocked call); a burst
+-- What Blizzard's gamepad UI reads on its way to the calls only it may make (0.9.8), from its
+-- own code on Forever 1.60: the interact button's target (Blizzard_GamepadActionBars/
+-- MainActionBarFrame.lua, UpdateInteractIcons -> SetPreferredGamepadInteractTarget), the binding
+-- stack it asks first (Blizzard_GamepadSharedUtility/InputBindingStack/InputBindingManager.lua),
+-- the frames and popups it follows (FrameControlsManager.lua, Blizzard_StaticPopup/
+-- StaticPopupGamepad.lua), the escape list its menus sweep (CloseSpecialWindows) and the chat box
+-- it focuses (an addon's slash command runs inside the chat box's own code: ChatFrameEditBox.lua).
+-- A value an addon wrote there makes the game blame that addon when the call comes;
+-- issecurevariable says which values, and whose.
+local PROBE_GLOBALS = {
+	"GamepadSharedUtility", "GamepadMode", "GamepadMainActionBarFrame", "SmartNavigation", "InputUtil",
+	"EventRegistry", "RunNextFrame", "GenerateClosure", "C_Timer", "C_Spell", "SetPreferredGamepadInteractTarget",
+	"SetUnitCursorTexture", "UnitExists", "UnitIsGameObject", "UnitHasLootInteraction", "UnitIsInInteractRange",
+	"UnitIsInteractable", "UnitCanAttack", "UISpecialFrames", "CloseSpecialWindows", "CloseAllWindows",
+	"ShowUIPanel", "HideUIPanel", "StaticPopup_Show", "StaticPopup_Hide", "ACTIVE_CHAT_EDIT_BOX", "LAST_ACTIVE_CHAT_EDIT_BOX",
+}
+-- label, the object (nil when this client has none), its fields, and the field that is a list
+-- whose slots are read one by one.
+local PROBE_OBJECTS = {
+	{ "binding stack", function() return type(GamepadSharedUtility) == "table" and GamepadSharedUtility.InputBindingManager end,
+		{ "bindingSetStack", "currentCoreBindingActive", "assumeCoreBindingsUsable", "coreSet", "coreBindingListenerFunctions" }, "bindingSetStack" },
+	{ "frame controls", function() return type(GamepadMode) == "table" and GamepadMode.FrameControlsManager end,
+		{ "shownFrames", "focusedFrame", "isUIFocused", "fallThroughCatcherActive", "topSuspendedFrame" }, "shownFrames" },
+	{ "gamepad popups", function() return type(GamepadMode) == "table" and GamepadMode.PopupHandler end,
+		{ "visiblePopups", "activePopup" }, "visiblePopups" },
+	{ "action bar", function() return GamepadMainActionBarFrame end, { "PageUnit", "autoLootOnTap" } },
+	{ "smart navigation", function() return SmartNavigation end, { "currentButton", "activeInfo" } },
+}
+local PROBE_SLOTS = 20 -- slots of a list read at most (one past its end too: a slot emptied)
+
+-- One line: the values above an addon wrote, and whose, or that none was.
+function ns.TaintProbe()
+	if type(issecurevariable) ~= "function" then return "taint: not checked (no issecurevariable)" end
+	local found, checked = {}, 0
+	local function Check(label, t, key)
+		local ok, secure, by
+		if t == nil then ok, secure, by = pcall(issecurevariable, key) else ok, secure, by = pcall(issecurevariable, t, key) end
+		if not ok then return end
+		checked = checked + 1
+		if not secure then found[#found + 1] = label .. " by " .. tostring(by or "?") end
+	end
+	local function Slots(label, list)
+		if type(list) ~= "table" then return end
+		for i = 1, math.min(#list + 1, PROBE_SLOTS) do
+			local v = list[i]
+			Check(("%s[%d]%s"):format(label, i, type(v) == "string" and ("=" .. v) or ""), list, i)
+			if type(v) == "table" and label == "bindingSetStack" then
+				Check(("%s[%d].treatBindsAsCore"):format(label, i), v, "treatBindsAsCore")
+			end
+		end
+	end
+	for _, name in ipairs(PROBE_GLOBALS) do Check(name, nil, name) end
+	for _, o in ipairs(PROBE_OBJECTS) do
+		local ok, t = pcall(o[2])
+		if ok and type(t) == "table" then
+			for _, key in ipairs(o[3]) do Check(o[1] .. "." .. key, t, key) end
+			if o[4] then Slots(o[4], rawget(t, o[4])) end
+		end
+	end
+	Slots("UISpecialFrames", UISpecialFrames)
+	if #found == 0 then return ("taint: none of %d values the gamepad UI reads"):format(checked) end
+	local shown = {}
+	for i = 1, math.min(8, #found) do shown[i] = found[i] end
+	return ("taint: %s%s (%d checked)"):format(table.concat(shown, ", "), #found > 8 and (", +" .. (#found - 8)) or "", checked)
+end
+
+-- Blocked protected calls (taint) are not Lua errors, so they are kept apart. The first ones
+-- logged with where they came from (the handler runs inside the blocked call); a burst
 -- (Blizzard's gamepad UI repeats a block on every popup) counted, not logged line by line.
-local blocked = 0
+-- Each blocked call of ours is also kept (0.9.8) in OlympusDB.actionsBlocked, once per call
+-- with a count: the call the game refused, the stack it was refused in and what the taint
+-- probe saw, all in /oly bug. With the gamepad UI one line in chat, once a session, asks the
+-- player for that report: there it is the only way to learn what the game refused.
+local MAX_BLOCKED = 10
+local blocked, toldGamepad = 0, false
+function ns.ResetBlocked() blocked, toldGamepad = 0, false end -- tests
+
+-- Kept once per call; the first time it comes in a session its stack and probe are taken
+-- again (and it moves to the end, the newest), so the report shows this version's evidence.
+local function RecordBlocked(event, func)
+	local db = ns.db
+	if not db then return end
+	db.actionsBlocked = type(db.actionsBlocked) == "table" and db.actionsBlocked or {}
+	local list, key, now = db.actionsBlocked, event .. "|" .. func, date("%Y-%m-%d %H:%M:%S")
+	local b
+	for i, e in ipairs(list) do
+		if e.key == key then
+			e.count, e.last = (e.count or 0) + 1, now
+			if e.session == db.sessions then return end
+			b = table.remove(list, i)
+			break
+		end
+	end
+	local stack = ""
+	if type(debugstack) == "function" then
+		local ok, s = pcall(debugstack, 2, 24, 6)
+		stack = ok and type(s) == "string" and s or ""
+	end
+	local okProbe, taint = pcall(ns.TaintProbe)
+	b = b or { key = key, event = event, func = func, count = 1, first = now, last = now }
+	b.session, b.version, b.client, b.gamepad, b.stack = db.sessions, ns.VERSION, ClientInfo(), ns.GamepadUI(), stack
+	b.taint = okProbe and taint or ("taint: probe failed: " .. tostring(taint))
+	list[#list + 1] = b
+	while #list > MAX_BLOCKED do table.remove(list, 1) end
+end
+
 for _, event in ipairs({ "ADDON_ACTION_BLOCKED", "ADDON_ACTION_FORBIDDEN" }) do
 	ns.RegisterEvent(event, function(addon, func)
 		-- Another addon's: logged as always.
@@ -77,6 +179,11 @@ for _, event in ipairs({ "ADDON_ACTION_BLOCKED", "ADDON_ACTION_FORBIDDEN" }) do
 			ns.Log("%s: %s tried %s | %s", event, tostring(addon), tostring(func), (stack:gsub("\n", " < ")))
 		elseif blocked <= 10 or blocked % 100 == 0 then
 			ns.Log("%s: %s tried %s (%d this session)", event, tostring(addon), tostring(func), blocked)
+		end
+		RecordBlocked(event, tostring(func))
+		if ns.GamepadUI() and not toldGamepad then
+			toldGamepad = true
+			ns.Print("|cffff4040" .. L.BLOCKED_GAMEPAD .. "|r")
 		end
 	end)
 end
@@ -250,11 +357,47 @@ function ns.StatusText()
 	for _ in pairs(ns.rdb.seen or {}) do seen = seen + 1 end
 	add("who: %s  |  guilds seen=%d", ns.Who and ns.Who.StatusLine() or "not loaded", seen)
 	add("hop: %s", ns.Hop and ns.Hop.StatusLine and ns.Hop.StatusLine() or "not loaded")
+	-- The gamepad UI and what the game refused us this session; what its code reads, as now.
+	local refused = type(ns.db.actionsBlocked) == "table" and ns.db.actionsBlocked or {}
+	add("gamepad UI: %s  |  blocked this session: %d  |  blocked calls kept: %d%s", ns.GamepadUI() and "on" or "off", blocked, #refused,
+		#refused > 0 and (" (last: %s)"):format(tostring(refused[#refused].func)) or "")
+	if ns.GamepadUI() or blocked > 0 then
+		local ok, line = pcall(ns.TaintProbe)
+		add("%s", ok and line or ("taint: probe failed: " .. tostring(line)))
+	end
 	return table.concat(lines, "\n")
 end
 
 function ns.BuildBugReport()
-	local out = { "```", ns.StatusText(), "" }
+	local out = { "```" }
+	-- The calls the game refused Olympus ("blocked from an action"), newest first. First in the
+	-- report: a report sent in game stops at Workshop.BUG_MAX bytes, and this is the part that
+	-- names what to fix.
+	local refused = type(ns.db.actionsBlocked) == "table" and ns.db.actionsBlocked or {}
+	if #refused > 0 then
+		out[#out + 1] = "Blocked by the game:"
+		-- This version's newest two, their stacks cut to 8 lines: the errors below must still fit.
+		local shown = 0
+		for i = #refused, 1, -1 do
+			local b = refused[i]
+			if shown >= 2 then break end
+			if b.version == ns.VERSION then
+				shown = shown + 1
+				out[#out + 1] = ("[%dx] %s %s  (%s .. %s, v%s, %s)"):format(b.count or 1, tostring(b.event), tostring(b.func),
+					tostring(b.first), tostring(b.last), tostring(b.version), b.gamepad and "gamepad UI" or "mouse and keyboard")
+				if b.taint then out[#out + 1] = "  " .. b.taint end
+				local n = 0
+				for line in tostring(b.stack or ""):gmatch("[^\n]+") do
+					n = n + 1
+					if n > 8 then break end
+					out[#out + 1] = "    " .. line
+				end
+			end
+		end
+		out[#out + 1] = ""
+	end
+	out[#out + 1] = ns.StatusText()
+	out[#out + 1] = ""
 	local errors = ns.db.errors
 	if #errors == 0 then
 		out[#out + 1] = "No errors recorded."

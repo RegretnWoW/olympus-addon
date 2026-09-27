@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Run the same addon checks locally and in CI. Requires Bash and LuaJIT.
+# Run the same addon checks locally and in CI. Requires Bash and LuaJIT; the Python checks
+# (the High Council's signing script) run wherever python3 is installed, as on CI.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -9,13 +10,26 @@ if ! command -v luajit >/dev/null 2>&1; then
 fi
 
 printf 'Checking Lua syntax...\n'
-lua_files=$(mktemp)
-trap 'rm -f "$lua_files"' EXIT
+check_tmp=$(mktemp -d)
+trap 'rm -rf "$check_tmp"' EXIT
+lua_files="$check_tmp/lua-files"
 find Olympus tests -type f -name '*.lua' -print0 > "$lua_files"
 while IFS= read -r -d '' file; do
 	# Compile to a listing without executing addon code or writing bytecode files.
 	luajit -bl "$file" >/dev/null
 done < "$lua_files"
+
+printf 'Checking Python syntax...\n'
+if command -v python3 >/dev/null 2>&1; then
+	py_files="$check_tmp/py-files"
+	find scripts tests -type f -name '*.py' -print0 > "$py_files"
+	while IFS= read -r -d '' file; do
+		# Compiled only, never run; the bytecode goes to the temporary folder, not the repository.
+		PYTHONPYCACHEPREFIX="$check_tmp/pycache" python3 -m py_compile "$file"
+	done < "$py_files"
+else
+	printf 'python3 not found: Python checks skipped.\n'
+fi
 
 printf 'Checking files listed in Olympus/Olympus.toc...\n'
 luajit - <<'LUA'
@@ -43,5 +57,8 @@ bash scripts/lint-globals.sh
 
 printf 'Running offline tests...\n'
 luajit tests/run.lua
+
+printf 'Running the signing round trip...\n'
+bash tests/sign-roundtrip.sh
 
 printf 'All repository checks passed.\n'

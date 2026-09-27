@@ -18,6 +18,15 @@ local L = ns.L
 -- A search given up before its answer (no answer by TIMEOUT, someone else searched) keeps
 -- results going to the UI until that answer comes, see Release.
 --
+-- Blizzard's gamepad UI (0.9.8): nothing of theirs is silenced there, and no search goes on
+-- its own. Forever guards the events of a frame (its API marks RegisterEvent, UnregisterEvent
+-- and IsEventRegistered as checking the frame's EventRegistrations aspect), our code gave them
+-- back from a timer, often while the player was already walking, and the list we silence
+-- opens its window on every answer (ShowUIPanel), which the gamepad's frame manager follows.
+-- Any of it can end in the game's "blocked" message there. Refresh and the Join screen's
+-- search still search, plainly, and the answer shows in the game's who list as a /who does
+-- (Olympus reads it from there). The quiet ones (Auto, SearchGuild) don't search.
+--
 -- Past the cap. The server lists at most 50 players per search (MAX_WHOS_FROM_SERVER; on
 -- Forever the total it reports stops at 50 too). When the broad search is capped, the next
 -- clicks search level ranges and add what they find (one player once, by name: the server
@@ -234,14 +243,19 @@ end
 -- Must be called from a click. Returns true if a search was sent. `quiet`: nothing printed.
 -- `guild`: that one guild only (g-"<guild>", Who.SearchGuild): its players are kept apart
 -- (Who.GuildSeen) and the round goes on where it was.
+-- With the gamepad UI only the player's own searches go, plainly (see the top of this file).
+local toldPlain = false
 function Who.Search(quiet, guild)
+	local plain = ns.GamepadUI()
+	if plain and (quiet or guild) then return false end
 	local now = GetTime()
 	local wait = Wait(now, math.max(Who.lastSend, Who.lastPlain))
 	if wait > 0 then
 		if not quiet then ns.Print(L.WHO_WAIT:format(math.ceil(wait))) end
 		return false
 	end
-	if Who.WindowOpen() then
+	-- (Not in the gamepad UI's plain searches: their answer is meant for the open list.)
+	if not plain and Who.WindowOpen() then
 		if not quiet then ns.Print(L.WHO_WINDOW_OPEN) end
 		return false
 	end
@@ -257,10 +271,13 @@ function Who.Search(quiet, guild)
 	local b = not guild and not variant and sweep.step > 0 and sweep.brackets[sweep.step]
 	local query = guild and ('g-"%s"'):format(guild) or variant and ('g-"%s"'):format(Who.VARIANTS[variant])
 		or b and ("%s %d-%d"):format(Who.QUERY, b[1], b[2]) or Who.QUERY
-	HookSendWho()
+	local frames, names = {}, {}
+	if not plain then
+		HookSendWho()
+		frames, names = Quiet()
+	end
 	lastId = lastId + 1
 	local id = lastId
-	local frames, names = Quiet()
 	pending = { id = id, frames = frames, step = sweep.step, query = query, guild = guild, variant = variant }
 	owed = nil -- a search given up before this one: its answer would now pass for this one's
 	Who.lastSend = now
@@ -276,7 +293,12 @@ function Who.Search(quiet, guild)
 		error(err, 0)
 	end
 	if not quiet then ns.Print(L.RECRUIT_SEARCHING) end
-	ns.Log("who: sent %s%s, quiet: %s", query, quiet and " (auto)" or "", #names > 0 and table.concat(names, ", ") or "none")
+	if plain and not toldPlain then
+		toldPlain = true
+		ns.Print(L.WHO_GAMEPAD)
+	end
+	ns.Log("who: sent %s%s, quiet: %s", query, quiet and " (auto)" or "",
+		plain and "nothing (gamepad UI)" or (#names > 0 and table.concat(names, ", ") or "none"))
 	return true
 end
 
@@ -301,6 +323,7 @@ function Who.GuildSeen(guild)
 end
 function Who.SearchGuild(guild)
 	if type(guild) ~= "string" or guild == "" or guild:find('"', 1, true) then return false end
+	if ns.GamepadUI() then return false end -- quiet: not with the gamepad UI (see the top)
 	if not ((C_FriendList and C_FriendList.SendWho) or SendWho) then return false end
 	local now = GetTime()
 	if now - (guildSearched[guild] or -math.huge) < Who.GUILD_AGAIN then return false end
@@ -315,6 +338,7 @@ end
 
 function Who.Auto()
 	if not ((C_FriendList and C_FriendList.SendWho) or SendWho) then return false end
+	if ns.GamepadUI() then return false end -- quiet: not with the gamepad UI (see the top)
 	local now = GetTime()
 	if pending or Wait(now, math.max(Who.lastSend, Who.lastPlain)) > 0 or Who.WindowOpen() then return false end
 	-- A guild opened in the Realm tab while a search could not go comes first.
@@ -517,13 +541,14 @@ end
 function Who.StatusLine()
 	local s = sweep
 	local step = s.brackets and ("%d/%d"):format(math.min(s.step, #s.brackets), #s.brackets) or "broad"
-	local open = {}
-	for _, entry in ipairs(LISTENERS) do
+	-- (Not asked of Blizzard's frames with the gamepad UI: the question is a guarded one there.)
+	local open, gamepad = {}, ns.GamepadUI()
+	for _, entry in ipairs(gamepad and {} or LISTENERS) do
 		local f = entry[2]()
 		if type(f) == "table" and f.IsEventRegistered and f:IsEventRegistered(EVENT) then open[#open + 1] = entry[1] end
 	end
 	return ("round %s, %d found (answer %d of %d), done=%s missing=%s, pending=%s owed=%s, last %s  |  listening: %s"):format(
 		step, #s.list, s.shown, s.total, tostring(s.done), tostring(s.missing), tostring(pending ~= nil), tostring(owed ~= nil),
 		Who.lastSend > 0 and ("%ds ago"):format(math.floor(GetTime() - Who.lastSend)) or "never",
-		#open > 0 and table.concat(open, ", ") or "none")
+		gamepad and "not asked (gamepad UI)" or (#open > 0 and table.concat(open, ", ") or "none"))
 end

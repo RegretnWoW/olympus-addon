@@ -740,7 +740,9 @@ local function RealmLines(s)
 	end)
 	lines[#lines + 1] = { header = true, text = L.LEVEL_RACE }
 	if #racers == 0 then lines[#lines + 1] = { text = Grey(L.NONE_REPORTED) } end
-	for i = 1, math.min(10, #racers) do
+	-- The top 100, shown 25 at a time (0.9.7): the window stays light.
+	local shownRacers = math.min(#racers, Views.RACE_MAX, Views.raceShown)
+	for i = 1, shownRacers do
 		local p = racers[i]
 		lines[#lines + 1] = {
 			key = p.name,
@@ -748,6 +750,12 @@ local function RealmLines(s)
 			right = Gold(L.LEVEL_N:format(p.level)),
 			onClick = function() ns.UI.ShowPerson({ name = p.name, realm = p.realm, class = p.class, level = p.level, guild = p.guild }) end,
 		}
+	end
+
+	local total = math.min(#racers, Views.RACE_MAX)
+	if total > shownRacers then
+		lines[#lines + 1] = { text = Grey(L.SHOW_MORE:format(math.min(Views.RACE_PAGE, total - shownRacers), shownRacers, total)),
+			onClick = function() Views.raceShown = Views.raceShown + Views.RACE_PAGE; ns.Fire("DATA_CHANGED") end }
 	end
 
 	local open = {}
@@ -883,6 +891,8 @@ local STATUS_TEXT = {
 	YOUNG = function() return Grey(L.TABARD_YOUNG) end,
 }
 
+Views.RACE_MAX, Views.RACE_PAGE = 100, 25 -- the level race: its top 100, 25 at a time
+Views.raceShown = Views.RACE_PAGE
 Views.INSPECT_ROWS = 200 -- inspected players listed on the Tabards page
 
 local function HeraldryLines()

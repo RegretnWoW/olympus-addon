@@ -268,6 +268,10 @@ for the King, and for every member once the King shows the army something of it.
 - **Blizzard's gamepad mode** (Forever's controller interface): Olympus asks its questions in
   windows of its own instead of the game's popups, which Blizzard's gamepad code blocks (and
   freezes) when an addon opens one. With mouse and keyboard, the game's popups as always.
+  Since 0.9.8 it also leaves the game's own frames alone there: no quiet `/who` on its own
+  (**Refresh** and **Find Olympus online** still search, and the answer shows in the game's
+  Who list), and the Issue Reporter is the game's to show. If the game still says it blocked
+  Olympus, type `/oly bug` and send the text: it names the action the game refused.
 - English and Portuguese (follows the game language).
 
 ## Install
@@ -482,6 +486,9 @@ Limits, stated honestly:
 | `/oly rollcall on\|off` | answer the author's roll calls (version, client, channel state) or not |
 | `/oly inspection on\|off` | take part in the King's Royal Inspection when sampled (a 2-minute patrol reported to him), or not |
 | `/oly issuereporter hide\|show` | hide Blizzard's Issue Reporter box (beta clients) at every login, or show it again (also a "Hide" button on it) |
+| `/oly helpme [text]` (or **Ask a High Councillor** on the Realm tab) | ask the High Council (the moderators) for help: it goes by whisper to up to three of them online who take requests |
+| `/oly council list` · `/oly council help on\|off` | the High Council as your addon knows it; moderators: take help requests or not. The list is signed by the author on his own computer and checked by every client: no name is written in the addon's code, and nobody can forge or change it |
+| `/oly council icon` (or **My council icon** on the Realm tab, councillors only) | moderators: pick the icon before your name in the Olympus chats from the game's icons, like a macro's. Your addon announces it on the channel (at once, then every 20 minutes), and other clients take it only from a councillor and only as a game icon. Until one is heard: a skull |
 | `/oly hop` | ask for an invite to the King's layer (while he is online) |
 | `/oly vox off` · `/oly vox on` | Vox Populi questions in chat only, or in a window |
 | `/oly layerhelp on` · `/oly layerhelp off` | get (or not) requests to invite players to your layer |

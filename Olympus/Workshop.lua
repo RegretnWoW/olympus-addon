@@ -85,6 +85,7 @@ local function IsAuthorName(name)
 end
 
 function Workshop.IsAuthor() return IsAuthorName(ns.me) end
+Workshop.IsAuthorName = IsAuthorName
 
 -- The author's test characters (Dev.lua, never published) see the tab too: nothing it sends
 -- goes anywhere but the test bench's log (DevTest.lua), or is ignored by everyone.
@@ -601,6 +602,578 @@ function Workshop.Reset()
 	lastRoll, lastRollAnswer, lastUpdateShown, lastBug, lastAsk = -math.huge, -math.huge, -math.huge, -math.huge, -math.huge
 	changePending = false
 end
+
+---------------------------------------------------------------------------
+-- The High Council (the moderators): a list of character names signed by the author on his
+-- own computer (scripts/council-sign.py; Sign.lua checks it), never written in the code. His
+-- character loads it from a file that exists on his machine only and publishes it; every
+-- client checks the signature, keeps the newest list and passes it along now and then, so
+-- nobody needs to be online and nobody can forge or change it.
+--   HS1~<time>~<realm group>~<First Surname>,...~<signature>   (signed: all before the last ~)
+-- On the channel it travels as HS~<the signed list> (0.9.8): Comm hands a message to its
+-- handler only when "~" follows the two letters of its type, and the list starts "HS1~".
+---------------------------------------------------------------------------
+
+Workshop.COUNCIL_MAX = 30
+Workshop.RELAY_EVERY = 1800 -- a client passes the list along about every 30 minutes...
+Workshop.RELAYS = 3         -- ...and about this many clients do, whatever the army's size
+local lastCouncilSent = -math.huge
+
+local function CouncilNames()
+	local c = ns.rdb and ns.rdb.council
+	local out = {}
+	for _, display in pairs(type(c) == "table" and c.names or {}) do out[#out + 1] = display end
+	table.sort(out)
+	return out
+end
+Workshop.CouncilNames = CouncilNames
+
+-- A signed list (from the author's file, or heard on the channel): checked, kept if newer.
+-- A signature check is the heaviest thing the addon does (0.9.8, Konig's review): lists heard on
+-- the channel are checked at most once a minute per sender and VERIFY_MAX times a minute in all,
+-- and a list already found false is not checked again. The author's own file is not limited.
+Workshop.VERIFY_GAP, Workshop.VERIFY_MAX = 60, 6
+local verifiedFrom, verifyTimes, falseLists, falseCount = {}, {}, {}, 0
+local function MayVerify(sender, blob, now)
+	if falseLists[blob] then return false end
+	if sender and now - (verifiedFrom[sender] or -math.huge) < Workshop.VERIFY_GAP then return false end
+	for i = #verifyTimes, 1, -1 do if now - verifyTimes[i] >= 60 then table.remove(verifyTimes, i) end end
+	if #verifyTimes >= Workshop.VERIFY_MAX then return false end
+	if sender then verifiedFrom[sender] = now end
+	verifyTimes[#verifyTimes + 1] = now
+	return true
+end
+local function RememberFalse(blob)
+	if falseCount >= 100 then wipe(falseLists); falseCount = 0 end
+	falseLists[blob], falseCount = true, falseCount + 1
+end
+function Workshop.ResetVerify() wipe(verifiedFrom); wipe(verifyTimes); wipe(falseLists); falseCount = 0 end -- tests
+
+function Workshop.TakeCouncil(blob, sender)
+	if type(blob) ~= "string" or #blob > 2000 then return false end
+	local text, at, realm, list, sig = blob:match("^(HS1~(%d+)~([^~]*)~([^~]*))~(%x+)$")
+	at = tonumber(at)
+	if not at then return false end
+	-- The list we hold (or an older one) is not checked again: each relay would cost every
+	-- client a signature check for nothing (0.9.8).
+	local c = ns.rdb.council
+	if type(c) == "table" and (tonumber(c.at) or 0) >= at then return false end
+	if sender and not MayVerify(sender, blob, ns.Now()) then return false end
+	if not ns.Sign or not ns.Sign.Verify(text, sig) then
+		if sender then
+			RememberFalse(blob)
+			ns.Log("High Council: a list from %s failed its signature", tostring(sender))
+		end
+		return false
+	end
+	local names, n = {}, 0
+	for name in list:gmatch("[^,]+") do
+		name = name:gsub("^%s+", ""):gsub("%s+$", "")
+		if name ~= "" and #name <= 48 and n < Workshop.COUNCIL_MAX then names[name:lower()], n = name, n + 1 end
+	end
+	ns.rdb.council = { at = at, names = names, realm = realm ~= "" and realm or nil, blob = blob }
+	ns.Log("High Council: a signed list of %d names (%s)", n, tostring(at))
+	ns.Fire("DATA_CHANGED")
+	return true
+end
+
+function Workshop.HandleCouncil(dist, sender, text)
+	if dist ~= "CHANNEL" or type(text) ~= "string" then return end
+	Workshop.TakeCouncil(text:match("^HS~(HS1~.*)$") or text, ns.FullName(sender))
+end
+ns.Comm.Handle("HS", function(...) Workshop.HandleCouncil(...) end)
+
+-- Passing the list along: the author's client each 10 minutes; any other one now and then, so
+-- about RELAYS clients a half hour, whatever the army's size.
+function Workshop.RelayCouncil(force)
+	local c = ns.rdb and ns.rdb.council
+	if type(c) ~= "table" or type(c.blob) ~= "string" then return end
+	local now = ns.Now()
+	local mine = ns.COUNCIL_SIGNED ~= nil
+	local every = mine and 600 or Workshop.RELAY_EVERY
+	if not force and now - lastCouncilSent < every then return end
+	lastCouncilSent = now
+	if not force and not mine then
+		local users = ns.King and ns.King.AddonsOnline and ns.King.AddonsOnline() or 1
+		if Workshop.random() > math.min(1, Workshop.RELAYS / users) then return end
+	end
+	ns.Comm.SendChunked("HS~" .. c.blob)
+end
+
+function Workshop.EditCouncil(verb)
+	local names = CouncilNames()
+	ns.Print(L.COUNCIL_LIST:format(#names > 0 and table.concat(names, ", ") or "-"))
+end
+
+-- Asking a High Councillor for help (Max's): the councillors who opted in (/oly council help on)
+-- say so on the channel every few minutes; a player's request goes by whisper to up to three
+-- of them online, once every five minutes at most.
+Workshop.HELP_EVERY, Workshop.HELP_FRESH, Workshop.HELP_GAP = 300, 700, 300
+local available, lastHelpSent, lastAvailSent, helpFrom = {}, -math.huge, -math.huge, {}
+local asking -- our request waiting for a councillor's "got it": { t, acked }
+Workshop.ACK_WAIT = 10
+function Workshop.SetCouncilHelp(on)
+	if not ns.IsHighCouncillor(ns.me) then return ns.Print(L.COUNCIL_HELP_ONLY) end
+	ns.db.councilHelp = on and true or false
+	ns.Print(on and L.COUNCIL_HELP_ON or L.COUNCIL_HELP_OFF)
+	lastAvailSent = -math.huge
+	-- Off: said at once, so nobody's request goes to us meanwhile.
+	if not on then ns.Comm.Send("CHANNEL", "HA~0", "counciladvert") end
+	Workshop.SayAvailable()
+end
+function Workshop.SayAvailable()
+	if not ns.db.councilHelp or not ns.IsHighCouncillor(ns.me) then return end
+	local now = ns.Now()
+	if now - lastAvailSent < Workshop.HELP_EVERY then return end
+	lastAvailSent = now
+	ns.Comm.Send("CHANNEL", "HA~1", "counciladvert")
+end
+function Workshop.HandleAvailable(dist, sender, text)
+	if dist ~= "CHANNEL" or not ns.IsHighCouncillor(sender) then return end
+	available[ns.FullName(sender)] = (text ~= "HA~0") and ns.Now() or nil
+end
+function Workshop.Available()
+	local out, now = {}, ns.Now()
+	for name, t in pairs(available) do if now - t <= Workshop.HELP_FRESH then out[#out + 1] = name end end
+	table.sort(out)
+	return out
+end
+function Workshop.AskCouncil(text)
+	text = ns.Cut(ns.Codec.Plain(tostring(text or "")), 180) -- (never half a letter, 0.9.8)
+	local now = ns.Now()
+	if now - lastHelpSent < Workshop.HELP_GAP then return ns.Print(L.COUNCIL_ASK_WAIT) end
+	local list = Workshop.Available()
+	if #list == 0 then return ns.Print(L.COUNCIL_ASK_NOBODY) end
+	lastHelpSent = now
+	for i = 1, math.min(3, #list) do
+		local k = Workshop.random(1, #list)
+		ns.Comm.Whisper(list[k], "HR~" .. text, "councilask" .. i)
+		table.remove(list, k)
+	end
+	-- Sent is not received (a councillor may have just logged off): told only when one of them
+	-- says "got it"; none within ACK_WAIT, the player is told and may ask again at once.
+	local mine = { t = now }
+	asking = mine
+	ns.After(Workshop.ACK_WAIT, "council ask", function()
+		if asking ~= mine or mine.acked then return end
+		asking, lastHelpSent = nil, -math.huge
+		ns.Print(L.COUNCIL_ASK_NOBODY)
+	end)
+end
+function Workshop.HandleCouncilAck(dist, sender)
+	if dist ~= "WHISPER" or not asking or asking.acked or not ns.IsHighCouncillor(sender) then return end
+	asking.acked = true
+	ns.Print(L.COUNCIL_ASK_SENT)
+end
+function Workshop.HandleAsk(dist, sender, text)
+	if dist ~= "WHISPER" or not ns.db.councilHelp or not ns.IsHighCouncillor(ns.me) then return end
+	local now, who = ns.Now(), ns.FullName(sender)
+	if now - (helpFrom[who] or -math.huge) < 60 then return end
+	helpFrom[who] = now
+	ns.Comm.Whisper(who, "HK~1", "councilack")
+	local msg = ns.Codec.Plain(text:match("^HR~(.*)$") or "")
+	ns.Print(L.COUNCIL_ASKED:format("|Hplayer:" .. ns.TellName(who) .. "|h[" .. ns.DisplayName(who) .. "]|h", msg))
+	ns.PlayAlert("soft")
+end
+ns.Comm.Handle("HA", function(...) Workshop.HandleAvailable(...) end)
+ns.Comm.Handle("HR", function(...) Workshop.HandleAsk(...) end)
+ns.Comm.Handle("HK", function(...) Workshop.HandleCouncilAck(...) end)
+function Workshop.ResetHelp() wipe(available); wipe(helpFrom); asking, lastHelpSent, lastAvailSent = nil, -math.huge, -math.huge end -- tests
+
+StaticPopupDialogs["OLYMPUS_COUNCIL_ASK"] = {
+	text = L.COUNCIL_ASK_PROMPT,
+	button1 = L.COUNCIL_ASK_SEND,
+	button2 = CANCEL or "Cancel",
+	hasEditBox = true,
+	maxLetters = 180,
+	editBoxWidth = 260, -- (a sentence, not a name)
+	OnAccept = function(self)
+		local eb = self.editBox or self.EditBox
+		ns.SafeCall("council ask", Workshop.AskCouncil, eb and eb:GetText() or "")
+	end,
+	-- Enter sends and Escape closes, as in our other boxes (0.9.8: Enter did nothing).
+	EditBoxOnEnterPressed = function(self)
+		ns.SafeCall("council ask", Workshop.AskCouncil, self:GetText())
+		self:GetParent():Hide()
+	end,
+	EditBoxOnEscapePressed = function(self) self:GetParent():Hide() end,
+	timeout = 0,
+	whileDead = true,
+	hideOnEscape = true,
+	preferredIndex = 3,
+}
+
+---------------------------------------------------------------------------
+-- The councillors' own icons (0.9.8, the High Council's wish): each councillor picks the icon
+-- before their name in the Olympus chats from the game's icons, as the macro window does (in a
+-- window of ours: Blizzard's macro icon window, opened from addon code, would run tainted). Their
+-- client says which on the channel when it changes, then about every ICON_EVERY. Every client
+-- keeps it for councillors only (ns.IsHighCouncillor of the sender the server stamped), and only
+-- a file number or a plain icon name under Interface\Icons (ns.CouncilIconValue): nothing else
+-- can reach the chat line. None heard yet: the default skull (Core.lua).
+--   HI~<file number or icon name>   |   HI~0   (back to the default skull)
+---------------------------------------------------------------------------
+
+Workshop.ICON_EVERY = 1200 -- about every 20 minutes (the council ticker runs once a minute)
+Workshop.ICON_COLS, Workshop.ICON_ROWS = 8, 5
+local ICON_CELL, ICON_GAP = 36, 4
+local lastIconSent = -math.huge
+local picker          -- the picker window, built the first time it opens
+local gameIcons       -- the game's icons while it is open (let go when it closes, like Blizzard's)
+local shownIcons      -- the ones the filter leaves
+local iconPage, iconChoice = 1, nil
+
+-- Our own icon (per character, like the council's names), or nil for the default skull. False
+-- is the default chosen on purpose: it is still said ("0"), so the old one fades everywhere.
+local function MyIcon()
+	local mine = ns.db and ns.db.councilIcons
+	return ns.CouncilIconValue(type(mine) == "table" and ns.me and mine[ns.me] or nil)
+end
+Workshop.MyIcon = MyIcon
+
+-- Our icon on the channel: at once when forced (a change), else every ICON_EVERY. Only a
+-- councillor's client says it, and only once they picked one (or the default back).
+function Workshop.SayIcon(force)
+	if not ns.IsHighCouncillor(ns.me) then return false end
+	local mine = ns.db and ns.db.councilIcons
+	if not force and (type(mine) ~= "table" or mine[ns.me] == nil) then return false end
+	local now = ns.Now()
+	if not force and now - lastIconSent < Workshop.ICON_EVERY then return false end
+	lastIconSent = now
+	ns.Comm.Send("CHANNEL", "HI~" .. tostring(MyIcon() or 0), "councilicon")
+	return true
+end
+
+-- A councillor's choice (the picker's OK): kept on this character and said at once; nil puts
+-- the default skull back.
+function Workshop.SetCouncilIcon(v)
+	if not ns.IsHighCouncillor(ns.me) then
+		ns.Print(L.COUNCIL_ICON_ONLY)
+		return false
+	end
+	local icon = ns.CouncilIconValue(v)
+	if v ~= nil and not icon then return false end
+	if type(ns.db.councilIcons) ~= "table" then ns.db.councilIcons = {} end
+	ns.db.councilIcons[ns.me] = icon or false
+	Workshop.SayIcon(true)
+	ns.Print(icon and L.COUNCIL_ICON_SET:format("|T" .. ns.CouncilIconTexture(icon) .. ":0|t") or L.COUNCIL_ICON_RESET)
+	return true
+end
+
+-- The icons heard, per realm group like the council's list (kept in the SavedVariables, so a
+-- /reload shows them at once): councillor (Name-Realm) -> { icon, t }.
+local function HeardIcons()
+	if type(ns.rdb.councilIcons) ~= "table" then ns.rdb.councilIcons = {} end
+	return ns.rdb.councilIcons
+end
+
+-- Councillors no longer on the list, and anything that is not an icon, go; past COUNCIL_MAX,
+-- the ones heard longest ago.
+local function PruneIcons(store)
+	local n = 0
+	for who, e in pairs(store) do
+		if type(who) ~= "string" or type(e) ~= "table" or not ns.CouncilIconValue(e.icon) or not ns.IsHighCouncillor(who) then
+			store[who] = nil
+		else
+			n = n + 1
+		end
+	end
+	while n > Workshop.COUNCIL_MAX do
+		local oldest, at = nil, math.huge
+		for who, e in pairs(store) do
+			local t = tonumber(e.t) or 0
+			if t < at then oldest, at = who, t end
+		end
+		if not oldest then break end
+		store[oldest], n = nil, n - 1
+	end
+end
+
+function Workshop.HandleIcon(dist, sender, text)
+	if dist ~= "CHANNEL" or not ns.IsHighCouncillor(sender) or type(text) ~= "string" then return end
+	local v = text:match("^HI~([%w_]+)$")
+	if not v then return end
+	local store, who = HeardIcons(), ns.FullName(sender)
+	if v == "0" then
+		store[who] = nil
+		return
+	end
+	local icon = ns.CouncilIconValue(v)
+	if not icon then return end
+	store[who] = { icon = icon, t = ns.Now() }
+	PruneIcons(store)
+end
+ns.Comm.Handle("HI", function(...) Workshop.HandleIcon(...) end)
+
+-- The game's icons, as the macro window lists them (Blizzard's IconDataProvider.lua): its loose
+-- icons, then the spells' and the items' (file numbers or names: Blizzard's code takes either).
+-- Each is a client function that fills a table; one a client lacks, or that fails, is skipped.
+-- Repeats, and anything ns.CouncilIconValue refuses, are left out. Also: whether any is a name
+-- (only names can be filtered; file numbers say nothing).
+local ICON_LISTS = { "GetLooseMacroIcons", "GetLooseMacroItemIcons", "GetMacroIcons", "GetMacroItemIcons" }
+function Workshop.GameIcons()
+	local out, seen, names = {}, {}, false
+	for _, api in ipairs(ICON_LISTS) do
+		local fill = _G[api]
+		local list = {}
+		if type(fill) == "function" and pcall(fill, list) then
+			for _, v in ipairs(list) do
+				local icon = ns.CouncilIconValue(v)
+				local key = icon and tostring(icon):lower()
+				if key and not seen[key] then
+					seen[key] = true
+					out[#out + 1] = icon
+					if type(icon) == "string" then names = true end
+				end
+			end
+		end
+	end
+	return out, names
+end
+
+local function IconLabel(icon)
+	return type(icon) == "number" and ("#" .. icon) or tostring(icon)
+end
+
+function Workshop.RefreshIconPicker()
+	if not picker then return end
+	local per = Workshop.ICON_COLS * Workshop.ICON_ROWS
+	local list = shownIcons or {}
+	local pages = math.max(1, math.ceil(#list / per))
+	iconPage = math.max(1, math.min(iconPage, pages))
+	for i, b in ipairs(picker.cells) do
+		local icon = list[(iconPage - 1) * per + i]
+		b.icon = icon
+		if icon then
+			b.art:SetTexture(ns.CouncilIconTexture(icon))
+			b.chosen:SetShown(icon == iconChoice)
+			b:Show()
+		else
+			b:Hide()
+		end
+	end
+	picker.page:SetText(L.COUNCIL_ICON_PAGE:format(iconPage, pages))
+	picker.prev:SetEnabled(iconPage > 1)
+	picker.next:SetEnabled(iconPage < pages)
+	picker.empty:SetShown(#list == 0)
+	-- The preview: the icon large, and our name as the chats will show it.
+	local texture = ns.CouncilIconTexture(iconChoice) or ns.HIGH_COUNCIL_SKULL
+	picker.preview:SetTexture(texture)
+	picker.sample:SetText("[" .. L.CHAN_ALL .. "] [|T" .. texture .. ":0|t|c" .. ns.HIGH_COUNCIL_COLOR .. (ns.DisplayName(ns.me) or "?") .. "|r]")
+	picker.chosenName:SetText(iconChoice and IconLabel(iconChoice) or L.COUNCIL_ICON_DEFAULT)
+end
+
+-- A click on an icon (or the default skull, nil): the preview only, until OK.
+function Workshop.PickIcon(icon)
+	iconChoice = ns.CouncilIconValue(icon)
+	Workshop.RefreshIconPicker()
+end
+
+function Workshop.IconPage(n)
+	iconPage = tonumber(n) or 1
+	Workshop.RefreshIconPicker()
+end
+
+-- The filter: the names (and file numbers) that hold the text, any case.
+function Workshop.FilterIcons(text)
+	text = tostring(text or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
+	if text == "" then
+		shownIcons = gameIcons
+	else
+		shownIcons = {}
+		for _, icon in ipairs(gameIcons or {}) do
+			if tostring(icon):lower():find(text, 1, true) then shownIcons[#shownIcons + 1] = icon end
+		end
+	end
+	iconPage = 1
+	Workshop.RefreshIconPicker()
+end
+
+local function PickerButton(f, label, width)
+	local b = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+	b:SetSize(width, 22)
+	b:SetText(label)
+	return b
+end
+
+-- Our own window on UIParent: movable, closed by its X (and by Escape with mouse and keyboard,
+-- ns.EscapeCloses), no Blizzard frame touched. Its filter box never takes the keyboard by
+-- itself: the player clicks into it (the gamepad UI's rule, ns.Focus).
+local function MakePicker()
+	local cols, rows = Workshop.ICON_COLS, Workshop.ICON_ROWS
+	local gridW = cols * ICON_CELL + (cols - 1) * ICON_GAP
+	local gridTop = -150
+	local gridBottom = gridTop - (rows * ICON_CELL + (rows - 1) * ICON_GAP)
+	local f = CreateFrame("Frame", "OlympusCouncilIconFrame", UIParent)
+	f:SetSize(gridW + 56, -gridBottom + 96)
+	f:SetPoint("CENTER", 0, 40)
+	f:SetFrameStrata("DIALOG")
+	f:SetToplevel(true)
+	f:SetClampedToScreen(true)
+	f:EnableMouse(true)
+	f:SetMovable(true)
+	f:RegisterForDrag("LeftButton")
+	f:SetScript("OnDragStart", f.StartMoving)
+	f:SetScript("OnDragStop", f.StopMovingOrSizing)
+	f:Hide()
+	local okBorder, border = pcall(CreateFrame, "Frame", nil, f, "DialogBorderTemplate")
+	if not okBorder or not border then
+		border = f:CreateTexture(nil, "BACKGROUND")
+		border:SetColorTexture(0, 0, 0, 0.85)
+	end
+	border:SetAllPoints()
+	f.title = f:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+	f.title:SetPoint("TOP", 0, -18)
+	f.title:SetText(L.COUNCIL_ICON_TITLE)
+	f.close = CreateFrame("Button", nil, f, "UIPanelCloseButton")
+	f.close:SetPoint("TOPRIGHT", -4, -4)
+	f.close:SetScript("OnClick", function() f:Hide() end)
+	-- The preview, and the hint.
+	f.preview = f:CreateTexture(nil, "ARTWORK")
+	f.preview:SetSize(40, 40)
+	f.preview:SetPoint("TOPLEFT", 28, -40)
+	f.sample = f:CreateFontString(nil, "ARTWORK", "ChatFontNormal")
+	f.sample:SetPoint("TOPLEFT", f.preview, "TOPRIGHT", 10, -3)
+	f.sample:SetWidth(gridW - 50)
+	f.sample:SetJustifyH("LEFT")
+	f.sample:SetWordWrap(false)
+	f.chosenName = f:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
+	f.chosenName:SetPoint("TOPLEFT", f.sample, "BOTTOMLEFT", 0, -6)
+	f.hint = f:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+	f.hint:SetPoint("TOPLEFT", 28, -88)
+	f.hint:SetWidth(gridW)
+	f.hint:SetJustifyH("LEFT")
+	f.hint:SetText(L.COUNCIL_ICON_HINT)
+	-- The filter (only when the game lists names).
+	f.filterLabel = f:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
+	f.filterLabel:SetPoint("TOPLEFT", 28, -124)
+	f.filterLabel:SetText(L.COUNCIL_ICON_FILTER)
+	local okBox, eb = pcall(CreateFrame, "EditBox", "OlympusCouncilIconFilter", f, "InputBoxTemplate")
+	if not okBox or not eb then eb = CreateFrame("EditBox", nil, f) end
+	eb:SetSize(160, 20)
+	eb:SetPoint("LEFT", f.filterLabel, "RIGHT", 12, 0)
+	eb:SetAutoFocus(false)
+	eb:SetMaxLetters(40)
+	eb:SetFontObject("ChatFontNormal")
+	eb.olympusBox = true
+	eb:SetScript("OnTextChanged", function(self) ns.SafeCall("council icon filter", Workshop.FilterIcons, self:GetText()) end)
+	eb:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
+	eb:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+	f.filter = eb
+	-- The grid, a page at a time (the mouse wheel turns them too).
+	f.cells = {}
+	for i = 1, cols * rows do
+		local b = CreateFrame("Button", nil, f)
+		b:SetSize(ICON_CELL, ICON_CELL)
+		local col, row = (i - 1) % cols, math.floor((i - 1) / cols)
+		b:SetPoint("TOPLEFT", 28 + col * (ICON_CELL + ICON_GAP), gridTop - row * (ICON_CELL + ICON_GAP))
+		b.art = b:CreateTexture(nil, "ARTWORK")
+		b.art:SetAllPoints()
+		b:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
+		b.chosen = b:CreateTexture(nil, "OVERLAY")
+		b.chosen:SetTexture("Interface\\Buttons\\CheckButtonHilight")
+		b.chosen:SetBlendMode("ADD")
+		b.chosen:SetAllPoints()
+		b.chosen:Hide()
+		b:SetScript("OnClick", function(self) ns.SafeCall("council icon pick", Workshop.PickIcon, self.icon) end)
+		b:SetScript("OnEnter", function(self)
+			if not self.icon or not GameTooltip then return end
+			GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+			GameTooltip:AddLine(IconLabel(self.icon), 1, 1, 1)
+			GameTooltip:Show()
+		end)
+		b:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+		f.cells[i] = b
+	end
+	f.empty = f:CreateFontString(nil, "ARTWORK", "GameFontDisable")
+	f.empty:SetPoint("TOP", 0, gridTop - 20)
+	f.empty:SetText(L.COUNCIL_ICON_NONE)
+	f:EnableMouseWheel(true)
+	f:SetScript("OnMouseWheel", function(_, delta) ns.SafeCall("council icon page", Workshop.IconPage, iconPage - delta) end)
+	f.prev = PickerButton(f, "<", 32)
+	f.prev:SetPoint("TOPLEFT", 28, gridBottom - 8)
+	f.prev:SetScript("OnClick", function() ns.SafeCall("council icon page", Workshop.IconPage, iconPage - 1) end)
+	f.next = PickerButton(f, ">", 32)
+	f.next:SetPoint("TOPRIGHT", -28, gridBottom - 8)
+	f.next:SetScript("OnClick", function() ns.SafeCall("council icon page", Workshop.IconPage, iconPage + 1) end)
+	f.page = f:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+	f.page:SetPoint("TOP", 0, gridBottom - 13)
+	-- The default skull, Cancel and OK. OK with nothing changed only closes.
+	f.default = PickerButton(f, L.COUNCIL_ICON_DEFAULT, 120)
+	f.default:SetPoint("BOTTOMLEFT", 24, 18)
+	f.default:SetScript("OnClick", function() ns.SafeCall("council icon pick", Workshop.PickIcon, nil) end)
+	f.ok = PickerButton(f, OKAY or "OK", 90)
+	f.ok:SetPoint("BOTTOMRIGHT", -24, 18)
+	f.ok:SetScript("OnClick", function()
+		ns.SafeCall("council icon ok", function()
+			if iconChoice == MyIcon() or Workshop.SetCouncilIcon(iconChoice) then f:Hide() end
+		end)
+	end)
+	f.cancel = PickerButton(f, CANCEL or "Cancel", 90)
+	f.cancel:SetPoint("RIGHT", f.ok, "LEFT", -8, 0)
+	f.cancel:SetScript("OnClick", function() f:Hide() end)
+	f:SetScript("OnHide", function(self)
+		if self:IsShown() then return end -- the whole interface hidden (Alt+Z): still open
+		self.filter:ClearFocus()
+		gameIcons, shownIcons = nil, nil
+	end)
+	return f
+end
+
+-- /oly council icon, and the Realm tab's button: a councillor's alone.
+function Workshop.ShowIconPicker()
+	if not ns.IsHighCouncillor(ns.me) then
+		ns.Print(L.COUNCIL_ICON_ONLY)
+		return false
+	end
+	picker = picker or MakePicker()
+	local names
+	gameIcons, names = Workshop.GameIcons()
+	shownIcons, iconChoice = gameIcons, MyIcon()
+	picker.filter:SetText("")
+	picker.filter:SetShown(names)
+	picker.filterLabel:SetShown(names)
+	-- It opens at the page of the icon in use.
+	iconPage = 1
+	for i, icon in ipairs(gameIcons) do
+		if icon == iconChoice then
+			iconPage = math.floor((i - 1) / (Workshop.ICON_COLS * Workshop.ICON_ROWS)) + 1
+			break
+		end
+	end
+	Workshop.RefreshIconPicker()
+	picker:Show()
+	ns.EscapeCloses("OlympusCouncilIconFrame")
+	return true
+end
+
+function Workshop.IconPicker() return picker end
+
+-- Tests start from a clean state.
+function Workshop.ResetIcons()
+	if picker then picker:Hide() end
+	picker, gameIcons, shownIcons, iconPage, iconChoice = nil, nil, nil, 1, nil
+	lastIconSent = -math.huge
+end
+
+-- At login. The author's machine holds the signed list (CouncilList.lua, never published): his
+-- client takes it and sends the newest it holds at once. Any other client passes the list
+-- along a whole RELAY_EVERY after login at the earliest (0.9.8): until the census says how
+-- many addons are online, each would count itself alone and relay for sure, the whole army
+-- at once after a server restart.
+function Workshop.CouncilLogin()
+	lastCouncilSent = ns.Now()
+	if ns.COUNCIL_SIGNED then
+		Workshop.TakeCouncil(ns.COUNCIL_SIGNED)
+		ns.After(15, "council", function() Workshop.RelayCouncil(true) end)
+	end
+	ns.Every(60, "council", function()
+		Workshop.RelayCouncil()
+		Workshop.SayAvailable()
+		Workshop.SayIcon()
+	end)
+end
+ns.On("LOGIN", function() Workshop.CouncilLogin() end)
 
 ns.Comm.Handle("V1", function(...) Workshop.HandleRoll(...) end)
 ns.Comm.Handle("V2", function(...) Workshop.HandleAnswer(...) end)

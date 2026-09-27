@@ -752,6 +752,38 @@ L.ISSUE_SHOWN = "Blizzard's Issue Reporter is shown again. /oly issuereporter hi
 L.HELP_ISSUE = "  /oly issuereporter hide|show - hide Blizzard's Issue Reporter box (beta clients) at every login, or show it"
 -- 0.9.6: treasury
 L.TREASURY_IN_ALL = "(%s in all)"
+-- 0.9.7: the High Council
+L.COUNCIL_LIST = "High Council: %s"
+L.COUNCIL_HELP_ON = "You now take requests for a High Councillor (/oly council help off stops them)."
+L.COUNCIL_HELP_OFF = "You no longer take requests for a High Councillor."
+L.COUNCIL_ASK_PROMPT = "Ask a High Councillor (a moderator) for help. What is it about?"
+L.COUNCIL_ASK_SEND = "Send"
+L.COUNCIL_ASK_SENT = "Your request went to the High Councillors online. One of them will whisper you."
+L.COUNCIL_ASK_NOBODY = "No High Councillor is taking requests right now. Try again later."
+L.COUNCIL_ASK_WAIT = "You asked a few minutes ago: wait a little before asking again."
+L.COUNCIL_ASKED = "|cffb048f8High Council:|r %s asks for help: %s"
+L.COUNCIL_ASK_BTN = "Ask a High Councillor"
+-- 0.9.7: leaderboards
+L.SHOW_MORE = "Show %d more (%d of %d)"
+-- 0.9.8: review-fixes
+L.HELP_COUNCIL = "  /oly helpme [text] - ask the High Council (the moderators) for help; /oly council list | help on|off (moderators)"
+-- 0.9.8: gamepad
+L.BLOCKED_GAMEPAD = "The game blocked an Olympus action while you play with the gamepad. Please type /oly bug and send us the text: it says which action it was."
+L.WHO_GAMEPAD = "With the gamepad UI the answer shows in the game's own Who list (Olympus reads it from there), and Olympus no longer searches on its own."
+L.ISSUE_GAMEPAD = "With the gamepad UI the game hides the Issue Reporter itself (it only comes with the game's menu): Olympus leaves it alone there."
+-- 0.9.8: council-icon
+L.COUNCIL_ICON_BTN = "My council icon"
+L.COUNCIL_ICON_BTN_TIP = "Pick the icon shown before your name in the Olympus chats (High Councillors only)."
+L.COUNCIL_ICON_TITLE = "Your High Council icon"
+L.COUNCIL_ICON_HINT = "The icon before your name in the Olympus chats, for everyone with the addon. Click one, then OK."
+L.COUNCIL_ICON_FILTER = "Filter"
+L.COUNCIL_ICON_PAGE = "Page %d of %d"
+L.COUNCIL_ICON_DEFAULT = "Default skull"
+L.COUNCIL_ICON_NONE = "No icon found."
+L.COUNCIL_ICON_ONLY = "Only a High Councillor picks a council icon."
+L.COUNCIL_ICON_SET = "Your council icon is now %s: the Olympus chats show it before your name."
+L.COUNCIL_ICON_RESET = "The default skull is back before your name in the Olympus chats."
+L.COUNCIL_HELP_ONLY = "Only a High Councillor takes help requests."
 if GetLocale and GetLocale() == "ptBR" then
 	L.THOUSANDS = "."
 	L.ARMY_TOTAL = "%s soldados"
@@ -1460,4 +1492,36 @@ if GetLocale and GetLocale() == "ptBR" then
 	L.HELP_ISSUE = "  /oly issuereporter hide|show - esconder o Issue Reporter da Blizzard (clientes beta) em todo login, ou mostrar"
 	-- 0.9.6: treasury
 	L.TREASURY_IN_ALL = "(%s no total)"
+	-- 0.9.7: the High Council
+	L.COUNCIL_LIST = "High Council: %s"
+	L.COUNCIL_HELP_ON = "Você agora recebe pedidos de ajuda ao High Council (/oly council help off para)."
+	L.COUNCIL_HELP_OFF = "Você não recebe mais pedidos de ajuda ao High Council."
+	L.COUNCIL_ASK_PROMPT = "Pedir ajuda a um High Councillor (moderador). Qual o assunto?"
+	L.COUNCIL_ASK_SEND = "Enviar"
+	L.COUNCIL_ASK_SENT = "Seu pedido foi aos High Councillors online. Um deles vai te sussurrar."
+	L.COUNCIL_ASK_NOBODY = "Nenhum High Councillor está recebendo pedidos agora. Tente mais tarde."
+	L.COUNCIL_ASK_WAIT = "Você pediu há poucos minutos: espere um pouco antes de pedir de novo."
+	L.COUNCIL_ASKED = "|cffb048f8High Council:|r %s pede ajuda: %s"
+	L.COUNCIL_ASK_BTN = "Pedir um High Councillor"
+	-- 0.9.7: leaderboards
+	L.SHOW_MORE = "Mostrar mais %d (%d de %d)"
+	-- 0.9.8: review-fixes
+	L.HELP_COUNCIL = "  /oly helpme [texto] - pedir ajuda ao High Council (os moderadores); /oly council list | help on|off (moderadores)"
+	-- 0.9.8: gamepad
+	L.BLOCKED_GAMEPAD = "O jogo bloqueou uma ação do Olympus enquanto você joga com o controle. Digite /oly bug e mande o texto para nós: ele diz qual ação foi."
+	L.WHO_GAMEPAD = "Com a interface de controle a resposta aparece na própria lista Quem do jogo (o Olympus lê de lá), e o Olympus não busca mais sozinho."
+	L.ISSUE_GAMEPAD = "Com a interface de controle o próprio jogo esconde o Issue Reporter (ele só aparece com o menu do jogo): lá o Olympus não mexe nele."
+	-- 0.9.8: council-icon
+	L.COUNCIL_ICON_BTN = "Meu ícone do Conselho"
+	L.COUNCIL_ICON_BTN_TIP = "Escolha o ícone mostrado antes do seu nome nos chats do Olympus (só High Councillors)."
+	L.COUNCIL_ICON_TITLE = "Seu ícone do High Council"
+	L.COUNCIL_ICON_HINT = "O ícone antes do seu nome nos chats do Olympus, para todos com o addon. Clique em um e depois em OK."
+	L.COUNCIL_ICON_FILTER = "Filtro"
+	L.COUNCIL_ICON_PAGE = "Página %d de %d"
+	L.COUNCIL_ICON_DEFAULT = "Caveira padrão"
+	L.COUNCIL_ICON_NONE = "Nenhum ícone encontrado."
+	L.COUNCIL_ICON_ONLY = "Só um High Councillor escolhe um ícone do Conselho."
+	L.COUNCIL_ICON_SET = "Seu ícone do Conselho agora é %s: os chats do Olympus o mostram antes do seu nome."
+	L.COUNCIL_ICON_RESET = "A caveira padrão voltou antes do seu nome nos chats do Olympus."
+	L.COUNCIL_HELP_ONLY = "Só um High Councillor recebe pedidos de ajuda."
 end

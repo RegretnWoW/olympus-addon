@@ -202,6 +202,15 @@ local DETAIL_BUTTONS = {
 	},
 }
 -- (0.9.2: no "Publish shame" button any more: the untabarded list is the King's, Throne tab.)
+-- Asking a High Councillor (a moderator) for help, on the Realm tab (0.9.7, Workshop.lua).
+DETAIL_BUTTONS.realm = DETAIL_BUTTONS.realm or {}
+table.insert(DETAIL_BUTTONS.realm, { "COUNCIL_ASK_BTN", function() ns.ShowDialog("OLYMPUS_COUNCIL_ASK") end,
+	-- Only where a council exists (a signed list reached us).
+	shown = function() local c = ns.rdb and ns.rdb.council return type(c) == "table" and next(c.names or {}) ~= nil end })
+-- A councillor's own icon before their name in the Olympus chats (0.9.8, Workshop.lua): shown
+-- to councillors alone.
+table.insert(DETAIL_BUTTONS.realm, { "COUNCIL_ICON_BTN", function() ns.Workshop.ShowIconPicker() end,
+	shown = function() return ns.IsHighCouncillor(ns.me) end })
 
 -- Buttons that come and go (def.shown): only the ones shown, in order.
 local function Shown(defs)
@@ -333,13 +342,19 @@ end
 function UI.IssueReporterHidden() return ns.db and ns.db.hideIssueReporter == true end
 
 function UI.ApplyIssueReporter()
+	-- Blizzard's gamepad UI (0.9.8): the game hides the Issue Reporter there itself and shows it
+	-- only with its gamepad menu, centred, with bindings of its own (see
+	-- Blizzard_PTRFeedback_Gamepad.lua), so it never covers our window. Hidden from our code, its
+	-- hide would run that gamepad code from ours: Olympus leaves it alone there (no hook, no
+	-- button, never hidden or shown).
+	if ns.GamepadUI() then return false end
 	local r = Reporter()
 	if not r then return false end
 	if not reporterHooked and r.HookScript then
 		reporterHooked = true
 		-- Hooked, not replaced: Blizzard's own OnShow runs as always, then it goes away.
 		r:HookScript("OnShow", function(self)
-			if UI.IssueReporterHidden() and CanTouch(self) then
+			if UI.IssueReporterHidden() and CanTouch(self) and not ns.GamepadUI() then
 				self:Hide()
 				hiddenByUs = true
 			end
@@ -374,6 +389,7 @@ end
 function UI.SetIssueReporterHidden(on)
 	ns.db.hideIssueReporter = on and true or false
 	ns.Print(on and L.ISSUE_HIDDEN or L.ISSUE_SHOWN)
+	if ns.GamepadUI() then ns.Print(L.ISSUE_GAMEPAD) end
 	UI.ApplyIssueReporter()
 end
 function UI.ResetIssueReporter() reporterHooked, hiddenByUs = false, false end -- tests
