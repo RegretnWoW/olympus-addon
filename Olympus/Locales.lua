@@ -289,7 +289,6 @@ L.THRONE_INSPECT_TIP = "A raid warning for the whole army, then every soldier wi
 L.THRONE_AGENDA = "Agenda"
 L.THRONE_AGENDA_TIP = "Set the hour of the next royal event: the whole army sees it on the Census page and gets reminders."
 L.THRONE_SHAME = "Untabarded"
-L.THRONE_LETTER_BTN = "The letter"
 L.THRONE_AGENDA_TITLE = "The King's Agenda"
 L.THRONE_AGENDA_NONE = "No royal event set. Press Agenda: minutes, then what."
 L.THRONE_AGENDA_CANCELLED = "The King's Agenda is cancelled."
@@ -333,48 +332,11 @@ L.THRONE_INSPECT_SUMMARY = "%d patrols, %d checks, %d%% wearing the tabard"
 L.THRONE_VIOLATORS = "Caught without their colors (%d)"
 L.THRONE_YOU_ARE_KING = "This page is yours alone, Sire. Only the King's commands reach the army from here."
 L.THRONE_PREVIEW = "Preview: only the King's own client can send from this page."
-L.THRONE_LETTER = [[September 24, 2026
-
-*To His Majesty,
-*Asmongold, King of Olympus
-
-Sire, forgive this humble interruption.
-While Your Majesty conquered Azeroth,
-a loyal servant counted Your army:
-every Olympus guild, every soldier,
-every Lord, in one window.
-
-This tab is Yours alone, Sire:
-- The King's Agenda (below): set the
-  hour, the whole army sees it
-- Hold Court (below) where You stand
-- Summon the Lords (the Realm tab):
-  see who answers "Present, my King"
-- A Royal Inspection (the Tabards
-  tab): every soldier checks the
-  tabards around them
-- Vox Populi (its own tab): ask the
-  army, every answer in a chart
-- Royal Writs to Your Lords (the
-  Decrees tab), and Hands to rule
-  in Your name (the Hands button)
-- The Treasury, kept by Your
-  Treasurer (its own tab)
-
-Should Your Majesty wish for any
-other feature, just let me know.
-
-At Your service, Your Majesty.
-
-*Faladoriel Skylance
-Level 4. I bought the game yesterday.
-I will level, Sire. Eventually.]]
 -- 0.8.3: the Throne Room, the Hands of the King, Vox Populi, the court, the treasury,
 -- royal writs, the gates, pardons, the chats in the Realm.
 L.THRONE_ROOM = "The Throne Room"
 L.THRONE_ROOM_HAND = "The Throne Room (Hand of %s)"
 L.THRONE_YOU_ARE_HAND = "You are a Hand of %s: the roll call, the inspection, the agenda, Vox Populi and the gates are yours to use in his name."
-L.THRONE_ENTER = "Enter the Throne Room"
 L.HANDS_TITLE = "The Hands of the King"
 L.HANDS_HINT = "Your Hands use the roll call, the inspection, the agenda, Vox Populi and the gates in your name. Never the court, writs, pardons, the treasury or your crown on the map."
 L.HANDS_ADD = "Name a Hand (your target, or type a name)"
@@ -1094,7 +1056,6 @@ if GetLocale and GetLocale() == "ptBR" then
 	L.THRONE_AGENDA = "Agenda"
 	L.THRONE_AGENDA_TIP = "Marque a hora do próximo evento real: o exército inteiro vê na página do Censo e recebe lembretes."
 	L.THRONE_SHAME = "Sem tabardo"
-	L.THRONE_LETTER_BTN = "A carta"
 	L.THRONE_AGENDA_TITLE = "Agenda do Rei"
 	L.THRONE_AGENDA_NONE = "Nenhum evento real marcado. Aperte Agenda: minutos e depois o quê."
 	L.THRONE_AGENDA_CANCELLED = "A Agenda do Rei foi cancelada."
@@ -1141,7 +1102,6 @@ if GetLocale and GetLocale() == "ptBR" then
 	L.THRONE_ROOM = "A Sala do Trono"
 	L.THRONE_ROOM_HAND = "A Sala do Trono (Mão de %s)"
 	L.THRONE_YOU_ARE_HAND = "Você é uma Mão de %s: a chamada, a inspeção, a agenda, a Vox Populi e os portões são seus para usar em nome dele."
-	L.THRONE_ENTER = "Entrar na Sala do Trono"
 	L.HANDS_TITLE = "As Mãos do Rei"
 	L.HANDS_HINT = "Suas Mãos usam a chamada, a inspeção, a agenda, a Vox Populi e os portões em seu nome. Nunca a corte, os éditos, os perdões, o tesouro ou sua coroa no mapa."
 	L.HANDS_ADD = "Nomear uma Mão (seu alvo, ou digite um nome)"

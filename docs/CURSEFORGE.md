@@ -162,9 +162,9 @@ Before your first line in each channel the addon tells you this and waits for **
 ### The Throne (the King and his Hands)
 A tab with a crown that only the King sees: the guild master of the guild named exactly
 "Olympus" (of his faction), and on the Alliance that very character, Asmongold Asmongler: the
-addon knows him by name, like the Treasurer. It opens on the author's letter, its cover; **the Throne Room**
-(the queue of his court while it is open, and the Treasury) is a click away, and holding
-court takes him there. Each of his tools lives where it belongs:
+addon knows him by name, like the Treasurer. It opens on **the Throne Room** (the queue of
+his court while it is open, and the Treasury), and holding court takes him there. Each of his
+tools lives where it belongs:
 - **The King's Agenda** (a button on the Throne): minutes and an event ("30 Raid on
   Crossroads"). The whole army gets a popup with the appointment (what, in how long, where)
   and sees it on the Census, with reminders 10 minutes and 1 minute before.

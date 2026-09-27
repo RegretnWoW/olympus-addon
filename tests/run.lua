@@ -372,20 +372,28 @@ test("Throne: only the King sees it and his commands are checked; Lords answer h
 		GetGuildInfo = function() return "Olympus", "King", 0 end
 		ns.me = "Asmongold Asmongler-Realm"
 		eq(K.IsKing(), true); eq(K.Visible(), true)
-		K.Reset() -- the Throne opens on the letter until the King has read it
-		local savedRead = ns.db.throneLetterRead
-		ns.db.throneLetterRead = nil
+		K.Reset() -- 1.0.0: the Throne opens on the Throne Room itself, no letter before it
 		local lines = K.Build(ns.Data.Summary())
-		eq(lines[1].text, "< " .. ns.L.THRONE_ROOM, "the letter, leading to the Throne Room")
-		eq(lines[2].text, "September 24, 2026", "the letter, dated")
-		assert(lines[4].text:find("To His Majesty"), lines[4].text)
-		assert(lines[#lines].text:find(ns.L.THRONE_ENTER, 1, true) and lines[#lines].onClick, "and at its end")
-		lines[#lines].onClick()
-		eq(ns.db.throneLetterRead, true, "read")
-		eq(K.Build(ns.Data.Summary())[1].text, ns.L.THRONE_ROOM, "entered: the Throne Room")
+		eq(lines[1].text, ns.L.THRONE_ROOM, "the Throne Room, first thing")
+		eq(K.mode, "home")
+		-- Another page (his Hands) leads back to it; the next session opens on it again.
+		K.Show("hands")
+		eq(K.Build(ns.Data.Summary())[1].text, "< " .. ns.L.THRONE_ROOM, "the Hands' page, back to the Throne Room")
 		K.Reset()
-		eq(K.Build(ns.Data.Summary())[1].text, "< " .. ns.L.THRONE_ROOM, "the next session opens on the letter again: the Throne's cover")
-		ns.db.throneLetterRead = savedRead
+		eq(K.Build(ns.Data.Summary())[1].text, ns.L.THRONE_ROOM, "the next session: the Throne Room again")
+		-- The letter's page is gone: asked for by its old name, the Throne Room shows.
+		K.Show("letter")
+		eq(K.Build(ns.Data.Summary())[1].text, ns.L.THRONE_ROOM, "no page by that name")
+		K.Reset()
+		-- Its words are gone too, in English and in Portuguese.
+		local pt, savedLocale = {}, GetLocale
+		GetLocale = function() return "ptBR" end
+		local okPt, errPt = pcall(function() assert(loadfile(ADDON_DIR .. "Locales.lua"))("Olympus", pt) end)
+		GetLocale = savedLocale
+		assert(okPt, errPt)
+		for _, key in ipairs({ "THRONE_LETTER", "THRONE_LETTER_BTN", "THRONE_ENTER" }) do
+			eq(rawget(ns.L, key), nil, key); eq(rawget(pt.L, key), nil, "pt-BR " .. key)
+		end
 		K.Summon()
 		eq(#sent, 1); assert(sent[1]:find("^CHANNEL T1~S~%d+~Olympus$"), sent[1])
 		local id = tonumber(sent[1]:match("T1~S~(%d+)"))

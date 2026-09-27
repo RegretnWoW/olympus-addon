@@ -45,8 +45,7 @@ King.MAX_HANDS = 40          -- Hands of the King (the list goes out in pieces w
 King.HANDS_EVERY = 300       -- the King's client repeats the list for late logins
 King.HANDS_FRESH = 20 * 60   -- a list the King stopped repeating (he left) ends
 
-King.mode = nil              -- what the tab shows: home, hands or letter (nil: the letter until
-                             -- the King has read it, then home)
+King.mode = nil              -- what the tab shows: home or hands (nil: home, the Throne Room)
 local summon, inspect        -- the King's own roll call / inspection in progress
 local agenda                 -- the agenda everyone sees: { id, title, at, zone, by }
 local lastSummonSeen, lastInspectSeen, inspecting = -math.huge, -math.huge, nil
@@ -961,15 +960,6 @@ local function Para(lines, text, font, extra)
 end
 King.Para = Para
 
-function King.LetterLines()
-	local lines = {}
-	for part in (L.THRONE_LETTER .. "\n"):gmatch("(.-)\n") do
-		lines[#lines + 1] = Line(part, part:find("^%*") and TITLE or INK)
-		if part:find("^%*") then lines[#lines].text = part:sub(2) end
-	end
-	return lines
-end
-
 ---------------------------------------------------------------------------
 -- Where the King's calls show: the roll call in the Realm tab (next to the Lords it calls),
 -- the Royal Inspection in the Tabards tab. Plain rows (not the parchment), for the King and
@@ -1151,24 +1141,18 @@ end
 King.KING_PAGES = { hands = true }
 
 -- For Views.Build("throne"): lines, detail title, detail text.
--- The King's Throne opens on the author's letter, its cover: the Throne Room (his court's
--- queue while it is open, the treasury) is a click away, and holding court takes him there.
--- A Hand's opens on the Throne Room.
+-- The Throne opens on the Throne Room (the King's: his court's queue while it is open, the
+-- treasury; a Hand's: where their tools are), and holding court takes him there. (1.0.0: no
+-- letter before it any more.)
 function King.Build(s)
 	local lines, home
-	local mine = King.IsKing() or King.Preview()
-	if not King.mode then King.mode = mine and "letter" or "home" end
+	if not King.mode then King.mode = "home" end
 	local mode = King.mode
 	if King.KING_PAGES[mode] and not (King.IsKing() or King.Preview()) then mode = "home" end
 	if mode == "hands" then lines = HandsLines()
-	elseif mode == "letter" then lines = King.LetterLines()
 	else lines, home = HomeLines(), true end
-	-- Every other page leads back to the Throne Room (the letter also at its end).
+	-- Every other page leads back to the Throne Room.
 	if not home then table.insert(lines, 1, Line("< " .. L.THRONE_ROOM, INK, { onClick = Go("home"), gapAfter = true })) end
-	if mode == "letter" then
-		lines[#lines].gapAfter = true
-		lines[#lines + 1] = Line(L.THRONE_ENTER .. " >", TITLE, { onClick = Go("home") })
-	end
 	-- While the army sees him on the map, the page says so on top, whatever it shows.
 	if King.SharingLocation() and King.IsKing() then
 		table.insert(lines, 1, Line("|T" .. ns.CROWN_ICON .. ":0|t " .. L.THRONE_LOCATION_LIVE, TITLE, { gapAfter = true }))
@@ -1177,8 +1161,6 @@ function King.Build(s)
 end
 
 function King.Show(mode)
-	-- Leaving the letter for another page: read.
-	if King.mode == "letter" and mode ~= "letter" and (King.IsKing() or King.Preview()) then ns.db.throneLetterRead = true end
 	King.mode = mode
 	Changed()
 end

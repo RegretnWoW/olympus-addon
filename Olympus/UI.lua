@@ -100,7 +100,7 @@ local BUTTONS = {
 		{ "MARK_TARGET", function() ns.Inspect.MarkTarget() end },
 		{ "COPY_BTN", function() UI.ShowCopy(L.INSPECT_TITLE, ns.Inspect.DiscordText()) end },
 	},
-	-- The Throne: the agenda (the King and his Hands), the court (the King's), the letter.
+	-- The Throne: the agenda (the King and his Hands), the court (the King's).
 	-- The roll call lives in the Realm, the inspection in the Tabards (King.RollCallLines...).
 	throne = {
 		{ "THRONE_AGENDA", function() ns.King.AgendaPrompt() end },
@@ -110,7 +110,6 @@ local BUTTONS = {
 				tt:AddLine(L.COURT_TITLE, 1, 0.82, 0)
 				tt:AddLine(L.COURT_BTN_TIP, 1, 1, 1, true)
 			end },
-		{ "THRONE_LETTER_BTN", function() ns.King.Show("letter") end },
 	},
 	vox = {
 		{ "VOX_NEW", function() ns.Vox.Prompt() end },
