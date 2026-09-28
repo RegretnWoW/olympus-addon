@@ -161,6 +161,10 @@ local function Hand(name)
 end
 
 function King.IsHand() return not King.IsKing() and ns.IsMember() and Hand(ns.me) end
+-- Whether the King's list names this sender (1.0.0): his word alone, never a census vote. His
+-- Hands speak with his Crown for his guild on every client outside it (Decree.lua,
+-- Channels.VerifiedLevel); on its own members' clients its roster says who speaks for it.
+function King.IsHandName(name) return type(name) == "string" and Hand(name) end
 function King.Hands() return myHands end
 
 -- The King may send it, or one of his Hands if it is theirs to use too (soft: his position).

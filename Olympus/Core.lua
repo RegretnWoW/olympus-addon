@@ -769,7 +769,8 @@ end
 -- from it, never from the census). Anywhere else the census alone could name them, and three
 -- outsiders' reports were enough to add one of their own: there they are Captains like any
 -- guild's officers, and the Crown of the King's guild is the King himself (his pinned name) and
--- the Hands he names for his tools (King.Authorized).
+-- the Hands his list names (King.IsHandName: his word, never a vote), who speak for his guild
+-- with his Crown there (Decree.lua, Channels.VerifiedLevel) besides his tools (King.Authorized).
 function ns.IsCrownRank(guild, rankIndex)
 	if not guild or not rankIndex then return false end
 	if rankIndex == 0 then return true end

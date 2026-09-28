@@ -179,9 +179,15 @@ ns.Comm.Handle("D1", function(dist, sender, text)
 	local d = ns.Codec.DecodeDecree(text)
 	if not d or not ns.IsFederation(d.guild) then return end
 	-- The King by his pinned name (the server stamps it), never by a vote: his decree needs no
-	-- census. Everyone else: the rank we can verify, never the rank written in the message.
-	local king = ns.IsKingGuild(d.guild) and ns.IsKingCharacter(sender)
-	local rank = king and 0 or ns.Data.KnownRank(sender, d.guild)
+	-- census. So do his Hands' for his guild (the list he last sent, King.IsHandName), on every
+	-- client outside it: there they are of his Crown on his word (1.0.0); on its own members'
+	-- clients its roster says who speaks for it. Everyone else: the rank we can verify, never
+	-- the rank written in the message.
+	local mine = GetGuildInfo("player")
+	local kings = ns.IsKingGuild(d.guild)
+	local king = kings and ns.IsKingCharacter(sender)
+	local hand = kings and not king and not ns.IsKingGuild(mine) and ns.King ~= nil and ns.King.IsHandName(sender)
+	local rank = (king or hand) and 0 or ns.Data.KnownRank(sender, d.guild)
 	if not rank then
 		ns.Log("decree from %s ignored: rank in %s not verified", sender, d.guild)
 		return
@@ -192,11 +198,10 @@ ns.Comm.Handle("D1", function(dist, sender, text)
 	elseif rank > ns.CAPTAIN_RANK then
 		return
 	end
-	-- The King and our own guild's officers (our roster: the server's word) never wait behind the
-	-- flood guard, which census ranks (anyone's votes) can fill. Anyone else speaks for one guild
-	-- only, as in the chats (Data.ClaimGuild).
-	local mine = GetGuildInfo("player")
-	local sure = king or (mine ~= nil and d.guild == mine and ns.Roster.RankOf(sender) ~= nil)
+	-- The King, his Hands and our own guild's officers (our roster: the server's word) never wait
+	-- behind the flood guard, which census ranks (anyone's votes) can fill. Anyone else speaks for
+	-- one guild only, as in the chats (Data.ClaimGuild).
+	local sure = king or hand or (mine ~= nil and d.guild == mine and ns.Roster.RankOf(sender) ~= nil)
 	if not sure and not ns.Data.ClaimGuild(sender, d.guild) then
 		ns.Log("decree from %s ignored: speaks for another guild than %s", sender, d.guild)
 		return

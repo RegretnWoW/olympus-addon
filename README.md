@@ -147,7 +147,8 @@ Any soldier can reach the Lord of another Olympus guild in two clicks.
 the officers of `<Olympus>` are of the Crown for `<Olympus>`'s own members, whose roster (the
 server's word) names them: on every other client, where only the census could, they count as
 Captains, and the Crown of `<Olympus>` there is the King himself (by his character's name) and
-the Hands he names.
+the Hands he names, on his word alone: while his list names them, a Hand who is one of its
+officers has its Royal decrees, Tabard inspections and [Lords] lines on every client.
 
 ### Channels
 Chat for the whole federation, carried by the addon over its hidden Olympus channel (no
@@ -157,7 +158,7 @@ WoW channel number to join). Each channel is exclusive to a rank:
 |---|---|---|
 | **[Olympus]** | `/ol <text>` | every member of every Olympus guild |
 | **[Captains]** | `/olc <text>` | the Captains (rank 1) and Lords of every Olympus guild |
-| **[Lords]** | `/oll <text>` | the Lords (every guild master, the King included) and the officers of `<Olympus>` (their lines show to `<Olympus>`'s own members, 1.0.0) |
+| **[Lords]** | `/oll <text>` | the Lords (every guild master, the King included) and the officers of `<Olympus>` (their lines show to `<Olympus>`'s own members, and to everyone for those the King names his Hands, 1.0.0) |
 
 - Higher ranks also use the channels below theirs: a Lord writes in all three.
 - `/oly mute captains` (or `olympus`, `lords`) hides a channel in chat; the same command shows it again.
@@ -226,7 +227,8 @@ tools lives where it belongs:
 - **Hands of the King** (a button next to his map button): players he names use the roll
   call, the inspection, the agenda, Vox Populi and the gates in his name. Never the court,
   writs, pardons or his crown on the map. Their addons learn the list from his, and it ends
-  when he stops sending it.
+  when he stops sending it. A Hand who is an officer of `<Olympus>` keeps its Crown (Royal
+  decrees, Tabard inspections, [Lords]) on every client, not only on its members' (1.0.0).
 - **Show me on the map** (his own button, with the crown): while he turns it on, everyone with
   the addon sees a crown where he is, on the world map and the minimap. Off by default (his
   position is on stream); the same button hides it, its tooltip says whether it is on now, and
@@ -599,8 +601,9 @@ copy. No addon can prevent that. What this one does is make an edited copy usele
     requests), so a Lord or officer who is the elected reporter is still verified. (An officer
     who is the only one of their guild with the addon is not.)
   - **The Crown** (any guild master) needs two senders naming them. The officers of
-    `<Olympus>` are of the Crown only on `<Olympus>` members' clients, from their roster (1.0.0):
-    everywhere else they count as Captains, so outsiders' reports can't add one to the Crown.
+    `<Olympus>` are of the Crown only on `<Olympus>` members' clients, from their roster (1.0.0),
+    and those the King names his Hands (his word, never a vote): everywhere else they count as
+    Captains, so outsiders' reports can't add one to the Crown.
   - A sender speaks for one guild only (a player who changed guilds can speak for the new one
     after 15 quiet minutes). A guild is one whatever the capitals a report spells it with: a
     second spelling is a vote on the same guild, never a second guild.

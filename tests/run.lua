@@ -20025,6 +20025,95 @@ do
 			if not ok then error(err, 0) end
 		end)
 	end)
+
+	-- 1.0.0: outside <Olympus> its Crown is the King and the Hands he names, and no code gave the
+	-- Hands the Crown: a real officer of <Olympus> the King named his Hand lost his Royal decrees,
+	-- Tabard inspections and [Lords] lines on every other guild's client with the previous commit.
+	-- Now a Hand speaking for the King's guild is of its Crown there, on the King's word alone (the
+	-- list he last sent, King.lua), never on a census vote; on <Olympus>'s own clients its roster
+	-- still says who speaks for it.
+	test("1.0.0 the Crown: a Hand the King names has [Lords] and the Crown's decrees for <Olympus> on every other guild's client, while the King's list names him", function()
+		Scene(0, function(s)
+			local K, KING = ns.King, ns.KingCharacter() .. "-Realm"
+			local savedShow = StaticPopup_Show
+			StaticPopup_Show = function() end
+			local ok, err = pcall(function()
+				K.Reset()
+				Forged(ns.KingCharacter()) -- (Baron: a real officer of <Olympus>; Sapper: the outsiders' man)
+				local cns, Decree, Logged = DecreeClient(s)
+				-- Before the King names him, Baron is a Captain here like any census officer.
+				Logged("Baron-Realm", "ROYAL", "Olympus", "too soon")
+				eq(#cns.Decree.Active(), 0, "a census officer of <Olympus>: no Royal decree")
+				eq(Line("Baron-Realm", "L", "Olympus"), "rank", "nor [Lords]")
+				-- The King names him his Hand.
+				K.HandleCommand("CHANNEL", KING, "T1~H~8~Olympus~Baron-Realm")
+				eq(K.IsHandName("Baron-Realm"), true)
+				s.clock = s.clock + 61
+				Logged("Baron-Realm", "ROYAL", "Olympus", "the Hand's royal decree")
+				eq(cns.Decree.Active()[1] and cns.Decree.Active()[1].kind, "ROYAL", "his Royal decree")
+				eq(cns.Decree.Active()[1].text, "the Hand's royal decree")
+				s.clock = s.clock + 61
+				Logged("Baron-Realm", "HERALDRY", "Olympus", "")
+				eq(cns.Decree.Active()[1].kind, "HERALDRY", "his Tabard inspection")
+				eq(Line("Baron-Realm", "L", "Olympus"), "shown", "his [Lords] line")
+				-- For the King's guild alone: speaking for another guild, the census rules as for anyone.
+				s.clock = s.clock + 61
+				Logged("Baron-Realm", "ROYAL", "Olympus Zeus")
+				eq(#cns.Decree.Active(), 2, "not as Olympus Zeus")
+				-- Only the King's word names Hands: Sapper naming himself is nobody's Hand.
+				K.HandleCommand("CHANNEL", "Sapper-Realm", "T1~H~9~Olympus~Sapper-Realm")
+				eq(K.IsHandName("Sapper-Realm"), false)
+				Logged("Sapper-Realm", "ROYAL", "Olympus")
+				eq(#cns.Decree.Active(), 2, "no Crown for Sapper")
+				eq(Line("Sapper-Realm", "L", "Olympus"), "rank")
+				-- Like the King's, a Hand's decree never waits behind the flood guard.
+				Flood(s, Decree, "Din")
+				eq(#cns.Decree.Active(), 8)
+				Logged("Baron-Realm", "ARMS", "Olympus", "the Hand's call")
+				eq(#cns.Decree.Active(), 9, "past six census Captains")
+				eq(cns.Decree.Active()[1].sender, "Baron")
+				-- The King takes him off his list: a Captain here again.
+				K.HandleCommand("CHANNEL", KING, "T1~H~10~Olympus~")
+				s.clock = s.clock + 61
+				Logged("Baron-Realm", "ROYAL", "Olympus")
+				eq(#cns.Decree.Active(), 9, "no longer his Hand")
+				eq(Line("Baron-Realm", "L", "Olympus"), "rank")
+				-- And a list the King stopped repeating ends (King.HANDS_FRESH).
+				K.HandleCommand("CHANNEL", KING, "T1~H~11~Olympus~Baron-Realm")
+				eq(Line("Baron-Realm", "L", "Olympus"), "shown")
+				s.clock = s.clock + K.HANDS_FRESH + 1
+				eq(K.IsHandName("Baron-Realm"), false)
+				assert(Line("Baron-Realm", "L", "Olympus") ~= "shown", "not once the list ended")
+			end)
+			StaticPopup_Show = savedShow
+			K.Reset()
+			if not ok then error(err, 0) end
+		end)
+	end)
+
+	test("1.0.0 the Crown: on <Olympus>'s own clients its roster, not the King's list of Hands, says who speaks for it", function()
+		Scene(1, function(s)
+			GetGuildInfo = function() return "Olympus", "Knight", 1 end
+			ns.Roster.Scan()
+			local K, KING = ns.King, ns.KingCharacter() .. "-Realm"
+			local savedShow = StaticPopup_Show
+			StaticPopup_Show = function() end
+			local ok, err = pcall(function()
+				K.Reset()
+				K.HandleCommand("CHANNEL", KING, "T1~H~8~Olympus~Helper-Realm")
+				eq(K.IsHandName("Helper-Realm"), true)
+				local cns, _, Logged = DecreeClient(s)
+				Logged("Helper-Realm", "ROYAL", "Olympus", "not one of us")
+				eq(#cns.Decree.Active(), 0, "a Hand not in our roster does not speak for our guild")
+				eq(Line("Helper-Realm", "L", "Olympus"), "forged")
+				Logged("Member2-Realm", "ROYAL", "Olympus", "our officer's")
+				eq(#cns.Decree.Active(), 1, "our officer, from our roster")
+			end)
+			StaticPopup_Show = savedShow
+			K.Reset()
+			if not ok then error(err, 0) end
+		end)
+	end)
 end
 
 print(("\n%d passed, %d failed"):format(passed, failed))
