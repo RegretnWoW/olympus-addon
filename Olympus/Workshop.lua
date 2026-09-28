@@ -1018,6 +1018,8 @@ function Workshop.Build(report)
 	InstallLines(lines)
 	RollLines(lines, report)
 	BugLines(lines)
+	-- The elite borders' preview round his own portrait (Borders.lua, 1.0.0): not in the copy.
+	if not report then ns.Borders.PreviewLines(lines) end
 	return lines, L.TAB_WORKSHOP, L.WORKSHOP_HINT
 end
 
