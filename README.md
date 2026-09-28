@@ -308,6 +308,88 @@ shows the army something of it.
 - The round **Olympus** button in the bottom left corner of the map switches markers
   (army per zone, decrees) on and off.
 
+### Olympus Link: your Discord role (0.9.10)
+Players in game prove to the Olympus bot on Discord that a character is yours, and the bot gives
+you your role. No password, no Battle.net login, and nothing leaves the game before you say yes.
+
+1. **Get a code** from the Olympus bot on Discord (its `/link` command, or the Olympus Link
+   page after "Continue with Discord"). It looks like
+   `OLC2.7K3M9QX2TB.your.name.1800000000.c.00000000.…` and is good for 24 hours. Keep it to
+   yourself, and don't show it (or the Olympus Link window) on a stream.
+2. **Type `/oly discord <code>`** in the game's chat (or `/oly discord` alone and paste it in the
+   box: the bot's whole line, `/oly discord` included, is fine too). The addon checks the bot's
+   signature and the expiry first, then asks: *"Link <Name> to the Discord account @your.name? …
+   Only accept if @your.name is you."* The Discord account shown is the one the bot signed into
+   the code: nobody can change it. Cancel sends nothing.
+3. **Confirmers answer in game**, by addon whisper. A High Councillor online signs a proof that
+   this character asked, with a key of their own that the bot certified (one is enough; they are
+   asked one at a time, and a second councillor online is asked too, so two proofs can travel).
+   When the bot allows it and no councillor is online, verified players drawn for your code are
+   asked instead, five at once, and three must confirm. Nobody picks who is drawn: a key is
+   drawn when SHA-256 of your code and its key id falls below the threshold the bot wrote into
+   your code, and the code is new each time. Each confirmer also signs how it knows your guild:
+   it is its own guild and its roster lists you, its `/who` saw you in it within 15 minutes, or it
+   only has your word. When every proof only has your word, the addon says so and keeps asking
+   for up to 10 minutes for one that knows it (a High Councillor who only had your word is asked
+   again every 3 minutes: its quiet `/who` may have seen you since); then it finishes, and tells
+   you the bot may refuse a guild nobody saw. No confirmer online? The request stays open until
+   the code expires and is asked again when one comes online, and at each login.
+4. **The proof reaches the bot** one of two ways:
+   - **now**: the **Olympus Link** window shows a QR code and the same link in a copy box. On the
+     Olympus Link page, share the WoW window, point your phone's camera at it, or paste the link.
+     The proof rides after the `#` of the link, which a browser never sends to any server;
+   - **or later, by itself**: the addon hands it to the bot's watcher (a High Councillor's
+     character in watcher mode) the next time you are both online. The bot's keeper uploads what
+     the watcher kept. One rule for how long, from your code's expiry: the bot takes the proof
+     until 7 days after it, so the addon hands it to a watcher until 5 days after it (the keeper
+     has 2 days left to upload it) and, after that, tells you to scan it: the window shows it until
+     the bot's limit.
+
+`/oly discord show` opens the window again, `/oly discord status` lists every character of your
+account (waiting for confirmers, ready, delivered), `/oly discord forget` drops this character's
+request and proof.
+
+**For confirmers and watchers.** A confirmer's key belongs to one character, and so does its
+certificate, which names it: another character of the same account confirms nothing with it.
+**High Councillors paste nothing**: the first time the signed High Council list names your
+character, your addon makes a key of its own in the game (from the finest timings the client
+has, over several frames; the key never leaves your computer) and asks the author's client for
+its certificate the next time it hears him (a whisper with the key's public half); his client
+checks you are on the signed list and signs one for a year (for one character per key: it keeps a
+record of every key it certified, and another councillor who sends your key's public half gets
+nothing), and your addon checks it before it keeps it. `/oly discord key new` makes a new key and
+asks again (a lost or leaked one), `/oly discord key off` removes it (your addon makes none by
+itself after that, until `key new`). Either way the old key keeps counting at the bot until its
+keeper revokes it (the bot never asks your game, and a certificate lasts a year), so both print
+the old key's id for you to send them, at once if it leaked. `/oly discord certified`, in the
+author's game, lists every certificate his client signed (key id, character, end) for the
+keeper, who can revoke one key or every key of a character. Other confirmers get a key from the bot's keeper (an id and
+43 letters) and its certificate (a line starting with `OLK2.`, the bot's signature on the key's
+public half, its tier, an expiry and your character's name): `/oly discord key <id> <key>` keeps
+the key for the character you are on, then `/oly discord cert <certificate>` its certificate,
+which the addon checks against the bot's key, your key's public half and your character before
+it keeps it. `/oly discord key` shows the key's id and public half (to compare with what was
+registered), `/oly discord cert` the certificate's tier and days left. The key is never shown,
+sent, logged or written in `/oly status` and `/oly bug`. With a key and its certificate, your
+addon says it is online every 5 minutes (the certificate goes with it: requesters check it, and
+that it names the character announcing it, before they ask you) and signs, by itself, the
+requests of players of an Olympus guild of your faction: one a minute and five a day per
+character, thirty a minute in all, never for the characters of your own account, and never when
+what you know says otherwise (they claim your guild and your roster doesn't list them, or your
+`/who` saw them in another guild in the last 15 minutes). A High Councillor taken off the signed
+list stops at once in game (their addon confirms nothing, and nobody's asks them); at the bot,
+their keys count until its keeper revokes their character. A High Councillor who could only take someone's word for their guild gets
+their `/who` quietly with the next click in the Olympus window (mouse and keyboard only). High
+Councillors can turn on `/oly discord watcher on`: the proofs players hand you are kept in your
+SavedVariables once your addon has checked them (every signature against the certificate the
+link carries, and enough for the bot), so made-up links never take a place. It keeps one link per
+character (its latest: a newer one replaces it) and 500 in all, with no cap per code: a code's id
+is public on a stream, and only the bot can check a link's tag, so a character that got a
+councillor's real proof for itself with someone else's code takes its own place (the bot refuses
+that link) and never the real requester's. Filling the inbox takes 500 characters; nothing
+another character sent is dropped to make room, and an entry goes once the bot can no longer take
+it, 7 days after its code expired.
+
 ### Everywhere
 - **Copy**: every tab produces a ready-to-paste text for Discord.
 - **Search**: a box on top of the Census (a guild or its Lord), the Realm (guilds, Lords, Captains,
@@ -383,7 +465,9 @@ find or join it. Share the same secret with the officers of the other Olympus gu
 3. The reporter sends a compact summary of its guild about every 3 minutes on the hidden Olympus channel.
 4. Every client adds up all the summaries: that is the census.
 
-Nothing leaves the game. There is no server, no website, no account and no tracking.
+Nothing leaves the game. There is no server, no website, no account and no tracking. The one
+exception is Olympus Link, and only when you ask for it: the proof that a character is yours
+goes to the Olympus bot on Discord, through the page you scan it with or a watcher.
 
 **Realms vs layers.** A realm (ClassicBetaPvP, ClassicBetaPvP2...) is a separate world
 with its own guilds; layers are copies of a zone *inside* one realm. Guilds on the same
@@ -412,6 +496,10 @@ tracking. Your name is on every message (the game adds it). What goes where:
 | Your position as a dot on the map | your guild | only with `/oly share` (off by default) |
 | A treasury keeper's book (balance, gold and items given and who gave them, the ranking) and the guild bank of `<Olympus>` (its gold and items) | everyone on the Olympus channel receives the bytes; the addon shows them to the King, and to the army only with his switches | only after that keeper says yes (each keeper, the King too, is asked once; `/oly treasurer on\|off`), withdrawn at once when he turns it off |
 | The King's crown on the map, and with it his zone and layer | everyone on the Olympus channel | only while the King turns it on (Throne tab), whatever he answered to the question |
+| Olympus Link (0.9.10): a request (your guild, faction, a random number, your code's id and a tag made from your code's signature and your name) | the confirmers asked (a whisper each): a High Councillor, or verified players drawn for your code | only after you press **Accept** on `/oly discord <code>` |
+| Olympus Link: the finished proof (your character name, realm, guild, faction, the tag, and the confirmers' names, how each knew your guild, their signatures and their keys' certificates) | the Olympus bot, through the page you scan it with, or a watcher (a High Councillor, by whisper) who hands it to the bot | when it is ready, until it is delivered (5 days after your code expired at most) |
+| Olympus Link: "a confirmer's key is online" (its certificate: the key's id, public half, tier, expiry and character), "a watcher is online" | everyone on the Olympus channel | every 5 minutes, only from characters with a key and its certificate, or the watcher on |
+| Olympus Link: a High Councillor's key's public half, and the certificate for it | the author's character, and back (a whisper each) | only from a councillor of the signed list whose addon made its own key, once a session when it hears the author |
 
 Decrees and the King's calls go out when someone sends one (a decree carries its sender's
 position on the map).
@@ -511,6 +599,31 @@ copy. No addon can prevent that. What this one does is make an edited copy usele
   decrees; everyone else can use [Olympus] only. Sent with Blizzard's logged addon-message
   function (lines sent any other way are dropped); rate limited per sender and per channel, and
   no single sender can fill a channel.
+- **Olympus Link** (0.9.10): the bot's codes carry an Ed25519 signature every addon checks
+  against the bot's public key, written in `Olympus/Link.lua` (`ns.LINK_BACKEND_KEYS`), so the
+  Discord account the question names is the bot's word. Each proof is an Ed25519 signature by a
+  confirmer's own key, which is one character's and certified for that character: by the bot, or
+  a High Councillor's by the council authority, the author's own client (`ns.LINK_CA_KEYS`; its
+  private key is on his computer only and never printed, logged or sent). A requester asks only
+  confirmers whose certificate checks and names the character that announced it (a "c" counts
+  only from a name on the signed High Council list), counts a proof only once its signature
+  checks with the certified key and it was signed within its code's life, and carries each
+  proof's certificate in the link. The bot keeps only the public halves, can revoke one (a
+  council authority's key too: a revocation list), and checks every proof again (the
+  certificate, the signature, the key's owner and character, the time, the draw, how the guild
+  was known). A proof is bound to its code and requester by a
+  tag made from the code's signature, which never leaves the command you pasted: someone who sees
+  your code's id on a stream can't make a link for their own character with it. The addon signs
+  and checks in small slices over several frames, so the game never stops for it.
+  `Olympus/Ed25519.lua` is checked against RFC 8032's vectors and signs byte for byte as Python's
+  `cryptography` does, and the offline tests hold every slice to the game's Lua 5.1 rule (no
+  yield across a pcall, a sort, a gsub, a metamethod or a generic for's iterator). A High
+  Councillor's key made in the game comes from the best the client offers, which is no
+  cryptographic random source: sub-millisecond frame timings, the time, the game's generator,
+  table addresses, the cursor and the character, over eight frames, through SHA-512 (the comment
+  in `Link.lua` says what an attacker could guess). Such a key only confirms, lasts a year and
+  can be revoked and replaced at once; a councillor who wants one made on a computer asks the
+  bot's keeper instead.
 - `/oly block <name>` ignores a player completely.
 
 Limits, stated honestly:
@@ -571,6 +684,12 @@ Limits, stated honestly:
 | `/oly helpme [text]` (or **Ask a High Councillor** on the Realm tab) | ask the High Council (the moderators) for help: it goes by whisper to up to three of them online who take requests |
 | `/oly council list` · `/oly council help on\|off` | the High Council as your addon knows it; moderators: take help requests or not. The list is signed by the author on his own computer and checked by every client: no name is written in the addon's code, and nobody can forge or change it. An addon without the list (`High Council: -`) asks the channel for it a minute or so after login, and again until it has it (two and a half minutes later when nobody answered, up to 3 times). Since 1.0.0 the list also crosses realms through guild chat: guildmates on another realm answer the ask and pass the list on, and it goes on to your realm's channel |
 | `/oly council icon` (or **My council icon** on the Realm tab, councillors only) | moderators: a councillor's name in the Olympus chats always carries the High Council's mark (the game's target-frame skull), which nobody can change. An icon of your own after it is optional: pick it from the game's icons, like a macro's. Your addon announces it on the channel (at once, then every 20 minutes), and other clients take it only from a councillor and only as a game icon |
+| `/oly discord <code>` · `/oly discord` | Olympus Link: link this character to your Discord account with the bot's code (or paste it in a box) |
+| `/oly discord show` · `status` · `forget` | the Olympus Link window (QR code and link) again; every character's request or proof; drop this character's |
+| `/oly discord key <id> <key>` · `key` · `key new` · `key off` | confirmers: keep the key the bot's keeper gave you for this character, show its id and public half, make a new one (High Councillors: certified by the author's client by itself), remove it (and its certificate); the last two print the old key's id, which counts at the bot until its keeper revokes it |
+| `/oly discord cert <certificate>` · `cert` | confirmers: keep the bot's certificate for that key and this character (checked first), show its tier and days left |
+| `/oly discord watcher on\|off` | High Councillors: keep the proofs players hand you for the bot |
+| `/oly discord certified` | the author: every certificate his client signed for a High Councillor's key (key id, character, end), for the bot's keeper |
 | `/oly hop` | ask for an invite to the King's layer (while he is online) |
 | `/oly vox off` · `/oly vox on` | Vox Populi questions in chat only, or in a window |
 | `/oly layerhelp on` · `/oly layerhelp off` | get (or not) requests to invite players to your layer |
@@ -610,6 +729,8 @@ luajit tests/run.lua                      # offline tests: codec, roster, hierar
 scripts/lint-globals.sh                   # catches locals used before they are declared
 bash tests/check-scripts.sh               # verify check-script failure handling (also run in CI)
 bash tests/sign-roundtrip.sh              # the High Council signing script end to end (needs python3)
+python3 tests/fixtures/make-link-vectors.py --check  # Olympus Link's shared vectors, sample, draw and inbox (needs "cryptography")
+python3 scripts/link-keys.py ca           # the author, once: Olympus Link's council authority (see below)
 python3 scripts/council-sign.py sign "First Surname,..." [realm group]  # the author: sign the High Council list
 python3 scripts/council-sign.py council [council.json]  # the author: sign the names, departments and titles (see the script)
 scripts/package.sh                        # dist/Olympus-<version>.zip
@@ -617,8 +738,19 @@ WOW_HOST=user@pc scripts/deploy.sh        # copy to a Windows PC over SSH
 WOW_HOST=user@pc scripts/logs.sh          # read the log and captured errors from that PC
 ```
 
-Bundled libraries: LibStub (public domain), CallbackHandler-1.0 (Ace3, BSD) and
-HereBeDragons by Nevcairiel (BSD), the map library Questie uses.
+`scripts/link-keys.py ca` writes `dist/LinkCA.lua` (the council authority's seed, like
+`dist/CouncilList.lua` local only: never committed or in the zip) and prints its public key,
+which goes into `ns.LINK_CA_KEYS` in `Olympus/Link.lua` and the Worker's `LINK_CA_PUBLIC`.
+The author copies the file to his own game only (`Interface/AddOns/Olympus/LinkCA.lua`) and adds
+`LinkCA.lua` at the end of `Olympus.toc` there: his client then certifies the High Councillors'
+own keys by itself and records each one in his SavedVariables (`/oly discord certified` lists
+them). When he takes a councillor off the signed list, the bot's keeper revokes that character at
+the bot too. `web/WORKER.md` (step 1b) says the rest, rotation included.
+
+Bundled libraries: LibStub (public domain), CallbackHandler-1.0 (Ace3, BSD),
+HereBeDragons by Nevcairiel (BSD), the map library Questie uses, and luaqrcode by Patrick
+Gundlach and contributors (speedata, 3-clause BSD) for Olympus Link's QR code
+(`Olympus/libs/QREncode/qrencode.lua`, its changes listed at its top).
 
 ## Credits
 

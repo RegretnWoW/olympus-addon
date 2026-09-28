@@ -80,7 +80,7 @@ local function NewSweep()
 end
 NewSweep()
 
-local pending   -- our search waiting for its answer: { id, frames, step, query, guild, answered }
+local pending   -- our search waiting for its answer: { id, frames, step, query, guild, name, answered }
 local guildSeen -- one guild's players, found by its own search (Who.SearchGuild)
 local owed      -- the id of a search given up that may still be answered (see Release)
 local lastId = 0
@@ -242,12 +242,13 @@ end
 
 -- Must be called from a click. Returns true if a search was sent. `quiet`: nothing printed.
 -- `guild`: that one guild only (g-"<guild>", Who.SearchGuild): its players are kept apart
--- (Who.GuildSeen) and the round goes on where it was.
+-- (Who.GuildSeen) and the round goes on where it was. `name`: that one player (n-"<name>",
+-- Who.WantName), for the guild it shows (Who.SeenGuild); the round goes on where it was too.
 -- With the gamepad UI only the player's own searches go, plainly (see the top of this file).
 local toldPlain = false
-function Who.Search(quiet, guild)
+function Who.Search(quiet, guild, name)
 	local plain = ns.GamepadUI()
-	if plain and (quiet or guild) then return false end
+	if plain and (quiet or guild or name) then return false end
 	local now = GetTime()
 	local wait = Wait(now, math.max(Who.lastSend, Who.lastPlain))
 	if wait > 0 then
@@ -265,12 +266,13 @@ function Who.Search(quiet, guild)
 	local old = sweep.started and now - sweep.started > Who.ROUND_TTL
 	if not sweep.done and old then NewSweep() end
 	-- The round done: the misspelled names next (VARIANTS), then it starts over.
-	local variant = not guild and sweep.done and not old and sweep.variant < #Who.VARIANTS and sweep.variant + 1 or nil
-	if sweep.done and not guild and not variant then sweep.step = 0 end
+	local own = guild or name -- one guild's or one player's search: the round stays where it is
+	local variant = not own and sweep.done and not old and sweep.variant < #Who.VARIANTS and sweep.variant + 1 or nil
+	if sweep.done and not own and not variant then sweep.step = 0 end
 	-- A level range is a plain "lo-hi" in the filter, like the Who window's default search.
-	local b = not guild and not variant and sweep.step > 0 and sweep.brackets[sweep.step]
-	local query = guild and ('g-"%s"'):format(guild) or variant and ('g-"%s"'):format(Who.VARIANTS[variant])
-		or b and ("%s %d-%d"):format(Who.QUERY, b[1], b[2]) or Who.QUERY
+	local b = not own and not variant and sweep.step > 0 and sweep.brackets[sweep.step]
+	local query = guild and ('g-"%s"'):format(guild) or name and ('n-"%s"'):format(ns.TellName(name))
+		or variant and ('g-"%s"'):format(Who.VARIANTS[variant]) or b and ("%s %d-%d"):format(Who.QUERY, b[1], b[2]) or Who.QUERY
 	local frames, names = {}, {}
 	if not plain then
 		HookSendWho()
@@ -278,7 +280,7 @@ function Who.Search(quiet, guild)
 	end
 	lastId = lastId + 1
 	local id = lastId
-	pending = { id = id, frames = frames, step = sweep.step, query = query, guild = guild, variant = variant }
+	pending = { id = id, frames = frames, step = sweep.step, query = query, guild = guild, name = name, variant = variant }
 	owed = nil -- a search given up before this one: its answer would now pass for this one's
 	Who.lastSend = now
 	-- Scheduled first: whatever fails from here on, the who windows get their event back.
@@ -336,6 +338,23 @@ function Who.SearchGuild(guild)
 	return sent
 end
 
+-- Olympus Link (0.9.10, Link.lua): a High Councillor's addon that could only sign a player's
+-- guild as claimed asks here for that player's /who. It goes quietly with a later click in our
+-- window, like the rest of Auto, one name per click (never with the gamepad UI: no quiet search
+-- goes there); its answer tells the confirmer the guild the next time that player asks.
+Who.WANT_MAX = 5
+local wantedNames = {}
+function Who.WantName(name)
+	if ns.GamepadUI() or type(name) ~= "string" or name == "" or name:find('"', 1, true) then return false end
+	for _, n in ipairs(wantedNames) do
+		if n == name then return true end
+	end
+	if #wantedNames >= Who.WANT_MAX then table.remove(wantedNames, 1) end
+	wantedNames[#wantedNames + 1] = name
+	return true
+end
+function Who.WantedNames() return wantedNames end
+
 function Who.Auto()
 	if not ((C_FriendList and C_FriendList.SendWho) or SendWho) then return false end
 	if ns.GamepadUI() then return false end -- quiet: not with the gamepad UI (see the top)
@@ -346,6 +365,11 @@ function Who.Auto()
 		local guild = wantedGuild
 		wantedGuild = nil
 		if Who.SearchGuild(guild) then return true end
+	end
+	-- Then a player Olympus Link asked for.
+	if wantedNames[1] then
+		local name = table.remove(wantedNames, 1)
+		if Who.Search(true, nil, name) then return true end
 	end
 	if sweep.done and sweep.variant >= #Who.VARIANTS and sweep.started and now - sweep.started < Who.AUTO_AGAIN then return false end
 	if now - Who.lastAuto < Who.AUTO_GAP then return false end
@@ -379,12 +403,38 @@ function Who.GuildName(guild)
 	return guild, realm
 end
 
+-- Everyone an answer of ours listed and the guild it showed ("" for none), with GetTime() (0.9.10,
+-- Olympus Link: a confirmer's "w" is a /who of the requester in exactly the guild they claim, at
+-- most 15 minutes old). [Name-Realm] = { guild, t }.
+Who.SEEN_MAX = 2000
+local seenAt, nSeen = {}, 0
+local function Saw(name, guild)
+	local full = ns.FullName(name)
+	if not seenAt[full] then
+		if nSeen >= Who.SEEN_MAX then
+			wipe(seenAt)
+			nSeen = 0
+		end
+		nSeen = nSeen + 1
+	end
+	seenAt[full] = { guild = type(guild) == "string" and guild ~= "" and Who.GuildName(guild) or "", t = GetTime() }
+end
+
+-- The guild the last answer of ours that listed `name` showed ("" for none), and how many
+-- seconds ago; nil when none did.
+function Who.SeenGuild(name)
+	local e = type(name) == "string" and seenAt[ns.FullName(name)]
+	if not e then return nil end
+	return e.guild, GetTime() - e.t
+end
+
 -- The answer's Olympus players, each once.
 local function Read()
 	local shown, total = Counts()
 	local rows, byName = {}, {}
 	for i = 1, shown do
 		local name, guild, level, class, zone = Info(i)
+		if name and name ~= "" then Saw(name, guild) end
 		if name and name ~= "" and not byName[name] and ns.IsFederation(guild) then
 			local gname, gRealm = Who.GuildName(guild)
 			local p = { name = name, guild = gname, guildRealm = gRealm, level = tonumber(level), class = class, zone = zone }
@@ -423,6 +473,15 @@ local function OnAnswer()
 	end
 	local rows, shown, total = Read()
 	local first = not p.answered
+	if p.name then
+		-- One player's search (Who.WantName): Read kept the guild it showed.
+		if first then
+			p.answered = true
+			ns.After(Who.SETTLE, "who settle", function() if pending == p then Release("answered") end end)
+			ns.Log("who: a name answered %d", shown)
+		end
+		return
+	end
 	if p.guild then
 		-- One guild's search: kept apart, the round stays where it was.
 		if first then
@@ -503,6 +562,9 @@ function Who.Reset()
 	wipe(guildSeen)
 	wipe(guildSearched)
 	wantedGuild = nil
+	wipe(wantedNames)
+	wipe(seenAt)
+	nSeen = 0
 end
 
 -- One or two lines on how far the round got, for under a list; nil when there is nothing

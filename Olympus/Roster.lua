@@ -131,7 +131,7 @@ function Roster.Scan()
 	end)
 	for i = 1, math.min(5, #everyone) do r.top[i] = everyone[i] end
 	r.avgLevel = seen > 0 and levelSum / seen or 0
-	Roster.byName = byName
+	Roster.byName, Roster.guild = byName, guild -- (whose roster it is: Olympus Link's "r", Link.lua)
 	table.sort(online, function(a, b)
 		if a.rankIndex ~= b.rankIndex then return a.rankIndex < b.rankIndex end
 		if a.level ~= b.level then return a.level > b.level end

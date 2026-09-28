@@ -61,4 +61,15 @@ luajit tests/run.lua
 printf 'Running the signing round trip...\n'
 bash tests/sign-roundtrip.sh
 
+# Olympus Link's vectors, sample, draw and inbox, shared with the page's and the Worker's tests:
+# checked again with Python's "cryptography" wherever it is installed (the script changes nothing).
+if [ -f tests/fixtures/make-link-vectors.py ]; then
+	printf "Checking Olympus Link's shared vectors...\n"
+	if command -v python3 >/dev/null 2>&1 && python3 -c 'import cryptography' >/dev/null 2>&1; then
+		PYTHONDONTWRITEBYTECODE=1 python3 tests/fixtures/make-link-vectors.py --check
+	else
+		printf 'python3 with "cryptography" not found: the shared vectors check skipped.\n'
+	fi
+fi
+
 printf 'All repository checks passed.\n'
