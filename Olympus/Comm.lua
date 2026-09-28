@@ -28,7 +28,7 @@ local ASK_AFTER = 4       -- seconds after joining we ask the channel for the ce
 local ASK_SPREAD = 41     -- ...at a second drawn up to this much later (1.0.0: 4 to 45 s)...
 local ASK_HELD = 30       -- ...unless someone else asked this recently (its answers reach us too)...
 local ASK_AGAIN = 65      -- ...and once more this later, for the reporters that had just answered
-local SHARED_FOR = 3600   -- a report sent from another realm this recently: the channel is shared
+local SHARED_FOR = 3600   -- our guild's report from a guildmate of another realm this recently: the channel is shared
 local QUIET_TOTAL = 10    -- members of a guild who keep saying hello (Comm.Hello), whatever its realms...
 local QUIET_MIN = 3       -- ...and at least this many on each realm
 local ANSWER_GAP = BROADCAST_EVERY -- a reporter answers census requests at most this often
@@ -69,6 +69,9 @@ local heardOwn = {}
 local benched = {}   -- guild peer -> time it may be elected again
 local watch          -- { name, since }: the peer we elected while we are on the channel
 local lastKeyAsk     -- when MaybeBroadcast last asked our guild for the key
+-- 1.0.0: when our channel last carried our guild's report from a guildmate whose hello named
+-- another realm (Comm.ElectsAcrossRealms). This session's alone, never saved.
+local crossedAt = -math.huge
 
 -- count[key] + 1, with at most MAX_KEYS distinct keys (senders choose some of them).
 local function Count(t, key)
@@ -722,9 +725,9 @@ end
 -- channel, and a guild that elected a single reporter was missing from the other realm's
 -- census (older versions left that reporter out after GUARD_AFTER unheard, one name at a time).
 -- So each realm elects its own reporter among the peers whose hello names that realm, and
--- those whose realm we don't know (versions before 0.7.11). While a report sent from another
--- realm reaches our channel (the channel is shared: Comm.ElectsAcrossRealms), one reporter
--- for all, as before.
+-- those whose realm we don't know (versions before 0.7.11). While our guild's report, sent by a
+-- guildmate of another realm, reaches our channel (the channel is shared:
+-- Comm.ElectsAcrossRealms), one reporter for all, as before.
 ---------------------------------------------------------------------------
 
 -- A realm's code in our report (field 27): three letters or digits.
@@ -766,12 +769,30 @@ end
 -- census layer's clients will say "b" or "c").
 Comm.CAPABILITY = "a"
 
--- A report sent from another realm reached our channel lately (Data: ns.rdb.shared): every
--- realm's peers hear one reporter there, and the election counts them all.
+-- Our channel crosses realms: our guild's report, sent by a guildmate whose hello over GUILD
+-- (where the server vouches for our guild) named another realm, was heard on it within
+-- SHARED_FOR, in this session. Every realm's peers hear one reporter there then, and the
+-- election counts them all. Nothing else proves it: the realm a report names (field 21, `from`;
+-- ns.rdb.shared in /oly status) is whatever its sender wrote, and anyone on the public channel
+-- may send one; a flag saved by an earlier session proves nothing of this one.
 function Comm.ElectsAcrossRealms(now)
-	local s = ns.rdb and ns.rdb.shared
-	if type(s) ~= "table" or (s.to ~= ns.realm and s.realm ~= ns.realm) then return false end
-	return (now or ns.Now()) - (tonumber(s.t) or -math.huge) <= SHARED_FOR
+	return (now or ns.Now()) - crossedAt <= SHARED_FOR
+end
+
+-- The realm, not ours, that the hello of this guildmate named (counted now), or nil. The channel
+-- may send a name of another realm without it (see heardOwn): matched by the short name then,
+-- unless the full name is a peer of its own.
+local function OtherRealm(name, now)
+	local t, realm = peers[name], peerRealm[name]
+	if t and now - t <= COUNT_WINDOW and realm and realm ~= "old" and realm ~= ns.realm then return realm end
+end
+local function PeerOfOtherRealm(sender, now)
+	if peers[sender] then return OtherRealm(sender, now) end
+	local short = ns.ShortName(sender)
+	for name in pairs(peers) do
+		local realm = ns.ShortName(name) == short and OtherRealm(name, now)
+		if realm then return realm end
+	end
 end
 
 -- In a full guild, 1000 members saying hello every minute would be ~16 messages per second.
@@ -1176,7 +1197,8 @@ local function OnAddonMessage(prefix, text, dist, sender, target, zoneChannelID,
 			return
 		end
 		stats.reports = stats.reports + 1
-		-- A report from a reporter on another realm proves the channel crosses realms.
+		-- A report naming another realm: the channel may cross realms (/oly status). Its sender
+		-- wrote that realm, so it never turns the election (Comm.ElectsAcrossRealms).
 		Count(stats.reportRealms, r.from or "old")
 		if r.from and r.from ~= ns.realm then ns.rdb.shared = { realm = r.from, to = ns.realm, t = now } end
 		-- Our guild's reporter is heard: the election guard (MaybeBroadcast) leaves it in.
@@ -1187,6 +1209,8 @@ local function OnAddonMessage(prefix, text, dist, sender, target, zoneChannelID,
 			for name in pairs(benched) do
 				if ns.ShortName(name) == short then benched[name] = nil end
 			end
+			-- Sent by a guildmate of another realm: our channel crosses realms (1.0.0).
+			if PeerOfOtherRealm(sender, now) then crossedAt = now end
 		end
 		if ns.Data.Receive(r, sender) then
 			ns.Log("report %s from %s: %d members, %d online", r.guild, sender, r.total, r.online)

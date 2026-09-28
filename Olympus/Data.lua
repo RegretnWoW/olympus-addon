@@ -135,7 +135,7 @@ function Data.SetLocal(r)
 	r.reporter = ns.DisplayName(ns.me)
 	r.reporterFull = ns.me
 	r.realm = ns.realm
-	r.from = ns.realm -- travels in the report: whoever hears it on another realm knows the channel is shared
+	r.from = ns.realm -- travels in the report: whoever hears it on another realm sees the channel shared (/oly status)
 	r.heardOn = ns.realm -- see Data.Receive
 	r.mine = true
 	ns.rdb.guilds[r.guild] = r

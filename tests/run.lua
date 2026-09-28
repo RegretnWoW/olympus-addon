@@ -4437,7 +4437,8 @@ test("election guard: a reporter named with its realm over GUILD and without it 
 		C.loginAt = cns.clock - 1000
 		local ours = { guild = MY_GUILD, total = 1000, online = 300, zones = {} }
 		-- (1.0.0: a peer of another realm is elected only while our channel is shared, which its
-		-- reports, sent from its realm, prove: before the first one, we report.)
+		-- reports of our guild prove, heard as "Abe" here and matched to his hello by the short
+		-- name: before the first one, we report.)
 		local his = { guild = MY_GUILD, total = 1000, online = 300, zones = {}, from = "ClassicBetaPvP2" }
 		ns.rdb.shared = nil
 		GetChannelName = function() return 5 end
@@ -4557,14 +4558,21 @@ test("/oly status: realm, census, raw names and topology, short, and without the
 			"census: " .. BETA .. " (seed)  unique names=true  connected=none", "names raw: roster Realm=1000  e.g. [Member1-Realm]",
 			"names raw: roster by server (GUID) ?=1000", "topology: channel SHARED (ClassicBetaPvP2 -> ClassicBetaPvP, 4m ago)",
 			"topology: guild peers by realm",
-			-- 1.0.0: the channel seen shared, one reporter for every realm; then what our report says.
-			"topology: reporter elected on every realm (channel shared)  |  quiet after 10 before us",
+			-- 1.0.0: a report naming another realm shows above, and the election stays our realm's:
+			-- only our guild's report from a guildmate of another realm turns it (the next lines,
+			-- and Comm.ElectsAcrossRealms). Then what our report says.
+			"topology: reporter elected on this realm  |  quiet after 10 before us",
 			"topology: guild on ClassicBetaPvP  |  report st=" }) do
 			assert(text:find(want, 1, true), want .. "\n" .. text)
 		end
 		ns.rdb.shared = nil
 		assert(ns.StatusText():find("topology: reporter elected on this realm  |  quiet after 10 before us", 1, true),
 			"not shared: our realm's reporter (our guild on one realm: 10 of it say hello)")
+		local stats = ns.Comm.Stats
+		ns.Comm.Stats = function() local c = stats(); c.electAll = true; return c end
+		assert(ns.StatusText():find("topology: reporter elected on every realm (channel shared)  |  quiet after 10 before us", 1, true),
+			"shared: one reporter for every realm")
+		ns.Comm.Stats = stats
 		ns.rdb.shared = { realm = "ClassicBetaPvP2", to = "ClassicBetaPvP", t = os.time() - 250 }
 		-- The longest these lines get on the beta: still short.
 		local long = "Bellattrixx Lesstrange-ClassicBetaPvP2"
@@ -13260,7 +13268,7 @@ do
 		end)
 	end)
 
-	test("1.0.0 one reporter for every realm while a report sent from another realm reached our channel within the hour", function()
+	test("1.0.0 one reporter for every realm while our guild's report from a guildmate of another realm reached our channel within the hour", function()
 		Guarded(function(Open)
 			local cns, Deliver, Report = Open()
 			local C = cns.Comm
@@ -13273,28 +13281,88 @@ do
 			Tick()
 			eq(C.isReporter, true, "the channel not seen shared: our realm's reporter")
 			eq(C.Stats().electAll, false)
-			-- Abe's report, sent from PvP 2, heard on our channel: it is shared, one reporter for all.
+			-- Abe's report of our guild (his hello named PvP 2) heard on our channel: it is shared,
+			-- one reporter for all.
 			Report("Abe-" .. P2, { guild = MY_GUILD, total = 1000, online = 300, zones = {}, from = P2 })
 			eq(ns.rdb.shared.realm, P2)
 			Tick()
 			eq(C.reporterName, "Abe-" .. P2, "every realm's peers elect one reporter, as before 1.0.0")
 			eq(C.Stats().electAll, true)
+			-- Kept while his reports keep coming (each 3 minutes), whatever the saved flag says.
+			ns.rdb.shared = nil
+			for _ = 1, 25 do
+				Tick(180)
+				Report("Abe-" .. P2, { guild = MY_GUILD, total = 1000, online = 300, zones = {}, from = P2 })
+			end
+			Tick()
+			eq(C.reporterName, "Abe-" .. P2, "75 minutes on"); eq(C.ElectsAcrossRealms(), true)
 			-- An hour later without another such report: our realm's again.
+			eq(C.ElectsAcrossRealms(cns.clock + 3600), true)
 			Tick(3601)
-			eq(C.isReporter, true, "an hour without a report from another realm")
-			-- Shared between two other realms of our group: not our channel.
-			ns.rdb.shared = { realm = P2, to = "ClassicBetaPvP3", t = cns.clock }
+			eq(C.ElectsAcrossRealms(), false); eq(C.isReporter, true, "an hour without a report from another realm")
+			-- (Before the fix the saved flag, ns.rdb.shared, turned the election on its own, from a
+			-- report of anyone; it no longer does: the next test.)
+		end)
+	end)
+
+	test("1.0.0 a report from outside our guild, or a realm its sender names, never makes our guild's election cross realms", function()
+		Guarded(function(Open)
+			local cns, Deliver, Report = Open()
+			local C = cns.Comm
+			local ours = { guild = MY_GUILD, total = 1000, online = 300, zones = {} }
+			local function From(guild, from) return { guild = guild, total = 5, online = 1, zones = {}, from = from } end
+			-- Our guild's five first names play on PvP 2; Zed (after us) on our realm; Zoe's
+			-- hello names no realm (before 0.7.11). We (Tester) sort first on our realm.
+			local far = { "Aa", "Ab", "Ac", "Ad", "Ae" }
+			local function Tick(seconds)
+				cns.clock = cns.clock + (seconds or 0)
+				for _, n in ipairs(far) do Deliver("GUILD", n .. "-" .. P2, "H1~1.0.0~" .. P2 .. "~p") end
+				Deliver("GUILD", "Zed", "H1~1.0.0~Realm~p")
+				Deliver("GUILD", "Zoe", "H1~0.7.10")
+				C.MaybeBroadcast(ours)
+			end
 			Tick()
-			eq(C.isReporter, true, "another realm's channel")
-			ns.rdb.shared = { realm = "Realm", to = P2, t = cns.clock - 100 }
+			eq(C.isReporter, true); eq(C.ElectsAcrossRealms(), false); eq(C.QuietAfter(), 5, "our guild on two realms")
+			-- Anyone on the public channel, in no guild of ours, sends one report of a guild of his
+			-- own naming PvP 2. /oly status shows it; our election stays our realm's, for an hour and
+			-- more (before the fix: every realm's, so Aa, Ab, Ac... elected and left out in turn, never
+			-- heard on our channel, and our guild off our realm's census).
+			Report("Stranger", From("Nobodys Guild", P2))
+			eq(ns.rdb.shared.realm, P2, "seen in /oly status")
+			eq(C.ElectsAcrossRealms(), false, "a stranger's report proves nothing")
+			eq(C.Stats().electAll, false); eq(C.QuietAfter(), 5)
+			for _ = 1, 20 do
+				Tick(180)
+				eq(C.isReporter, true, "we keep reporting our guild on our realm")
+			end
+			eq(#C.Stats().benched, 0, "nobody of PvP 2 elected, so nobody left out")
+			-- Nor does the stranger naming our guild, a guildmate of our realm, or one whose realm we
+			-- don't know, whatever realm their report names.
+			Report("Stranger", From(MY_GUILD, P2))
+			Report("Zed", From(MY_GUILD, P2))
+			Report("Zoe", From(MY_GUILD, P2))
 			Tick()
-			eq(C.reporterName, "Abe-" .. P2, "ours heard on PvP 2's channel: shared too")
+			eq(C.ElectsAcrossRealms(), false); eq(C.isReporter, true)
+			-- Nor a proof saved before: SavedVariables, or another character of our group.
+			ns.rdb.shared = { realm = P2, to = "Realm", t = cns.clock }
+			Tick()
+			eq(C.ElectsAcrossRealms(), false, "the saved flag is for /oly status alone")
+			ns.rdb.shared = { realm = "Realm", to = P2, t = cns.clock }
+			Tick()
+			eq(C.ElectsAcrossRealms(), false); eq(C.isReporter, true)
+			-- Only our guild's report on our channel from a guildmate whose hello (over GUILD, where
+			-- the server vouches for our guild) named another realm; the channel may send the name
+			-- without its realm.
+			Report("Ac", From(MY_GUILD, P2))
+			eq(C.ElectsAcrossRealms(), true, "Ac, of PvP 2, heard on our channel")
+			Tick()
+			eq(C.reporterName, "Aa-" .. P2, "one reporter for every realm"); eq(C.QuietAfter(), 10)
 		end)
 	end)
 
 	test("1.0.0 the hello quiet rule counts our realm: 10 guildmates before us on one realm, 5 on each of two, 3 at least", function()
 		Guarded(function(Open)
-			local cns, Deliver = Open()
+			local cns, Deliver, Report = Open()
 			local C = cns.Comm
 			local hellos, peers = 0, {}
 			C_ChatInfo.SendAddonMessage = function(_, msg) if msg:find("^H1~") then hellos = hellos + 1 end end
@@ -13334,8 +13402,9 @@ do
 			for i = 4, 6 do peers["Ae" .. i] = "ClassicBetaPvP" .. i end
 			Hear(0)
 			eq(C.QuietAfter(), 3)
-			-- A shared channel: one reporter for every realm, and 10 of every realm before us.
-			ns.rdb.shared = { realm = P2, to = "Realm", t = cns.clock }
+			-- A shared channel (our guild's report from Ac1, of PvP 2, heard on ours): one reporter
+			-- for every realm, and 10 of every realm before us.
+			Report("Ac1-" .. P2, { guild = MY_GUILD, total = 1000, online = 300, zones = {}, from = P2 })
 			eq(C.QuietAfter(), 10)
 			eq(C.Stats().quietAfter, 10)
 		end)
