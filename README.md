@@ -143,7 +143,11 @@ Any soldier can reach the Lord of another Olympus guild in two clicks.
 | **Tabard inspection** | The Crown | Announces an inspection at the caller's position: wear your colors |
 
 *The Crown* means the guild masters of Olympus guilds and the officers of the main
-`<Olympus>` guild. Everyone else gets a local preview when they press the buttons.
+`<Olympus>` guild. Everyone else gets a local preview when they press the buttons. Since 1.0.0
+the officers of `<Olympus>` are of the Crown for `<Olympus>`'s own members, whose roster (the
+server's word) names them: on every other client, where only the census could, they count as
+Captains, and the Crown of `<Olympus>` there is the King himself (by his character's name) and
+the Hands he names.
 
 ### Channels
 Chat for the whole federation, carried by the addon over its hidden Olympus channel (no
@@ -153,7 +157,7 @@ WoW channel number to join). Each channel is exclusive to a rank:
 |---|---|---|
 | **[Olympus]** | `/ol <text>` | every member of every Olympus guild |
 | **[Captains]** | `/olc <text>` | the Captains (rank 1) and Lords of every Olympus guild |
-| **[Lords]** | `/oll <text>` | the Lords (every guild master, the King included) and the officers of `<Olympus>` |
+| **[Lords]** | `/oll <text>` | the Lords (every guild master, the King included) and the officers of `<Olympus>` (their lines show to `<Olympus>`'s own members, 1.0.0) |
 
 - Higher ranks also use the channels below theirs: a Lord writes in all three.
 - `/oly mute captains` (or `olympus`, `lords`) hides a channel in chat; the same command shows it again.
@@ -594,7 +598,9 @@ copy. No addon can prevent that. What this one does is make an edited copy usele
     runner-up of each guild's election also reports every 10 minutes (and answers census
     requests), so a Lord or officer who is the elected reporter is still verified. (An officer
     who is the only one of their guild with the addon is not.)
-  - **The Crown** (any guild master, the officers of `<Olympus>`) needs two senders naming them.
+  - **The Crown** (any guild master) needs two senders naming them. The officers of
+    `<Olympus>` are of the Crown only on `<Olympus>` members' clients, from their roster (1.0.0):
+    everywhere else they count as Captains, so outsiders' reports can't add one to the Crown.
   - A sender speaks for one guild only (a player who changed guilds can speak for the new one
     after 15 quiet minutes). A guild is one whatever the capitals a report spells it with: a
     second spelling is a vote on the same guild, never a second guild.

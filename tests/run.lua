@@ -286,9 +286,14 @@ test("federation filter: Olympus however it was spelled, but not other words", f
 	end
 	eq(ns.Slips("olmps", "olympus", 2), 2); eq(ns.Slips("olympia", "olympus", 2), 2); eq(ns.Slips("abcdefg", "olympus", 2), 3)
 	eq(ns.Slips("olypmus", "olympus", 2), 1, "two neighbours swapped: one slip")
-	-- The main guild is still the exact name: the King and the Crown's officers.
-	eq(ns.IsCrownRank("OLYMPVS", 1), false, "an officer of a look-alike guild is no Crown officer")
-	eq(ns.IsCrownRank("Olympus", 1), true)
+	-- The main guild is still the exact name: the King and the Crown's officers (these on its own
+	-- members' clients since 1.0.0: see "crown permissions").
+	local savedGuild = GetGuildInfo
+	GetGuildInfo = function() return "Olympus", "Knight", 3 end
+	local crowned = { ns.IsCrownRank("OLYMPVS", 1), ns.IsCrownRank("Olympus", 1) }
+	GetGuildInfo = savedGuild
+	eq(crowned[1], false, "an officer of a look-alike guild is no Crown officer")
+	eq(crowned[2], true)
 end)
 
 test("number formatting", function()
@@ -675,9 +680,18 @@ end)
 
 test("crown permissions", function()
 	eq(ns.IsCrownRank("Olympus II", 0), true, "any guild master")
-	eq(ns.IsCrownRank("Olympus", 1), true, "officers of the main guild")
 	eq(ns.IsCrownRank("Olympus II", 1), false, "officers of other guilds")
 	eq(ns.IsCrownRank("Olympus", 3), false)
+	-- The officers of the main guild (1.0.0): of the Crown on its own members' clients, where
+	-- their rank is the server's (the roster); anywhere else only the census could name them,
+	-- and there they are Captains like any guild's officers.
+	eq(ns.IsCrownRank("Olympus", 1), false, "officers of the main guild, on another guild's client")
+	local savedGuild = GetGuildInfo
+	GetGuildInfo = function() return "Olympus", "Knight", 3 end
+	local theirs = ns.IsCrownRank("Olympus", 1)
+	GetGuildInfo = savedGuild
+	eq(theirs, true, "officers of the main guild, on its members' clients")
+	eq(ns.IsCrownRank("Olympus", 0), true, "its guild master everywhere")
 end)
 
 test("wall of shame round trip", function()
@@ -3211,7 +3225,10 @@ test("long chat splits at safe points and every part fits one message", function
 end)
 
 test("channel levels follow the realm hierarchy", function()
-	eq(Chan.LevelOf("Olympus", 0), 3); eq(Chan.LevelOf("Olympus", 1), 3); eq(Chan.LevelOf("Olympus", 2), 1)
+	eq(Chan.LevelOf("Olympus", 0), 3); eq(Chan.LevelOf("Olympus", 2), 1)
+	-- An officer of <Olympus>: a Lord on its members' clients, a Captain on any other (1.0.0).
+	eq(Chan.LevelOf("Olympus", 1), 2)
+	AsRank(3, function() eq(Chan.LevelOf("Olympus", 1), 3) end, "Olympus")
 	eq(Chan.LevelOf("Olympus II", 0), 3); eq(Chan.LevelOf("Olympus II", 1), 2); eq(Chan.LevelOf("Olympus II", 3), 1)
 	eq(Chan.LevelOf("Horde Pals", 0), 0)
 	local function uses()
@@ -3291,7 +3308,9 @@ test("sender ranks are verified on receipt, never taken from the message", funct
 		eq(R("Stranger-Realm", "A", MY_GUILD), "forged", "not in our roster")
 		eq(R("Member3", "A", "Olympus"), "forged", "a guildmate speaking for another guild")
 		eq(R("Asmongold", "L", "Olympus"), "ok", "the King, from the report")
-		eq(R("Capt", "L", "Olympus"), "ok", "officer of <Olympus>, from the report")
+		-- (1.0.0: an officer of <Olympus> the report names is a Captain here, not a Lord.)
+		eq(R("Capt", "L", "Olympus"), "rank", "officer of <Olympus>, from the report: no [Lords] outside <Olympus>")
+		eq(R("Capt", "C", "Olympus"), "ok", "officer of <Olympus>, from the report: [Captains]")
 		eq(R("Random", "A", "Olympus"), "ok", "unverified members can use [Olympus]")
 		eq(R("Random", "C", "Olympus"), "unverified")
 		eq(R("X", "C", "Olympus Bad"), "unverified", "conflicting report")
@@ -6730,19 +6749,23 @@ test("no Olympus file opens or closes the game's popups itself (ns.ShowDialog / 
 end)
 
 test("the King's guild in one place: <Olympus> on the Alliance, the Horde's once it is set", function()
-	local savedFaction, savedHorde = ns.faction, ns.KING_GUILD.Horde
+	local savedFaction, savedHorde, savedGuild = ns.faction, ns.KING_GUILD.Horde, GetGuildInfo
 	local ok, err = pcall(function()
 		ns.faction = "Alliance"
 		eq(ns.IsKingGuild("Olympus"), true); eq(ns.IsKingGuild("OLYMPUS"), true); eq(ns.IsKingGuild("Olympus II"), false); eq(ns.IsKingGuild(nil), false)
-		eq(ns.IsCrownRank("Olympus", 1), true); eq(ns.IsCrownRank("Olympus II", 1), false); eq(ns.IsCrownRank("Olympus II", 0), true)
+		eq(ns.IsCrownRank("Olympus II", 1), false); eq(ns.IsCrownRank("Olympus II", 0), true)
+		-- (Its officers are of the Crown on its members' clients, 1.0.0.)
+		GetGuildInfo = function() return "Olympus", "Knight", 3 end
+		eq(ns.IsCrownRank("Olympus", 1), true)
 		ns.faction = "Horde"
 		eq(ns.IsKingGuild("Mudhutters"), true, "the Horde's: <Mudhutters> (0.9.4)"); eq(ns.IsKingGuild("Olympus"), false)
 		ns.KING_GUILD.Horde = nil
 		eq(ns.IsKingGuild("Olympus"), false, "no Horde King with no guild set")
 		ns.KING_GUILD.Horde = "olympus horde"
+		GetGuildInfo = function() return "Olympus Horde", "Knight", 3 end
 		eq(ns.IsKingGuild("Olympus Horde"), true); eq(ns.IsKingGuild("Olympus"), false); eq(ns.IsCrownRank("Olympus Horde", 1), true)
 	end)
-	ns.faction, ns.KING_GUILD.Horde = savedFaction, savedHorde
+	ns.faction, ns.KING_GUILD.Horde, GetGuildInfo = savedFaction, savedHorde, savedGuild
 	if not ok then error(err, 0) end
 end)
 
@@ -7362,7 +7385,7 @@ test("#18: outsiders on the channel can't crown one of their own, and the King's
 	end)
 end)
 
-test("#18: an officer of <Olympus> the census names is of the Crown like any Lord, never the King", function()
+test("#18: an officer of <Olympus> the census names is never the King, and (1.0.0) of the Crown only on <Olympus>'s own clients", function()
 	WithThrone(function(w, K)
 		local D, savedLogin = ns.Data, ns.Comm.loginAt
 		local ok, err = pcall(function()
@@ -7377,9 +7400,11 @@ test("#18: an officer of <Olympus> the census names is of the Crown like any Lor
 			-- Three outsiders keep the King at its head and add one of their own as an officer.
 			for _, s in ipairs({ "Atk-Realm", "Accomplice-Realm", "Third-Realm" }) do Report("Atk:1:0", s) end
 			eq(D.KnownRank("Asmongold Asmongler-Realm", "Olympus"), 0, "every picture names the King")
-			-- The officers of <Olympus> are of the Crown: [Lords] and the Crown's decrees, what every
-			-- guild master of an Olympus guild has. Nothing of the King's.
-			eq(ns.Channels.LevelOf("Olympus", 1), ns.Channels.LevelOf("Olympus Zeus", 0))
+			-- (1.0.0) Outside <Olympus> an officer of it is a Captain like any guild's: no [Lords], no
+			-- Crown decree; before, three outsiders' reports made one of theirs of the Crown here.
+			eq(ns.Channels.LevelOf("Olympus", 1), ns.Channels.LevelOf("Olympus Zeus", 1))
+			eq(ns.IsCrownRank("Olympus", D.KnownRank("Atk-Realm", "Olympus")), false)
+			-- Nothing of the King's either.
 			for _, kind in ipairs({ "S", "I", "A", "X", "H", "W", "G", "F", "C", "Z", "V", "E", "T", "P", "Q" }) do
 				eq(K.Authorized(kind, "Atk-Realm", "Olympus"), false, kind)
 			end
@@ -19915,6 +19940,90 @@ do
 		end)
 		GetChannelName, C_ChatInfo = savedChannel, nil
 		if not ok then error(err, 0) end
+	end)
+
+	-- 1.0.0: the officers of <Olympus> counted as the Crown on every client, and outside <Olympus>
+	-- only the census names them: three outsiders' reports that kept the King at its head and added
+	-- one of their own made him of the Crown there ([Lords], Royal decrees, Tabard inspections).
+	-- Now they are of the Crown on <Olympus> members' clients alone (their roster); elsewhere the
+	-- Crown of the King's guild is the King himself, by his pinned name, and the Hands he names.
+
+	-- <Olympus> as its reporter and runner-up picture it (the King at its head, Baron its officer),
+	-- then three outsiders' reports that add Sapper: theirs is the picture most senders give.
+	local function Forged(KING)
+		eq(D.Receive(R("Olympus", KING, "Baron:1:0", 1000, 300), "Bellman-Realm"), true)
+		eq(D.Receive(R("Olympus", KING, "Baron:1:0", 1000, 300), "Notary-Realm"), true)
+		for _, atk in ipairs({ "Rogue1-Realm", "Rogue2-Realm", "Rogue3-Realm" }) do
+			D.Receive(R("Olympus", KING, "Baron:1:0,Sapper:1:0", 1000, 300), atk)
+		end
+		eq(D.KnownRank("Sapper-Realm", "Olympus"), 1, "the census names Sapper an officer of <Olympus>")
+	end
+
+	test("1.0.0 the Crown: three outsiders who add one of their own to <Olympus>'s officers crown nobody on another guild's client", function()
+		Scene(0, function(s) -- (a guild master of Olympus II: he reads [Lords])
+			Forged(ns.KingCharacter())
+			eq(ns.IsCrownRank("Olympus", D.KnownRank("Sapper-Realm", "Olympus")), false, "not of the Crown here")
+			eq(Line("Sapper-Realm", "L", "Olympus"), "rank", "no [Lords]")
+			eq(Line("Sapper-Realm", "C", "Olympus"), "shown", "[Captains], as any guild's census officer")
+			local cns, Decree = DecreeClient(s)
+			Decree("Sapper-Realm", "HERALDRY", "Olympus")
+			s.clock = s.clock + 61
+			Decree("Sapper-Realm", "ROYAL", "Olympus", "made-up royal decree")
+			eq(#cns.Decree.Active(), 0, "no Crown decree")
+			-- The real officer the census names loses the same here (a Captain, no Crown).
+			eq(Line("Baron-Realm", "L", "Olympus"), "rank")
+			Decree("Baron-Realm", "ROYAL", "Olympus")
+			eq(#cns.Decree.Active(), 0)
+		end)
+	end)
+
+	test("1.0.0 the Crown: a real officer of <Olympus> keeps it for his own guild's members, whatever the census says", function()
+		Scene(1, function(s)
+			-- An officer of <Olympus> (our roster: Member2 to Member6 its officers).
+			GetGuildInfo = function() return "Olympus", "Knight", 1 end
+			ns.Roster.Scan()
+			-- The outsiders' reports of our own guild count for nothing here: our roster is its word.
+			for _, atk in ipairs({ "Rogue1-Realm", "Rogue2-Realm", "Rogue3-Realm" }) do
+				eq(D.Receive(R("Olympus", ns.KingCharacter(), "Baron:1:0,Sapper:1:0", 1000, 300), atk), false)
+			end
+			eq(D.KnownRank("Sapper-Realm", "Olympus"), nil, "Sapper is nobody in our roster")
+			eq(Line("Member2-Realm", "L", "Olympus"), "shown", "[Lords]")
+			eq(Line("Sapper-Realm", "L", "Olympus"), "forged", "not one of us")
+			local cns, Decree = DecreeClient(s)
+			Decree("Member2-Realm", "ROYAL", "Olympus", "the officer's royal decree")
+			eq(cns.Decree.Active()[1] and cns.Decree.Active()[1].kind, "ROYAL", "his Royal decree")
+			Decree("Sapper-Realm", "ROYAL", "Olympus")
+			eq(#cns.Decree.Active(), 1, "not Sapper's")
+			eq(ns.IsCrown(), true, "and he sends them: of the Crown on his own client")
+		end)
+	end)
+
+	test("1.0.0 the Crown: the King (by his name, no census needed) and his Hands still reach every client", function()
+		Scene(0, function(s)
+			local K, KING = ns.King, ns.KingCharacter() .. "-Realm"
+			local savedShow = StaticPopup_Show
+			StaticPopup_Show = function() end
+			local ok, err = pcall(function()
+				K.Reset()
+				eq(ns.rdb.guilds.Olympus, nil, "no census of <Olympus> on this client")
+				eq(Line(KING, "L", "Olympus"), "shown", "the King's [Lords] line")
+				local cns, Decree = DecreeClient(s)
+				Decree(KING, "ROYAL", "Olympus", "the King's decree")
+				eq(cns.Decree.Active()[1] and cns.Decree.Active()[1].kind, "ROYAL", "his Royal decree")
+				-- Forged reports change none of it.
+				Forged(ns.KingCharacter())
+				eq(Line(KING, "L", "Olympus"), "shown")
+				-- His Hands: his word names them, and the Throne's tools they use reach everyone.
+				K.HandleCommand("CHANNEL", KING, "T1~H~8~Olympus~Helper-Realm")
+				eq(K.Authorized("A", "Helper-Realm", "Olympus II"), true, "his Hand")
+				eq(K.Authorized("A", "Sapper-Realm", "Olympus"), false, "not a census officer")
+				K.HandleCommand("CHANNEL", "Helper-Realm", "T1~A~9~Olympus II~600~Stormwind City~Raid at dawn")
+				eq(K.Agenda() and K.Agenda().title, "Raid at dawn", "a Hand's agenda")
+			end)
+			StaticPopup_Show = savedShow
+			K.Reset()
+			if not ok then error(err, 0) end
+		end)
 	end)
 end
 

@@ -763,11 +763,17 @@ function ns.Holds(query, ...)
 	return false
 end
 
--- The Crown: guild masters of any Olympus guild, and the officers of the King's guild.
+-- The Crown: guild masters of any Olympus guild, and the officers of the King's guild. Those
+-- officers only on the clients of the King's guild's own members (1.0.0), where their rank is
+-- the server's word (our roster: Data.KnownRank and Channels.VerifiedLevel read our own guild
+-- from it, never from the census). Anywhere else the census alone could name them, and three
+-- outsiders' reports were enough to add one of their own: there they are Captains like any
+-- guild's officers, and the Crown of the King's guild is the King himself (his pinned name) and
+-- the Hands he names for his tools (King.Authorized).
 function ns.IsCrownRank(guild, rankIndex)
 	if not guild or not rankIndex then return false end
 	if rankIndex == 0 then return true end
-	return ns.IsKingGuild(guild) and rankIndex <= ns.CAPTAIN_RANK
+	return ns.IsKingGuild(guild) and rankIndex <= ns.CAPTAIN_RANK and ns.IsKingGuild(GetGuildInfo("player"))
 end
 
 function ns.IsCrown()
