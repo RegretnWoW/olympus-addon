@@ -13748,6 +13748,11 @@ do
 				eq(found, 1, "her line among the latest the Treasurer sent")
 				V.SetFilter("treasury", "donor aa")
 				eq(V.Build("treasury")[3].text, NO_MATCH, "only the latest lines travel: the oldest is not there")
+				-- The keepers' page (the King's and the keepers'): no donors there, no box.
+				T.Show("keepers")
+				lines = V.Build("treasury")
+				eq(Box(lines), nil, "no box over the keepers")
+				assert(At(lines, L.TREASURY_KEEPERS), "the keepers' page, whatever was typed")
 				-- A member the King shows nothing of: no box, and what was typed filters nothing.
 				T.Show("summary")
 				AsSoldier()
