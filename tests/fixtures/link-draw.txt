@@ -1,9 +1,10 @@
 # Olympus Link's draw (decision 4), shared by the addon (Link.Rank, Link.Drawn) and the Worker.
 # A "p" key's place for code R: the first 8 lowercase hex of SHA-256(R~keyId). At issuance the
-# Worker takes M = max(20, ceil(3% of the active "p" keys)) and T = the place of the M-th lowest
-# ("ffffffff" with M keys or fewer, "00000000" in mode c); a key is drawn iff its place < T.
+# Worker takes M = max(20, ceil(3% of the active "p" keys)) and T = the place at index M of the sorted
+# places, counting from 0 ("ffffffff" with M keys or fewer, "00000000" in mode c); a key is drawn
+# iff its place < T: the M lowest.
 # case <name> <R> <keys> <M> <T>, then key <case> <keyId> <place> <drawn 1|0>. Made by make-link-vectors.py.
-case thirty 7K3M9QX2TB 30 20 b79bf07b
+case thirty 7K3M9QX2TB 30 20 c573ca57
 key thirty draw0001 351f6427 1
 key thirty draw0002 0583b153 1
 key thirty draw0003 9d9d3725 1
@@ -29,12 +30,12 @@ key thirty draw0022 27607a6d 1
 key thirty draw0023 ed25a959 0
 key thirty draw0024 92cabb02 1
 key thirty draw0025 5df65251 1
-key thirty draw0026 b79bf07b 0
+key thirty draw0026 b79bf07b 1
 key thirty draw0027 86110a06 1
 key thirty draw0028 c8fd0761 0
 key thirty draw0029 8880e6bd 1
 key thirty draw0030 e163c674 0
-case sevenhundred ABCDEFGHJK 700 21 078a38ed
+case sevenhundred ABCDEFGHJK 700 21 079dee32
 key sevenhundred draw0001 34dc7ff4 0
 key sevenhundred draw0002 6191b2a3 0
 key sevenhundred draw0003 7e967b7e 0
@@ -675,7 +676,7 @@ key sevenhundred draw0637 5555fa57 0
 key sevenhundred draw0638 4548d308 0
 key sevenhundred draw0639 399b0ab5 0
 key sevenhundred draw0640 633b5d03 0
-key sevenhundred draw0641 078a38ed 0
+key sevenhundred draw0641 078a38ed 1
 key sevenhundred draw0642 d320c344 0
 key sevenhundred draw0643 495c20a8 0
 key sevenhundred draw0644 e4747377 0

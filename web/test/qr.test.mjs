@@ -54,6 +54,9 @@ test('the vendored jsQR reads the addon\'s QR codes to the exact link', () => {
 	assert.equal(typeof jsQR, 'function');
 	const list = blocks();
 	assert.equal(list.length, vectors.bundles.length);
+	// A version 23 code among them: jsQR 1.4.0 as published misplaces its alignment patterns and
+	// reads none (the one line vendor/jsQR.js changes, qr-worker.js).
+	assert.ok(list.some((b) => /\(version 23\)$/.test(b.name)), 'a version 23 code');
 	for (const [i, b] of list.entries()) {
 		assert.equal(b.url, vectors.bundles[i].url);
 		assert.ok(b.rows.every((r) => r.length === b.rows.length), b.name);

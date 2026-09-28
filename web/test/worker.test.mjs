@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { afterEach, beforeEach, describe, test } from 'node:test';
-import { handleLink, drawThreshold, drawPrefix, drawLimit, verifyCertificate, parseCertificate, LINK } from '../worker/link-worker.js';
+import { handleLink, drawThreshold, drawPrefix, drawLimit, verifyCertificate, parseCertificate, councilKeyId, LINK } from '../worker/link-worker.js';
 import { parseToken, buildBundle, parseBundle, signedMessage, linkTag, utf8Length } from '../public/core.js';
 import { vectors, makeD1, sign, verify, b64url, publicHexOf } from './helpers.mjs';
 
@@ -13,8 +13,12 @@ const probe = await makeD1();
 const ORIGIN = 'https://link.example.org';
 const ADMIN = 'test-admin-token-0123456789abcdefghijklmnop';
 const [TOKEN_C, TOKEN_A] = vectors.backend.tokens;
-const [B1, B3, B4, B2] = vectors.bundles;
+const [B1, B3, B4, B2, B5] = vectors.bundles;
 const KEYS = Object.fromEntries(vectors.keys.map((k) => [k.key_id, k]));
+// The High Councillor's key the council authority certified (never registered in D1).
+const CA = vectors.council_authority;
+const CK = vectors.council_keys[0];
+const COUNCIL_KEYS = Object.fromEntries(vectors.council_keys.map((k) => [k.key_id, { ...k, kind: 'c', ca: true }]));
 const TOKENS = Object.fromEntries(vectors.backend.tokens.map((t) => [t.R, t]));
 const USER_C = { id: TOKEN_C.discord_id, username: TOKEN_C.username, global_name: 'Some Player', avatar: null };
 const USER_A = { id: TOKEN_A.discord_id, username: TOKEN_A.username, global_name: 'Tester Two', avatar: null };
@@ -41,6 +45,7 @@ async function setup({ mode = 'c', policy } = {}) {
 		DB,
 		LINK_BACKEND_SEED: vectors.backend.seed_b64url,
 		LINK_BACKEND_PUBLIC: vectors.backend.public_hex,
+		LINK_CA_PUBLIC: CA.public_hex,
 		LINK_MODE: mode,
 		LINK_ORIGIN: ORIGIN,
 		LINK_ADMIN_TOKEN: ADMIN,
@@ -56,8 +61,8 @@ async function setup({ mode = 'c', policy } = {}) {
 			.run();
 	}
 	for (const k of vectors.keys) {
-		await DB.prepare('INSERT INTO keys (key_id, public_key, owner_discord_id, owner_username, kind, bootstrap, created, cert_exp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-			.bind(k.key_id, k.public_hex, k.owner_discord_id, k.owner_username, k.kind, k.bootstrap, k.created, k.cert_exp)
+		await DB.prepare('INSERT INTO keys (key_id, public_key, owner_discord_id, owner_username, character, kind, bootstrap, created, cert_exp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+			.bind(k.key_id, k.public_hex, k.owner_discord_id, k.owner_username, k.character, k.kind, k.bootstrap, k.created, k.cert_exp)
 			.run();
 	}
 	// The drawn players' own characters, linked earlier (their keys only count for those).
@@ -90,15 +95,27 @@ async function keys(body) {
 	return { http: res.status, ...(await res.json()) };
 }
 
-// A bundle signed here: the vectors' request with other proofs. The tag is the one the
-// requester's addon makes from the code's command, unless `tag` says otherwise.
+// The certificate a proof carries, for its confirmer: the backend's (a registered key), or the
+// council authority's (`ca`), as the confirmer's addon announced it. It fills p's certificate
+// fields; `signer` (a seed) signs it instead, `exp` is its end, `kind` its tier.
+function withCertificate(p, { seedHex, kind, ca = false, exp = 1830000000, signer }) {
+	const pub = Buffer.from(publicHexOf(seedHex), 'hex').toString('base64url');
+	const payload = `OLK2.${p.keyId}.${pub}.${kind}.${exp}.${p.confirmer}`;
+	const by = signer || (ca ? CA.seed_hex : vectors.backend.seed_hex);
+	return Object.assign(p, { pub, tier: kind, certExp: exp, certSig: b64url(sign(by, Buffer.from(payload, 'utf8'))) });
+}
+
+// A bundle signed here: the vectors' request with other proofs, each carrying its key's
+// certificate for its confirmer. The tag is the one the requester's addon makes from the code's
+// command, unless `tag` says otherwise.
 async function makeBundle(base, proofs, { tag } = {}) {
 	const b = { requester: base.requester, guild: base.guild, faction: base.faction, nonce: base.nonce, R: base.R, proofs: [] };
 	b.tag = tag || (TOKENS[b.R] ? await linkTag(TOKENS[b.R].signature_b64url, b.requester) : '0123456789abcdef');
-	for (const [issued, keyId, confirmer, gv = 'r'] of proofs) {
+	for (const [issued, keyId, confirmer, gv = 'r', cert = {}] of proofs) {
+		const k = KEYS[keyId] || COUNCIL_KEYS[keyId];
 		const p = { issued, keyId, confirmer, gv };
-		p.sig = b64url(sign(KEYS[keyId].seed_hex, signedMessage(b, p)));
-		b.proofs.push(p);
+		p.sig = b64url(sign(k.seed_hex, signedMessage(b, p)));
+		b.proofs.push(withCertificate(p, { seedHex: k.seed_hex, kind: k.kind || 'c', ca: !!k.ca, ...cert }));
 	}
 	return buildBundle(b);
 }
@@ -270,7 +287,7 @@ describe('Worker', { skip: probe ? false : 'node:sqlite is not available in this
 		assert.equal((await submit(B1.bundle, USER_A)).reason, 'other-user');
 		const unknown = await makeBundle({ ...B1, R: 'ZZZZZZZZZZ' }, [[NOW - 60, 'council01', COUNCILLOR]]);
 		assert.equal((await submit(unknown, USER_C)).reason, 'unknown-code');
-		assert.equal((await submit('OLB4~nonsense', USER_C)).reason, 'format');
+		assert.equal((await submit('OLB5~nonsense', USER_C)).reason, 'format');
 		// Delivered 3 days after the code expired (the watcher was away): still good...
 		clock = TOKEN_C.exp + 3 * 86400;
 		assert.equal((await submit(B1.bundle, USER_C)).status, 'linked');
@@ -314,9 +331,9 @@ describe('Worker', { skip: probe ? false : 'node:sqlite is not available in this
 	test('a key or an owner counts once, however often a bundle carries it', async () => {
 		await setup();
 		// One player key three times (the parser reads it: the addon's Link.Parse does too).
-		const p = parseBundle(B3.bundle).bundle.proofs[0];
-		const same = [p, p, p].map((x) => [x.issued, x.keyId, x.confirmer, x.gv, x.sig].join(',')).join(';');
-		const thrice = B3.bundle.split('~').slice(0, 7).concat(same).join('~');
+		const b3 = parseBundle(B3.bundle).bundle;
+		const p = b3.proofs[0];
+		const thrice = buildBundle({ ...b3, proofs: [p, p, p] });
 		assert.equal(parseBundle(thrice).ok, true);
 		let r = await submit(thrice, USER_A);
 		assert.equal(r.reason, 'not-enough', r.message);
@@ -347,6 +364,111 @@ describe('Worker', { skip: probe ? false : 'node:sqlite is not available in this
 		assert.equal(r.reason, 'not-enough');
 		assert.match(r.message, /own key/);
 		assert.equal(discord.calls.length, 0);
+	});
+
+	test('a key confirms from the one character its certificate names (A1): an alt of the same account is refused', async () => {
+		await setup();
+		// The finding's case: the main's key, the alt's name. The certificate the proof carries
+		// names the alt (so the requester's addon took it from the alt): D1 has the key for the main.
+		const alt = await makeBundle(B1, [[NOW - 60, 'council01', 'Test Alt-ClassicBetaPvP', 'w']]);
+		let r = await submit(alt, USER_C);
+		assert.equal(r.reason, 'not-enough', r.message);
+		assert.match(r.message, /council01: its certificate is not the one registered/);
+		// Nor another key's public half, nor another tier.
+		r = await submit(await makeBundle(B1, [[NOW - 60, 'council01', COUNCILLOR, 'w', { seedHex: KEYS.council02.seed_hex }]]), USER_C);
+		assert.match(r.message, /not the one registered/);
+		r = await submit(await makeBundle(B1, [[NOW - 60, 'council01', COUNCILLOR, 'w', { kind: 'p' }]]), USER_C);
+		assert.match(r.message, /not the one registered/);
+		assert.equal(discord.calls.length, 0);
+		// Its own character: linked.
+		assert.equal((await submit(await makeBundle(B1, [[NOW - 60, 'council01', COUNCILLOR, 'w']]), USER_C)).status, 'linked');
+	});
+
+	test('a High Councillor\'s key certified by the council authority counts unregistered, recorded for its character the first time', async () => {
+		await setup();
+		assert.equal(await row('SELECT 1 AS x FROM keys WHERE key_id = ?', CK.key_id), null, 'never registered');
+		assert.equal(await councilKeyId(CK.public_hex), CK.key_id, 'its id: the first 12 hex of SHA-256 of the key');
+		const r = await submit(B5.bundle, USER_C);
+		assert.equal(r.status, 'linked', r.message);
+		const rec = await row('SELECT * FROM council_keys WHERE key_id = ?', CK.key_id);
+		assert.deepEqual([rec.public_key, rec.character, rec.cert_exp, rec.first_seen], [CK.public_hex, CK.character, CK.cert_exp, NOW]);
+		assert.ok(await row('SELECT 1 AS x FROM used WHERE r = ? AND key_id = ?', B5.R, CK.key_id));
+		assert.equal((await row('SELECT gv FROM members WHERE character = ?', B5.requester)).gv, 'w');
+		// Its renewed certificate (a later end) moves the recorded end; the same key certified for
+		// another character (which the author's client never does) is refused.
+		const later = await makeBundle({ ...B3, requester: 'Another Requester-ClassicBetaPvP' }, [[1799990200, CK.key_id, CK.character, 'w', { exp: CK.cert_exp + 86400 }]]);
+		await env.DB.prepare('UPDATE codes SET discord_id = ? WHERE r = ?').bind(USER_C.id, B3.R).run();
+		assert.equal((await submit(later, USER_C)).status, 'linked');
+		assert.equal((await row('SELECT cert_exp FROM council_keys WHERE key_id = ?', CK.key_id)).cert_exp, CK.cert_exp + 86400);
+		await setup();
+		await submit(B5.bundle, USER_C);
+		const moved = await makeBundle({ ...B3, requester: 'Another Requester-ClassicBetaPvP' }, [[1799990200, CK.key_id, 'Someone Else-ClassicBetaPvP', 'w']]);
+		await env.DB.prepare('UPDATE codes SET discord_id = ? WHERE r = ?').bind(USER_C.id, B3.R).run();
+		const x = await submit(moved, USER_C);
+		assert.equal(x.reason, 'not-enough');
+		assert.match(x.message, /recorded for another character/);
+	});
+
+	test('the council authority\'s word only: its key, tier c, the key\'s own id, a certificate valid when signed, never its own account', async () => {
+		const alias = '0123456789ab';
+		COUNCIL_KEYS[alias] = { ...COUNCIL_KEYS[CK.key_id], key_id: alias };
+		try {
+			const cases = [
+				['no LINK_CA_PUBLIC', async () => { delete env.LINK_CA_PUBLIC; return B5.bundle; }, /not certified by the council authority/],
+				['another authority', async () => { env.LINK_CA_PUBLIC = vectors.backend.public_hex; return B5.bundle; }, /not certified by the council authority/],
+				['signed by the backend key instead', async () => makeBundle(B1, [[NOW - 60, CK.key_id, CK.character, 'w', { ca: false }]]), /not certified by the council authority/],
+				['a player\'s tier', async () => makeBundle(B1, [[NOW - 60, CK.key_id, CK.character, 'w', { kind: 'p' }]]), /not certified by the council authority/],
+				['an id that is not the key\'s hash', async () => makeBundle(B1, [[NOW - 60, alias, CK.character, 'w']]), /not certified by the council authority/],
+				['an id that is not 12 hex digits', async () => {
+					COUNCIL_KEYS.council99x = { ...COUNCIL_KEYS[CK.key_id], key_id: 'council99x' };
+					return makeBundle(B1, [[NOW - 60, 'council99x', CK.character, 'w']]);
+				}, /unknown key/],
+				['a certificate that ended before the proof', async () => makeBundle(B1, [[NOW - 60, CK.key_id, CK.character, 'w', { exp: NOW - 61 }]]), /after its certificate ended/],
+				['the councillor\'s own account', async () => {
+					await env.DB.prepare('INSERT INTO members (character, discord_id, guild, faction, r, linked) VALUES (?, ?, ?, ?, ?, ?)').bind(CK.character, USER_C.id, 'Olympus I', 'Alliance', '0000000000', 1780000000).run();
+					return B5.bundle;
+				}, /own key/],
+				['a character of the councillor\'s account', async () => {
+					for (const c of [CK.character, B5.requester]) {
+						await env.DB.prepare('INSERT INTO members (character, discord_id, guild, faction, r, linked) VALUES (?, ?, ?, ?, ?, ?)').bind(c, '500000000000000077', 'Olympus I', 'Alliance', '0000000000', 1780000000).run();
+					}
+					return B5.bundle;
+				}, /own character/],
+			];
+			for (const [name, prepare, why] of cases) {
+				await setup();
+				const r = await submit(await prepare(), USER_C);
+				assert.equal(r.reason, 'not-enough', `${name}: ${r.message}`);
+				assert.match(r.message, why, name);
+				assert.equal(discord.calls.length, 0, name);
+			}
+		} finally {
+			delete COUNCIL_KEYS[alias];
+			delete COUNCIL_KEYS.council99x;
+		}
+	});
+
+	test('revoking a council authority\'s key: on the list at once, seen or not, and its proofs stop counting', async () => {
+		// Never seen yet (a leaked key revoked ahead): its first link is refused.
+		await setup();
+		let r = await keys({ key_id: CK.key_id, revoke: true });
+		assert.deepEqual([r.http, r.status, r.revoked, r.council, r.character], [200, 'ok', true, true, null]);
+		r = await submit(B5.bundle, USER_C);
+		assert.equal(r.reason, 'not-enough');
+		assert.match(r.message, /revoked/);
+		assert.equal(await row('SELECT 1 AS x FROM council_keys WHERE key_id = ?', CK.key_id), null, 'not even recorded');
+		// Seen, then revoked: what it signs afterwards no longer counts.
+		await setup();
+		assert.equal((await submit(B5.bundle, USER_C)).status, 'linked');
+		r = await keys({ key_id: CK.key_id, revoke: true });
+		assert.equal(r.character, CK.character, 'the councillor it was recorded for');
+		await env.DB.prepare('UPDATE codes SET discord_id = ? WHERE r = ?').bind(USER_C.id, B3.R).run();
+		const again = await makeBundle({ ...B3, requester: 'Another Requester-ClassicBetaPvP' }, [[1799990200, CK.key_id, CK.character, 'w']]);
+		r = await submit(again, USER_C);
+		assert.equal(r.reason, 'not-enough');
+		assert.match(r.message, /revoked/);
+		// An id that is neither registered nor one of the authority's: unknown.
+		assert.equal((await keys({ key_id: 'nosuchkey1', revoke: true })).reason, 'unknown-key');
 	});
 
 	test('mode a refusals: window, key age, account age, replaced, revoked, own key, unlinked confirmer', async () => {
@@ -420,8 +542,8 @@ describe('Worker', { skip: probe ? false : 'node:sqlite is not available in this
 		// 400 more player keys (certified, old enough): M = max(20, ceil(3% of 405)) = 20.
 		const pool = [];
 		for (let i = 0; i < 400; i++) {
-			pool.push(env.DB.prepare('INSERT INTO keys (key_id, public_key, owner_discord_id, kind, created, cert_exp) VALUES (?, ?, ?, ?, ?, ?)')
-				.bind(`pool${String(i).padStart(4, '0')}`, crypto.randomBytes(32).toString('hex'), String(110000000000000000n + BigInt(i)), 'p', 1780000000, 1830000000));
+			pool.push(env.DB.prepare('INSERT INTO keys (key_id, public_key, owner_discord_id, character, kind, created, cert_exp) VALUES (?, ?, ?, ?, ?, ?, ?)')
+				.bind(`pool${String(i).padStart(4, '0')}`, crypto.randomBytes(32).toString('hex'), String(110000000000000000n + BigInt(i)), `Pool ${i}-ClassicBetaPvP`, 'p', 1780000000, 1830000000));
 		}
 		await env.DB.batch(pool);
 		// The pool alone is python's (web/test/fixtures/make-vectors.py): the same T.
@@ -499,37 +621,49 @@ describe('Worker', { skip: probe ? false : 'node:sqlite is not available in this
 		let res = await call('POST', '/api/link/keys', { body: { key_id: 'newkey01' }, origin: null });
 		assert.equal(res.status, 401);
 		const pub = crypto.generateKeyPairSync('ed25519').publicKey.export({ format: 'der', type: 'spki' }).subarray(12);
-		const r = await keys({ key_id: 'newcouncil1', public_key: pub.toString('hex'), owner_discord_id: '400000000000000001', owner_username: 'new.councillor', kind: 'c', bootstrap: true, days: 30 });
+		const r = await keys({ key_id: 'newcouncil1', public_key: pub.toString('hex'), owner_discord_id: '400000000000000001', owner_username: 'new.councillor', character: 'New Councillor-ClassicBetaPvP', kind: 'c', bootstrap: true, days: 30 });
 		assert.equal(r.http, 200, r.message);
 		assert.equal(r.status, 'ok');
 		assert.equal(r.cert_exp, clock + 30 * 86400);
+		assert.equal(r.character, 'New Councillor-ClassicBetaPvP');
 		const cert = await verifyCertificate(vectors.backend.public_hex, r.cert);
 		assert.ok(cert, 'the backend key signed it');
-		assert.deepEqual([cert.keyId, cert.publicHex, cert.tier, cert.exp], ['newcouncil1', pub.toString('hex'), 'c', r.cert_exp]);
+		assert.deepEqual([cert.keyId, cert.publicHex, cert.tier, cert.exp, cert.character], ['newcouncil1', pub.toString('hex'), 'c', r.cert_exp, 'New Councillor-ClassicBetaPvP']);
 		assert.equal(r.command, `/oly discord cert ${r.cert}`);
 		// The two chat lines fit the game's 255 bytes, and so does the announcement.
 		assert.ok(utf8Length(r.command) < 255);
 		assert.ok(utf8Length(`DV~1~${r.cert}`) < 255);
 		assert.ok(utf8Length(`/oly discord key newcouncil1 ${'A'.repeat(43)}`) < 255);
 		const stored = await row('SELECT * FROM keys WHERE key_id = ?', 'newcouncil1');
-		assert.deepEqual([stored.public_key, stored.kind, stored.bootstrap, stored.cert_exp, stored.owner_username], [pub.toString('hex'), 'c', 1, r.cert_exp, 'new.councillor']);
-		// The same key in base64url; refusals.
+		assert.deepEqual([stored.public_key, stored.kind, stored.bootstrap, stored.cert_exp, stored.owner_username, stored.character], [pub.toString('hex'), 'c', 1, r.cert_exp, 'new.councillor', 'New Councillor-ClassicBetaPvP']);
+		// The same key in base64url; a key that is not a bootstrap one confirms from one of its
+		// owner's linked characters only; refusals.
 		const p2 = crypto.generateKeyPairSync('ed25519').publicKey.export({ format: 'der', type: 'spki' }).subarray(12);
-		const player = await keys({ key_id: 'newplayer1', public_key: p2.toString('base64url'), owner_discord_id: '400000000000000002', kind: 'p' });
+		const playerBody = { key_id: 'newplayer1', public_key: p2.toString('base64url'), owner_discord_id: '400000000000000002', character: 'New Player-ClassicBetaPvP', kind: 'p' };
+		const unlinked = await keys(playerBody);
+		assert.deepEqual([unlinked.http, unlinked.reason], [409, 'character-not-linked']);
+		await env.DB.prepare('INSERT INTO members (character, discord_id, guild, faction, r, linked) VALUES (?, ?, ?, ?, ?, ?)')
+			.bind('New Player-ClassicBetaPvP', '400000000000000002', 'Olympus II', 'Alliance', '0000000000', 1780000000)
+			.run();
+		const player = await keys(playerBody);
 		assert.equal(player.status, 'ok');
 		assert.equal((await row('SELECT public_key FROM keys WHERE key_id = ?', 'newplayer1')).public_key, p2.toString('hex'));
 		// A player key's certificate waits until the key counts (the test above).
 		assert.deepEqual([player.cert, player.cert_exp, player.command], [null, null, null]);
 		assert.ok(player.cert_from > clock + LINK.KEY_MIN_AGE);
+		const who = { character: 'Another One-ClassicBetaPvP', bootstrap: true };
 		for (const [body, reason, status] of [
-			[{ key_id: 'newcouncil1', public_key: p2.toString('hex'), owner_discord_id: '400000000000000009', kind: 'c' }, 'key-id-used', 409],
-			[{ key_id: 'another01', public_key: pub.toString('hex'), owner_discord_id: '400000000000000009', kind: 'c' }, 'public-key-used', 409],
-			[{ key_id: 'another02', public_key: crypto.randomBytes(32).toString('hex'), owner_discord_id: '400000000000000001', kind: 'c' }, 'owner-has-key', 409],
-			[{ key_id: 'another03', public_key: crypto.randomBytes(32).toString('hex'), owner_discord_id: '400000000000000009', kind: 'p', bootstrap: true }, 'format', 400],
-			[{ key_id: 'another04', public_key: 'xyz', owner_discord_id: '400000000000000009', kind: 'p' }, 'format', 400],
-			[{ key_id: 'another05', public_key: crypto.randomBytes(32).toString('hex'), owner_discord_id: 'abc', kind: 'p' }, 'format', 400],
-			[{ key_id: 'another06', public_key: crypto.randomBytes(32).toString('hex'), owner_discord_id: '400000000000000009', kind: 'x' }, 'format', 400],
-			[{ key_id: 'another07', public_key: crypto.randomBytes(32).toString('hex'), owner_discord_id: '400000000000000009', kind: 'p', days: 0 }, 'format', 400],
+			[{ key_id: 'newcouncil1', public_key: p2.toString('hex'), owner_discord_id: '400000000000000009', kind: 'c', ...who }, 'key-id-used', 409],
+			[{ key_id: 'another01', public_key: pub.toString('hex'), owner_discord_id: '400000000000000009', kind: 'c', ...who }, 'public-key-used', 409],
+			[{ key_id: 'another02', public_key: crypto.randomBytes(32).toString('hex'), owner_discord_id: '400000000000000001', kind: 'c', ...who }, 'owner-has-key', 409],
+			[{ key_id: 'another03', public_key: crypto.randomBytes(32).toString('hex'), owner_discord_id: '400000000000000009', kind: 'p', ...who }, 'format', 400],
+			[{ key_id: 'another04', public_key: 'xyz', owner_discord_id: '400000000000000009', kind: 'c', ...who }, 'format', 400],
+			[{ key_id: 'another05', public_key: crypto.randomBytes(32).toString('hex'), owner_discord_id: 'abc', kind: 'c', ...who }, 'format', 400],
+			[{ key_id: 'another06', public_key: crypto.randomBytes(32).toString('hex'), owner_discord_id: '400000000000000009', kind: 'x', ...who }, 'format', 400],
+			[{ key_id: 'another07', public_key: crypto.randomBytes(32).toString('hex'), owner_discord_id: '400000000000000009', kind: 'c', days: 0, ...who }, 'format', 400],
+			[{ key_id: 'another08', public_key: crypto.randomBytes(32).toString('hex'), owner_discord_id: '400000000000000009', kind: 'c', bootstrap: true }, 'format', 400], // no character
+			[{ key_id: 'another09', public_key: crypto.randomBytes(32).toString('hex'), owner_discord_id: '400000000000000009', kind: 'c', bootstrap: true, character: 'No Realm' }, 'format', 400],
+			[{ key_id: 'a1b2c3d4e5f6', public_key: crypto.randomBytes(32).toString('hex'), owner_discord_id: '400000000000000009', kind: 'c', ...who }, 'format', 400], // the council authority's ids
 			[{ key_id: 'Bad Id', kind: 'p' }, 'format', 400],
 			[{ key_id: 'unknown1', renew: true }, 'unknown-key', 404],
 		]) {
@@ -544,6 +678,7 @@ describe('Worker', { skip: probe ? false : 'node:sqlite is not available in this
 		assert.equal(renewed.status, 'ok');
 		assert.equal(renewed.replaced, null);
 		assert.equal(parseCertificate(renewed.cert).exp, clock + LINK.CERT_DAYS * 86400);
+		assert.equal(parseCertificate(renewed.cert).character, 'New Councillor-ClassicBetaPvP', 'for the same character');
 		assert.equal((await row('SELECT cert_exp FROM keys WHERE key_id = ?', 'newcouncil1')).cert_exp, clock + LINK.CERT_DAYS * 86400);
 		assert.equal(parseCertificate((await keys({ key_id: 'newcouncil1', renew: true, days: 10 })).cert).exp, clock + 10 * 86400);
 		assert.equal((await keys({ key_id: 'newplayer1', renew: true })).reason, 'too-early');
@@ -558,12 +693,12 @@ describe('Worker', { skip: probe ? false : 'node:sqlite is not available in this
 		const k = KEYS.council01;
 		const fresh = crypto.generateKeyPairSync('ed25519');
 		const pub = fresh.publicKey.export({ format: 'der', type: 'spki' }).subarray(12).toString('hex');
-		KEYS.council01b = { seed_hex: fresh.privateKey.export({ format: 'der', type: 'pkcs8' }).subarray(16).toString('hex') };
+		KEYS.council01b = { seed_hex: fresh.privateKey.export({ format: 'der', type: 'pkcs8' }).subarray(16).toString('hex'), kind: 'c' };
 		try {
 			const signedNew = await makeBundle(B1, [[NOW - 30, 'council01b', COUNCILLOR, 'w']]);
 			const rotate = async () => {
 				await setup();
-				const r = await keys({ key_id: 'council01b', public_key: pub, owner_discord_id: k.owner_discord_id, kind: 'c', bootstrap: true, replace: true });
+				const r = await keys({ key_id: 'council01b', public_key: pub, owner_discord_id: k.owner_discord_id, character: COUNCILLOR, kind: 'c', bootstrap: true, replace: true });
 				assert.equal(r.status, 'ok', r.message);
 				assert.equal(r.replaced, 'council01');
 			};
@@ -586,13 +721,13 @@ describe('Worker', { skip: probe ? false : 'node:sqlite is not available in this
 			// Still one active key per owner: a third one without "replace" is refused, and the
 			// database takes no second certified key (a new key without a certificate may wait
 			// next to it: its first certificate replaces the old one).
-			const third = await keys({ key_id: 'council01c', public_key: crypto.randomBytes(32).toString('hex'), owner_discord_id: k.owner_discord_id, kind: 'c' });
+			const third = await keys({ key_id: 'council01c', public_key: crypto.randomBytes(32).toString('hex'), owner_discord_id: k.owner_discord_id, character: COUNCILLOR, kind: 'c', bootstrap: true });
 			assert.equal(third.reason, 'owner-has-key');
 			await assert.rejects(
-				env.DB.prepare('INSERT INTO keys (key_id, public_key, owner_discord_id, kind, created, cert_exp) VALUES (?, ?, ?, ?, ?, ?)').bind('council01d', crypto.randomBytes(32).toString('hex'), k.owner_discord_id, 'c', NOW, NOW + 86400).run(),
+				env.DB.prepare('INSERT INTO keys (key_id, public_key, owner_discord_id, character, kind, created, cert_exp) VALUES (?, ?, ?, ?, ?, ?, ?)').bind('council01d', crypto.randomBytes(32).toString('hex'), k.owner_discord_id, COUNCILLOR, 'c', NOW, NOW + 86400).run(),
 				/UNIQUE/,
 			);
-			await env.DB.prepare('INSERT INTO keys (key_id, public_key, owner_discord_id, kind, created) VALUES (?, ?, ?, ?, ?)').bind('council01e', crypto.randomBytes(32).toString('hex'), k.owner_discord_id, 'c', NOW).run();
+			await env.DB.prepare('INSERT INTO keys (key_id, public_key, owner_discord_id, character, kind, created) VALUES (?, ?, ?, ?, ?, ?)').bind('council01e', crypto.randomBytes(32).toString('hex'), k.owner_discord_id, COUNCILLOR, 'c', NOW).run();
 			await assert.rejects(env.DB.prepare('UPDATE keys SET cert_exp = ? WHERE key_id = ?').bind(NOW + 86400, 'council01e').run(), /UNIQUE/);
 		} finally {
 			delete KEYS.council01b;
@@ -613,7 +748,7 @@ describe('Worker', { skip: probe ? false : 'node:sqlite is not available in this
 			await env.DB.prepare('INSERT OR IGNORE INTO members (character, discord_id, guild, gv, faction, r, linked) VALUES (?, ?, ?, ?, ?, ?, ?)')
 				.bind(chars[keyId], owner, 'Olympus Vanguard', 'r', 'Horde', '0000000000', 1780000000)
 				.run();
-			return keys({ key_id: keyId, public_key: publicHexOf(seeds[keyId]), owner_discord_id: owner, kind: 'p', ...extra });
+			return keys({ key_id: keyId, public_key: publicHexOf(seeds[keyId]), owner_discord_id: owner, character: chars[keyId], kind: 'p', ...extra });
 		};
 		for (const id of ['player01', 'player02', 'player03']) {
 			seeds[id] = KEYS[id].seed_hex;
@@ -634,7 +769,7 @@ describe('Worker', { skip: probe ? false : 'node:sqlite is not available in this
 			ids.forEach((keyId, i) => {
 				const p = { issued: issued + i, keyId, confirmer: chars[keyId], gv: 'r' };
 				p.sig = b64url(sign(seeds[keyId], signedMessage(b, p)));
-				b.proofs.push(p);
+				b.proofs.push(withCertificate(p, { seedHex: seeds[keyId], kind: 'p' }));
 			});
 			return submit(buildBundle(b), code.user);
 		};
@@ -717,10 +852,12 @@ describe('Worker', { skip: probe ? false : 'node:sqlite is not available in this
 		// one keeps counting (the confirmer still has it in game) until then.
 		clock = t0;
 		const owner01 = KEYS.player01.owner_discord_id;
-		const rot = await register('player01r', owner01, { replace: true });
+		// (Registered for the same character as the old key: the confirmer's own, linked.)
+		seeds.player01r = crypto.randomBytes(32).toString('hex');
+		chars.player01r = OWN.player01;
+		const rot = await keys({ key_id: 'player01r', public_key: publicHexOf(seeds.player01r), owner_discord_id: owner01, character: OWN.player01, kind: 'p', replace: true });
 		assert.equal(rot.status, 'ok', rot.message);
 		assert.deepEqual([rot.cert, rot.replaced], [null, null]);
-		chars.player01r = OWN.player01;
 		assert.equal((await row('SELECT replaced_at FROM keys WHERE key_id = ?', 'player01')).replaced_at, null);
 		clock = t0 + 86400;
 		code = await newCode();
@@ -818,7 +955,7 @@ describe('Worker', { skip: probe ? false : 'node:sqlite is not available in this
 
 	test('the page may submit 10 times an hour per account', async () => {
 		await setup();
-		for (let i = 0; i < LINK.SUBMITS_PER_HOUR; i++) assert.equal((await submit('OLB4~bad', USER_C)).reason, 'format');
+		for (let i = 0; i < LINK.SUBMITS_PER_HOUR; i++) assert.equal((await submit('OLB5~bad', USER_C)).reason, 'format');
 		const r = await submit(B1.bundle, USER_C);
 		assert.equal(r.http, 429);
 		assert.equal(r.reason, 'limit');
@@ -836,7 +973,7 @@ describe('Worker', { skip: probe ? false : 'node:sqlite is not available in this
 			{ R: B1.R, bundle: B1.bundle, from: 'Some Player-ClassicBetaPvP', t: 1799990130 },
 			{ R: B3.R, bundle: B3.bundle, from: 'Tëst Plâyer-ClassicBetaPvP', t: 1799990310 },
 			{ R: 'AAAAAAAAAA', bundle: B1.bundle, from: 'Some Player-ClassicBetaPvP', t: 1799990131 },
-			{ R: 'BBBBBBBBBB', bundle: 'OLB4~broken', from: 'x', t: 1 },
+			{ R: 'BBBBBBBBBB', bundle: 'OLB5~broken', from: 'x', t: 1 },
 			B1.bundle,
 		];
 		res = await call('POST', '/api/link/inbox', { body: { bundles }, origin: null, headers: admin });

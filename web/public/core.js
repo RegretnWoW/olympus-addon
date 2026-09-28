@@ -63,24 +63,28 @@ export function worstCaseCommandLength() {
 }
 
 // ---------------------------------------------------------------------------
-// Bundles: OLB4~<requester>~<guild>~<faction>~<nonce>~<R>~<tag>~<p1>;<p2>;...
-// with each proof <issued>,<keyId>,<confirmer Name-Realm>,<gv>,<sig>, at most 4. Each sig is
-// the confirmer's Ed25519 over the UTF-8 bytes of
+// Bundles: OLB5~<requester>~<guild>~<faction>~<nonce>~<R>~<tag>~<p1>;<p2>;...
+// with each proof <issued>,<keyId>,<confirmer Name-Realm>,<gv>,<sig>,<public key>,<tier>,
+// <cert exp>,<cert sig>, at most 4. Each sig is the confirmer's Ed25519 over the UTF-8 bytes of
 //   OLY4~<requester>~<guild>~<gv>~<faction>~<nonce>~<R>~<tag>~<issued>~<keyId>~<confirmer>
 // gv: how that confirmer checked the guild: "r" it is the confirmer's own guild and its roster
 // lists the requester, "w" a /who younger than 15 minutes shows the requester in it, "c"
 // claimed only. tag: the first 16 lowercase hex of SHA-256(<the code token's sig>~<requester>):
 // only the player who pasted the command can make a link for its code, since the QR code and
-// the copy box never carry the token.
+// the copy box never carry the token. The rest of a proof is its key's certificate, for that
+// confirmer: OLK2.<keyId>.<public key>.<tier>.<cert exp>.<confirmer>.<cert sig> (the bot's, or a
+// High Councillor's by the council authority): a watcher and the Worker check it from the link.
 
 export const MAX_PROOFS = 4;
-export const MAX_BUNDLE_BYTES = 1600;
+export const MAX_BUNDLE_BYTES = 2400;
 export const FACTIONS = ['Alliance', 'Horde'];
 export const GUILD_CHECKS = ['r', 'w', 'c'];
 export const NONCE_RE = /^[0-9a-f]{16}$/;
 export const TAG_RE = /^[0-9a-f]{16}$/;
 export const KEYID_RE = /^[a-z0-9]{6,16}$/;
 export const ISSUED_RE = /^[1-9][0-9]{0,11}$/;
+export const PUBLIC_B64_RE = /^[A-Za-z0-9_-]{43}$/;
+export const TIERS = ['c', 'p'];
 const FORBIDDEN = /[|~;,\u0000-\u001f\u007f]/;
 
 const encoder = new TextEncoder();
@@ -108,7 +112,7 @@ export function validGuild(s) {
 // exactly what the addon's Link.Parse reads; whether the proofs count is the Worker's call.
 export function parseBundle(text) {
 	if (typeof text !== 'string' || text === '') return { ok: false, error: 'empty' };
-	if (!text.startsWith('OLB4~')) return { ok: false, error: 'prefix' };
+	if (!text.startsWith('OLB5~')) return { ok: false, error: 'prefix' };
 	if (utf8Length(text) > MAX_BUNDLE_BYTES) return { ok: false, error: 'size' };
 	const f = text.split('~');
 	if (f.length !== 8) return { ok: false, error: 'fields' };
@@ -125,21 +129,29 @@ export function parseBundle(text) {
 	const proofs = [];
 	for (const part of parts) {
 		const p = part.split(',');
-		if (p.length !== 5) return { ok: false, error: 'proof' };
-		const [issued, keyId, confirmer, gv, sig] = p;
+		if (p.length !== 9) return { ok: false, error: 'proof' };
+		const [issued, keyId, confirmer, gv, sig, pub, tier, certExp, certSig] = p;
 		if (!ISSUED_RE.test(issued)) return { ok: false, error: 'issued' };
 		if (!KEYID_RE.test(keyId)) return { ok: false, error: 'keyId' };
 		if (!validCharacter(confirmer)) return { ok: false, error: 'confirmer' };
 		if (!GUILD_CHECKS.includes(gv)) return { ok: false, error: 'gv' };
 		if (!SIG_RE.test(sig) || !canonicalB64url(sig, 64)) return { ok: false, error: 'sig' };
-		proofs.push({ issued: Number(issued), keyId, confirmer, gv, sig });
+		if (!PUBLIC_B64_RE.test(pub) || !canonicalB64url(pub, 32) || !TIERS.includes(tier) || !ISSUED_RE.test(certExp) || !SIG_RE.test(certSig) || !canonicalB64url(certSig, 64)) {
+			return { ok: false, error: 'cert' };
+		}
+		proofs.push({ issued: Number(issued), keyId, confirmer, gv, sig, pub, tier, certExp: Number(certExp), certSig });
 	}
 	return { ok: true, bundle: { requester, guild, faction, nonce, R, tag, proofs } };
 }
 
 export function buildBundle(b) {
-	const proofs = b.proofs.map((p) => [p.issued, p.keyId, p.confirmer, p.gv, p.sig].join(',')).join(';');
-	return ['OLB4', b.requester, b.guild, b.faction, b.nonce, b.R, b.tag, proofs].join('~');
+	const proofs = b.proofs.map((p) => [p.issued, p.keyId, p.confirmer, p.gv, p.sig, p.pub, p.tier, p.certExp, p.certSig].join(',')).join(';');
+	return ['OLB5', b.requester, b.guild, b.faction, b.nonce, b.R, b.tag, proofs].join('~');
+}
+
+// The certificate a proof carries, as its key's confirmer announced it in game.
+export function proofCertificate(p) {
+	return `OLK2.${p.keyId}.${p.pub}.${p.tier}.${p.certExp}.${p.confirmer}.${p.certSig}`;
 }
 
 // The exact text a confirmer signed for one proof.
@@ -185,7 +197,7 @@ export function bundleFromText(input) {
 		}
 	}
 	s = s.trim();
-	return s.startsWith('OLB4~') ? s : null;
+	return s.startsWith('OLB5~') ? s : null;
 }
 
 // The page's fragment: a bundle from a phone that scanned the QR with its camera.
@@ -387,7 +399,7 @@ export function pathSystem(os) {
 }
 
 // ---------------------------------------------------------------------------
-// Olympus.lua (SavedVariables): every "OLB4~..." string in it, unescaped as Lua writes them.
+// Olympus.lua (SavedVariables): every "OLB5~..." string in it, unescaped as Lua writes them.
 // The file stays in the browser; only the bundle the player picks is sent.
 
 export const MAX_FILE_BYTES = 30 * 1024 * 1024;
@@ -435,7 +447,7 @@ export function unescapeLua(body) {
 export function bundlesFromSavedVariables(text) {
 	const out = [];
 	const seen = new Set();
-	const re = /"(OLB4~(?:[^"\\\r\n]|\\[\s\S])*)"/g;
+	const re = /"(OLB5~(?:[^"\\\r\n]|\\[\s\S])*)"/g;
 	for (let m = re.exec(text); m; m = re.exec(text)) {
 		const s = unescapeLua(m[1]);
 		if (s === null || seen.has(s)) continue;

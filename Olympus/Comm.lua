@@ -1000,6 +1000,10 @@ local function OnAddonMessage(prefix, text, dist, sender, target, zoneChannelID,
 	if ns.db.blocked[sender:lower()] then return end
 	if not Comm.Admit(sender, ns.Now()) then return end
 	stats.recv = stats.recv + 1
+	-- Olympus Link (0.9.10): a High Councillor's addon waiting to hear the author (Link.HeardFrom)
+	-- sees who speaks; only while it waits: otherwise nil, and no message pays for it.
+	local hook = Comm.senderHook
+	if hook then ns.SafeCall("link author", hook, sender, dist) end
 	local kind = (dist == "CHANNEL" and "ch:" or "g:") .. (text:match("^C%w+:") and "chunk" or text:sub(1, 2))
 	Count(stats.byType, kind) -- (unknown prefixes fold into "other": a flood of them stays small)
 	local now = ns.Now()

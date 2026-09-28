@@ -17,13 +17,14 @@ import {
 	bundleFromText,
 	parseFragment,
 	checkBundle,
+	proofCertificate,
 	splitCharacter,
 	b64urlEncode,
 	b64urlDecode,
 	canonicalB64url,
 	utf8Length,
 } from '../public/core.js';
-import { parseBundle as workerParse, signedMessage as workerMessage, linkTag as workerTag } from '../worker/link-worker.js';
+import { parseBundle as workerParse, signedMessage as workerMessage, linkTag as workerTag, proofCertificate as workerCert } from '../worker/link-worker.js';
 import { vectors } from './helpers.mjs';
 
 const [TOKEN_C, TOKEN_A] = vectors.backend.tokens;
@@ -127,6 +128,15 @@ test('bundles: the vectors parse and rebuild byte for byte, here and in the Work
 	}
 	// The signed text: OLY4~requester~guild~gv~faction~nonce~R~tag~issued~keyId~confirmer.
 	assert.equal(B1.messages[0], `OLY4~Some Player-ClassicBetaPvP~Olympus II~w~Alliance~0123456789abcdef~7K3M9QX2TB~${B1.tag}~1799990100~council01~Test Councillor-ClassicBetaPvP`);
+	// Each proof carries its key's certificate for its confirmer, as the key's addon announced it.
+	const certs = Object.fromEntries([...vectors.keys, ...vectors.council_keys].map((k) => [k.key_id, k.cert]));
+	for (const v of vectors.bundles) {
+		for (const p of parseBundle(v.bundle).bundle.proofs) {
+			assert.equal(proofCertificate(p), certs[p.keyId], `${v.name} ${p.keyId}`);
+			assert.equal(workerCert(p).keyId, p.keyId);
+			assert.equal(workerCert(p).character, p.confirmer);
+		}
+	}
 	assert.equal(splitCharacter(B3.requester).name, 'Tëst Plâyer');
 	assert.equal(splitCharacter(B3.requester).realm, 'ClassicBetaPvP');
 });
@@ -138,6 +148,7 @@ test('bundles: malformed ones are refused, here and in the Worker', () => {
 	const withProof = (i, value) => withField(7, proof.map((x, k) => (k === i ? value : x)).join(','));
 	const bad = [
 		['OLB3' + B1.bundle.slice(4), 'prefix'],
+		['OLB4' + B1.bundle.slice(4), 'prefix'], // the format before the certificates travelled
 		[B1.bundle + '~extra', 'fields'],
 		[f.slice(0, 6).concat(f[7]).join('~'), 'fields'], // the old format: no tag
 		[withField(1, 'NoRealm'), 'requester'],
@@ -168,6 +179,13 @@ test('bundles: malformed ones are refused, here and in the Worker', () => {
 		[withProof(3, ''), 'gv'],
 		[withProof(4, proof[4].slice(0, 85)), 'sig'],
 		[withProof(4, proof[4].slice(0, 85) + 'B'), 'sig'],
+		[withProof(5, proof[5].slice(1)), 'cert'], // the public key
+		[withProof(5, proof[5].slice(0, 42) + 'B'), 'cert'], // stray low bits
+		[withProof(6, 'x'), 'cert'], // the tier
+		[withProof(6, 'C'), 'cert'],
+		[withProof(7, '0' + proof[7]), 'cert'], // the certificate's end
+		[withProof(8, proof[8].slice(0, 85)), 'cert'], // its signature
+		[withField(7, proof.slice(0, 5).join(',')), 'proof'], // the proof of OLB4: no certificate
 		[withField(7, [proof[0], proof[1], proof[2], proof[4]].join(',')), 'proof'], // the old proof: no gv
 		[withField(7, new Array(5).fill(f[7]).join(';')), 'proofs'],
 		[withField(7, `${f[7]};`), 'proof'],
@@ -177,7 +195,7 @@ test('bundles: malformed ones are refused, here and in the Worker', () => {
 		assert.deepEqual(parseBundle(text), { ok: false, error }, text);
 		assert.equal(workerParse(text).ok, false, text);
 	}
-	assert.equal(parseBundle('OLB4~' + 'x'.repeat(1600)).error, 'size');
+	assert.equal(parseBundle('OLB5~' + 'x'.repeat(2400)).error, 'size');
 	assert.equal(parseBundle(B4.bundle).ok, true);
 });
 
@@ -207,11 +225,15 @@ test('bundles: whatever the addon\'s Link.Parse takes, the page and the Worker t
 	assert.equal(parseBundle(withField(1, `${'é'.repeat(25)}-${'y'.repeat(14)}`)).error, 'requester'); // 65 bytes
 });
 
-test('bundles: the largest there can be stays well under 1600 bytes', () => {
-	const proof = ['9'.repeat(12), 'k'.repeat(16), `${'é'.repeat(24)}-${'y'.repeat(15)}`, 'r', 'A'.repeat(85) + 'A'].join(',');
-	const text = ['OLB4', `${'é'.repeat(24)}-${'y'.repeat(15)}`, 'x'.repeat(40), 'Alliance', '0'.repeat(16), '7K3M9QX2TB', 'f'.repeat(16), new Array(4).fill(proof).join(';')].join('~');
+test('bundles: the largest there can be fits the 2400 bytes the addon, the page and the Worker take', () => {
+	const name = `${'é'.repeat(24)}-${'y'.repeat(15)}`; // 64 bytes of UTF-8
+	const proof = ['9'.repeat(12), 'k'.repeat(16), name, 'r', 'A'.repeat(86), 'A'.repeat(43), 'p', '9'.repeat(12), 'A'.repeat(86)].join(',');
+	const text = ['OLB5', name, 'x'.repeat(40), 'Alliance', '0'.repeat(16), '7K3M9QX2TB', 'f'.repeat(16), new Array(4).fill(proof).join(';')].join('~');
 	assert.equal(parseBundle(text).ok, true);
-	assert.ok(utf8Length(text) <= 1000, `${utf8Length(text)} bytes`);
+	assert.equal(workerParse(text).ok, true);
+	assert.ok(utf8Length(text) <= 1600, `${utf8Length(text)} bytes`);
+	// Its certificate fits the chat line the addon announces it on (DV~1~<certificate>).
+	assert.ok(utf8Length(`DV~1~${proofCertificate(parseBundle(text).bundle.proofs[0])}`) <= 255);
 });
 
 test('links: the URL of the QR and copy box round-trips, whatever the encoding', () => {
@@ -247,7 +269,7 @@ test('checkBundle: what the page shows, and the code check', () => {
 	assert.equal(checkBundle(B3.bundle, '7K3M9QX2TB').matchesCode, false);
 	assert.equal(checkBundle(B3.bundle, null).matchesCode, null);
 	assert.equal(checkBundle(B4.bundle).confirmations, 4);
-	assert.deepEqual(checkBundle('OLB4~x', null).ok, false);
+	assert.deepEqual(checkBundle('OLB5~x', null).ok, false);
 	assert.equal(checkBundle(B1.bundle.split('~').slice(0, 7).join('~') + '~', null).error, 'noProofs');
 });
 

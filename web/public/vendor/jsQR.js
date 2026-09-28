@@ -8961,7 +8961,7 @@ exports.VERSIONS = [
     {
         infoBits: 0x177EC,
         versionNumber: 23,
-        alignmentPatternCenters: [6, 30, 54, 74, 102],
+        alignmentPatternCenters: [6, 30, 54, 78, 102], // Olympus: 78, not 74 (ISO/IEC 18004 table E.1; see qr-worker.js)
         errorCorrectionLevels: [
             {
                 ecCodewordsPerBlock: 30,

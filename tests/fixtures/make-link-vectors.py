@@ -12,15 +12,21 @@ an empty message). rfc8032-*: RFC 8032 section 7.1. python-*: Ed25519PrivateKey 
 seeds below. lua-*: made by the addon's Olympus/Ed25519.lua; kept as they are, checked here.
 
 tests/fixtures/link-sample.txt: key=value lines. The bot's codes (OLC2, with the draw threshold
-T), the confirmers' certificates (OLK1, signed by the backend key), the tags that bind a link to
-the code's signature and the requester, and finished links (OLB4, each proof with its guild
-flag gv), all signed with the throwaway keys below.
+T), the confirmers' certificates (OLK2, each for one character: signed by the backend key, or a
+councillor's by the council authority's key), the tags that bind a link to the code's signature
+and the requester, and finished links (OLB5, each proof with its guild flag gv and its
+certificate), all signed with the throwaway keys below.
 
 tests/fixtures/link-draw.txt: the draw of decision 4 for two sets of keys: each key's place
-(the first 8 hex of SHA-256(R~keyId)), M, the threshold T and who is drawn (place < T).
+(the first 8 hex of SHA-256(R~keyId)), M, the threshold T and who is drawn (place < T): the M
+lowest, as the Worker and the page draw them.
 
 tests/fixtures/link-inbox.lua: a watcher's SavedVariables as the addon writes its inbox,
-OlympusDB.discord.inbox[R][sender] = { bundle, from, t }, holding the sample's links.
+OlympusDB.discord.inbox[R][sender] = { bundle, from, t, keep }, holding the sample's links.
+
+The lua-* lines of ed25519-vectors.txt are the addon's own (Olympus/Ed25519.lua; lua-ca-cert is
+the certificate the addon's council authority makes, which tests/run.lua makes again byte for
+byte): kept as they are here, and checked.
 
 Every key here is made from a public label for these tests alone: never use one of them for
 anything real.
@@ -117,8 +123,25 @@ def token_payload(R, username, exp, mode, T):
     return "OLC2.%s.%s.%d.%s.%s" % (R, username, exp, mode, T)
 
 
-def cert_payload(key_id, pub_b64, tier, exp):
-    return "OLK1.%s.%s.%s.%d" % (key_id, pub_b64, tier, exp)
+def cert_payload(key_id, pub_b64, tier, exp, character):
+    """OLK2.<keyId>.<public key, base64url>.<tier>.<exp>.<Name-Realm>: signed (UTF-8) by the backend
+    key, or a councillor's (tier c) by the council authority's key."""
+    return "OLK2.%s.%s.%s.%d.%s" % (key_id, pub_b64, tier, exp, character)
+
+
+def ca_key_id(pub_bytes):
+    """The id of a key the council authority certifies: the first 12 hex of SHA-256(its 32 bytes)."""
+    return hashlib.sha256(pub_bytes).hexdigest()[:12]
+
+
+def parse_cert(text):
+    """(key_id, pub_b64, tier, exp, character, signed, sig) of an OLK2 certificate: the character is
+    what lies between the expiry and the last dot (read from both ends)."""
+    signed, sig = text.rsplit(".", 1)
+    head = signed.split(".", 4)
+    assert head[0] == "OLK2" and len(head) == 5, text
+    exp, character = head[4].split(".", 1)
+    return head[1], head[2], head[3], int(exp), character, signed, sig
 
 
 def tag_of(token_sig, requester):
@@ -133,8 +156,10 @@ def signed_text(head, p):
 
 
 def bundle_text(head, proofs):
-    parts = [",".join([str(p["issued"]), p["key_id"], p["confirmer"], p["gv"], p["sig"]]) for p in proofs]
-    return "~".join(["OLB4", head["requester"], head["guild"], head["faction"], head["nonce"], head["R"], head["tag"], ";".join(parts)])
+    """OLB5: each proof <issued>,<keyId>,<confirmer>,<gv>,<sig>,<public key>,<tier>,<cert exp>,<cert sig>."""
+    parts = [",".join([str(p["issued"]), p["key_id"], p["confirmer"], p["gv"], p["sig"], p["pub"], p["tier"], str(p["cert_exp"]),
+                       p["cert_sig"]]) for p in proofs]
+    return "~".join(["OLB5", head["requester"], head["guild"], head["faction"], head["nonce"], head["R"], head["tag"], ";".join(parts)])
 
 
 def rank(R, key_id):
@@ -143,14 +168,15 @@ def rank(R, key_id):
 
 
 def draw_threshold(R, key_ids, mode="a"):
-    """T of decision 4: M = max(20, ceil(3% of the active "p" keys)); the place of the M-th
-    lowest, "ffffffff" with M keys or fewer, "00000000" in mode c. Drawn: place < T."""
+    """T of decision 4: M = max(20, ceil(3% of the active "p" keys)); the place at index M of the
+    sorted places (counting from 0: the (M+1)th lowest), "ffffffff" with M keys or fewer,
+    "00000000" in mode c. Drawn: place < T, so the M lowest are drawn (the Worker's thresholdOf)."""
     if mode == "c":
         return "00000000", 0
     m = max(20, math.ceil(len(key_ids) * 3 / 100))
     if len(key_ids) <= m:
         return "ffffffff", m
-    return sorted(rank(R, k) for k in key_ids)[m - 1], m
+    return sorted(rank(R, k) for k in key_ids)[m], m
 
 
 NAME = "Some Player-ClassicBetaPvP"
@@ -159,6 +185,9 @@ ACCENTED = "Sômé Plâyer-ClassicBetaPvP"   # a made-up name with accented lett
 COUNCILLORS = {"council01": "Test Councillor-ClassicBetaPvP", "council02": "Other Councillor-ClassicBetaPvP"}
 PLAYERS = {"player01": "Some Player Two-ClassicBetaPvP", "player02": "Some Player Three-ClassicBetaPvP",
            "player03": "Some Player Four-ClassicBetaPvP"}
+# A councillor whose key its own addon made, certified by the council authority (the author's
+# client): its id is the first 12 hex of SHA-256 of its public key, made from the label "council03".
+CA_COUNCILLOR = ("council03", "Third Councillor-ClassicBetaPvP")
 R = "7K3M9QX2TB"
 USERNAME = "some.player"
 TOKEN_EXP = 1800000000
@@ -172,7 +201,11 @@ PYTHON = [
                                  + COUNCILLORS["council01"]).encode()),
     ("python-oly4-accented", "vector-d", ("OLY4~" + ACCENTED + "~Ólympus Ørder~w~Horde~fedcba9876543210~ABCDEFGHJK~8899aabbccddeeff~1799990200~player01~"
                                           + PLAYERS["player01"]).encode()),
-    ("python-cert", "vector-f", cert_payload("council01", b64(pub(key("council01"))), "c", CERT_EXP).encode()),
+    ("python-cert", "vector-f", cert_payload("council01", b64(pub(key("council01"))), "c", CERT_EXP, COUNCILLORS["council01"]).encode()),
+    # The council authority's key (label "ca") signing a councillor's certificate, as the author's
+    # client does it in game (the lua-ca-cert line is the addon's own, for the same key and text).
+    ("python-ca-cert", "ca", cert_payload(ca_key_id(pub(key(CA_COUNCILLOR[0]))), b64(pub(key(CA_COUNCILLOR[0]))), "c", CERT_EXP,
+                                          CA_COUNCILLOR[1]).encode()),
     ("python-1000", "vector-e", bytes((i * 7 + 3) % 256 for i in range(1000))),
 ]
 
@@ -205,9 +238,12 @@ def check_line(line):
 def make_sample():
     """The sample's values, in order, and the inbox the addon keeps for the links in it."""
     backend = key("backend")
+    ca = key("ca")
     v = {}
     v["backend_seed"] = b64(seed("backend"))
     v["backend_pub"] = pub(backend).hex()
+    v["ca_seed"] = b64(seed("ca"))
+    v["ca_pub"] = pub(ca).hex()
     v["requester"], v["guild"], v["faction"], v["nonce"], v["R"] = NAME, GUILD, FACTION, NONCE, R
     v["token_exp"] = str(TOKEN_EXP)
     v["cert_exp"] = str(CERT_EXP)
@@ -222,26 +258,38 @@ def make_sample():
         v["token_" + mode] = payload + "." + sig
     v["tag_a"] = tag_of(tokens["a"], NAME)
     v["tag_c"] = tag_of(tokens["c"], NAME)
+    labels = {}
     for key_id in list(COUNCILLORS) + list(PLAYERS):
         tier = "c" if key_id in COUNCILLORS else "p"
         k = key(key_id)
-        pub_b64 = b64(pub(k))
-        payload = cert_payload(key_id, pub_b64, tier, CERT_EXP)
+        labels[key_id] = key_id
+        payload = cert_payload(key_id, b64(pub(k)), tier, CERT_EXP, COUNCILLORS.get(key_id) or PLAYERS[key_id])
         v["confirmer_%s_seed" % key_id] = b64(seed(key_id))
         v["confirmer_%s_pub" % key_id] = pub(k).hex()
         v["confirmer_%s_cert" % key_id] = payload + "." + b64(backend.sign(payload.encode()))
+    # The councillor certified by the council authority: its id comes from its public key.
+    label, character = CA_COUNCILLOR
+    k = key(label)
+    ca_id = ca_key_id(pub(k))
+    labels[ca_id] = label
+    payload = cert_payload(ca_id, b64(pub(k)), "c", CERT_EXP, character)
+    v["confirmer_%s_seed" % ca_id] = b64(seed(label))
+    v["confirmer_%s_pub" % ca_id] = pub(k).hex()
+    v["confirmer_%s_cert" % ca_id] = payload + "." + b64(ca.sign(payload.encode()))
 
     def head(tag, requester=NAME):
         return {"requester": requester, "guild": GUILD, "faction": FACTION, "nonce": NONCE, "R": R, "tag": tag}
 
     def proof(h, key_id, gv, issued):
-        confirmer = COUNCILLORS.get(key_id) or PLAYERS[key_id]
-        p = {"issued": issued, "key_id": key_id, "confirmer": confirmer, "gv": gv}
-        p["sig"] = b64(key(key_id).sign(signed_text(h, p).encode()))
+        _, pub_b64, tier, exp, confirmer, _, cert_sig = parse_cert(v["confirmer_%s_cert" % key_id])
+        p = {"issued": issued, "key_id": key_id, "confirmer": confirmer, "gv": gv, "pub": pub_b64, "tier": tier, "cert_exp": exp,
+             "cert_sig": cert_sig}
+        p["sig"] = b64(key(labels[key_id]).sign(signed_text(h, p).encode()))
         return p
 
     hc, ha = head(v["tag_c"]), head(v["tag_a"])
     v["bundle_council"] = bundle_text(hc, [proof(hc, "council01", "r", 1799990100)])
+    v["bundle_council_ca"] = bundle_text(hc, [proof(hc, ca_id, "w", 1799990120)])
     v["bundle_council_two"] = bundle_text(hc, [proof(hc, "council01", "c", 1799990100), proof(hc, "council02", "w", 1799990110)])
     v["bundle_players"] = bundle_text(ha, [proof(ha, "player01", "w", 1799990200), proof(ha, "player02", "c", 1799990230),
                                            proof(ha, "player03", "c", 1799990260)])
@@ -259,13 +307,16 @@ def sample_lines(v):
         "# A sample Olympus Link (0.9.10): the bot's codes, confirmers' certificates and finished links, signed",
         "# with throwaway test keys (made by tests/fixtures/make-link-vectors.py from public labels): never use",
         "# them for anything real. key=value; *_seed are base64url (as /oly discord key takes them), *_pub hex.",
+        "# ca_seed, ca_pub: the council authority's key (the author's client; ns.LINK_CA_KEYS, LINK_CA_PUBLIC).",
         "# token_a (mode a) and token_c (mode c): OLC2.<R>.<username>.<exp>.<mode>.<T>.<sig>, signed by the",
         "#   backend key over all but the last field; token_a_T is T of the sample's three player keys.",
         "# tag_a, tag_c: the first 16 hex of SHA-256(<that token's signature>~<requester>).",
-        "# confirmer_<id>_cert: OLK1.<id>.<public key base64url>.<tier c|p>.<exp>.<sig>, signed by the backend key.",
-        "# bundle_council, bundle_council_two: links made with token_c (tag_c); bundle_players (one gv w) and",
-        "#   bundle_players_claimed (all gv c): with token_a (tag_a); bundle_impostor: another character's",
-        "#   request for the same R, with a tag made without the code's signature (the Worker must refuse it).",
+        "# confirmer_<id>_cert: OLK2.<id>.<public key base64url>.<tier c|p>.<exp>.<Name-Realm>.<sig>, signed by",
+        "#   the backend key; the one whose id is 12 hex (the first of SHA-256 of its key) by the council authority.",
+        "# bundle_council, bundle_council_two, bundle_council_ca: links made with token_c (tag_c); bundle_players",
+        "#   (one gv w) and bundle_players_claimed (all gv c): with token_a (tag_a); bundle_impostor: another",
+        "#   character's request for the same R, with a tag made without the code's signature (the Worker must",
+        "#   refuse it). Each proof carries its certificate: ...,<sig>,<public key>,<tier>,<cert exp>,<cert sig>.",
     ]
     lines += ["%s=%s" % (k, val) for k, val in v.items()]
     return lines
@@ -274,8 +325,10 @@ def sample_lines(v):
 def check_sample(lines):
     values = dict(line.split("=", 1) for line in lines if line and not line.startswith("#"))
     backend = Ed25519PublicKey.from_public_bytes(bytes.fromhex(values["backend_pub"]))
-    assert Ed25519PrivateKey.from_private_bytes(unb64(values["backend_seed"])).public_key().public_bytes(
-        serialization.Encoding.Raw, serialization.PublicFormat.Raw).hex() == values["backend_pub"], "backend key"
+    ca = Ed25519PublicKey.from_public_bytes(bytes.fromhex(values["ca_pub"]))
+    for name in ("backend", "ca"):
+        assert Ed25519PrivateKey.from_private_bytes(unb64(values[name + "_seed"])).public_key().public_bytes(
+            serialization.Encoding.Raw, serialization.PublicFormat.Raw).hex() == values[name + "_pub"], name + " key"
     sigs = {}
     for mode in ("a", "c"):
         token = values["token_" + mode]
@@ -285,25 +338,28 @@ def check_sample(lines):
         assert fields[0] == "OLC2" and fields[-2] == mode, token
         sigs[mode] = sig
         assert values["tag_" + mode] == tag_of(sig, values["requester"]), "tag " + mode
-    pubs = {}
+    pubs, certs = {}, {}
     for k, val in values.items():
         if k.startswith("confirmer_") and k.endswith("_cert"):
             key_id = k[len("confirmer_"):-len("_cert")]
-            signed, sig = val.rsplit(".", 1)
-            backend.verify(unb64(sig), signed.encode())
-            _, cid, pub_b64, tier, exp = signed.split(".")
+            cid, pub_b64, tier, exp, character, signed, sig = parse_cert(val)
+            by_ca = key_id == ca_key_id(unb64(pub_b64))
+            (ca if by_ca else backend).verify(unb64(sig), signed.encode())
             assert cid == key_id and unb64(pub_b64).hex() == values["confirmer_%s_pub" % key_id], k
-            assert tier == ("c" if key_id.startswith("council") else "p") and exp == values["cert_exp"], k
-            pubs[key_id] = unb64(pub_b64)
-    for name, tag in (("bundle_council", "tag_c"), ("bundle_council_two", "tag_c"), ("bundle_players", "tag_a"),
-                      ("bundle_players_claimed", "tag_a"), ("bundle_impostor", None)):
+            assert tier == ("c" if key_id.startswith("council") or by_ca else "p") and str(exp) == values["cert_exp"], k
+            pubs[key_id], certs[key_id] = unb64(pub_b64), val
+    assert any(key_id == ca_key_id(p) for key_id, p in pubs.items()), "a certificate of the council authority"
+    for name, tag in (("bundle_council", "tag_c"), ("bundle_council_two", "tag_c"), ("bundle_council_ca", "tag_c"),
+                      ("bundle_players", "tag_a"), ("bundle_players_claimed", "tag_a"), ("bundle_impostor", None)):
         f = values[name].split("~")
-        assert f[0] == "OLB4" and len(f) == 8, name
+        assert f[0] == "OLB5" and len(f) == 8, name
         h = dict(zip(["requester", "guild", "faction", "nonce", "R", "tag"], f[1:7]))
         assert tag is None or h["tag"] == values[tag], name
         assert tag is not None or h["tag"] not in (values["tag_a"], values["tag_c"]), name
         for part in f[7].split(";"):
-            issued, key_id, confirmer, gv, sig = part.split(",")
+            issued, key_id, confirmer, gv, sig, pub_b64, tier, cert_exp, cert_sig = part.split(",")
+            # The certificate it carries is the sample's, for its confirmer.
+            assert "OLK2.%s.%s.%s.%s.%s.%s" % (key_id, pub_b64, tier, cert_exp, confirmer, cert_sig) == certs[key_id], name
             p = {"issued": issued, "key_id": key_id, "confirmer": confirmer, "gv": gv}
             Ed25519PublicKey.from_public_bytes(pubs[key_id]).verify(unb64(sig), signed_text(h, p).encode())
 
@@ -316,8 +372,9 @@ def draw_lines():
     out = [
         "# Olympus Link's draw (decision 4), shared by the addon (Link.Rank, Link.Drawn) and the Worker.",
         "# A \"p\" key's place for code R: the first 8 lowercase hex of SHA-256(R~keyId). At issuance the",
-        "# Worker takes M = max(20, ceil(3% of the active \"p\" keys)) and T = the place of the M-th lowest",
-        "# (\"ffffffff\" with M keys or fewer, \"00000000\" in mode c); a key is drawn iff its place < T.",
+        "# Worker takes M = max(20, ceil(3% of the active \"p\" keys)) and T = the place at index M of the sorted",
+        "# places, counting from 0 (\"ffffffff\" with M keys or fewer, \"00000000\" in mode c); a key is drawn",
+        "# iff its place < T: the M lowest.",
         "# case <name> <R> <keys> <M> <T>, then key <case> <keyId> <place> <drawn 1|0>. Made by make-link-vectors.py.",
     ]
     for name, R_, n in DRAW_CASES:
@@ -346,7 +403,7 @@ def check_draw(lines):
         for k, place, d in keys[name]:
             assert place == rank(R_, k) and d == ("1" if place < T else "0"), k
             drawn += d == "1"
-        assert drawn == (m - 1 if n > m else n), name  # the M-th lowest itself is not below T
+        assert drawn == min(n, m), name  # the M lowest: T is the (M+1)th lowest place
 
 
 def lua_string(s):
@@ -355,12 +412,20 @@ def lua_string(s):
 
 # The watcher's inbox: the sample's links as the addon keeps them (their times are the clock of the
 # addon's test, tests/run.lua).
+# Until when a watcher keeps a link: the latest proof's time + a code's life (a day) + the clocks'
+# difference (5 minutes) + the 7 days the bot takes a link after its code expired (Link.KeepUntil).
+def keep_until(bundle):
+    latest = max(int(part.split(",")[0]) for part in bundle.split("~")[7].split(";"))
+    return latest + 86400 + 300 + 7 * 86400
+
+
 def inbox_lines(v):
     entries = [(v["R"], v["requester"], v["bundle_council"], 1799990400), (v["R"], OTHER, v["bundle_impostor"], 1799990460)]
     out = [
         "-- A watcher's SavedVariables (WTF/Account/<account>/SavedVariables/Olympus.lua) as the addon writes its",
-        "-- Olympus Link inbox (0.9.10): OlympusDB.discord.inbox[R][sender] = { bundle, from, t }. Up to 3 senders",
-        "-- per code, 5 entries per sender and 500 in all; nothing is dropped while its code can still be used.",
+        "-- Olympus Link inbox (0.9.10): OlympusDB.discord.inbox[R][sender] = { bundle, from, t, keep }. Up to 3",
+        "-- senders per code, 5 entries per sender and 500 in all, each checked first; nothing is dropped while",
+        "-- its code can still be used (keep: until when, Link.KeepUntil).",
         "-- Made by tests/fixtures/make-link-vectors.py from link-sample.txt; tests/run.lua checks the addon keeps",
         "-- exactly this, and web/tools/read-inbox.mjs reads it. Throwaway test keys only.",
         "OlympusDB = {",
@@ -376,6 +441,7 @@ def inbox_lines(v):
             out.append("\t\t\t\t[%s] = {" % lua_string(sender))
             out.append("\t\t\t\t\t[\"bundle\"] = %s," % lua_string(bundle))
             out.append("\t\t\t\t\t[\"from\"] = %s," % lua_string(sender))
+            out.append("\t\t\t\t\t[\"keep\"] = %d," % keep_until(bundle))
             out.append("\t\t\t\t\t[\"t\"] = %d," % t)
             out.append("\t\t\t\t},")
         out.append("\t\t\t},")
@@ -406,6 +472,8 @@ def main():
         vec = [line for line in vec_all if line and not line.startswith("#")]
     for line in vec:
         check_line(line)
+    names = [line.split()[0] for line in vec]
+    assert "lua-ca-cert" in names or "--check" not in sys.argv, "the addon's own council authority certificate (lua-ca-cert)"
     check_sample(sample)
     check_draw(draw)
     print("%d vectors, the sample, the draw and the inbox check out" % len(vec))

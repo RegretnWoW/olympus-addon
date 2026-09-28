@@ -70,23 +70,38 @@ test('the backend\'s tokens verify with its public key', () => {
 	}
 });
 
-test('key certificates: signed by the backend key over OLK1.<keyId>.<pub>.<tier>.<exp>', () => {
+test('key certificates: signed by the backend key over OLK2.<keyId>.<pub>.<tier>.<exp>.<character>', () => {
 	for (const k of vectors.keys) {
-		assert.equal(k.cert_payload, `OLK1.${k.key_id}.${Buffer.from(k.public_hex, 'hex').toString('base64url')}.${k.kind}.${k.cert_exp}`);
+		assert.equal(k.cert_payload, `OLK2.${k.key_id}.${Buffer.from(k.public_hex, 'hex').toString('base64url')}.${k.kind}.${k.cert_exp}.${k.character}`);
 		assert.equal(k.public_b64url.length, 43);
 		const sig = k.cert.slice(k.cert_payload.length + 1);
 		assert.equal(k.cert, `${k.cert_payload}.${sig}`);
 		assert.equal(sig.length, 86);
-		assert.ok(verify(vectors.backend.public_hex, Buffer.from(k.cert_payload, 'ascii'), Buffer.from(sig, 'base64url')), k.key_id);
-		assert.equal(sign(vectors.backend.seed_hex, k.cert_payload).toString('base64url'), sig);
-		// Another tier is another certificate.
+		assert.ok(verify(vectors.backend.public_hex, Buffer.from(k.cert_payload, 'utf8'), Buffer.from(sig, 'base64url')), k.key_id);
+		assert.equal(sign(vectors.backend.seed_hex, Buffer.from(k.cert_payload, 'utf8')).toString('base64url'), sig);
+		// Another tier, or another character, is another certificate.
 		const other = k.cert_payload.replace(`.${k.kind}.`, `.${k.kind === 'c' ? 'p' : 'c'}.`);
-		assert.equal(verify(vectors.backend.public_hex, Buffer.from(other, 'ascii'), Buffer.from(sig, 'base64url')), false);
+		const alt = k.cert_payload.replace(`.${k.character}`, '.Some Alt-ClassicBetaPvP');
+		for (const x of [other, alt]) assert.equal(verify(vectors.backend.public_hex, Buffer.from(x, 'utf8'), Buffer.from(sig, 'base64url')), false);
+	}
+});
+
+test('council authority certificates: a High Councillor\'s key, its id the first 12 hex of SHA-256 of it, signed by the authority', () => {
+	const ca = vectors.council_authority;
+	assert.equal(publicHexOf(ca.seed_hex), ca.public_hex);
+	assert.ok(vectors.council_keys.length >= 1);
+	for (const k of vectors.council_keys) {
+		assert.equal(k.key_id, crypto.createHash('sha256').update(Buffer.from(k.public_hex, 'hex')).digest('hex').slice(0, 12));
+		assert.equal(k.cert_payload, `OLK2.${k.key_id}.${k.public_b64url}.c.${k.cert_exp}.${k.character}`);
+		const sig = k.cert.slice(k.cert_payload.length + 1);
+		assert.ok(verify(ca.public_hex, Buffer.from(k.cert_payload, 'utf8'), Buffer.from(sig, 'base64url')), k.key_id);
+		assert.equal(verify(vectors.backend.public_hex, Buffer.from(k.cert_payload, 'utf8'), Buffer.from(sig, 'base64url')), false, 'not the backend\'s');
+		assert.equal(sign(ca.seed_hex, Buffer.from(k.cert_payload, 'utf8')).toString('base64url'), sig);
 	}
 });
 
 test('every proof of the sample bundles verifies with its confirmer key', () => {
-	const keys = Object.fromEntries(vectors.keys.map((k) => [k.key_id, k]));
+	const keys = Object.fromEntries([...vectors.keys, ...vectors.council_keys].map((k) => [k.key_id, k]));
 	for (const v of vectors.bundles) {
 		const parsed = parseBundle(v.bundle);
 		assert.ok(parsed.ok, `${v.name}: ${parsed.error}`);

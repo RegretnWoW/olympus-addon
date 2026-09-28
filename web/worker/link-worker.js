@@ -5,6 +5,10 @@
 //   DB                   D1 database with web/worker/schema.sql
 //   LINK_BACKEND_SEED    secret: the backend's Ed25519 seed, base64url (scripts/link-keys.py backend)
 //   LINK_BACKEND_PUBLIC  var: its public key, 64 hex (the same one is in the addon's ns.LINK_BACKEND_KEYS)
+//   LINK_CA_PUBLIC       var: the council authority's public key, 64 hex (scripts/link-keys.py ca; the same
+//                        one is in the addon's ns.LINK_CA_KEYS; two, comma-separated, while it changes):
+//                        the author's client certifies High Councillors' keys with it, and this Worker
+//                        takes those keys without registering them
 //   LINK_MODE            var: "c" councillors only (launch), "a" councillors or three drawn players
 //   LINK_GUILD_POLICY    var: "verified" (the default): a link needs a confirmer who checked the
 //                        guild in game (its roster or a recent /who); "claimed": the guild is taken as named
@@ -23,7 +27,8 @@ export const LINK = {
 	TOKEN_LIFE: 24 * 3600, // a code works for a day...
 	REUSE_LEFT: 12 * 3600, // ...and is handed out again while it has this long left
 	CODES_PER_DAY: 3,
-	DELIVERY_GRACE: 7 * 24 * 3600, // the addon holds a finished link 7 days for the watcher
+	DELIVERY_GRACE: 7 * 24 * 3600, // a link is taken until its code's expiry + this: the addon hands it to a
+	// watcher until 5 days after the expiry, so the watcher's keeper has 2 days to upload it
 	CLOCK_SKEW: 300, // game server clock vs ours
 	WINDOW: 300, // three player proofs within 5 minutes of each other
 	PLAYERS_NEEDED: 3,
@@ -51,8 +56,10 @@ const PUBLIC_B64_RE = /^[A-Za-z0-9_-]{43}$/;
 const FORBIDDEN = /[|~;,\u0000-\u001f\u007f]/;
 const GV_RE = /^[rwc]$/; // how a confirmer checked the guild: r its own roster, w a recent /who, c claimed only
 const CHECKED = (gv) => gv === 'r' || gv === 'w';
+const CA_KEYID_RE = /^[0-9a-f]{12}$/; // a council authority's key: the first 12 hex of SHA-256 of the key
 const MAX_PROOFS = 4;
-const MAX_BUNDLE_BYTES = 1600;
+const MAX_BUNDLE_BYTES = 2400; // four proofs, each with its certificate (the addon's Link.MAX_BUNDLE)
+const MAX_CERT_BYTES = 240; // a certificate fits one chat line: DV~1~<certificate> (the addon's Link.MAX_CERT)
 const NO_DRAW = '00000000'; // T of a mode "c" code: no player key is drawn
 const ALL_DRAWN = 'ffffffff'; // T when there are M player keys or fewer
 
@@ -333,9 +340,10 @@ export function certFrom(key) {
 // Bundles
 
 // What the addon's Link.Parse reads (Olympus/Link.lua; the page's web/public/core.js reads the
-// same). Whether the proofs count is acceptBundle's call: a key or owner is counted once.
+// same). Whether the proofs count is acceptBundle's call: a key or owner is counted once. Each
+// proof carries its key's certificate for its confirmer: <public key>,<tier>,<cert exp>,<cert sig>.
 export function parseBundle(text) {
-	if (typeof text !== 'string' || !text.startsWith('OLB4~')) return { ok: false, error: 'prefix' };
+	if (typeof text !== 'string' || !text.startsWith('OLB5~')) return { ok: false, error: 'prefix' };
 	if (enc.encode(text).length > MAX_BUNDLE_BYTES) return { ok: false, error: 'size' };
 	const f = text.split('~');
 	if (f.length !== 8) return { ok: false, error: 'fields' };
@@ -351,11 +359,13 @@ export function parseBundle(text) {
 	const proofs = [];
 	for (const part of parts) {
 		const p = part.split(',');
-		if (p.length !== 5) return { ok: false, error: 'proof' };
-		const [issued, keyId, confirmer, gv, sig] = p;
+		if (p.length !== 9) return { ok: false, error: 'proof' };
+		const [issued, keyId, confirmer, gv, sig, pub, tier, certExp, certSig] = p;
 		if (!ISSUED_RE.test(issued) || !KEYID_RE.test(keyId) || !validCharacter(confirmer) || !GV_RE.test(gv)) return { ok: false, error: 'proof' };
 		if (!SIG_RE.test(sig) || b64urlEncode(b64urlDecode(sig)) !== sig) return { ok: false, error: 'sig' };
-		proofs.push({ issued: Number(issued), keyId, confirmer, gv, sig });
+		if (!PUBLIC_B64_RE.test(pub) || b64urlEncode(b64urlDecode(pub)) !== pub || (tier !== 'c' && tier !== 'p') || !ISSUED_RE.test(certExp)) return { ok: false, error: 'cert' };
+		if (!SIG_RE.test(certSig) || b64urlEncode(b64urlDecode(certSig)) !== certSig) return { ok: false, error: 'cert' };
+		proofs.push({ issued: Number(issued), keyId, confirmer, gv, sig, pub, tier, certExp: Number(certExp), certSig });
 	}
 	return { ok: true, bundle: { requester, guild, faction, nonce, R, tag, proofs } };
 }
@@ -372,6 +382,11 @@ function validCharacter(s) {
 
 export function signedMessage(b, p) {
 	return ['OLY4', b.requester, b.guild, p.gv, b.faction, b.nonce, b.R, b.tag, p.issued, p.keyId, p.confirmer].join('~');
+}
+
+// The certificate a proof carries: its key's, for its confirmer (a parsed certificate, below).
+export function proofCertificate(p) {
+	return parseCertificate(`OLK2.${p.keyId}.${p.pub}.${p.tier}.${p.certExp}.${p.confirmer}.${p.certSig}`);
 }
 
 // The tag that binds a link to the command it was made with: the first 16 hex of
@@ -479,22 +494,58 @@ export async function acceptBundle(env, text, opts = {}) {
 
 async function checkProof(env, b, p, code, t) {
 	const bad = (why) => ({ ok: false, proof: p, why });
-	const key = await env.DB.prepare('SELECT * FROM keys WHERE key_id = ?').bind(p.keyId).first();
-	if (!key) return bad('unknown key');
-	if (key.revoked) return bad('revoked key');
-	if (key.owner_discord_id === code.discord_id) return bad("the requester's own key");
+	const found = await proofKey(env, p, t);
+	if (found.why) return bad(found.why);
+	const key = found.key;
+	if (key.owner_discord_id && key.owner_discord_id === code.discord_id) return bad("the requester's own key");
 	if (p.issued < code.created - LINK.CLOCK_SKEW || p.issued > code.exp) return bad('signed outside the code\'s life');
 	if (p.issued > t + LINK.CLOCK_SKEW) return bad('signed in the future');
 	if (!(await ed25519Verify(key.public_key, b64urlDecode(p.sig), enc.encode(signedMessage(b, p))))) return bad('bad signature');
-	if (!(key.kind === 'c' && key.bootstrap)) {
+	if (!key.council && !(key.kind === 'c' && key.bootstrap)) {
 		const mine = await env.DB.prepare('SELECT 1 AS x FROM members WHERE character = ? AND discord_id = ?').bind(p.confirmer, key.owner_discord_id).first();
 		if (!mine) return bad("the confirmer is not a linked character of the key's owner");
 	}
-	const own = await env.DB.prepare('SELECT 1 AS x FROM members WHERE character = ? AND discord_id = ?').bind(b.requester, key.owner_discord_id).first();
-	if (own) return bad("the requester is the key owner's own character");
+	if (p.confirmer === b.requester) return bad('the confirmer is the requester');
+	if (key.owner_discord_id) {
+		const own = await env.DB.prepare('SELECT 1 AS x FROM members WHERE character = ? AND discord_id = ?').bind(b.requester, key.owner_discord_id).first();
+		if (own) return bad("the requester is the key owner's own character");
+	}
 	const reused = await env.DB.prepare('SELECT 1 AS x FROM used WHERE r = ? AND key_id = ?').bind(b.R, p.keyId).first();
 	if (reused) return bad('already counted');
 	return { ok: true, proof: p, key };
+}
+
+// The key a proof is checked with: { key } or { why }. A key registered here (keys) is D1's: the
+// certificate the proof carries must name its public key, tier and character, and D1 says
+// whether it is revoked. A key this Worker never registered counts only as a High Councillor's
+// certified by the council authority (the author's client, LINK_CA_PUBLIC): the certificate the
+// proof carries is then checked here (tier c, the key's id the first 12 hex of SHA-256 of it,
+// valid when the proof was signed), the key is recorded for the character it names the first
+// time it is seen (council_keys), and the revocation list (revoked_keys) can end it.
+async function proofKey(env, p, t) {
+	const cert = proofCertificate(p);
+	if (!cert) return { why: 'a certificate that does not read' };
+	const row = await env.DB.prepare('SELECT * FROM keys WHERE key_id = ?').bind(p.keyId).first();
+	if (row) {
+		if (row.revoked) return { why: 'revoked key' };
+		if (row.public_key !== cert.publicHex || row.kind !== cert.tier || row.character !== cert.character) {
+			return { why: "its certificate is not the one registered for this key (public key, tier and character)" };
+		}
+		return { key: row };
+	}
+	if (!CA_KEYID_RE.test(p.keyId)) return { why: 'unknown key' };
+	if (await env.DB.prepare('SELECT 1 AS x FROM revoked_keys WHERE key_id = ?').bind(p.keyId).first()) return { why: 'revoked key' };
+	if (!(await councilCertificate(env, cert))) return { why: 'unknown key (not certified by the council authority)' };
+	if (p.issued >= cert.exp) return { why: 'signed after its certificate ended' };
+	await env.DB.prepare('INSERT OR IGNORE INTO council_keys (key_id, public_key, character, cert_exp, first_seen) VALUES (?, ?, ?, ?, ?)')
+		.bind(p.keyId, cert.publicHex, cert.character, cert.exp, t)
+		.run();
+	const known = await env.DB.prepare('SELECT * FROM council_keys WHERE key_id = ?').bind(p.keyId).first();
+	if (!known || known.public_key !== cert.publicHex || known.character !== cert.character) return { why: 'a council key recorded for another character' };
+	if (cert.exp > known.cert_exp) await env.DB.prepare('UPDATE council_keys SET cert_exp = ? WHERE key_id = ?').bind(cert.exp, p.keyId).run();
+	// Its owner, when the councillor's character is linked: never confirms that account's codes or characters.
+	const owner = await env.DB.prepare('SELECT discord_id FROM members WHERE character = ?').bind(cert.character).first();
+	return { key: { key_id: p.keyId, public_key: cert.publicHex, kind: 'c', bootstrap: 1, council: true, character: cert.character, owner_discord_id: owner ? owner.discord_id : null } };
 }
 
 // Mode "a": three drawn players from three owners, signed within 5 minutes of each other. A
@@ -550,36 +601,64 @@ async function logUpload(env, source, text, result, extra) {
 // Confirmer keys and their certificates
 //
 // A certificate tells every requester's addon, without the bot online, that a key is
-// registered and whether it is a councillor's (c) or a drawn player's (p):
-//   OLK1.<keyId>.<public key, 43 base64url>.<tier>.<exp>.<sig>
-// sig: the backend key's Ed25519 over the ASCII bytes of everything before the last dot. The
-// confirmer types it in game (/oly discord cert <certificate>) and its addon announces it.
+// certified, whether it is a councillor's (c) or a drawn player's (p), and for which character:
+//   OLK2.<keyId>.<public key, 43 base64url>.<tier>.<exp>.<Name-Realm>.<sig>
+// sig: Ed25519 over the UTF-8 bytes of everything before the last dot, by the backend key (a
+// key registered here), or, tier c only and for a key whose id is the first 12 hex of SHA-256 of
+// it, by the council authority's (a High Councillor's key made in game, certified by the
+// author's client). The character is read from both ends (it may hold dots). Only that character
+// announces it and confirms with it, and every proof carries it in the link.
 
-export async function makeCertificate(env, keyId, publicHex, tier, exp) {
-	const payload = `OLK1.${keyId}.${b64urlEncode(hexToBytes(publicHex))}.${tier}.${exp}`;
+export async function makeCertificate(env, keyId, publicHex, tier, exp, character) {
+	const payload = `OLK2.${keyId}.${b64urlEncode(hexToBytes(publicHex))}.${tier}.${exp}.${character}`;
 	return `${payload}.${await backendSign(env, payload)}`;
 }
 
-// { keyId, publicHex, tier, exp, sig, payload } or null.
+// { keyId, publicHex, tier, exp, character, sig, payload } or null.
 export function parseCertificate(text) {
-	const m = /^OLK1\.([a-z0-9]{6,16})\.([A-Za-z0-9_-]{43})\.([cp])\.([1-9][0-9]{0,11})\.([A-Za-z0-9_-]{86})$/.exec(String(text));
-	if (!m) return null;
-	const [, keyId, pub, tier, exp, sig] = m;
-	if (b64urlEncode(b64urlDecode(pub)) !== pub || b64urlEncode(b64urlDecode(sig)) !== sig) return null;
-	return { keyId, publicHex: bytesToHex(b64urlDecode(pub)), tier, exp: Number(exp), sig, payload: m[0].slice(0, m[0].length - sig.length - 1) };
+	const s = String(text);
+	const m = /^OLK2\.([a-z0-9]{6,16})\.([A-Za-z0-9_-]{43})\.([cp])\.([1-9][0-9]{0,11})\.(.+)\.([A-Za-z0-9_-]{86})$/s.exec(s);
+	if (!m || enc.encode(s).length > MAX_CERT_BYTES) return null;
+	const [, keyId, pub, tier, exp, character, sig] = m;
+	if (!validCharacter(character) || b64urlEncode(b64urlDecode(pub)) !== pub || b64urlEncode(b64urlDecode(sig)) !== sig) return null;
+	return { keyId, publicHex: bytesToHex(b64urlDecode(pub)), tier, exp: Number(exp), character, sig, payload: s.slice(0, s.length - sig.length - 1) };
 }
 
-// The certificate when the backend key `publicHex` signed it, else null.
+// The certificate when the key `publicHex` (the backend's, or the council authority's) signed
+// it, else null.
 export async function verifyCertificate(publicHex, text) {
-	const c = parseCertificate(text);
+	const c = typeof text === 'string' ? parseCertificate(text) : text;
 	if (!c || !(await ed25519Verify(publicHex, b64urlDecode(c.sig), enc.encode(c.payload)))) return null;
 	return c;
 }
 
-// Your key tool (admin token): register a confirmer's public key, get its certificate (a
-// player key's once it counts: certFrom), renew it, or revoke a key. The seed never comes here:
-// it stays with the confirmer.
-//   {"key_id", "public_key", "owner_discord_id", "owner_username", "kind", "bootstrap", "days", "replace"}
+// The council authority's public keys (LINK_CA_PUBLIC: one, or two while it changes).
+export function councilAuthorityKeys(env) {
+	return String((env && env.LINK_CA_PUBLIC) || '')
+		.split(/[\s,]+/)
+		.map((k) => k.toLowerCase())
+		.filter((k) => PUBLIC_HEX_RE.test(k));
+}
+
+// The id of a key the council authority certifies: the first 12 hex of SHA-256 of its 32 bytes.
+export async function councilKeyId(publicHex) {
+	return bytesToHex(new Uint8Array(await crypto.subtle.digest('SHA-256', hexToBytes(publicHex)))).slice(0, 12);
+}
+
+// A parsed certificate the council authority signed for a High Councillor's key, else null.
+export async function councilCertificate(env, c) {
+	if (!c || c.tier !== 'c' || c.keyId !== (await councilKeyId(c.publicHex))) return null;
+	for (const pk of councilAuthorityKeys(env)) {
+		if (await verifyCertificate(pk, c)) return c;
+	}
+	return null;
+}
+
+// Your key tool (admin token): register a confirmer's public key for one character, get its
+// certificate (a player key's once it counts: certFrom), renew it, or revoke a key (a High
+// Councillor's key the council authority certified too: its id goes on the revocation list,
+// seen here or not). The seed never comes here: it stays with the confirmer.
+//   {"key_id", "public_key", "owner_discord_id", "owner_username", "character", "kind", "bootstrap", "days", "replace"}
 //   {"key_id", "renew": true, "days"}
 //   {"key_id", "revoke": true}
 async function routeKeys(request, env) {
@@ -596,7 +675,14 @@ async function routeKeys(request, env) {
 	const existing = await env.DB.prepare('SELECT * FROM keys WHERE key_id = ?').bind(keyId).first();
 
 	if (body.revoke === true) {
-		if (!existing) return fail('unknown-key', 'No such key.', 404);
+		if (!existing) {
+			// A councillor's key the council authority certified (never registered here): on the
+			// revocation list at once, whether a link has used it yet or not.
+			if (!CA_KEYID_RE.test(keyId)) return fail('unknown-key', 'No such key.', 404);
+			await env.DB.prepare('INSERT OR IGNORE INTO revoked_keys (key_id, revoked_at) VALUES (?, ?)').bind(keyId, t).run();
+			const known = await env.DB.prepare('SELECT character FROM council_keys WHERE key_id = ?').bind(keyId).first();
+			return json({ status: 'ok', key_id: keyId, revoked: true, council: true, character: known ? known.character : null });
+		}
 		await env.DB.prepare('UPDATE keys SET revoked = 1, revoked_at = ? WHERE key_id = ? AND revoked = 0').bind(t, keyId).run();
 		return json({ status: 'ok', key_id: keyId, revoked: true });
 	}
@@ -607,7 +693,7 @@ async function routeKeys(request, env) {
 		const from = certFrom(existing);
 		if (t < from) return fail('too-early', `This player key counts from ${when(from)}: ask for its certificate then.`, 409, { cert_from: from });
 		const exp = certExp(existing.kind);
-		const cert = await makeCertificate(env, keyId, existing.public_key, existing.kind, exp);
+		const cert = await makeCertificate(env, keyId, existing.public_key, existing.kind, exp, existing.character);
 		const first = existing.cert_exp === null || existing.cert_exp === undefined;
 		// A key's first certificate replaces the older key of its owner (a rotation).
 		const older = first ? await activeKeys(env, existing.owner_discord_id, keyId) : [];
@@ -623,21 +709,29 @@ async function routeKeys(request, env) {
 	const username = body.owner_username === undefined || body.owner_username === null ? null : String(body.owner_username);
 	const kind = body.kind;
 	const bootstrap = body.bootstrap === true ? 1 : 0;
+	const character = typeof body.character === 'string' ? body.character : '';
+	if (CA_KEYID_RE.test(keyId)) return fail('format', 'key_id: 12 hex digits name the council authority\'s keys: pick another id.');
 	if (!pub) return fail('format', 'public_key: 64 hex digits (or 43 of base64url).');
 	if (!DISCORD_ID_RE.test(owner)) return fail('format', "owner_discord_id: the confirmer's Discord id.");
 	if (username !== null && !USERNAME_RE.test(username)) return fail('format', 'owner_username: a Discord username.');
+	if (!validCharacter(character)) return fail('format', 'character: the one character that confirms with this key, "Name-Realm" as the game writes it.');
 	if (kind !== 'c' && kind !== 'p') return fail('format', 'kind: "c" (a High Councillor) or "p" (a drawn player).');
 	if (bootstrap && kind !== 'c') return fail('format', 'Only a councillor key can be a bootstrap key.');
 	if (existing) return fail('key-id-used', 'This key id exists already: ids are never reused.', 409);
 	if (await env.DB.prepare('SELECT 1 AS x FROM keys WHERE public_key = ?').bind(pub).first()) return fail('public-key-used', 'This public key is registered already.', 409);
+	// The character confirms for its owner: one of the owner's linked characters (a bootstrap
+	// councillor key excepted: at launch nobody has linked one yet).
+	if (!bootstrap && !(await env.DB.prepare('SELECT 1 AS x FROM members WHERE character = ? AND discord_id = ?').bind(character, owner).first())) {
+		return fail('character-not-linked', `${character} is not a linked character of this Discord account: a key confirms from one of its owner's linked characters.`, 409);
+	}
 	const mine = await activeKeys(env, owner, keyId);
 	if (mine.length && body.replace !== true) {
 		return fail('owner-has-key', `This account's key is ${replacedId(mine)}: send "replace": true to rotate it.`, 409);
 	}
-	const key = { key_id: keyId, public_key: pub, owner_discord_id: owner, kind, created: t, cert_exp: null };
+	const key = { key_id: keyId, public_key: pub, owner_discord_id: owner, character, kind, created: t, cert_exp: null };
 	const ready = t >= certFrom(key);
 	const exp = ready ? certExp(kind) : null;
-	const cert = ready ? await makeCertificate(env, keyId, pub, kind, exp) : null;
+	const cert = ready ? await makeCertificate(env, keyId, pub, kind, exp, character) : null;
 	// Rotating: the older key is replaced when the new one gets its certificate (a councillor's at
 	// once, a player's once it counts): until then the confirmer has only the old one in game, and
 	// it keeps counting. A replaced key leaves the draw and still checks the proofs it signed until
@@ -646,8 +740,8 @@ async function routeKeys(request, env) {
 	const older = ready ? mine : mine.filter((k) => k.cert_exp === null);
 	await env.DB.batch([
 		...older.map((k) => env.DB.prepare('UPDATE keys SET replaced_at = ? WHERE key_id = ?').bind(t, k.key_id)),
-		env.DB.prepare('INSERT INTO keys (key_id, public_key, owner_discord_id, owner_username, kind, bootstrap, created, cert_exp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-			.bind(keyId, pub, owner, username, kind, bootstrap, t, exp),
+		env.DB.prepare('INSERT INTO keys (key_id, public_key, owner_discord_id, owner_username, character, kind, bootstrap, created, cert_exp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+			.bind(keyId, pub, owner, username, character, kind, bootstrap, t, exp),
 	]);
 	return json(keyAnswer(key, cert, exp, ready ? replacedId(older) : null));
 }
@@ -668,6 +762,7 @@ function keyAnswer(key, cert, certExp, replaced) {
 		status: 'ok',
 		key_id: key.key_id,
 		kind: key.kind,
+		character: key.character,
 		public_key: key.public_key,
 		cert,
 		cert_exp: certExp,

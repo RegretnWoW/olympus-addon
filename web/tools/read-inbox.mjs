@@ -6,12 +6,15 @@
 //                                                     # sends them; the token from LINK_ADMIN_TOKEN
 //
 // A High Councillor in watcher mode ("/oly discord watcher on") keeps the finished links players
-// deliver to it in OlympusDB.discord.inbox, as entries { bundle, from, t } (keyed by the code,
-// or by the code and the player who sent it: this tool reads either). WoW writes that file when
-// the game saves (a /reload, logging out or quitting). The output is exactly the body that
-// POST /api/link/inbox takes (web/WORKER.md), oldest first, each link once:
-//   {"bundles": [{"R": "...", "bundle": "OLB4~...", "from": "Name-Realm", "t": 1800000000}]}
-// Nothing else of the file is printed: not the confirmer key a councillor keeps in the same file.
+// deliver to it in OlympusDB.discord.inbox, as entries { bundle, from, t, keep } (keyed by the
+// code and the player who sent it, or by the code alone: this tool reads either), each checked by
+// the watcher's addon first (every proof's signature with the certificate it carries). WoW writes
+// that file when the game saves (a /reload, logging out or quitting). An entry stays until "keep",
+// when its code can no longer be used: upload within 2 days of when a player could last hand it
+// over (5 days after its code expired; the Worker takes it until 7). The output is exactly the
+// body that POST /api/link/inbox takes (web/WORKER.md), oldest first, each link once:
+//   {"bundles": [{"R": "...", "bundle": "OLB5~...", "from": "Name-Realm", "t": 1800000000}]}
+// Nothing else of the file is printed: not the confirmer keys councillors keep in the same file.
 
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
@@ -201,7 +204,7 @@ export function inboxBundles(saved) {
 			const m = KEY_R.exec(k);
 			return !m || m[1] === R;
 		});
-		if (!bundle.startsWith('OLB4~') || fields.length !== 8 || !R_RE.test(R) || !keysAgree) {
+		if (!bundle.startsWith('OLB5~') || fields.length !== 8 || !R_RE.test(R) || !keysAgree) {
 			skipped.push(path.join('/'));
 			continue;
 		}

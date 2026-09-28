@@ -6,8 +6,9 @@ the Worker, the tools and the addon (Olympus/Ed25519.lua and Olympus/Link.lua).
 
 Every key here is a THROWAWAY test key: its seed is SHA-256 of a public label, the same labels
 and the same rule as the addon's tests/fixtures/make-link-vectors.py ("olympus-link-test:" +
-label, the label being the key id, or "backend"), so both sides hold the same keys. Never
-register one of these public keys in D1 or in ns.LINK_BACKEND_KEYS.
+label, the label being the key id, "backend", "ca" or "council03"), so both sides hold the same
+keys. Never register one of these public keys in D1, LINK_CA_PUBLIC, ns.LINK_BACKEND_KEYS or
+ns.LINK_CA_KEYS.
 
 What is in the file:
   rfc8032    RFC 8032 section 7.1 TEST 1, 2, 3 and 1024 (checked here with cryptography)
@@ -16,9 +17,15 @@ What is in the file:
              deterministic, so every correct implementation gives these exact bytes)
   rejects    a non-canonical S (S + L) and altered message/signature/key: all must fail
   backend    the test backend key and two code tokens it signed (OLC2, with the draw's T)
-  keys       test confirmer keys with the D1 fields the Worker tests use and their
-             certificates (OLK1, signed by the backend key)
-  bundles    signed bundles (OLB4) with 1 to 4 proofs, their tag, messages and link URLs
+  keys       test confirmer keys with the D1 fields the Worker tests use (the character each
+             is registered for among them) and their certificates (OLK2, signed by the backend
+             key, each for its character)
+  council_authority, council_keys
+             the test council authority key (the author's client's) and a High Councillor's
+             key it certified (OLK2 of tier c, the key's id the first 12 hex of SHA-256 of it):
+             a key the Worker has never seen, taken on the authority's word
+  bundles    signed bundles (OLB5) with 1 to 4 proofs, each carrying its certificate, their
+             tag, messages and link URLs
   draw       the 8-hex draw prefixes of SHA-256(R .. "~" .. keyId) for one R, and the
              threshold T for pools of several sizes
 """
@@ -83,6 +90,7 @@ CREATED = 1799913600   # the codes' issue time...
 EXP = 1800000000       # ...and expiry (24 hours later), as in the addon's link-sample.txt
 KEYS_CREATED = 1780000000  # the confirmer keys: 230 days before the codes
 CERT_EXP = 1830000000  # their certificates' expiry
+MAX_BUNDLE_BYTES = 2400  # the addon's Link.MAX_BUNDLE: four proofs with their certificates
 
 
 def b64url(b):
@@ -136,6 +144,16 @@ def draw_threshold(R, key_ids):
     return prefixes[m] if len(prefixes) > m else "ffffffff"
 
 
+def ca_key_id(public):
+    """The id of a key the council authority certifies: the first 12 hex of SHA-256(its 32 bytes)."""
+    return hashlib.sha256(public).hexdigest()[:12]
+
+
+def cert_payload(key_id, public, tier, exp, character):
+    """OLK2.<keyId>.<public key, base64url>.<tier>.<exp>.<Name-Realm>: what a certificate signs (UTF-8)."""
+    return "OLK2.%s.%s.%s.%d.%s" % (key_id, b64url(public), tier, exp, character)
+
+
 def link_tag(token_sig, requester):
     """The tag that binds a request to the command pasted: 16 hex of SHA-256(sig~requester)."""
     return sha256_hex(token_sig + "~" + requester)[:16]
@@ -155,7 +173,7 @@ def vector(name, seed, msg):
 
 
 def main():
-    out = {"about": "Olympus Link v5 test vectors, written by web/test/fixtures/make-vectors.py with "
+    out = {"about": "Olympus Link v6 test vectors, written by web/test/fixtures/make-vectors.py with "
                     "python3 cryptography. Throwaway test keys only: never register them."}
 
     rfc = []
@@ -180,25 +198,48 @@ def main():
 
     # Confirmer keys (kind c = councillor, p = drawn player) with their D1 fields. The owners
     # are fake Discord ids from 2015 (older than 30 days); created long before the codes (older
-    # than 7 days). Each carries the certificate the backend signed for it:
-    #   OLK1.<keyId>.<public key, base64url>.<tier>.<exp>.<sig over everything before it>
+    # than 7 days). Each is registered for one character and carries the certificate the backend
+    # signed for it and that character:
+    #   OLK2.<keyId>.<public key, base64url>.<tier>.<exp>.<Name-Realm>.<sig over everything before it>
     keys = []
+    characters = {"council01": "Test Councillor-ClassicBetaPvP", "council02": "Other Councillor-ClassicBetaPvP",
+                  "player01": "Other Player-ClassicBetaPvP", "player02": "Third Player-ClassicBetaPvP2",
+                  "player03": "Fourth Player-ClassicBetaPvP", "player04": "Fifth Player-ClassicBetaPvP",
+                  "player05": "Sixth Player-ClassicBetaPvP"}
     specs = [("council01", "c", 1, "100000000000000001", "test_councillor")] + [
         ("player0%d" % i, "p", 0, "10000000000000001%d" % i, "test_player_%d" % i) for i in range(1, 6)] + [
         ("council02", "c", 1, "100000000000000002", "test_councillor_2")]
     for key_id, kind, bootstrap, owner, username in specs:
         s = seed_of(key_id)
         k = key(s)
-        payload = "OLK1.%s.%s.%s.%d" % (key_id, b64url(public_bytes(k)), kind, CERT_EXP)
-        cert = payload + "." + b64url(backend.sign(payload.encode("ascii")))
-        assert len(cert) <= 170 and len(("/oly discord cert " + cert).encode()) < 255 and len(("DV~1~" + cert).encode()) < 255
+        payload = cert_payload(key_id, public_bytes(k), kind, CERT_EXP, characters[key_id])
+        cert = payload + "." + b64url(backend.sign(payload.encode("utf-8")))
+        assert len(cert.encode()) <= 240 and len(("/oly discord cert " + cert).encode()) < 255 and len(("DV~1~" + cert).encode()) < 255
         keys.append({"key_id": key_id, "kind": kind, "bootstrap": bootstrap, "owner_discord_id": owner,
-                     "owner_username": username, "created": KEYS_CREATED,
+                     "owner_username": username, "character": characters[key_id], "created": KEYS_CREATED,
                      "seed_hex": s.hex(), "seed_b64url": b64url(s), "public_hex": public_hex(k),
                      "public_b64url": b64url(public_bytes(k)), "cert_exp": CERT_EXP,
                      "cert_payload": payload, "cert": cert})
     by_id = {k["key_id"]: k for k in keys}
     player_ids = [k["key_id"] for k in keys if k["kind"] == "p"]
+
+    # The council authority (the author's client holds its seed, the Worker its public key in
+    # LINK_CA_PUBLIC) and a High Councillor's key its addon made in game, certified by it: tier c,
+    # its id the first 12 hex of SHA-256 of the key, never registered in D1.
+    ca_seed = seed_of("ca")
+    ca = key(ca_seed)
+    council_keys = []
+    for label, character in [("council03", "Third Councillor-ClassicBetaPvP")]:
+        s = seed_of(label)
+        k = key(s)
+        key_id = ca_key_id(public_bytes(k))
+        payload = cert_payload(key_id, public_bytes(k), "c", CERT_EXP, character)
+        cert = payload + "." + b64url(ca.sign(payload.encode("utf-8")))
+        assert len(("DV~1~" + cert).encode()) < 255 and len(("DE~" + cert).encode()) < 255
+        council_keys.append({"key_id": key_id, "label": label, "character": character, "seed_hex": s.hex(), "seed_b64url": b64url(s),
+                             "public_hex": public_hex(k), "public_b64url": b64url(public_bytes(k)), "cert_exp": CERT_EXP,
+                             "cert_payload": payload, "cert": cert})
+    certified = dict(by_id, **{k["key_id"]: k for k in council_keys})
 
     # Code tokens: OLC2.<R>.<username>.<exp>.<mode>.<T>.<sig>, sig over the ASCII bytes before
     # it. T: "00000000" in mode c; in mode a the draw threshold over the active player keys.
@@ -216,22 +257,30 @@ def main():
     out["backend"] = {"seed_hex": backend_seed.hex(), "seed_b64url": b64url(backend_seed),
                       "public_hex": public_hex(backend), "tokens": tokens}
     out["keys"] = keys
+    out["council_authority"] = {"seed_hex": ca_seed.hex(), "seed_b64url": b64url(ca_seed), "public_hex": public_hex(ca)}
+    out["council_keys"] = council_keys
 
-    # Bundles: OLB4~<requester>~<guild>~<faction>~<nonce>~<R>~<tag>~<p1>;<p2>... with each proof
-    # <issued>,<keyId>,<confirmer>,<gv>,<sig> and sig over (UTF-8)
+    # Bundles: OLB5~<requester>~<guild>~<faction>~<nonce>~<R>~<tag>~<p1>;<p2>... with each proof
+    # <issued>,<keyId>,<confirmer>,<gv>,<sig>,<public key>,<tier>,<cert exp>,<cert sig>: its
+    # certificate travels with it (OLK2.<keyId>.<public key>.<tier>.<cert exp>.<confirmer>.<cert sig>),
+    # and sig is over (UTF-8)
     #   OLY4~<requester>~<guild>~<gv>~<faction>~<nonce>~<R>~<tag>~<issued>~<keyId>~<confirmer>
     # tag: the first 16 hex of SHA-256(<the code token's sig>~<requester>).
     def bundle(name, requester, guild, faction, nonce, R, proofs):
         tag = link_tag(token_of[R]["signature_b64url"], requester)
         parts, messages = [], []
         for issued, key_id, confirmer, gv in proofs:
+            k = certified[key_id]
+            assert confirmer == k["character"], "a certificate names its confirmer"
             msg = "~".join(["OLY4", requester, guild, gv, faction, nonce, R, tag, str(issued), key_id, confirmer])
-            sig = key(bytes.fromhex(by_id[key_id]["seed_hex"])).sign(msg.encode("utf-8"))
-            assert verifies(by_id[key_id]["public_hex"], sig, msg.encode("utf-8"))
-            parts.append(",".join([str(issued), key_id, confirmer, gv, b64url(sig)]))
+            sig = key(bytes.fromhex(k["seed_hex"])).sign(msg.encode("utf-8"))
+            assert verifies(k["public_hex"], sig, msg.encode("utf-8"))
+            cert_sig = k["cert"][len(k["cert_payload"]) + 1:]
+            tier = k["cert_payload"].split(".")[3]
+            parts.append(",".join([str(issued), key_id, confirmer, gv, b64url(sig), k["public_b64url"], tier, str(k["cert_exp"]), cert_sig]))
             messages.append(msg)
-        text = "~".join(["OLB4", requester, guild, faction, nonce, R, tag, ";".join(parts)])
-        assert len(text.encode("utf-8")) <= 1600
+        text = "~".join(["OLB5", requester, guild, faction, nonce, R, tag, ";".join(parts)])
+        assert len(text.encode("utf-8")) <= MAX_BUNDLE_BYTES
         return {"name": name, "requester": requester, "guild": guild, "faction": faction, "nonce": nonce,
                 "R": R, "tag": tag, "tag_input": token_of[R]["signature_b64url"] + "~" + requester,
                 "proofs": [{"issued": i, "key_id": k, "confirmer": c, "gv": g} for i, k, c, g in proofs],
@@ -257,6 +306,9 @@ def main():
                "00ff00ff00ff00ff", "7K3M9QX2TB",
                [(1799990150, "council01", "Test Councillor-ClassicBetaPvP", "c"),
                 (1799990170, "council02", "Other Councillor-ClassicBetaPvP", "c")]),
+        bundle("a councillor certified by the council authority", "Some Player-ClassicBetaPvP", "Olympus II", "Alliance",
+               "0123456789abcdef", "7K3M9QX2TB",
+               [(1799990120, council_keys[0]["key_id"], council_keys[0]["character"], "w")]),
     ]
 
     # Cross-language Ed25519 vectors: fixed seeds, messages from empty to several SHA-512 blocks.
@@ -269,7 +321,8 @@ def main():
         vector("player key, OLY4 with non-ASCII requester", seed_of("player01"),
                out["bundles"][1]["messages"][0].encode("utf-8")),
         vector("seed ff..ff, 777 bytes", b"\xff" * 32, bytes((i * 7 + 3) % 256 for i in range(777))),
-        vector("backend key, key certificate", backend_seed, by_id["council01"]["cert_payload"].encode("ascii")),
+        vector("backend key, key certificate", backend_seed, by_id["council01"]["cert_payload"].encode("utf-8")),
+        vector("council authority key, councillor certificate", ca_seed, council_keys[0]["cert_payload"].encode("utf-8")),
     ]
     out["ed25519"] = ed
 

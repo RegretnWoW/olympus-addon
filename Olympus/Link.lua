@@ -7,25 +7,34 @@ local L = ns.L
 -- <code> checks that signature and the expiry, shows the Discord account the code belongs to, and
 -- after the player's Accept (nothing is sent before it) asks confirmers in game for proofs that
 -- this character asked: each proof is an Ed25519 signature made by a confirmer's addon with a key
--- of its own (/oly discord key), which the bot certified (/oly discord cert: OLK1, the bot's
--- signature on the key's public half and tier). The server stamps who whispers whom, so a proof
--- names the character that really asked.
+-- of its own, kept for one character (OlympusDB.discord.keys[Name-Realm]), and certified for that
+-- character: OLK2, a signature on the key's public half, its tier and the character's name, by the
+-- bot (/oly discord key and /oly discord cert, typed) or, for a High Councillor, by the council's
+-- authority, the author's own client, which answers the councillor's addon by itself (below). The
+-- server stamps who whispers whom, so a proof names the character that really asked, and a
+-- certificate is honoured only from the character it names.
 -- Who confirms:
 --   * a High Councillor (the signed list, Workshop.lua) with a certificate of tier c: one proof is
 --     enough; the next councillor online is asked too, and up to two councillors' proofs travel;
 --   * mode "a" only, none online: verified players (tier p) drawn for this code. T, in the code,
---     is the bot's threshold: a key is drawn when the first 8 hex of SHA-256(R~keyId) are below T.
+--     is the bot's threshold: a key is drawn when the first 8 hex of SHA-256(R~keyId) are below T
+--     (T is the place of the (M+1)th lowest key, so the M lowest are drawn: the Worker's rule).
 --     Five drawn ones at once, lowest first, three must confirm, from three keys.
 -- Each confirmer says how it knows the requester's guild (gv, signed): "r" it is its own guild and
 -- its roster lists them, "w" its /who saw them in that guild within 15 minutes (Who.lua), "c" only
--- claimed. The requester asks on for a while to carry at least one "r" or "w" when it can.
+-- claimed. With enough proofs that only claim it, the request stays open CLAIMED_WAIT (10 minutes)
+-- for one that knows it: a councillor who said "c" is asked again (its /who may have run since),
+-- and players as they come online; only then does it finish with the guild claimed, and says so.
 -- The code's signature never leaves the command the player pasted: the link carries a tag instead,
 -- the first 16 hex of SHA-256(<code's signature>~<requester>), which the confirmers sign and the bot
 -- recomputes. Someone who sees R (a QR code on a stream) can't make a link for their character.
 -- The finished proof reaches the bot two ways: the Olympus Link page reads it from this window
 -- (a QR code, or the link in the copy box), or the addon hands it to a watcher (a High Councillor
 -- in watcher mode) the next time both are online, whose SavedVariables the bot's keeper uploads.
--- It waits in the addon for 7 days: nothing is lost while the bot or the watcher is away.
+-- One rule for how long (all from the code's expiry, exp): the bot takes a link until exp + GRACE
+-- (7 days); the addon hands it to a watcher until exp + DELIVER_UNTIL (5 days), leaving the keeper
+-- 2 days to upload; a watcher keeps what it got until exp + GRACE (it takes exp as the latest
+-- proof's time + a code's life, never earlier than exp); the window shows it until exp + GRACE.
 -- Messages (Comm.lua; each dispatched only as "<type>~"):
 --   DV~1~<certificate>   a confirmer is online (CHANNEL, every 5 minutes); DV~0 its key is gone
 --   DR~<nonce>~<guild>~<faction>~<R>~<tag>   a request (WHISPER, requester -> confirmer)
@@ -34,21 +43,33 @@ local L = ns.L
 --   DB~<bundle>          a finished proof (WHISPER, requester -> watcher; in Codec.Chunk pieces
 --                        "DB~C<id>:<i>:<n>:<piece>" when longer than one message)
 --   DK~<R>               the watcher kept it (WHISPER, watcher -> requester)
--- Certificate: OLK1.<keyId>.<public key, base64url>.<tier c|p>.<exp>.<sig>, the bot's signature
--- over all but the last field.
+--   DC~1~<public key>    a councillor's addon asks the author's for a certificate (WHISPER)
+--   DE~<certificate>     the author's addon answers it (WHISPER)
+-- Certificate: OLK2.<keyId>.<public key, base64url>.<tier c|p>.<exp>.<Name-Realm>.<sig>, a
+-- signature over all but the last field (UTF-8) by one of the bot's keys, or, tier c only and for a
+-- key whose id is the first 12 hex of SHA-256(<its 32 bytes>), by one of the council authority's
+-- (ns.LINK_CA_KEYS). The character is read from both ends (it may hold dots).
 -- Signed: OLY4~<requester>~<guild>~<gv>~<faction>~<nonce>~<R>~<tag>~<issued>~<keyId>~<confirmer>
--- Carried: OLB4~<requester>~<guild>~<faction>~<nonce>~<R>~<tag>~<issued>,<keyId>,<confirmer>,<gv>,<sig>;...
--- (4 proofs at most), in the URL <ns.LINK_SITE>#b=<the bundle, URL-encoded>: a fragment, never
--- sent to any server by the browser.
--- A watcher's inbox (SavedVariables): OlympusDB.discord.inbox[R][sender] = { bundle, from, t }.
--- A confirmer's key never leaves OlympusDB.discord.key: it is never printed, sent, logged, or
--- written in /oly status and the bug report.
+-- Carried: OLB5~<requester>~<guild>~<faction>~<nonce>~<R>~<tag>~<proof>;... (4 proofs at most),
+-- each proof <issued>,<keyId>,<confirmer>,<gv>,<sig>,<public key>,<tier>,<certificate's exp>,
+-- <certificate's sig>: its certificate travels with it (OLK2.<keyId>.<public key>.<tier>.<exp>.
+-- <confirmer>.<certificate's sig>), so a watcher and the bot check it without having heard it. In
+-- the URL <ns.LINK_SITE>#b=<the bundle, URL-encoded>: a fragment, never sent to any server.
+-- A watcher's inbox (SavedVariables): OlympusDB.discord.inbox[R][sender] = { bundle, from, t, keep },
+-- only links whose every proof checks with its certificate and that are enough for the bot.
+-- A confirmer's key never leaves OlympusDB.discord.keys, nor the council authority's seed
+-- ns.LINK_CA_SEED: neither is ever printed, sent, logged, or written in /oly status and the bug report.
 
 -- The Olympus bot's public keys (64 hex digits each, from scripts/link-keys.py backend): a code
 -- or certificate signed by any of them is accepted, so two can be listed while the key changes.
 -- Anything that is not 64 hex digits is ignored: until the bot's key is pasted here, every code
 -- is refused.
 ns.LINK_BACKEND_KEYS = { "PASTE-THE-BOT-PUBLIC-KEY-HEX-HERE" }
+-- The High Council's certificate authority (scripts/link-keys.py ca, on the author's computer):
+-- its public keys (64 hex digits each), whose certificates of tier c count for councillors' keys.
+-- Its seed is only in dist/LinkCA.lua (ns.LINK_CA_SEED), copied to the author's own game and never
+-- published. Until a key is pasted here, councillors' addons make no key and ask for nothing.
+ns.LINK_CA_KEYS = { "PASTE-THE-COUNCIL-AUTHORITY-PUBLIC-KEY-HEX-HERE" }
 -- The Olympus Link page (on the bot's site): the QR code and the copy box open it.
 ns.LINK_SITE = "https://olympus.example/link"
 -- Whose watcher the texts name ("<name>'s watcher"); nil: "the bot's watcher".
@@ -70,11 +91,17 @@ Link.DRAW_WAIT = 30          -- each batch has this long to answer
 Link.NEEDED = 3              -- players' proofs that make a link
 Link.MAX_PROOFS = 4          -- proofs carried at most
 Link.FRESH = 240             -- players' proofs count together within 4 minutes (the bot: 5)
-Link.MORE_WAIT = 60          -- enough proofs, none that verified the guild (or one councillor's):
-                             -- others still to ask are asked this long at most
+Link.MORE_WAIT = 60          -- one councillor's proof that showed the guild: a second councillor
+                             -- online is asked this long at most
+Link.CLAIMED_WAIT = 600      -- enough proofs, none that showed the guild: open this long for one...
+Link.CLAIMED_AGAIN = 180     -- ...a councillor whose proof said "c" asked again this often
 Link.ASK_AGAIN = 300         -- a player who did not answer is asked again after this long
 Link.ROUND_GAP = 120         -- a new round at most this often
-Link.DELIVER_FOR = 7 * 86400 -- a finished proof waits this long for a watcher
+Link.CODE_LIFE = 86400       -- the bot's codes live a day (the Worker's TOKEN_LIFE): issued at exp - this
+Link.CLOCK_SKEW = 300        -- one game server's clock against another's (the Worker's CLOCK_SKEW)
+Link.GRACE = 7 * 86400       -- the bot takes a link until its code's expiry + this (DELIVERY_GRACE)...
+Link.KEEPER_TIME = 2 * 86400 -- ...so the addon hands it to a watcher until 2 days before, for the
+Link.DELIVER_UNTIL = Link.GRACE - Link.KEEPER_TIME -- keeper to upload it in time (exp + 5 days)
 Link.ACK_WAIT = 30           -- a watcher has this long to say it kept the proof
 Link.GIVE_GAP = 60           -- a confirmer: one proof per requesting character a minute...
 Link.GIVE_DAY = 5            -- ...five a day...
@@ -83,11 +110,20 @@ Link.WHO_FRESH = 15 * 60     -- a /who this recent tells a confirmer the request
 Link.INBOX_MAX = 500         -- a watcher keeps this many proofs...
 Link.INBOX_PER_CODE = 3      -- ...this many senders' per code...
 Link.INBOX_PER_SENDER = 5    -- ...and this many of one sender; a new one past these is refused
-Link.INBOX_KEEP = 8 * 86400  -- an entry goes after this long (its code can't be used any more)
-Link.INBOX_GAP = 60          -- ...and one per requesting character a minute
+Link.INBOX_GAP = 60          -- one link checked per requesting character a minute...
+Link.INBOX_CHECKS = 2        -- ...and this many at once
 Link.MAX_ANNOUNCERS = 3000
 Link.CERT_JOBS = 4           -- confirmers' certificates checked at once
 Link.CERT_CACHE = 1000       -- checked certificates remembered
+Link.CERT_NEW_GAP = 60       -- one new certificate per announcing character a minute is taken
+Link.MAX_BUNDLE = 2400       -- bytes of a link at most (four proofs with their certificates)
+Link.MAX_CERT = 240          -- ...and of a certificate (DV and DE carry it in one message)
+Link.CA_GAP = 600            -- the council authority: one certificate per councillor in this long...
+Link.CA_HOUR = 20            -- ...and this many an hour in all
+Link.CA_DAYS = 365           -- ...each good for this many days
+Link.CA_WAIT = 60            -- a councillor's addon waits this long for the author's certificate,
+Link.CA_AGAIN = 600          -- ...and asks again after a refusal (or no answer) this long after
+Link.ENTROPY_FRAMES = 8      -- a councillor's new key: the entropy pool is stirred over this many frames
 Link.M_MAX_BYTES = 412       -- the longest link a version 15 QR code holds at level M
 Link.QUIET = 4               -- modules of white around the code
 Link.CHROME = 190            -- UI units of the window around the code (title, name, hint, box)
@@ -98,18 +134,25 @@ local certs, nCerts = {}, 0          -- [certificate] = true | false: signed by 
 local certJobs, nCertJobs = {}, 0    -- certificates being checked
 local ownCert              -- { cert, seed, ok }: our own certificate, checked this session
 local ownChecking          -- the certificate and seed being checked
+local certNewAt = {}       -- [Name-Realm] = when a new certificate of theirs was last taken
 local watchers = {}        -- [Name-Realm] = t: High Councillors in watcher mode heard
 local delivery             -- the proof on its way to a watcher: { to, due }
 local waitWatcher = false  -- a delivery went unanswered: the next one when a watcher is heard
 local sentTo = {}          -- watchers our proof was sent to, this session
 local recent = {}          -- when our key confirmed, the last minute (every requester)
-local inboxFrom = {}       -- watcher: [requester] = when their last proof was kept
+local inboxTried = {}      -- watcher: [requester] = when their last link was checked
+local checking, nChecking = {}, 0 -- watcher: [requester] = true while their link is checked
 local inAsm = ns.Codec.NewAssembler() -- watcher: proofs arriving in pieces
 local bundleId = 0
-local stats = { confirmed = 0, refused = 0, kept = 0, badProofs = 0, badCerts = 0 }
+local stats = { confirmed = 0, refused = 0, kept = 0, badProofs = 0, badCerts = 0, badBundles = 0, certified = 0 }
 local lastAnnounce, lastWatch, lastPrune = -math.huge, -math.huge, -math.huge
+local announced            -- the certificate we announced this session (DV~0 when we stop)
 local pubCache             -- { id, seed, pub }: our confirmer key's public half
 local toldCert = false     -- our saved certificate was found wrong: said once a session
+local making               -- a councillor's new key being made: { samples, me }
+local auto = {}            -- a councillor's key and the author: { askedAt, refusedAt }
+local ca = { given = {}, hour = {} } -- the council authority: [councillor] = when certified; this hour's
+local caPub                -- its public key (32 bytes) once found in ns.LINK_CA_KEYS; false: it is not
 local frame                -- the Olympus Link window, built the first time it opens
 local qr = {}              -- the QR code last made: { url, matrix, level }
 local qrJob                -- the URL whose QR code is being made
@@ -174,42 +217,63 @@ function Link.ParseToken(s)
 	return { R = R, user = user, exp = tonumber(exp), mode = mode, T = T, sig = sig, signed = s:sub(1, #s - 87) }
 end
 
--- A confirmer's certificate: { id, pub, tier, exp, sig, signed, text } or nil.
+-- A confirmer's certificate: { id, pub, tier, exp, name, sig, signed, text } or nil. The character
+-- (Name-Realm) is what lies between the expiry and the last dot.
 function Link.ParseCert(s)
-	if type(s) ~= "string" or #s > 200 then return nil end
-	local id, pub, tier, exp, sig = s:match("^OLK1%.([^.]*)%.([^.]*)%.([^.]*)%.([^.]*)%.([^.]*)$")
-	if not id or not KeyId(id) or not Pub(pub) or (tier ~= "c" and tier ~= "p") or not Time(exp) or not Sig(sig) then return nil end
-	return { id = id, pub = pub, tier = tier, exp = tonumber(exp), sig = sig, signed = s:sub(1, #s - 87), text = s }
+	if type(s) ~= "string" or #s > Link.MAX_CERT then return nil end
+	local id, pub, tier, exp, name, sig = s:match("^OLK2%.([^.]*)%.([^.]*)%.([^.]*)%.([^.]*)%.(.+)%.([^.]*)$")
+	if not id or not KeyId(id) or not Pub(pub) or (tier ~= "c" and tier ~= "p") or not Time(exp) or not Link.ValidName(name) or not Sig(sig) then
+		return nil
+	end
+	return { id = id, pub = pub, tier = tier, exp = tonumber(exp), name = name, sig = sig, signed = s:sub(1, #s - 87), text = s }
 end
 
--- The bot's public keys this version knows (32-byte strings): 64 hex digits that are a key a
--- signature can be checked with (Ed.ValidPublicKey), made once for the list as it is.
-local backendKeys = {}
-function Link.BackendKeys()
-	local list = type(ns.LINK_BACKEND_KEYS) == "table" and ns.LINK_BACKEND_KEYS or {}
+-- The id of a key the council authority certifies: the first 12 hex of SHA-256 of its 32 bytes.
+local function KeyIdOf(pub) return Ed.ToHex(ns.Sign.SHA256(pub)):sub(1, 12) end
+Link.KeyIdOf = KeyIdOf
+
+-- Public keys a list names (32-byte strings): 64 hex digits that are a key a signature can be
+-- checked with (Ed.ValidPublicKey), made once for the list as it is.
+local function KeyList(list, cache)
+	list = type(list) == "table" and list or {}
 	local id = table.concat(list, ",")
-	if backendKeys.id ~= id then
+	if cache.id ~= id then
 		local out = {}
 		for _, hex in ipairs(list) do
 			local pk = type(hex) == "string" and #hex == 64 and Ed.FromHex(hex)
 			if pk and Ed.ValidPublicKey(pk) then out[#out + 1] = pk end
 		end
-		backendKeys = { id = id, keys = out }
+		cache.id, cache.keys = id, out
 	end
-	return backendKeys.keys
+	return cache.keys
 end
+local backendKeys, caKeys = {}, {}
+-- The bot's public keys this version knows, and the council authority's.
+function Link.BackendKeys() return KeyList(ns.LINK_BACKEND_KEYS, backendKeys) end
+function Link.CAKeys() return KeyList(ns.LINK_CA_KEYS, caKeys) end
 
--- Did one of the bot's keys sign this (a parsed code or certificate: its `signed` and `sig`)?
--- Heavy: run inside Ed.Run.
-local function BotSigned(t)
+-- Who signed a parsed code or certificate (its `signed` and `sig`): "bot" (one of the bot's
+-- keys), "ca" (the council authority's: a certificate of tier c only, for a key whose id is its
+-- hash), or false. Heavy: run inside Ed.Run.
+local function SignedBy(t, certificate)
 	local sig = type(t) == "table" and Ed.FromB64(t.sig)
 	if not sig then return false end
 	for _, pk in ipairs(Link.BackendKeys()) do
-		if Ed.Verify(pk, t.signed, sig) then return true end
+		if Ed.Verify(pk, t.signed, sig) then return "bot" end
+	end
+	if certificate and t.tier == "c" then
+		local pub = Ed.FromB64(t.pub)
+		if pub and t.id == KeyIdOf(pub) then
+			for _, pk in ipairs(Link.CAKeys()) do
+				if Ed.Verify(pk, t.signed, sig) then return "ca" end
+			end
+		end
 	end
 	return false
 end
-Link.VerifyToken, Link.VerifyCert = BotSigned, BotSigned
+local function BotSigned(t) return SignedBy(t, false) == "bot" end
+local function CertSigned(t) return SignedBy(t, true) ~= false end
+Link.VerifyToken, Link.VerifyCert, Link.CertSigner = BotSigned, CertSigned, function(c) return SignedBy(c, true) end
 
 -- The tag that binds a link to its code and its requester: the first 16 hex of SHA-256 of the
 -- code's signature (only in the command the player pasted), "~" and the requester's Name-Realm.
@@ -227,35 +291,49 @@ end
 function Link.Rank(R, keyId) return Ed.ToHex(ns.Sign.SHA256(R .. "~" .. keyId):sub(1, 4)) end
 function Link.Drawn(place, T) return type(place) == "string" and type(T) == "string" and place < T end
 
+-- The certificate a proof carries (its key's, for its confirmer): OLK2 rebuilt from its fields.
+function Link.CertText(p)
+	return ("OLK2.%s.%s.%s.%s.%s.%s"):format(p.keyId, p.pub, p.tier, p.certExp, p.confirmer, p.certSig)
+end
+
 local function ValidProof(p)
 	return type(p) == "table" and Time(p.issued) and KeyId(p.keyId) and Link.ValidName(p.confirmer) and GV[p.gv] == true and Sig(p.sig)
+		and Pub(p.pub) and (p.tier == "c" or p.tier == "p") and Time(p.certExp) and Sig(p.certSig) and #Link.CertText(p) <= Link.MAX_CERT
 end
 local function ValidHead(b)
 	return type(b) == "table" and Link.ValidName(b.requester) and Link.ValidGuild(b.guild) and FACTIONS[b.faction] ~= nil
 		and Nonce(b.nonce) and Code(b.R) and Tag(b.tag)
 end
+local PROOF_FIELDS = { "issued", "keyId", "confirmer", "gv", "sig", "pub", "tier", "certExp", "certSig" }
 
--- The link the page reads: the request and 1 to 4 proofs.
+-- The link the page reads: the request and 1 to 4 proofs, each with its certificate.
 function Link.Build(b, proofs)
 	if not ValidHead(b) or type(proofs) ~= "table" or #proofs < 1 or #proofs > Link.MAX_PROOFS then return nil end
 	local parts = {}
 	for i, p in ipairs(proofs) do
 		if not ValidProof(p) then return nil end
-		parts[i] = table.concat({ p.issued, p.keyId, p.confirmer, p.gv, p.sig }, ",")
+		local f = {}
+		for j, k in ipairs(PROOF_FIELDS) do f[j] = p[k] end
+		parts[i] = table.concat(f, ",")
 	end
-	return table.concat({ "OLB4", b.requester, b.guild, b.faction, b.nonce, b.R, b.tag, table.concat(parts, ";") }, "~")
+	local s = table.concat({ "OLB5", b.requester, b.guild, b.faction, b.nonce, b.R, b.tag, table.concat(parts, ";") }, "~")
+	return #s <= Link.MAX_BUNDLE and s or nil
 end
 
 -- The link read back: { requester, guild, faction, nonce, R, tag, proofs = { ... } }, or nil.
 function Link.Parse(s)
-	if type(s) ~= "string" or #s > 1600 then return nil end
-	local requester, guild, faction, nonce, R, tag, list = s:match("^OLB4~([^~]*)~([^~]*)~([^~]*)~([^~]*)~([^~]*)~([^~]*)~([^~]*)$")
+	if type(s) ~= "string" or #s > Link.MAX_BUNDLE then return nil end
+	local requester, guild, faction, nonce, R, tag, list = s:match("^OLB5~([^~]*)~([^~]*)~([^~]*)~([^~]*)~([^~]*)~([^~]*)~([^~]*)$")
 	local b = { requester = requester, guild = guild, faction = faction, nonce = nonce, R = R, tag = tag, proofs = {} }
 	if not requester or not ValidHead(b) then return nil end
 	for part in (list .. ";"):gmatch("([^;]*);") do
-		local issued, keyId, confirmer, gv, sig = part:match("^([^,]*),([^,]*),([^,]*),([^,]*),([^,]*)$")
-		local p = { issued = issued, keyId = keyId, confirmer = confirmer, gv = gv, sig = sig }
-		if not issued or not ValidProof(p) or #b.proofs >= Link.MAX_PROOFS then return nil end
+		local p, n = {}, 0
+		for v in (part .. ","):gmatch("([^,]*),") do
+			n = n + 1
+			if n > #PROOF_FIELDS then return nil end
+			p[PROOF_FIELDS[n]] = v
+		end
+		if n ~= #PROOF_FIELDS or not ValidProof(p) or #b.proofs >= Link.MAX_PROOFS then return nil end
 		b.proofs[#b.proofs + 1] = p
 	end
 	if #b.proofs == 0 then return nil end
@@ -282,16 +360,17 @@ local function Hours(seconds) return math.max(1, math.ceil(seconds / 3600)) end
 local function Days(seconds) return math.max(1, math.ceil(seconds / 86400)) end
 
 ---------------------------------------------------------------------------
--- Saved on the account (OlympusDB.discord): each character's request and proof (chars), the
--- confirmer key and its certificate, whom that key confirmed (given), and a watcher's inbox and
--- switch.
+-- Saved on the account (OlympusDB.discord): each character's request and proof (chars), each
+-- character's confirmer key and its certificate (keys), the characters whose key was turned off
+-- (nokey: a councillor's addon makes none until /oly discord key new), whom the account's keys
+-- confirmed (given), and a watcher's inbox and switch.
 ---------------------------------------------------------------------------
 
 local function Store()
 	local db = ns.db
 	if type(db.discord) ~= "table" then db.discord = {} end
 	local d = db.discord
-	for _, k in ipairs({ "chars", "given", "inbox", "watch" }) do
+	for _, k in ipairs({ "chars", "given", "inbox", "watch", "keys", "nokey" }) do
 		if type(d[k]) ~= "table" then d[k] = {} end
 	end
 	return d
@@ -305,23 +384,25 @@ local function MyRecord()
 	return type(chars) == "table" and chars[ns.me] or nil
 end
 
--- Our confirmer key: the saved record and its 32-byte seed, or nil.
+-- This character's confirmer key: the saved record { id, seed, cert, auto } and its 32-byte
+-- seed, or nil. A key is one character's: another character of the account has its own, or none.
 function Link.Key()
 	local d = ns.db and ns.db.discord
-	local k = type(d) == "table" and d.key
+	local keys = type(d) == "table" and d.keys
+	local k = type(keys) == "table" and keys[ns.me]
 	if type(k) ~= "table" or not KeyId(k.id) or type(k.seed) ~= "string" or #k.seed ~= 43 then return nil end
 	local seed = Ed.FromB64(k.seed)
 	if not seed or #seed ~= 32 then return nil end
 	return k, seed
 end
 
--- Our certificate: parsed, for our key's id, not expired; or nil. (That the bot signed it, for
--- our key's public half, is checked in a job: CheckOwnCert.)
+-- Our certificate: parsed, for our key's id and this character, not expired; or nil. (That the
+-- bot or the council authority signed it, for our key's public half, is checked in a job:
+-- CheckOwnCert.)
 local function MyCert(k)
 	k = k or Link.Key()
-	local d = ns.db and ns.db.discord
-	local c = k and type(d) == "table" and Link.ParseCert(d.cert)
-	if not c or c.id ~= k.id or c.exp <= ServerTime() then return nil end
+	local c = k and Link.ParseCert(k.cert)
+	if not c or c.id ~= k.id or c.name ~= ns.me or c.exp <= ServerTime() then return nil end
 	return c
 end
 
@@ -345,14 +426,32 @@ local function InboxCount(inbox, from)
 	return n, mine
 end
 
--- Entries whose code can no longer be used go (anything malformed with them).
+-- Until when a watcher keeps a link (server time): its code's expiry + GRACE, the expiry taken
+-- as the latest proof's time + a code's life and the clocks' difference (a proof is signed within
+-- its code's life, so that is never before the expiry). nil for a link without proofs.
+function Link.KeepUntil(b)
+	local latest
+	for _, p in ipairs(type(b) == "table" and b.proofs or {}) do
+		local t = tonumber(p.issued)
+		if t and (not latest or t > latest) then latest = t end
+	end
+	return latest and latest + Link.CODE_LIFE + Link.CLOCK_SKEW + Link.GRACE or nil
+end
+
+-- Entries whose code can no longer be used go (anything malformed with them). An entry without
+-- its time to go counts from when it came.
 local function PruneInbox(inbox, now)
+	local server = ServerTime()
 	for R, slot in pairs(inbox) do
 		if type(slot) ~= "table" then
 			inbox[R] = nil
 		else
 			for from, e in pairs(slot) do
-				if type(e) ~= "table" or type(e.bundle) ~= "string" or now - (tonumber(e.t) or -math.huge) >= Link.INBOX_KEEP then slot[from] = nil end
+				local keep = type(e) == "table" and tonumber(e.keep)
+				if type(e) ~= "table" or type(e.bundle) ~= "string" or (keep and server >= keep)
+					or (not keep and now - (tonumber(e.t) or -math.huge) >= Link.GRACE + Link.CODE_LIFE) then
+					slot[from] = nil
+				end
 			end
 			if next(slot) == nil then inbox[R] = nil end
 		end
@@ -368,7 +467,8 @@ local function CachedPub(k)
 	return pubCache and k and pubCache.id == k.id and pubCache.seed == k.seed and pubCache.pub or nil
 end
 
--- Our certificate checked in a job: the bot signed it, for our key's public half. done(ok) after.
+-- Our certificate checked in a job: the bot (or the council authority) signed it, for our key's
+-- public half. done(ok) after.
 local function CheckOwnCert(done)
 	local k, seed = Link.Key()
 	local c = MyCert(k)
@@ -383,7 +483,7 @@ local function CheckOwnCert(done)
 	local cached = CachedPub(k)
 	local queued = Ed.Run(function()
 		local pub = cached or Ed.PublicKey(seed)
-		return { pub = pub, ok = Ed.ToB64(pub) == c.pub and BotSigned(c) }
+		return { pub = pub, ok = Ed.ToB64(pub) == c.pub and CertSigned(c) }
 	end, function(ok, res)
 		if ownChecking == what then ownChecking = nil end
 		local k2 = Link.Key()
@@ -400,11 +500,26 @@ local function CheckOwnCert(done)
 	return queued
 end
 
--- Every ANNOUNCE_EVERY with a key and a certificate the bot signed for it.
+-- Our certificate, when it lets us confirm now: a councillor's (tier c) only while the signed
+-- list names us.
+local function UsableCert(k)
+	local c = MyCert(k)
+	if c and c.tier == "c" and not ns.IsHighCouncillor(ns.me) then return nil end
+	return c
+end
+
+-- Every ANNOUNCE_EVERY with a key and a certificate the bot (or the council authority) signed
+-- for it. A councillor taken off the signed list stops: DV~0 once, if it had announced.
 function Link.Announce(force)
 	local k = Link.Key()
-	local c = k and MyCert(k)
-	if not c then return false end
+	local c = k and UsableCert(k)
+	if not c then
+		if announced then
+			announced = nil
+			ns.Comm.Send("CHANNEL", "DV~0", "linkannounce")
+		end
+		return false
+	end
 	local now = ns.Now()
 	if not force and now - lastAnnounce < Link.ANNOUNCE_EVERY then return false end
 	if not (ownCert and ownCert.cert == c.text and ownCert.seed == k.seed) then
@@ -412,7 +527,7 @@ function Link.Announce(force)
 		return false
 	end
 	if not ownCert.ok then return false end
-	lastAnnounce = now
+	lastAnnounce, announced = now, c.text
 	ns.Comm.Send("CHANNEL", "DV~1~" .. c.text, "linkannounce")
 	return true
 end
@@ -440,8 +555,14 @@ local function Prune(now)
 	for name, t in pairs(watchers) do
 		if now - t > Link.ANNOUNCE_FRESH then watchers[name] = nil end
 	end
-	for name, t in pairs(inboxFrom) do
-		if now - t >= Link.INBOX_GAP then inboxFrom[name] = nil end
+	for name, t in pairs(inboxTried) do
+		if now - t >= Link.INBOX_GAP then inboxTried[name] = nil end
+	end
+	for name, t in pairs(certNewAt) do
+		if now - t >= Link.CERT_NEW_GAP then certNewAt[name] = nil end
+	end
+	for name, t in pairs(ca.given) do
+		if now - t >= Link.CA_GAP then ca.given[name] = nil end
 	end
 	ns.Codec.Gc(inAsm, now)
 	local d = ns.db and ns.db.discord
@@ -462,7 +583,7 @@ local function CheckCert(a)
 		return
 	end
 	certJobs[cert], nCertJobs = true, nCertJobs + 1
-	local queued = Ed.Run(function() return BotSigned(c) end, function(ok, valid)
+	local queued = Ed.Run(function() return CertSigned(c) end, function(ok, valid)
 		certJobs[cert], nCertJobs = nil, nCertJobs - 1
 		if nCerts >= Link.CERT_CACHE then wipe(certs); nCerts = 0 end
 		local good = ok and valid == true
@@ -523,10 +644,11 @@ local function PlaceAll(r)
 	if not queued then r.ranking = nil end
 end
 
--- Online confirmers request r may ask, with a certificate the bot signed and still valid:
--- councillors (by name), or the players drawn for its code (lowest place first). { name, id, pub,
--- c, place }, and how many more wait for their certificate to be checked: they are checked (the
--- lowest places first) and join after.
+-- Online confirmers request r may ask, with a certificate for them the bot (or the council
+-- authority) signed and still valid: councillors (by name), or the players drawn for its code
+-- (lowest place first). { name, id, pub, c, place, tier, certExp, certSig }, and how many more
+-- wait for their certificate to be checked: they are checked (the lowest places first) and join
+-- after.
 local function Online(r, councillors, now)
 	local out, unchecked = {}, {}
 	local own, server, T = Link.Key(), ServerTime(), r.rec.T
@@ -540,7 +662,8 @@ local function Online(r, councillors, now)
 				want = a.tier == "p" and r.ranked and Link.Drawn(PlaceOf(r, a.id), T)
 			end
 			if want then
-				local e = { name = name, id = a.id, pub = a.pub, c = c, place = not c and r.place[a.id] or nil }
+				local e = { name = name, id = a.id, pub = a.pub, c = c, place = not c and r.place[a.id] or nil,
+					tier = a.tier, certExp = tostring(a.exp), certSig = a.sig }
 				local ok = certs[a.cert]
 				if ok then
 					out[#out + 1] = e
@@ -578,7 +701,8 @@ end
 -- The requester
 ---------------------------------------------------------------------------
 
-local SAY = { council = "LINK_ASKING_COUNCIL", draw = "LINK_DRAWING", waiting = "LINK_WAITING", waitingC = "LINK_WAITING_COUNCIL" }
+local SAY = { council = "LINK_ASKING_COUNCIL", draw = "LINK_DRAWING", waiting = "LINK_WAITING", waitingC = "LINK_WAITING_COUNCIL",
+	claimed = "LINK_GUILD_CHECKING" }
 local function Say(r, what)
 	if r.told[what] then return end
 	r.told[what] = true
@@ -657,6 +781,14 @@ local function Enough(rec, list)
 	return c > 0 or (rec.mode == "a" and p >= Link.NEEDED)
 end
 
+-- A proof as the link carries it (and whether it is a councillor's): what a finished request
+-- keeps while it waits for one that knows the guild.
+local function Carried(p)
+	local out = { c = p.c or nil }
+	for _, k in ipairs(PROOF_FIELDS) do out[k] = p[k] end
+	return out
+end
+
 -- A councillor online who can be asked now (and has not given a proof), or one whose turn runs.
 local function CouncilLeft(r, now)
 	if r.waitC and now < r.waitC then return true end
@@ -667,44 +799,17 @@ local function CouncilLeft(r, now)
 	return false
 end
 
+-- A councillor to ask now: one without a proof, not asked within COUNCIL_AGAIN; or, while the
+-- request waits for a proof that knows the guild, one whose proof only claimed it, asked again
+-- CLAIMED_AGAIN after the last time (the /who it asked for may have seen the player since).
+local function CouncilDue(r, e, now)
+	local a, p = r.asked[e.name], r.rec.proofs[e.name]
+	if r.verifying[e.name] then return false end
+	if not p then return not a or now - a.t >= Link.COUNCIL_AGAIN end
+	return r.rec.claimedAt ~= nil and not Strong(p) and (not a or now - a.t >= Link.CLAIMED_AGAIN)
+end
+
 local Candidates
-
--- Drawn players who could still answer: the draw not placed yet, a proof being checked, a batch
--- waiting for its answers, or a round about to start with someone to ask (or whose certificate is
--- being checked).
-local function PlayersLeft(r, now)
-	if r.rec.mode ~= "a" then return false end
-	if not r.ranked or next(r.verifying) ~= nil or (r.round and now < r.round.due) then return true end
-	if not r.wantRound then return false end
-	local cands, unchecked = Candidates(r, now)
-	return #cands > 0 or unchecked > 0
-end
-
--- Ready now? Enough proofs for the bot, and nobody left to ask for what would make it stronger:
--- a second councillor's proof, or one that showed the guild ("r" or "w"). That asking lasts
--- MORE_WAIT at most once there are enough.
-local function Finished(r, now, list)
-	local rec = r.rec
-	if not Enough(rec, list) then
-		r.enoughAt = nil
-		return false
-	end
-	r.enoughAt = r.enoughAt or now
-	if now - r.enoughAt >= Link.MORE_WAIT then return true end
-	local c, _, strong = Counts(list)
-	if c == 1 and CouncilLeft(r, now) then return false end
-	if strong then return true end
-	if CouncilLeft(r, now) or PlayersLeft(r, now) then return false end
-	-- Mode a, drawn players online who were not asked: one more round of the draw for it, once.
-	if rec.mode == "a" and not r.moreRound then
-		local cands, unchecked = Candidates(r, now)
-		if #cands > 0 or unchecked > 0 then
-			r.moreRound, r.wantRound = true, true
-			return false
-		end
-	end
-	return true
-end
 
 local function Expire(r)
 	local d = Store()
@@ -714,19 +819,21 @@ local function Expire(r)
 	ns.Log("discord link: request expired")
 end
 
+-- Finished: the link is made. With the guild only claimed it says so: the bot may want a
+-- confirmer who saw it (LINK_GUILD_POLICY), and a new code while one is online does it.
 local function Ready(r, now, list)
 	local rec = r.rec
 	local proofs = {}
-	for i, p in ipairs(list) do proofs[i] = { issued = p.issued, keyId = p.keyId, confirmer = p.confirmer, gv = p.gv, sig = p.sig } end
+	for i, p in ipairs(list) do proofs[i] = Carried(p) end
 	local bundle = Link.Build(Head(rec), proofs)
 	if not bundle then return end
 	local c, _, strong = Counts(list)
 	rec.state, rec.bundle, rec.readyAt, rec.n = "ready", bundle, now, #proofs
 	rec.council, rec.verified = c > 0 or nil, strong or nil
-	rec.proofs = nil
+	rec.proofs, rec.fallback, rec.claimedAt = nil, nil, nil
 	req, delivery, waitWatcher = nil, nil, false
 	wipe(sentTo)
-	ns.Print(L.LINK_READY)
+	ns.Print(strong and L.LINK_READY or L.LINK_READY_CLAIMED)
 	ns.Log("discord link: ready with %d proofs (%d councillors', guild %s)", #proofs, c, strong and "verified" or "claimed")
 	Link.ShowWindow()
 	Link.Deliver(now)
@@ -734,7 +841,7 @@ end
 
 local function Ask(r, e, now)
 	local rec = r.rec
-	r.asked[e.name] = { id = e.id, pub = e.pub, c = e.c, place = e.place, t = now }
+	r.asked[e.name] = { id = e.id, pub = e.pub, c = e.c, place = e.place, t = now, tier = e.tier, certExp = e.certExp, certSig = e.certSig }
 	ns.Comm.Whisper(e.name, ("DR~%s~%s~%s~%s~%s"):format(rec.nonce, rec.guild, rec.faction, rec.R, rec.tag), "linkask:" .. e.name, true)
 end
 
@@ -821,15 +928,41 @@ function Link.Step(now)
 	now = now or ns.Now()
 	local rec = r.rec
 	if rec.state ~= "waiting" then return end
-	if ServerTime() >= rec.exp then return Expire(r) end
+	local server = ServerTime()
 	if rec.mode == "a" then PlaceAll(r) end
 	local list = Chosen(rec, now)
-	if Finished(r, now, list) then return Ready(r, now, list) end
-	-- High Councillors first, one at a time (the first proof does it; a second one is asked for).
+	local enough = Enough(rec, list)
+	local c, _, strong = Counts(list)
+	if enough and strong then
+		-- Enough, and the guild shown: ready, but for a second councillor online, asked for
+		-- MORE_WAIT at most.
+		r.enoughAt = r.enoughAt or now
+		if not (c == 1 and now - r.enoughAt < Link.MORE_WAIT and CouncilLeft(r, now)) then return Ready(r, now, list) end
+	else
+		r.enoughAt = nil
+		if enough then
+			-- Enough for the bot, the guild only claimed: kept (a player's proof stops counting with
+			-- the others after FRESH), and open CLAIMED_WAIT for a proof that knows the guild.
+			rec.claimedAt = rec.claimedAt or now
+			rec.fallback = {}
+			for i, p in ipairs(list) do rec.fallback[i] = Carried(p) end
+			Say(r, "claimed")
+		end
+	end
+	if rec.claimedAt and type(rec.fallback) == "table" then
+		-- The wait ends, or the code does (the bot takes proofs signed before its expiry).
+		if now - rec.claimedAt >= Link.CLAIMED_WAIT or server >= rec.exp - Link.CLOCK_SKEW then
+			return Ready(r, now, enough and list or rec.fallback)
+		end
+	elseif server >= rec.exp then
+		return Expire(r)
+	end
+	-- High Councillors first, one at a time (the first proof does it; a second one is asked for,
+	-- and one that only claimed the guild is asked again while the request waits for one that
+	-- knows it).
 	if r.waitC and now < r.waitC then return end
 	for _, e in ipairs(Online(r, true, now)) do
-		local a = r.asked[e.name]
-		if not rec.proofs[e.name] and not r.verifying[e.name] and (not a or now - a.t >= Link.COUNCIL_AGAIN) then
+		if CouncilDue(r, e, now) then
 			Ask(r, e, now)
 			r.waitC = now + Link.COUNCIL_WAIT
 			return Say(r, "council")
@@ -839,6 +972,8 @@ function Link.Step(now)
 		if #list == 0 and nCertJobs == 0 then Say(r, "waitingC") end
 		return
 	end
+	-- Waiting for a proof that knows the guild: the draw goes on, a round every ROUND_GAP.
+	if rec.claimedAt and not r.round and (not r.roundEnded or now - r.roundEnded >= Link.ROUND_GAP) then r.wantRound = true end
 	Draw(r, now)
 end
 
@@ -870,8 +1005,10 @@ function Link.Start(t)
 	return true
 end
 
--- A confirmer online (DV): its certificate read (checked only when it is asked); a request
--- waiting places it in its draw and asks it when it can.
+-- A confirmer online (DV): its certificate read (checked only when it is asked), and only from
+-- the character it names; a request waiting places it in its draw and asks it when it can. A
+-- character's new certificate (one not checked yet) is taken once a minute at most: a flood of
+-- them from one character can't make a waiting requester check more.
 function Link.HandleAnnounce(dist, sender, text)
 	if dist ~= "CHANNEL" or type(text) ~= "string" then return end
 	local name = ns.FullName(sender)
@@ -881,17 +1018,21 @@ function Link.HandleAnnounce(dist, sender, text)
 		if announcers[name] then announcers[name], nAnnouncers = nil, nAnnouncers - 1 end
 		return
 	end
-	local cert = text:match("^DV~1~(OLK1%.[^~]+)$")
+	local cert = text:match("^DV~1~(OLK2%.[^~]+)$")
 	local c = cert and Link.ParseCert(cert)
-	if not c or c.exp <= ServerTime() then return end
+	if not c or c.name ~= name or c.exp <= ServerTime() then return end
 	local a = announcers[name]
+	if not (a and a.cert == cert) and certs[cert] == nil then
+		if certNewAt[name] and now - certNewAt[name] < Link.CERT_NEW_GAP then return end
+		certNewAt[name] = now
+	end
 	if not a then
 		if nAnnouncers >= Link.MAX_ANNOUNCERS then Prune(now) end
 		if nAnnouncers >= Link.MAX_ANNOUNCERS then return end
 		nAnnouncers = nAnnouncers + 1
 	end
 	local known = a and a.cert == cert and now - a.t <= Link.ANNOUNCE_FRESH
-	announcers[name] = { id = c.id, tier = c.tier, pub = c.pub, exp = c.exp, cert = cert, t = now }
+	announcers[name] = { id = c.id, tier = c.tier, pub = c.pub, exp = c.exp, sig = c.sig, cert = cert, t = now }
 	local r = req
 	if r and r.rec.state == "waiting" and not known then
 		if r.rec.mode == "a" and c.tier == "p" then PlaceOf(r, c.id) end
@@ -902,8 +1043,10 @@ function Link.HandleAnnounce(dist, sender, text)
 end
 
 -- A proof (DA): only from a confirmer we asked for this request, with the key we asked it for;
--- the confirmer is the name the server stamped. Counted only once its signature checks with
--- the key the bot certified (in a job).
+-- the confirmer is the name the server stamped (the one its certificate names), and it was
+-- signed within the code's life (from its issue, CODE_LIFE before its expiry, less the clocks'
+-- difference) and not ahead of our clock, as the bot checks it. Counted only once its signature
+-- checks with the certified key (in a job). It carries that certificate in the link.
 function Link.HandleAnswer(dist, sender, text)
 	local r = req
 	if dist ~= "WHISPER" or not r or type(text) ~= "string" or r.rec.state ~= "waiting" then return end
@@ -913,10 +1056,12 @@ function Link.HandleAnswer(dist, sender, text)
 	local issued, keyId, gv, sig = text:match("^DA~([^~]*)~([^~]*)~([^~]*)~([^~]*)$")
 	if not Time(issued) or keyId ~= a.id or not GV[gv] or not Sig(sig) then return end
 	local rec = r.rec
-	if tonumber(issued) > rec.exp then return end
+	local t = tonumber(issued)
+	if t > rec.exp or t < rec.exp - Link.CODE_LIFE - Link.CLOCK_SKEW or t > ServerTime() + Link.CLOCK_SKEW then return end
 	local old = rec.proofs[name]
 	if old and old.sig == sig then return end
-	local p = { issued = issued, keyId = keyId, confirmer = name, gv = gv, sig = sig, c = a.c or nil, place = a.place, got = ns.Now() }
+	local p = { issued = issued, keyId = keyId, confirmer = name, gv = gv, sig = sig, pub = a.pub, tier = a.tier, certExp = a.certExp,
+		certSig = a.certSig, c = a.c or nil, place = a.place, got = ns.Now() }
 	local pk, raw, msg = Ed.FromB64(a.pub), Ed.FromB64(sig), Link.Message(Head(rec), p)
 	r.verifying[name] = true
 	local queued = Ed.Run(function() return Ed.Verify(pk, msg, raw) end, function(ok, valid)
@@ -938,9 +1083,11 @@ end
 -- The finished proof and the watchers
 ---------------------------------------------------------------------------
 
-local function Deliverable(rec, now)
+-- A finished proof still goes to a watcher: until its code's expiry + DELIVER_UNTIL, so the
+-- keeper has KEEPER_TIME left to upload it before the bot stops taking it (exp + GRACE).
+local function Deliverable(rec)
 	return type(rec) == "table" and rec.state == "ready" and type(rec.bundle) == "string"
-		and now - (tonumber(rec.readyAt) or 0) < Link.DELIVER_FOR
+		and ServerTime() < (tonumber(rec.exp) or 0) + Link.DELIVER_UNTIL
 end
 
 -- Our proof (as ourselves: a watcher keeps only the requester's own) to a watcher.
@@ -962,9 +1109,10 @@ local Keep
 function Link.Deliver(now)
 	now = now or ns.Now()
 	local rec = MyRecord()
-	if not Deliverable(rec, now) then return false end
+	if not Deliverable(rec) then return false end
 	if Link.Watching() then
-		if Keep(rec.bundle, ns.me, now) then
+		-- (Our own proofs were each checked when they came.)
+		if Keep(rec.bundle, ns.me, now, Link.KeepUntil(Link.Parse(rec.bundle))) then
 			rec.state, rec.deliveredAt = "delivered", now
 			ns.Print(L.LINK_DELIVERED:format(Link.WatcherLabel()))
 		end
@@ -1013,15 +1161,15 @@ end
 -- A watcher keeps a proof: one per code and sender (the same sender's newer one replaces it),
 -- INBOX_PER_CODE senders per code, INBOX_PER_SENDER entries per sender, INBOX_MAX in all. A proof
 -- kept was acknowledged (DK), so nothing is dropped to make room: past a limit a new one is
--- refused, without DK. Entries go once their code can't be used any more (INBOX_KEEP).
-Keep = function(bundle, from, now)
+-- refused, without DK. An entry goes once its code can't be used any more (keep: KeepUntil).
+Keep = function(bundle, from, now, keep)
 	local b = Link.Parse(bundle)
-	if not b or b.requester ~= from then return false end
+	if not b or b.requester ~= from or not keep then return false end
 	local inbox = Store().inbox
 	local slot = inbox[b.R]
 	local e = type(slot) == "table" and slot[from]
 	if type(e) == "table" then
-		e.bundle, e.from, e.t = bundle, from, now
+		e.bundle, e.from, e.t, e.keep = bundle, from, now, keep
 		stats.kept = stats.kept + 1
 		return b
 	end
@@ -1040,35 +1188,82 @@ Keep = function(bundle, from, now)
 		slot = {}
 		inbox[b.R] = slot
 	end
-	slot[from] = { bundle = bundle, from = from, t = now }
+	slot[from] = { bundle = bundle, from = from, t = now, keep = keep }
 	stats.kept = stats.kept + 1
 	return b
 end
 
--- A proof for our inbox (DB), whole or in pieces: only from the requester it names, one per
--- requester a minute; told back with DK once kept.
+-- What a watcher checks before a link takes a place in its inbox (heavy: in a job). Every proof:
+-- its certificate names its confirmer (the link carries it so), the bot or the council authority
+-- signed it, it was valid when the proof was signed, and the proof's signature checks with it.
+-- And together they are enough for the bot: a High Councillor's (the signed list), or three
+-- players' from three keys. Junk never takes one of the INBOX_PER_CODE places of a code.
+local function CheckBundle(b)
+	local c, players, keys = 0, 0, {}
+	for _, p in ipairs(b.proofs) do
+		local cert = Link.ParseCert(Link.CertText(p))
+		if not cert or tonumber(p.issued) >= cert.exp then return false end
+		local good = certs[cert.text]
+		if good == nil then
+			good = CertSigned(cert)
+			if nCerts >= Link.CERT_CACHE then wipe(certs); nCerts = 0 end
+			certs[cert.text], nCerts = good, nCerts + 1
+		end
+		if not good then return false end
+		if not Ed.Verify(Ed.FromB64(p.pub), Link.Message(b, p), Ed.FromB64(p.sig)) then return false end
+		if p.tier == "c" then
+			if ns.IsHighCouncillor(p.confirmer) then c = c + 1 end
+		elseif not keys[p.keyId] then
+			keys[p.keyId], players = true, players + 1
+		end
+	end
+	return c > 0 or players >= Link.NEEDED
+end
+
+local function Ack(from, R) ns.Comm.Whisper(from, "DK~" .. R, "linkack:" .. from, true) end
+
+-- A proof for our inbox (DB), whole or in pieces: only from the requester it names, its proofs
+-- checked first (CheckBundle), one link per requester a minute and INBOX_CHECKS at once; told
+-- back with DK once kept. The same link again (our word was lost) is told again at once.
 function Link.HandleBundle(dist, sender, text)
 	if dist ~= "WHISPER" or type(text) ~= "string" or not Link.Watching() then return end
 	local from, now = ns.FullName(sender), ns.Now()
 	local payload = text:sub(4)
 	local full = payload
-	if payload:sub(1, 5) ~= "OLB4~" then full = ns.Codec.Feed(inAsm, from, payload, now) end
+	if payload:sub(1, 5) ~= "OLB5~" then full = ns.Codec.Feed(inAsm, from, payload, now) end
 	if not full then return end
 	local b = Link.Parse(full)
 	if not b or b.requester ~= from then return end
 	local slot = Store().inbox[b.R]
 	local e = type(slot) == "table" and slot[from]
-	local same = type(e) == "table" and e.bundle == full
-	if not same then
-		if inboxFrom[from] and now - inboxFrom[from] < Link.INBOX_GAP then return end
-		if not Keep(full, from, now) then
+	if type(e) == "table" and e.bundle == full then return Ack(from, b.R) end
+	if checking[from] or nChecking >= Link.INBOX_CHECKS or (inboxTried[from] and now - inboxTried[from] < Link.INBOX_GAP) then return end
+	-- Proofs from the future, or a link whose code can't be used any more: not even checked.
+	local server, keep = ServerTime(), Link.KeepUntil(b)
+	for _, p in ipairs(b.proofs) do
+		if tonumber(p.issued) > server + Link.CLOCK_SKEW then return end
+	end
+	if not keep or server >= keep then return end
+	inboxTried[from] = now
+	checking[from], nChecking = true, nChecking + 1
+	local queued = Ed.Run(function() return CheckBundle(b) end, function(ok, good)
+		checking[from], nChecking = nil, nChecking - 1
+		if not ok or good ~= true then
+			stats.badBundles = stats.badBundles + 1
+			ns.Log("discord link: a link whose proofs don't check: refused")
+			return
+		end
+		if not Link.Watching() then return end
+		if not Keep(full, from, ns.Now(), keep) then
 			ns.Log("discord link: the inbox is full for a proof: refused")
 			return
 		end
-		inboxFrom[from] = now
 		ns.Log("discord link: proof kept in the inbox")
+		Ack(from, b.R)
+	end)
+	if not queued then
+		checking[from], nChecking, inboxTried[from] = nil, nChecking - 1, nil
 	end
-	ns.Comm.Whisper(from, "DK~" .. b.R, "linkack:" .. from, true)
 end
 
 -- /oly discord watcher on | off (High Councillors).
@@ -1090,7 +1285,7 @@ end
 ---------------------------------------------------------------------------
 
 -- Our key's limits: one proof per requesting character a minute and five a day (kept on the
--- account, as the key is), thirty a minute in all.
+-- account: every key of its characters together), thirty a minute in all.
 local function Allowed(requester, now)
 	while recent[1] and now - recent[1] >= 60 do table.remove(recent, 1) end
 	if #recent >= Link.GIVE_MINUTE then return false end
@@ -1151,14 +1346,15 @@ end
 
 -- A request (DR): signed for a player of an Olympus guild of our faction who asks it
 -- themselves, within the limits, never one of our own account's characters, and only with a
--- certificate for our key (without one no requester asks us). Anything else is ignored without a
--- word. A High Councillor who could only sign the guild as claimed asks for the player's /who
--- (sent quietly with a later click in the Olympus window, never with the gamepad UI, Who.lua): if
--- the player asks again after it, the proof says "w".
+-- certificate for our key and this character (without one no requester asks us; a councillor's
+-- only while the signed list names us). Anything else is ignored without a word. A High
+-- Councillor who could only sign the guild as claimed asks for the player's /who (sent quietly
+-- with a later click in the Olympus window, never with the gamepad UI, Who.lua): the player's
+-- addon asks again while it waits for a proof that knows the guild, and then the proof says "w".
 function Link.HandleRequest(dist, sender, text)
 	if dist ~= "WHISPER" or type(text) ~= "string" then return end
 	local key, seed = Link.Key()
-	if not key or not MyCert(key) then return end
+	if not key or not UsableCert(key) then return end
 	local requester, now = ns.FullName(sender), ns.Now()
 	if requester == ns.me or OwnCharacter(requester) or not Link.ValidName(requester) or not Link.ValidName(ns.me) then return end
 	local nonce, guild, faction, R, tag = text:match("^DR~([^~]*)~([^~]*)~([^~]*)~([^~]*)~([^~]*)$")
@@ -1189,35 +1385,60 @@ function Link.HandleRequest(dist, sender, text)
 	if gv == "c" and ns.IsHighCouncillor(ns.me) and ns.Who and type(ns.Who.WantName) == "function" then ns.Who.WantName(requester) end
 end
 
--- /oly discord key [<id> <key> | off], /oly discord cert [<certificate>]. Nothing typed is ever
--- repeated back.
+-- /oly discord key [<id> <key> | new | off], /oly discord cert [<certificate>]. Nothing typed is
+-- ever repeated back, and the key itself never shown: its id and public half only.
 function Link.ShowKey()
 	local k = Link.Key()
 	if not k then return ns.Print(L.LINK_KEY_NONE) end
-	local c = MyCert(k)
-	Link.PublicKey(function(pub)
-		ns.Print(L.LINK_KEY_SHOW:format(k.id, c and TierName(c.tier) or L.LINK_NO_CERT, Ed.ToHex(pub)))
-	end)
+	Link.PublicKey(function(pub) ns.Print(L.LINK_KEY_SHOW:format(k.id, Ed.ToHex(pub))) end)
+end
+
+-- This character's key gone (and its certificate): said on the channel if we had announced it.
+local function DropKey()
+	local d = Store()
+	local had = Link.Key()
+	d.keys[ns.me], pubCache, ownCert, ownChecking, toldCert = nil, nil, nil, nil, false
+	making, auto = nil, {}
+	if had or announced then
+		announced = nil
+		ns.Comm.Send("CHANNEL", "DV~0", "linkannounce")
+	end
+	return had
 end
 
 function Link.SetKey(args)
 	args = tostring(args or ""):match("^%s*(.-)%s*$")
 	local d = Store()
 	if args == "" then return Link.ShowKey() end
-	if args:lower() == "off" then
-		local had = Link.Key()
-		d.key, d.cert, pubCache, ownCert = nil, nil, nil, nil
-		if had then ns.Comm.Send("CHANNEL", "DV~0", "linkannounce") end
-		return ns.Print(L.LINK_KEY_OFF)
+	local verb = args:lower()
+	if verb == "off" then
+		DropKey()
+		d.nokey[ns.me] = true -- (a councillor's addon makes no new key by itself)
+		return ns.Print(ns.IsHighCouncillor(ns.me) and L.LINK_KEY_OFF_COUNCIL or L.LINK_KEY_OFF)
+	end
+	if verb == "new" then
+		-- A councillor's new key (a lost or leaked one, or one a year old): made here, and the
+		-- author's client certifies it the next time it is heard.
+		if not ns.IsHighCouncillor(ns.me) then return ns.Print(L.LINK_KEY_NEW_ONLY) end
+		if #Link.CAKeys() == 0 then return ns.Print(L.LINK_NOT_OPEN) end
+		DropKey()
+		d.nokey[ns.me] = nil
+		Link.MakeCouncilKey()
+		return ns.Print(L.LINK_KEY_NEW)
 	end
 	local id, seed = args:match("^(%S+)%s+(%S+)$")
 	id = id and id:lower()
 	if not KeyId(id) or not seed or #seed ~= 43 or not Ed.FromB64(seed) then return ns.Print(L.LINK_KEY_BAD) end
-	d.key, pubCache, ownCert, toldCert = { id = id, seed = seed }, nil, nil, false
+	local old = d.keys[ns.me]
+	local cert = type(old) == "table" and old.cert or nil
+	local oldCert = Link.ParseCert(cert)
+	making, auto = nil, {}
+	d.nokey[ns.me] = nil
+	d.keys[ns.me], pubCache, ownCert, toldCert = { id = id, seed = seed }, nil, nil, false
 	ns.Print(L.LINK_KEY_SET:format(id))
-	local old = Link.ParseCert(d.cert)
-	if d.cert ~= nil and (not old or old.id ~= id) then
-		d.cert = nil
+	if cert ~= nil and oldCert and oldCert.id == id then
+		d.keys[ns.me].cert = cert
+	elseif cert ~= nil then
 		ns.Print(L.LINK_CERT_REMOVED)
 	end
 	Link.ShowKey()
@@ -1233,8 +1454,9 @@ function Link.ShowCert()
 	ns.Print(L.LINK_CERT_SHOW:format(c.id, TierName(c.tier), Days(c.exp - ServerTime())))
 end
 
--- The bot's certificate for our key: checked (its signature, our key's id and public half,
--- the expiry) before it is kept; then our addon says it is online.
+-- A certificate for our key: checked (the bot's signature or, for a councillor's, the council
+-- authority's; our key's id and public half; this character; the expiry) before it is kept; then
+-- our addon says it is online.
 function Link.SetCert(args)
 	args = tostring(args or ""):match("^%s*(.-)%s*$")
 	if args == "" then return Link.ShowCert() end
@@ -1243,27 +1465,253 @@ function Link.SetCert(args)
 	local c = Link.ParseCert(args)
 	if not c then return ns.Print(L.LINK_CERT_USAGE) end
 	if c.id ~= k.id then return ns.Print(L.LINK_CERT_OTHER:format(c.id, k.id)) end
+	if c.name ~= ns.me then return ns.Print(L.LINK_CERT_OTHER_CHAR:format(c.name, ns.me)) end
 	if c.exp <= ServerTime() then return ns.Print(L.LINK_CERT_EXPIRED) end
-	if #Link.BackendKeys() == 0 then return ns.Print(L.LINK_NOT_OPEN) end
+	if #Link.BackendKeys() == 0 and #Link.CAKeys() == 0 then return ns.Print(L.LINK_NOT_OPEN) end
 	ns.Print(L.LINK_CERT_CHECKING)
 	local cached = CachedPub(k)
 	local queued = Ed.Run(function()
 		local pub = cached or Ed.PublicKey(seed)
-		return { pub = pub, mine = Ed.ToB64(pub) == c.pub, bot = BotSigned(c) }
+		return { pub = pub, mine = Ed.ToB64(pub) == c.pub, signed = CertSigned(c) }
 	end, function(ok, res)
 		local k2 = Link.Key()
 		if not k2 or k2.seed ~= k.seed then return end -- the key changed meanwhile
 		if not ok or type(res) ~= "table" then return ns.Print(L.LINK_CERT_BAD) end
 		pubCache = { id = k.id, seed = k.seed, pub = res.pub }
 		if not res.mine then return ns.Print(L.LINK_CERT_NOT_MINE) end
-		if not res.bot then return ns.Print(L.LINK_CERT_BAD) end
-		Store().cert = c.text
+		if not res.signed then return ns.Print(L.LINK_CERT_BAD) end
+		k2.cert = c.text
 		ownCert, toldCert = { cert = c.text, seed = k.seed, ok = true }, false
 		ns.Print(L.LINK_CERT_SET:format(c.id, TierName(c.tier), Days(c.exp - ServerTime())))
 		lastAnnounce = -math.huge
 		Link.Announce(true)
 	end)
 	if not queued then ns.Print(L.LINK_BUSY) end
+end
+
+---------------------------------------------------------------------------
+-- High Councillors' keys, certified by the author's client (the council authority)
+--
+-- A councillor pastes nothing: its addon makes a key of its own in the game, the first time it
+-- finds the signed list naming its character, and asks the author's client for a certificate
+-- (DC, a whisper, once it hears the author: any message of his). The author's client, holding the
+-- council authority's seed (dist/LinkCA.lua, on his computer only), certifies a councillor of the
+-- signed list of its realm group (DE): tier c, the character's name, a year. The councillor's
+-- private key never leaves its game, and the authority's never leaves the author's.
+---------------------------------------------------------------------------
+
+-- One sample of the entropy pool a councillor's key is made from, taken once a frame for
+-- ENTROPY_FRAMES frames: debugprofilestop() (a millisecond clock with fractions: the frame's
+-- timing), GetTimePreciseSec() where the client has it, GetTime(), GetServerTime(), time(),
+-- math.random() twice, the addresses of two new tables (tostring({})), UnitGUID("player") and
+-- GetCursorPosition(). SHA-512 of the whole pool, cut to 32 bytes, is the key's seed.
+-- Its limits, honestly: WoW's Lua has no cryptographic random source, and none of these is one.
+-- The GUID, the times to the second and the cursor are known to, or guessable by, someone who
+-- watches; math.random is the game's generator, whose state is not secret by design; the table
+-- addresses depend on the heap. What an attacker can't know is the sub-millisecond readings of
+-- debugprofilestop and GetTimePreciseSec over eight frames on this computer (the frame-to-frame
+-- jitter), and the exact second the key was made: tens of bits, not 256. That is enough for a key
+-- that only confirms Discord links, whose certificate lasts a year, that the bot's keeper can
+-- revoke at once (the Worker's revocation list) and that /oly discord key new replaces. A
+-- councillor who wants a key made from a real random source asks the bot's keeper for one
+-- (scripts/link-keys.py confirmer, on a computer) and types it with /oly discord key <id> <key>.
+function Link.EntropySample()
+	local parts = {}
+	local function Add(fn, ...)
+		if type(fn) ~= "function" then return end
+		local ok, a, b = pcall(fn, ...)
+		if ok then parts[#parts + 1] = tostring(a) .. "," .. tostring(b) end
+	end
+	Add(_G.debugprofilestop)
+	Add(_G.GetTimePreciseSec)
+	Add(_G.GetTime)
+	Add(_G.GetServerTime)
+	Add(_G.time)
+	parts[#parts + 1] = tostring(math.random()) .. "," .. tostring(math.random())
+	parts[#parts + 1] = tostring({}) .. "," .. tostring({})
+	Add(_G.UnitGUID, "player")
+	Add(_G.GetCursorPosition)
+	Add(_G.debugprofilestop)
+	return table.concat(parts, "~")
+end
+
+-- The next frame (a sample of the pool a frame). Tests run the frames themselves.
+Link.nextFrame = function(fn) C_Timer.After(0, fn) end
+
+local function WantAuthor()
+	if ns.Comm then ns.Comm.senderHook = Link.HeardFrom end
+end
+
+-- A new key for this councillor: the pool stirred over ENTROPY_FRAMES frames, then its seed and
+-- public half in a job; kept for this character (auto: its certificate comes by itself).
+function Link.MakeCouncilKey()
+	if making then return false end
+	local m = { samples = {}, me = ns.me }
+	making = m
+	local function Frame()
+		if making ~= m then return end
+		if ns.me ~= m.me then making = nil return end
+		m.samples[#m.samples + 1] = Link.EntropySample()
+		if #m.samples < Link.ENTROPY_FRAMES then return Link.nextFrame(Frame) end
+		local pool = table.concat(m.samples, "|")
+		local queued = Ed.Run(function()
+			local seed = Ed.SHA512(pool):sub(1, 32)
+			local pub = Ed.PublicKey(seed)
+			return { seed = seed, pub = pub, id = KeyIdOf(pub) }
+		end, function(ok, res)
+			if making ~= m then return end
+			making = nil
+			if not ok or type(res) ~= "table" or ns.me ~= m.me or Link.Key() then return end
+			local seed = Ed.ToB64(res.seed)
+			Store().keys[m.me] = { id = res.id, seed = seed, auto = true }
+			pubCache, ownCert, toldCert, auto = { id = res.id, seed = seed, pub = res.pub }, nil, false, {}
+			ns.Print(L.LINK_KEY_MADE:format(res.id))
+			ns.Log("discord link: a High Council confirmer key made (%s)", res.id)
+			WantAuthor()
+		end)
+		if not queued then making = nil end
+	end
+	Link.nextFrame(Frame)
+	return true
+end
+
+-- Every tick: a councillor of the signed list with no key gets one (unless its key was turned
+-- off: /oly discord key off); with its own key made here and no certificate, it listens for the
+-- author (Comm.senderHook). An ask unanswered for CA_WAIT counts as refused. Nothing happens
+-- until this version knows the council authority's key.
+function Link.CouncilKeyStep(now)
+	if #Link.CAKeys() == 0 or not ns.IsHighCouncillor(ns.me) or not Link.ValidName(ns.me) then return end
+	local k = Link.Key()
+	if not k then
+		local d = ns.db and ns.db.discord
+		if type(d) == "table" and type(d.nokey) == "table" and d.nokey[ns.me] then return end
+		if not making then Link.MakeCouncilKey() end
+		return
+	end
+	if not k.auto or MyCert(k) then return end
+	if auto.askedAt and not auto.refusedAt and now - auto.askedAt >= Link.CA_WAIT then auto.refusedAt = now end
+	WantAuthor()
+end
+
+-- Comm.lua calls this with every sender it admits while we wait for the author (and only then):
+-- a message of his (the name the server stamped, on his realm group) and our certificate is
+-- asked for: once a session, and again after a refusal only CA_AGAIN after it.
+function Link.HeardFrom(sender)
+	local W = ns.Workshop
+	if not W or not W.IsAuthorName(sender) then return end
+	local k = Link.Key()
+	if not k or not k.auto or MyCert(k) or not ns.IsHighCouncillor(ns.me) then
+		if ns.Comm.senderHook == Link.HeardFrom then ns.Comm.senderHook = nil end
+		return
+	end
+	local now = ns.Now()
+	if auto.askedAt then
+		if not auto.refusedAt then
+			if now - auto.askedAt < Link.CA_WAIT then return end
+			auto.refusedAt = now
+		end
+		if now - auto.refusedAt < Link.CA_AGAIN then return end
+	end
+	local to = ns.FullName(sender)
+	auto.askedAt, auto.refusedAt = now, nil
+	local asked = auto
+	Link.PublicKey(function(pub)
+		if auto ~= asked or not Link.Key() or Link.Key().seed ~= k.seed then return end
+		ns.Comm.Whisper(to, "DC~1~" .. Ed.ToB64(pub), "linkca", true)
+		ns.Log("discord link: asked the author's client for a certificate")
+	end)
+end
+
+-- The author's certificate for our key (DE): only from him, only once we asked, and checked (the
+-- council authority's signature, our key's id and public half, this character, tier c, the
+-- expiry) before it is kept; then our addon says it is online. Anything else counts as a refusal.
+function Link.HandleCertificate(dist, sender, text)
+	if dist ~= "WHISPER" or type(text) ~= "string" or not ns.Workshop or not ns.Workshop.IsAuthorName(sender) then return end
+	local k, seed = Link.Key()
+	if not k or not k.auto or not auto.askedAt or MyCert(k) then return end
+	local c = Link.ParseCert(text:match("^DE~(OLK2%.[^~]+)$"))
+	if not c or c.id ~= k.id or c.name ~= ns.me or c.tier ~= "c" or c.exp <= ServerTime() then
+		auto.refusedAt = ns.Now()
+		return
+	end
+	local asked, cached = auto, CachedPub(k)
+	local queued = Ed.Run(function()
+		local pub = cached or Ed.PublicKey(seed)
+		return { pub = pub, ok = Ed.ToB64(pub) == c.pub and SignedBy(c, true) == "ca" }
+	end, function(ok, res)
+		local k2 = Link.Key()
+		if not k2 or k2.seed ~= k.seed or auto ~= asked then return end
+		if not ok or type(res) ~= "table" or not res.ok then
+			auto.refusedAt = ns.Now()
+			ns.Log("discord link: a certificate from the author's client that doesn't check: left out")
+			return
+		end
+		pubCache = { id = k.id, seed = k.seed, pub = res.pub }
+		k2.cert = c.text
+		ownCert, toldCert = { cert = c.text, seed = k.seed, ok = true }, false
+		auto = {}
+		if ns.Comm.senderHook == Link.HeardFrom then ns.Comm.senderHook = nil end
+		ns.Print(L.LINK_CERT_AUTO:format(c.id, Days(c.exp - ServerTime())))
+		lastAnnounce = -math.huge
+		Link.Announce(true)
+	end)
+	if not queued then auto.refusedAt = ns.Now() end
+end
+
+-- The council authority's seed (32 bytes), on the author's own computer only (dist/LinkCA.lua):
+-- never printed, logged, sent or written anywhere by the addon.
+local function CASeed()
+	local s = ns.LINK_CA_SEED
+	local seed = type(s) == "string" and #s == 43 and Ed.FromB64(s)
+	return seed and #seed == 32 and seed or nil
+end
+
+-- The author's client is the council authority: it holds the seed, and it is his character.
+function Link.IsCA() return CASeed() ~= nil and ns.Workshop ~= nil and ns.Workshop.IsAuthor() end
+
+-- A councillor's ask (DC): answered with its certificate only for a High Councillor of the signed
+-- list (the name the server stamped) on our realm group, one per councillor in CA_GAP and CA_HOUR
+-- an hour in all, signed in a job. Nothing is said to anyone else. The authority's key must be one
+-- this version knows (ns.LINK_CA_KEYS): else it certifies nothing (a line in the log, once).
+function Link.HandleCertRequest(dist, sender, text)
+	if dist ~= "WHISPER" or type(text) ~= "string" or caPub == false or not Link.IsCA() then return end
+	local seed = CASeed()
+	local name, now = ns.FullName(sender), ns.Now()
+	local pubB64 = text:match("^DC~1~([%w_%-]+)$")
+	if not pubB64 or not Pub(pubB64) or not Link.ValidName(name) then return end
+	if not ns.IsHighCouncillor(name) or ns.GroupOf(ns.RealmOf(name) or "") ~= ns.GroupOf(ns.RealmOf(ns.me) or "") then return end
+	if ca.given[name] and now - ca.given[name] < Link.CA_GAP then return end
+	while ca.hour[1] and now - ca.hour[1] >= 3600 do table.remove(ca.hour, 1) end
+	if #ca.hour >= Link.CA_HOUR or Ed.Busy() >= Ed.MAX_JOBS then return end
+	ca.given[name] = now
+	ca.hour[#ca.hour + 1] = now
+	local exp, known = ServerTime() + Link.CA_DAYS * 86400, caPub
+	local queued = Ed.Run(function()
+		local capub = known or Ed.PublicKey(seed)
+		local listed = false
+		for _, pk in ipairs(Link.CAKeys()) do listed = listed or pk == capub end
+		if not listed then return { listed = false } end
+		local pub = Ed.FromB64(pubB64)
+		if not Ed.ValidPublicKey(pub) then return { listed = true, capub = capub } end
+		local signed = ("OLK2.%s.%s.c.%d.%s"):format(KeyIdOf(pub), pubB64, exp, name)
+		return { listed = true, capub = capub, cert = signed .. "." .. Ed.ToB64(Ed.Sign(seed, signed, capub)) }
+	end, function(ok, res)
+		if not ok or type(res) ~= "table" then return end
+		if not res.listed then
+			if caPub ~= false then ns.Log("discord link: this client's council authority key is not in ns.LINK_CA_KEYS: it certifies nothing") end
+			caPub = false
+			return
+		end
+		caPub = res.capub
+		if not res.cert then return end
+		stats.certified = stats.certified + 1
+		ns.Comm.Whisper(name, "DE~" .. res.cert, "linkcert:" .. name, true)
+		ns.Log("discord link: certified a High Councillor's key")
+	end)
+	if not queued then
+		ca.given[name] = nil
+		table.remove(ca.hour)
+	end
 end
 
 ---------------------------------------------------------------------------
@@ -1481,13 +1929,16 @@ function Link.ShowWindow(fromCommand)
 	end
 	if qrJob == url then return true end
 	qrJob = url
-	return Ed.Run(function() return Link.Matrix(url, Ed.Pause) end, function(ok, matrix)
+	local queued = Ed.Run(function() return Link.Matrix(url, Ed.Pause) end, function(ok, matrix)
 		if qrJob == url then qrJob = nil end
 		if not ok then ns.Log("discord link: the QR code failed: %s", tostring(matrix)) end
 		-- (Forgotten or replaced meanwhile: nothing to show.)
 		if not ok or type(matrix) ~= "table" or Store().chars[ns.me] ~= rec or rec.bundle ~= bundle then return end
 		Open(bundle, b, rec, matrix)
 	end)
+	-- No room for the job (the queue is full): nothing is being made, so the next try makes it.
+	if not queued then qrJob = nil end
+	return queued
 end
 
 function Link.HideWindow()
@@ -1540,7 +1991,9 @@ function Link.PrintStatus()
 	for _, name in ipairs(list) do
 		local rec = d.chars[name]
 		local who = ns.DisplayName(name)
-		if rec.state == "waiting" then
+		if rec.state == "waiting" and tonumber(rec.claimedAt) then
+			print(L.LINK_STATUS_CLAIMED:format(who, math.max(1, math.ceil((Link.CLAIMED_WAIT - (now - rec.claimedAt)) / 60))))
+		elseif rec.state == "waiting" then
 			local n = 0
 			for _, p in pairs(type(rec.proofs) == "table" and rec.proofs or {}) do
 				if p.c or FreshP(p, now) then n = n + 1 end
@@ -1548,7 +2001,8 @@ function Link.PrintStatus()
 			local need = rec.mode == "a" and L.LINK_NEED_PLAYERS:format(math.min(n, Link.NEEDED), Link.NEEDED) or L.LINK_NEED_COUNCIL
 			print(L.LINK_STATUS_WAITING:format(who, need, Hours((tonumber(rec.exp) or server) - server)))
 		elseif rec.state == "ready" then
-			print(L.LINK_STATUS_READY:format(who, Link.WatcherLabel(), Days(Link.DELIVER_FOR - (now - (tonumber(rec.readyAt) or now)))))
+			local left = (tonumber(rec.exp) or server) + Link.DELIVER_UNTIL - server
+			print(left > 0 and L.LINK_STATUS_READY:format(who, Link.WatcherLabel(), Days(left)) or L.LINK_STATUS_SCAN_ONLY:format(who))
 		elseif rec.state == "delivered" then
 			print(L.LINK_STATUS_DELIVERED:format(who, Link.WatcherLabel()))
 		end
@@ -1557,7 +2011,8 @@ function Link.PrintStatus()
 	local key = Link.Key()
 	local c = key and MyCert(key)
 	if key then
-		print(L.LINK_STATUS_KEY:format(key.id, c and L.LINK_STATUS_CERT:format(TierName(c.tier), Days(c.exp - server)) or L.LINK_STATUS_NOCERT))
+		print(L.LINK_STATUS_KEY:format(key.id, c and L.LINK_STATUS_CERT:format(TierName(c.tier), Days(c.exp - server))
+			or (key.auto and L.LINK_STATUS_AUTOCERT or L.LINK_STATUS_NOCERT)))
 	else
 		print(L.LINK_STATUS_NOKEY)
 	end
@@ -1588,15 +2043,17 @@ function Link.StatusLine()
 	local cert = key and MyCert(key)
 	local keyText = "none"
 	if key then
-		keyText = key.id .. (cert and (" as %s, certificate %s"):format(cert.tier,
+		keyText = key.id .. (key.auto and " (made here)" or "") .. (cert and (" as %s, certificate %s"):format(cert.tier,
 			ownCert and ownCert.cert == cert.text and (ownCert.ok and "checked" or "wrong") or "not checked yet") or ", no certificate")
+		if not cert and key.auto then keyText = keyText .. (auto.askedAt and (auto.refusedAt and ", refused" or ", asked") or ", not asked yet") end
 	end
-	return ("key %s  |  this character %s  |  confirmers online c=%d p=%d  |  watchers online %d  |  watcher %s, inbox %d  |  confirmed %d, refused %d, bad proofs %d, bad certificates %d  |  jobs %d"):format(
+	local caText = Link.IsCA() and ("  |  council authority %s, %d certified"):format(caPub == false and "not in LINK_CA_KEYS" or "on", stats.certified) or ""
+	return ("key %s  |  this character %s  |  confirmers online c=%d p=%d  |  watchers online %d  |  watcher %s, inbox %d  |  confirmed %d, refused %d, bad proofs %d, bad certificates %d, bad links %d  |  jobs %d%s"):format(
 		keyText, state, c, p, #OnlineWatchers(now), Link.Watching() and "on" or "off",
-		inbox, stats.confirmed, stats.refused, stats.badProofs, stats.badCerts, Ed.Busy())
+		inbox, stats.confirmed, stats.refused, stats.badProofs, stats.badCerts, stats.badBundles, Ed.Busy(), caText)
 end
 
--- /oly discord [code | show | status | forget | key [<id> <key> | off] | cert [<certificate>] |
+-- /oly discord [code | show | status | forget | key [<id> <key> | new | off] | cert [<certificate>] |
 -- watcher on|off]
 function Link.Slash(rest)
 	rest = tostring(rest or ""):match("^%s*(.-)%s*$")
@@ -1675,31 +2132,45 @@ local function Restore(rec, server)
 		or not Threshold(rec.T) or not Link.ValidGuild(rec.guild) or not FACTIONS[rec.faction] or (rec.mode ~= "c" and rec.mode ~= "a") then
 		return nil
 	end
-	if (tonumber(rec.exp) or 0) <= server then return nil end
 	local proofs = {}
 	for name, p in pairs(type(rec.proofs) == "table" and rec.proofs or {}) do
 		-- (Kept only once their signature checked: the SavedVariables are this player's own.)
 		if ValidProof(p) and p.confirmer == name and tonumber(p.got) then proofs[name] = p end
 	end
 	rec.proofs = proofs
+	-- Enough proofs that only claimed the guild, kept while it waits for one that knows it.
+	local fallback = type(rec.fallback) == "table" and rec.fallback or nil
+	for _, p in ipairs(fallback or {}) do
+		if not ValidProof(p) then fallback = nil break end
+	end
+	if not fallback or #fallback == 0 or not tonumber(rec.claimedAt) then fallback = nil end
+	rec.fallback, rec.claimedAt = fallback, fallback and tonumber(rec.claimedAt) or nil
+	if (tonumber(rec.exp) or 0) <= server and not fallback then return nil end
 	return Runtime(rec)
 end
 
--- At login: this character's request waiting comes back; what expired goes.
+-- At login: this character's request waiting comes back; what expired goes (a proof waiting
+-- for a watcher once the bot can't take it any more: GRACE after its code's expiry). The confirmer
+-- key 0.9.10's first builds kept for the whole account goes: a key is one character's now.
 function Link.Resume()
 	if type(ns.db.discord) ~= "table" then return end -- never used on this account
-	local d, now, server = Store(), ns.Now(), ServerTime()
+	local d, server = Store(), ServerTime()
+	if d.key ~= nil or d.cert ~= nil then
+		d.key, d.cert = nil, nil
+		ns.Print(L.LINK_KEY_PER_CHARACTER)
+	end
 	local expired = false
 	for name, rec in pairs(d.chars) do
 		local keep = type(rec) == "table"
 		if keep and rec.state == "waiting" then
-			keep = (tonumber(rec.exp) or 0) > server
+			keep = (tonumber(rec.exp) or 0) > server or type(rec.fallback) == "table"
 			if not keep and name == ns.me then expired = true end
 		elseif keep then
-			keep = (rec.state == "ready" or rec.state == "delivered") and now - (tonumber(rec.readyAt) or 0) < Link.DELIVER_FOR
+			keep = (rec.state == "ready" or rec.state == "delivered") and server < (tonumber(rec.exp) or 0) + Link.GRACE
 		end
 		if not keep then d.chars[name] = nil end
 	end
+	local now = ns.Now()
 	for name, times in pairs(d.given) do
 		if type(times) ~= "table" or type(times[#times]) ~= "number" or now - times[#times] >= 86400 then d.given[name] = nil end
 	end
@@ -1711,7 +2182,7 @@ function Link.Resume()
 	elseif type(rec) == "table" and rec.state == "waiting" then
 		d.chars[ns.me] = nil
 	elseif type(rec) == "table" and rec.state == "ready" then
-		ns.Print(L.LINK_READY_REMINDER:format(Link.WatcherLabel()))
+		ns.Print(Deliverable(rec) and L.LINK_READY_REMINDER:format(Link.WatcherLabel()) or L.LINK_READY_SCAN)
 	elseif expired then
 		ns.Print(L.LINK_EXPIRED)
 	end
@@ -1720,6 +2191,7 @@ end
 function Link.Tick()
 	local now = ns.Now()
 	if now - lastPrune >= 60 then Prune(now) end
+	Link.CouncilKeyStep(now)
 	Link.Announce()
 	Link.AnnounceWatcher()
 	if req then Link.Step(now) end
@@ -1740,6 +2212,8 @@ ns.Comm.Handle("DA", function(...) Link.HandleAnswer(...) end)
 ns.Comm.Handle("DW", function(...) Link.HandleWatcher(...) end)
 ns.Comm.Handle("DB", function(...) Link.HandleBundle(...) end)
 ns.Comm.Handle("DK", function(...) Link.HandleAck(...) end)
+ns.Comm.Handle("DC", function(...) Link.HandleCertRequest(...) end)
+ns.Comm.Handle("DE", function(...) Link.HandleCertificate(...) end)
 
 -- Tests start from a clean state.
 function Link.Request() return req end
@@ -1748,11 +2222,16 @@ function Link.Watchers() return watchers end
 function Link.Delivery() return delivery end
 function Link.Stats() return stats end
 function Link.Certs() return certs end
+function Link.QRJob() return qrJob end
+function Link.Making() return making end
 function Link.Reset()
 	req, delivery, waitWatcher, pubCache, qrJob, ownCert, ownChecking, toldCert = nil, nil, false, nil, nil, nil, nil, false
-	wipe(announcers); wipe(watchers); wipe(recent); wipe(sentTo); wipe(inboxFrom); wipe(certs); wipe(certJobs)
+	announced, making, auto, caPub = nil, nil, {}, nil
+	ca = { given = {}, hour = {} }
+	if ns.Comm.senderHook == Link.HeardFrom then ns.Comm.senderHook = nil end
+	wipe(announcers); wipe(watchers); wipe(recent); wipe(sentTo); wipe(inboxTried); wipe(certs); wipe(certJobs); wipe(certNewAt); wipe(checking)
 	inAsm = ns.Codec.NewAssembler()
-	nAnnouncers, nCerts, nCertJobs, lastAnnounce, lastWatch, lastPrune = 0, 0, 0, -math.huge, -math.huge, -math.huge
+	nAnnouncers, nCerts, nCertJobs, nChecking, lastAnnounce, lastWatch, lastPrune = 0, 0, 0, 0, -math.huge, -math.huge, -math.huge
 	for k in pairs(stats) do stats[k] = 0 end
 	qr = {}
 	if frame then frame:Hide() end

@@ -22,15 +22,20 @@ the Discord role.
  Discord /link, or the page after "Continue with Discord"
    └─> code  OLC2.<R>.<username>.<exp>.<mode>.<T>.<sig>    (signed with the backend key)
 
- confirmers announce themselves in game with their certificate (signed with the backend key):
-   DV~1~OLK1.<keyId>.<public key>.<c|p>.<exp>.<sig>
+ each confirmer's key is one character's, and so is its certificate:
+   a player's (or a councillor's you register): you make it, the backend key signs its certificate
+   a High Councillor's: their addon makes it in game, the author's game client signs its certificate
+                        by itself (the council authority), and nobody pastes anything
+ confirmers announce themselves in game with it, from that character only:
+   DV~1~OLK2.<keyId>.<public key>.<c|p>.<exp>.<Name-Realm>.<sig>
 
  in game: the player types  /oly discord <code>, sees "@username", clicks Accept
    requester ──DR (with the tag)──> an online confirmer ──DA──> requester
    (the confirmer's key signs OLY4; the requester checks the signature with the certified key)
 
- the finished proof (OLB4), two ways:
-   watcher path:  requester ──DB──> your watcher character (a High Councillor, "watcher on")
+ the finished proof (OLB5: each confirmation with its certificate), two ways:
+   watcher path:  requester ──DB──> your watcher character (a High Councillor, "watcher on"),
+                  whose addon checks every confirmation before it keeps it
                   later, read-inbox.mjs uploads the watcher's SavedVariables ──> POST /api/link/inbox
    can't wait:    the page reads the QR code / the link / Olympus.lua ─────────> POST /api/link/submit
 
@@ -42,13 +47,17 @@ the Discord role.
   a stream that shows the QR code gives nobody a link of their own. The page hides the code
   until it is clicked and tells players to keep it, and the Olympus Link window, off stream.
 - Nothing needs you online: confirmations need only confirmers online. The finished proof
-  waits in the player's addon for 7 days until a watcher is online, then in your watcher's
-  SavedVariables until you upload them.
+  waits in the player's addon until a watcher is online, then in your watcher's SavedVariables
+  until you upload them. One rule for how long, counted from the code's expiry (a code lives a
+  day): the Worker takes a link until 7 days after it; the addon hands it to a watcher until 5
+  days after it, so you have at least 2 days to upload what your watcher got; the watcher keeps
+  it until the Worker would refuse it. Upload the inbox every day or two.
 - Nothing is lost when the Worker or Discord is down: the page says so, the addon keeps the
-  proof, the code is released again, and either path delivers it later (the Worker takes a
-  proof up to 7 days after its code expired).
+  proof, the code is released again, and either path delivers it later.
 - The Worker stores only public keys. The backend's private key is a Worker secret; each
-  confirmer's private key stays in that confirmer's game. Confirmer keys can only confirm.
+  confirmer's private key stays in that confirmer's game (one character's: another character of
+  the same account has its own key, or none); the council authority's private key stays in
+  the addon author's own game. Confirmer keys can only confirm.
 
 ## What you need
 
@@ -77,14 +86,60 @@ It prints a seed and a public key, once, and writes nothing to disk.
 - The public key (64 hex digits) goes into the Worker var `LINK_BACKEND_PUBLIC`, and to Daniel
   for the addon (`ns.LINK_BACKEND_KEYS` in `Olympus/Link.lua`): the addon refuses any code, and
   any confirmer's certificate, whose signature does not check against one of those keys.
-- The same key signs the confirmers' certificates. The Worker does it when you register a
-  councillor's key, and a player's once it counts (step 8). To sign them on your own computer instead (`link-keys.py cert`), keep the seed in a
-  file only you can read and give the tool its path; the tool never prints it.
+- The same key signs the certificates of the confirmer keys you register (step 8). The Worker
+  does it when you register a councillor's key, and a player's once it counts. To sign them on
+  your own computer instead (`link-keys.py cert`), keep the seed in a file only you can read and
+  give the tool its path; the tool never prints it. High Councillors' own keys are certified by
+  the council authority instead (step 1b).
 - Rotating it: make a new key, have its public key added to `ns.LINK_BACKEND_KEYS` next to the
   old one (the addon takes two for this), wait until that addon version is out, then switch the
   Worker's `LINK_BACKEND_SEED` and `LINK_BACKEND_PUBLIC` and renew every confirmer's
   certificate (step 8) before the old key leaves the addon. Codes already handed out stay valid
   until they expire.
+
+### 1b. The council authority (High Councillors' keys, nothing to paste)
+
+High Councillors do not type keys. The first time a councillor's addon finds its character on
+the signed High Council list, it makes a key of its own, in the game, and keeps it for that
+character. When that councillor and the addon's author are online at the same time, the
+councillor's addon asks the author's addon for a certificate, and his addon signs one by
+itself: for that key, that character, a year. From then on the councillor confirms like anyone with a certificate. The
+private key never leaves the councillor's computer, and the key that signs these certificates
+(the council authority's) never leaves the author's.
+
+The author makes the authority once, on his computer:
+
+```sh
+python3 scripts/link-keys.py ca
+```
+
+It writes `dist/LinkCA.lua` (the seed, which only the author's own game loads, and which is never
+printed, published or committed) and prints a public key. That public key goes into:
+
+- the Worker var `LINK_CA_PUBLIC` (step 5), so this Worker takes those certificates;
+- the addon (`ns.LINK_CA_KEYS` in `Olympus/Link.lua`), so every player's addon does too.
+
+What the Worker does with them, in plain words:
+
+- A councillor's key certified this way is never registered with you. Every confirmation in a
+  link carries its certificate, so the Worker checks it there: signed by the council authority,
+  a councillor's (tier `c`), its id the first 12 hex digits of the SHA-256 of the key itself, still
+  valid when the confirmation was signed. It then counts like a registered councillor key.
+- The first time a link carries such a key, the Worker writes down whose it is: the key id, its
+  public key and the councillor's character (the `council_keys` table). If the same key id ever
+  shows up for another character, it is refused.
+- Revoking one (a councillor left, or their computer was compromised): send
+  `{"key_id": "<the 12 hex digits>", "revoke": true}` to `/api/link/keys` (or run the SQL of
+  `python3 scripts/link-keys.py revoke <id>`). It goes on the revocation list (`revoked_keys`) at
+  once, whether a link used it already or not, and its confirmations stop counting. `/oly discord
+  status` in the councillor's game shows the key id. The councillor types `/oly discord key new`:
+  their addon makes a new key and gets its certificate from the author's the next time they meet.
+  A councillor the author takes off the signed list stops confirming at once, key or not.
+- One councillor's key never confirms codes of their own Discord account or its characters, once
+  their character is linked (the Worker looks it up in `members`).
+
+You can still register a councillor's key yourself (step 8, `--bootstrap`) for a councillor who
+wants one made on a computer: both kinds work side by side.
 
 ### 2. The database
 
@@ -93,11 +148,13 @@ wrangler d1 create olympus-link
 wrangler d1 execute olympus-link --remote --file web/worker/schema.sql
 ```
 
-Five tables: `codes` (every code issued, single use, with its draw threshold), `keys`
-(confirmer public keys, one certified per Discord account, with the end of their certificate),
-`used` (the proofs that counted), `members` (linked characters, with how their guild was
-checked) and `inbox_uploads` (every bundle received: the audit trail and the page's rate
-limit). The full schema is in "The D1 schema" below.
+Seven tables: `codes` (every code issued, single use, with its draw threshold), `keys`
+(confirmer public keys you registered, one certified per Discord account, each for one
+character, with the end of their certificate), `council_keys` (High Councillors' keys the council
+authority certified, recorded the first time a link carried them), `revoked_keys` (the council
+authority's keys you revoked), `used` (the proofs that counted), `members` (linked characters,
+with how their guild was checked) and `inbox_uploads` (every bundle received: the audit trail and
+the page's rate limit). The full schema is in "The D1 schema" below.
 
 ### 3. The code
 
@@ -160,6 +217,7 @@ LINK_MODE = "c"                          # councillors only at launch; "a" when 
 LINK_GUILD_POLICY = "verified"           # or "claimed": see "The guild check" below
 LINK_ORIGIN = "https://your.site"        # the page's origin: no path, no trailing slash
 LINK_BACKEND_PUBLIC = "<64 hex from link-keys.py backend>"
+LINK_CA_PUBLIC = "<64 hex from the author's link-keys.py ca>" # the council authority (step 1b)
 DISCORD_PUBLIC_KEY = "<Developer Portal > General Information > Public Key>"
 GUILD_ID = "<the Olympus server id>"
 ROLE_ID = "<the role linked members get>"
@@ -235,18 +293,27 @@ curl -X POST "https://discord.com/api/v10/applications/$APP_ID/guilds/$GUILD_ID/
 
 ### 8. Confirmer keys
 
-Each confirmer has a key of their own, made on your computer, and a certificate for it signed
-with the backend key. The confirmer types two lines in game: the key, then the certificate.
+Each confirmer you register has a key of their own, made on your computer, for one of their
+characters, and a certificate for it signed with the backend key that names that character. The
+confirmer types two lines in game, on that character: the key, then the certificate. (High
+Councillors need none of this: step 1b.)
 
 ```sh
-python3 scripts/link-keys.py confirmer <id> c --owner <their Discord id> --username <their username> --bootstrap
-python3 scripts/link-keys.py confirmer <id> p --owner <their Discord id> --username <their username>
+python3 scripts/link-keys.py confirmer <id> c --character "<Name-Realm>" --owner <their Discord id> --username <their username> --bootstrap
+python3 scripts/link-keys.py confirmer <id> p --character "<Name-Realm>" --owner <their Discord id> --username <their username>
 ```
 
-- `<id>`: 6 to 16 of a-z and 0-9, never reused (it is part of what they sign).
-- `c` is a High Councillor, `p` a player for the draw (mode `a`). A confirmation counts only when
-  the confirming character is one of the key owner's linked characters; `--bootstrap` lifts that
-  for the first councillor keys, since at launch nobody has linked a character yet.
+- `<id>`: 6 to 16 of a-z and 0-9, never reused (it is part of what they sign); 12 hex digits are
+  kept for the council authority's keys.
+- `--character`: the one character that confirms with this key, as the game writes it
+  (`Name-Realm`). Only that character's addon announces the key and signs with it; players'
+  addons ask it only from that character, and the Worker counts a confirmation only when its
+  certificate is the one registered for the key and names the confirming character. An alt of
+  the same account needs its own key (or confirms nothing).
+- `c` is a High Councillor, `p` a player for the draw (mode `a`). The character must be one of the
+  key owner's linked characters (the Worker refuses the key otherwise, `character-not-linked`,
+  and checks it again for every confirmation); `--bootstrap` lifts that for the first councillor
+  keys, since at launch nobody has linked a character yet.
 - The tool prints the line the confirmer types in game (`/oly discord key <id> <seed>`), which
   you send them privately (a direct message, never a channel); the public key; and two ways to
   register it:
@@ -255,16 +322,16 @@ python3 scripts/link-keys.py confirmer <id> p --owner <their Discord id> --usern
     the answer's `command` is the second line for the confirmer: `/oly discord cert
     <certificate>`. For a player key, the answer's `cert_from` says when to ask for it (below).
   - **In D1 directly**: the `INSERT` it prints, then the certificate with
-    `python3 scripts/link-keys.py cert <id> <public key> <c|p> <days> --backend-seed-file <file>`
+    `python3 scripts/link-keys.py cert <id> <public key> <c|p> <days> --character "<Name-Realm>" --backend-seed-file <file>`
     (or `LINK_BACKEND_SEED_FILE` / `LINK_BACKEND_SEED` in the environment), which prints the
     `/oly discord cert` line and the `UPDATE` that records the certificate's end in D1. A player
     key's also takes `--created <its created> --owner <its owner_discord_id>`: `confirmer`
     prints that command, filled in. Given the backend seed the same way, `confirmer` prints a
     councillor key's certificate at once.
 - In game, `/oly discord key` shows the id and the public key, to compare with yours; the addon
-  checks that the certificate names the public half of the key typed before it. It never
-  prints, sends or logs the seed. Both lines fit the game's chat (under 255 characters), and so
-  does the announcement that carries the certificate (`DV~1~<certificate>`).
+  checks that the certificate names the public half of the key typed before it, and this
+  character. It never prints, sends or logs the seed. Both lines fit the game's chat (under 255
+  characters), and so does the announcement that carries the certificate (`DV~1~<certificate>`).
 - **A player key gets its certificate only once it counts.** Every player's addon asks the
   player keys with a valid certificate that a code's `T` draws, and cannot tell how old a key
   is. The Worker counts a player key only for codes issued once it was 7 days old and its
@@ -313,8 +380,10 @@ python3 scripts/link-keys.py confirmer <id> p --owner <their Discord id> --usern
 
 On one of your High Councillor characters, type `/oly discord watcher on`. While it is online,
 players whose proof is ready deliver it to it, and it keeps them in its SavedVariables
-(`OlympusDB.discord.inbox`, 500 at most). WoW writes that file on `/reload`, logout or quit.
-Then:
+(`OlympusDB.discord.inbox`, 500 at most). Its addon first checks every confirmation of a link
+with the certificate the link carries (and that together they are enough), so nobody fills the
+inbox with made-up links; an entry stays until the Worker can no longer take it (7 days after its
+code expired). WoW writes that file on `/reload`, logout or quit. Then, every day or two:
 
 ```sh
 # macOS
@@ -378,10 +447,10 @@ All JSON. The page's calls carry the session cookie; the tools' carry the admin 
 |---|---|---|---|
 | `GET /api/link/me` | page | | `200 {"user": {id, username, global_name, avatar}}`, or `401 {"user": null}` |
 | `POST /api/link/code` | page | `{}` | `200 {"token", "command", "exp", "mode"}`; `401` not signed in, `429 {"reason": "limit"}`, `400 {"reason": "username"}` |
-| `POST /api/link/submit` | page | `{"bundle": "OLB4~..."}` | `200 {"status", "reason", "message", "R", "characters"}`; `429` after 10 an hour |
+| `POST /api/link/submit` | page | `{"bundle": "OLB5~..."}` | `200 {"status", "reason", "message", "R", "characters"}`; `429` after 10 an hour |
 | `POST /api/link/inbox` | watcher tool | `{"bundles": [{"R", "bundle", "from", "t"}]}` (500 at most) | `200 {"results": [{"R", "status", "reason", "message"}]}` |
 | `POST /api/link/bot-code` | gateway bot | `{"id", "username"}` | `200 {"token", "command", "exp", "mode", "reply"}` |
-| `POST /api/link/keys` | you | `{"key_id", "public_key", "owner_discord_id", "owner_username", "kind", "bootstrap", "days", "replace"}`, or `{"key_id", "renew": true, "days"}`, or `{"key_id", "revoke": true}` | `200 {"status": "ok", "key_id", "kind", "public_key", "cert", "cert_exp", "cert_from", "command", "replaced"}`: a new player key's `cert`, `cert_exp` and `command` are `null` (with a `message`) until `cert_from`, when `renew` gives them (`{"status": "ok", "revoked": true}` for a revoke); `409 {"reason": "key-id-used" \| "public-key-used" \| "owner-has-key" \| "revoked" \| "replaced" \| "too-early"}` (`too-early` with `cert_from`), `404 {"reason": "unknown-key"}`, `400 {"reason": "format"}` |
+| `POST /api/link/keys` | you | `{"key_id", "public_key", "owner_discord_id", "owner_username", "character", "kind", "bootstrap", "days", "replace"}`, or `{"key_id", "renew": true, "days"}`, or `{"key_id", "revoke": true}` | `200 {"status": "ok", "key_id", "kind", "character", "public_key", "cert", "cert_exp", "cert_from", "command", "replaced"}`: a new player key's `cert`, `cert_exp` and `command` are `null` (with a `message`) until `cert_from`, when `renew` gives them (`{"status": "ok", "revoked": true}` for a revoke, with `"council": true` and the councillor's `character`, once seen, for a key of the council authority's); `409 {"reason": "key-id-used" \| "public-key-used" \| "owner-has-key" \| "character-not-linked" \| "revoked" \| "replaced" \| "too-early"}` (`too-early` with `cert_from`), `404 {"reason": "unknown-key"}`, `400 {"reason": "format"}` |
 | `POST /api/discord/interactions` | Discord | an interaction | `PING`, or `/link` answered ephemerally |
 
 `status` is `linked` (reason `linked`, or `already` when that link had already counted),
@@ -412,11 +481,14 @@ The page's four calls live in `web/public/backend.js`: `me()`, `code()`, `submit
   drawn for `R` when its prefix is below `T` (compared as text): the M lowest. The addon asks
   only drawn, online, certified player keys, lowest first, five at once; the Worker certifies a
   player key only once it counts for every open code (step 8).
-- **Key certificate** (the backend signs it, the confirmer types it):
-  `OLK1.<keyId>.<public key>.<tier>.<exp>.<sig>`. The public key in base64url (43
-  characters), `tier` `c` or `p`, `exp` unix time, `sig` the backend's Ed25519 over the ASCII
-  bytes `OLK1.<keyId>.<public key>.<tier>.<exp>`. At most 170 characters: the confirmer's
-  addon announces it as `DV~1~<certificate>`.
+- **Key certificate**: `OLK2.<keyId>.<public key>.<tier>.<exp>.<Name-Realm>.<sig>`. The public
+  key in base64url (43 characters), `tier` `c` or `p`, `exp` unix time, `Name-Realm` the one
+  character that confirms with the key (it may hold dots: read the certificate from both ends),
+  `sig` an Ed25519 signature over the UTF-8 bytes of everything before the last dot: the
+  backend's (a key you registered: the confirmer types it), or, for a High Councillor's key
+  (tier `c`) whose id is the first 12 hex of SHA-256 of its 32 bytes, the council authority's
+  (the author's addon whispers it to the councillor's). At most 240 bytes: the confirmer's addon
+  announces it as `DV~1~<certificate>`, and only from that character.
 - **Tag**: the first 16 lowercase hex of `SHA-256(<the code token's sig> + "~" + <requester>)`,
   the requester as `Name-Realm`. The requester's addon makes it from the command it was given
   and sends it with its request; the Worker makes it again from the token it stored.
@@ -426,10 +498,12 @@ The page's four calls live in `web/public/backend.js`: `me()`, `code()`, `submit
   whisper, the confirmer itself); guild at most 40 bytes, an Olympus guild; `gv` `r`, `w` or
   `c` ("The guild check"); faction `Alliance` or `Horde`, the confirmer's own; nonce 16
   lowercase hex digits; issued the confirmer's server time.
-- **Bundle**: `OLB4~<requester>~<guild>~<faction>~<nonce>~<R>~<tag>~<p1>;<p2>;...`, each proof
-  `<issued>,<keyId>,<confirmer>,<gv>,<sig>`, 1 to 4 proofs, 1600 bytes at most. A field holds
-  no `~`, `;`, `,`, `|` or control character; a name is at most 64 bytes and its realm (after
-  the last dash) has no dash or space.
+- **Bundle**: `OLB5~<requester>~<guild>~<faction>~<nonce>~<R>~<tag>~<p1>;<p2>;...`, each proof
+  `<issued>,<keyId>,<confirmer>,<gv>,<sig>,<public key>,<tier>,<cert exp>,<cert sig>`: the last
+  four are its key's certificate, `OLK2.<keyId>.<public key>.<tier>.<cert exp>.<confirmer>.<cert
+  sig>`, so a watcher and this Worker check it without having heard it. 1 to 4 proofs, 2400 bytes
+  at most. A field holds no `~`, `;`, `,`, `|` or control character; a name is at most 64 bytes
+  and its realm (after the last dash) has no dash or space.
 - **Link** (the QR code and the game's copy box): `<the page's address>#b=<bundle,
   percent-encoded>`. It never holds the token.
 
@@ -443,14 +517,20 @@ For every bundle, from the page or the inbox:
    bundle's requester (else `tag`: whoever saw `R` in a QR code cannot use it for another
    character). The code is unused (a link that already counted answers `already`).
 3. Its confirmations were signed within the code's life (from issue, less 5 minutes of clock
-   difference, to `exp`), none more than 5 minutes ahead of the Worker's clock. The bundle may
-   arrive up to 7 days after `exp`, since the addon keeps it that long for the watcher; after
-   that it is `expired`.
-4. For each proof: the key exists and is not revoked; its owner is not the code's account; the
-   Worker rebuilds the exact `OLY4` text and verifies the Ed25519 signature with the stored
-   public key (WebCrypto: a non-canonical signature fails); the confirmer is one of the key
-   owner's linked characters (except bootstrap councillor keys); the requester is not one of
-   the key owner's characters; and (R, keyId) never counted before.
+   difference, to `exp`), none more than 5 minutes ahead of the Worker's clock (the requester's
+   addon refuses the same). The bundle may arrive up to 7 days after `exp`: the addon hands it to
+   a watcher until 5 days after `exp`, which leaves the watcher's keeper 2 days to upload it;
+   after that it is `expired`.
+4. For each proof, its key: a key registered here, not revoked, whose certificate (the one the
+   proof carries) names its public key, its tier and the confirming character as registered; or
+   a High Councillor's key the council authority certified (the certificate checks with
+   `LINK_CA_PUBLIC`, tier `c`, the id the key's hash, valid when the proof was signed), not on the
+   revocation list and recorded for that character. Then: its owner is not the code's account;
+   the Worker rebuilds the exact `OLY4` text and verifies the Ed25519 signature with the key
+   (WebCrypto: a non-canonical signature fails); the confirmer is one of the key owner's linked
+   characters (except bootstrap and council authority keys: their certificate names the
+   character); the requester is neither the confirmer nor one of the key owner's characters; and
+   (R, keyId) never counted before.
 5. It accepts with **one valid councillor proof**. In mode `a` it also accepts **three valid
    player proofs** from three different owners, none the requester, signed within 5 minutes of
    each other, each key drawn for this code (its prefix below the `T` stored with the code),
@@ -485,9 +565,9 @@ certificates.
 
 These come from `web/test/fixtures/vectors.json`, made by `web/test/fixtures/make-vectors.py`
 with Python's `cryptography`. They are throwaway keys whose seeds are the SHA-256 of public
-labels (`"olympus-link-test:" + label`, the label being the key id or `backend`, the same rule
-as the addon's `tests/fixtures/make-link-vectors.py`, so both sides hold the same keys): never
-register one. The same vectors check the addon (`Olympus/Ed25519.lua` signs the `ed25519` ones
+labels (`"olympus-link-test:" + label`, the label being the key id, `backend`, `ca` or
+`council03`, the same rule as the addon's `tests/fixtures/make-link-vectors.py`, so both sides
+hold the same keys): never register one, nor put one in `LINK_CA_PUBLIC`. The same vectors check the addon (`Olympus/Ed25519.lua` signs the `ed25519` ones
 byte for byte: `web/test/fixtures/lua-signatures.json`), the page and this Worker, whose tests
 (`web/test/worker.test.mjs`) load the schema into SQLite, insert these codes and keys, and send
 these bundles; `web/test/addon-fixtures.test.mjs` checks the addon's own sample codes,
@@ -497,8 +577,9 @@ every check must refuse.
 
 To check your Worker by hand: insert the `codes` (with their `draw_t` and `token`) and `keys`
 below (for the players' bundle, also each confirmer character in `members` under its key's
-owner), set the Worker's clock between the proofs' `issued` and `exp`, and `acceptBundle`
-answers `linked` for each bundle. `tag_of` is the text whose SHA-256 starts with the tag;
+owner), set `LINK_CA_PUBLIC` to `council_authority.public_hex` (its key is never inserted), set
+the Worker's clock between the proofs' `issued` and `exp`, and `acceptBundle` answers `linked`
+for each bundle. `tag_of` is the text whose SHA-256 starts with the tag;
 `draw.thresholds` gives `T` for pools of keys `pool0000`, `pool0001`... of several sizes.
 
 <!-- block: vectors -->
@@ -537,48 +618,64 @@ answers `linked` for each bundle. `tag_of` is the text whose SHA-256 starts with
       "kind": "c",
       "bootstrap": 1,
       "owner_discord_id": "100000000000000001",
+      "character": "Test Councillor-ClassicBetaPvP",
       "created": 1780000000,
       "public_hex": "ec8625fa537ee50453146f50c298eb2922590c60ded7b54ade9e85702a70219b",
       "cert_exp": 1830000000,
-      "cert": "OLK1.council01.7IYl-lN-5QRTFG9QwpjrKSJZDGDe17VK3p6FcCpwIZs.c.1830000000.arYTictUuQ8GAtyDKuatSY5u4TcmBIk3TOkSRnj9wQeGZf1f2uloU-udjLiOpak4aQFRthop8705u3HU0Yw8Dw"
+      "cert": "OLK2.council01.7IYl-lN-5QRTFG9QwpjrKSJZDGDe17VK3p6FcCpwIZs.c.1830000000.Test Councillor-ClassicBetaPvP.kuaVPJGR4ZwtCf2mtveDYem8nJmMfU-R4I-FndUaJCswUEoqDNECnB_oFNIj3DPMA18UgHkSK7L7X1oWZSMDCQ"
     },
     {
       "key_id": "player01",
       "kind": "p",
       "bootstrap": 0,
       "owner_discord_id": "100000000000000011",
+      "character": "Other Player-ClassicBetaPvP",
       "created": 1780000000,
       "public_hex": "6237dcc3647b0995f0815a34a06541548363f74da2a4f7541415d582245d421a",
       "cert_exp": 1830000000,
-      "cert": "OLK1.player01.Yjfcw2R7CZXwgVo0oGVBVINj902ipPdUFBXVgiRdQho.p.1830000000.n2pUb9BAK9CPrT-xGpJ_66YBnKW1amfjwcqmEcHhRhP8C1RL6fsKAWlZGTKjX88EEahzU9lCHlVHhUGM47xeBg"
+      "cert": "OLK2.player01.Yjfcw2R7CZXwgVo0oGVBVINj902ipPdUFBXVgiRdQho.p.1830000000.Other Player-ClassicBetaPvP.VVCteYcVvEC94tf4AYXgFoqVIMF3lwmT0Oa_wHjjDReZqnCqwc3dBRyRa2_lsdC82VETV6yC1ynAfYkO0218Aw"
     },
     {
       "key_id": "player02",
       "kind": "p",
       "bootstrap": 0,
       "owner_discord_id": "100000000000000012",
+      "character": "Third Player-ClassicBetaPvP2",
       "created": 1780000000,
       "public_hex": "86dcd40827cbcb608b4419cc4afb1a68eb36b8002b208f05998a0dba2b4f4cba",
       "cert_exp": 1830000000,
-      "cert": "OLK1.player02.htzUCCfLy2CLRBnMSvsaaOs2uAArII8FmYoNuitPTLo.p.1830000000._XlSBnNuy2SJwh4e9s5shqR3WzRdeMd1ecRpLPOWbbPUVudFTJN0mdyVb-P-ijE09A0DJOBmyvbHhoJzpTcNCQ"
+      "cert": "OLK2.player02.htzUCCfLy2CLRBnMSvsaaOs2uAArII8FmYoNuitPTLo.p.1830000000.Third Player-ClassicBetaPvP2.AhXwg-IeO7pvCaCiMB99vAmq4z4LEIC2jOfExrd_baQIEOcGeh9O_oyPxJKQqioKuXc3Am3z_o4BsMtEa-EnAg"
     },
     {
       "key_id": "player03",
       "kind": "p",
       "bootstrap": 0,
       "owner_discord_id": "100000000000000013",
+      "character": "Fourth Player-ClassicBetaPvP",
       "created": 1780000000,
       "public_hex": "24b7aace15afb8c48409285ea8e2baac0884b6e8e6aa644189259ac57c607c7d",
       "cert_exp": 1830000000,
-      "cert": "OLK1.player03.JLeqzhWvuMSECSheqOK6rAiEtujmqmRBiSWaxXxgfH0.p.1830000000.wIOxnEwfrX3YL5EJWO7iPcjUp9EQP4DrhoPlKYXi8zFb0Gv9oc97hp1aib4f9pXi5hwrOvE9nbPCagZFMjlZAQ"
+      "cert": "OLK2.player03.JLeqzhWvuMSECSheqOK6rAiEtujmqmRBiSWaxXxgfH0.p.1830000000.Fourth Player-ClassicBetaPvP.C-wMIwi74DAQG3gPlNQTdiJZctpBv1fZWJs8XEPKWtOn6YjuNoZAOgYpIaGdnfUtQhdltBlfutRcejytbpdmAQ"
     }
   ],
+  "council_authority": {
+    "public_hex": "482fa6ee7b8220b00c1b0df468065f66cd5d1b87e46d66c00eafa63a0ba91740",
+    "keys": [
+      {
+        "key_id": "60d7d2f2c939",
+        "character": "Third Councillor-ClassicBetaPvP",
+        "public_hex": "4d6120fca76fdb3bf6fe180e215b1b0a316c3a2c47f929fe8197837a3f17d1e2",
+        "cert_exp": 1830000000,
+        "cert": "OLK2.60d7d2f2c939.TWEg_Kdv2zv2_hgOIVsbCjFsOixH-Sn-gZeDej8X0eI.c.1830000000.Third Councillor-ClassicBetaPvP.5wTsFv1jb3Q7WjgtwG1pX3dzfgOiD3KqB7o_TBeENqexSXDTGC1HMjdBi-1Eiyng12a8oSnurl0RnkcqfxEICg"
+      }
+    ]
+  },
   "bundles": [
     {
       "name": "one councillor",
       "tag": "5f2f66f046a1db8a",
       "tag_of": "TmJVCJJtjs5W_sOXnQm3G10J3y5xwVQkii6zRhi0EO-5AmL__PtEg1Ao7VaiUivi1Jslf4i1OJUxMDDNXtG4Ag~Some Player-ClassicBetaPvP",
-      "bundle": "OLB4~Some Player-ClassicBetaPvP~Olympus II~Alliance~0123456789abcdef~7K3M9QX2TB~5f2f66f046a1db8a~1799990100,council01,Test Councillor-ClassicBetaPvP,w,wYG_TW3fCOBxV9hteWMsnq2R8sBus8YaG-Dyb4SePjkl9a9Ub27i1okdpFxUh5aQASIZKKcXQbv0ocuXxvObBA",
+      "bundle": "OLB5~Some Player-ClassicBetaPvP~Olympus II~Alliance~0123456789abcdef~7K3M9QX2TB~5f2f66f046a1db8a~1799990100,council01,Test Councillor-ClassicBetaPvP,w,wYG_TW3fCOBxV9hteWMsnq2R8sBus8YaG-Dyb4SePjkl9a9Ub27i1okdpFxUh5aQASIZKKcXQbv0ocuXxvObBA,7IYl-lN-5QRTFG9QwpjrKSJZDGDe17VK3p6FcCpwIZs,c,1830000000,kuaVPJGR4ZwtCf2mtveDYem8nJmMfU-R4I-FndUaJCswUEoqDNECnB_oFNIj3DPMA18UgHkSK7L7X1oWZSMDCQ",
       "signed": [
         "OLY4~Some Player-ClassicBetaPvP~Olympus II~w~Alliance~0123456789abcdef~7K3M9QX2TB~5f2f66f046a1db8a~1799990100~council01~Test Councillor-ClassicBetaPvP"
       ]
@@ -587,11 +684,20 @@ answers `linked` for each bundle. `tag_of` is the text whose SHA-256 starts with
       "name": "three drawn players, non-ASCII requester",
       "tag": "9c5ac51afcd0bbee",
       "tag_of": "j00E_PzaPZ9AqZY3Dwq1RX_D-q5Geaq5E67Rsm-j_5XMJxkoepPoSoqi4GCQiEv9j-EkMYDFnzACydM3bATvAQ~Tëst Plâyer-ClassicBetaPvP",
-      "bundle": "OLB4~Tëst Plâyer-ClassicBetaPvP~Olympus Vanguard~Horde~a1b2c3d4e5f60718~H4N8PZ6R1B~9c5ac51afcd0bbee~1799990200,player01,Other Player-ClassicBetaPvP,r,jRr01ESNDrVEohLRRZYhLAVPD9ue32uDrRA2GQByQq2dsCQ-6o79nFWcL__shopaQ2Umy1aV9f8sDIaMQLzyBw;1799990245,player02,Third Player-ClassicBetaPvP2,c,K7sW12b4A_uTxycWnR8rRE1Ip3wzAxA2GYOgNMitKtbx1KfI6IxWMJLEu2oEoJ042TuWxlbk_RU6k81b4kuEAA;1799990301,player03,Fourth Player-ClassicBetaPvP,c,7sEYRUmeAZOZyqJUGu8_hZ_O2Mn8mFuWIKdWMTJ_0Zs4KYzelPEDfnjfq3bcU-uYal7tiPtuBY6zijo0mJCqDQ",
+      "bundle": "OLB5~Tëst Plâyer-ClassicBetaPvP~Olympus Vanguard~Horde~a1b2c3d4e5f60718~H4N8PZ6R1B~9c5ac51afcd0bbee~1799990200,player01,Other Player-ClassicBetaPvP,r,jRr01ESNDrVEohLRRZYhLAVPD9ue32uDrRA2GQByQq2dsCQ-6o79nFWcL__shopaQ2Umy1aV9f8sDIaMQLzyBw,Yjfcw2R7CZXwgVo0oGVBVINj902ipPdUFBXVgiRdQho,p,1830000000,VVCteYcVvEC94tf4AYXgFoqVIMF3lwmT0Oa_wHjjDReZqnCqwc3dBRyRa2_lsdC82VETV6yC1ynAfYkO0218Aw;1799990245,player02,Third Player-ClassicBetaPvP2,c,K7sW12b4A_uTxycWnR8rRE1Ip3wzAxA2GYOgNMitKtbx1KfI6IxWMJLEu2oEoJ042TuWxlbk_RU6k81b4kuEAA,htzUCCfLy2CLRBnMSvsaaOs2uAArII8FmYoNuitPTLo,p,1830000000,AhXwg-IeO7pvCaCiMB99vAmq4z4LEIC2jOfExrd_baQIEOcGeh9O_oyPxJKQqioKuXc3Am3z_o4BsMtEa-EnAg;1799990301,player03,Fourth Player-ClassicBetaPvP,c,7sEYRUmeAZOZyqJUGu8_hZ_O2Mn8mFuWIKdWMTJ_0Zs4KYzelPEDfnjfq3bcU-uYal7tiPtuBY6zijo0mJCqDQ,JLeqzhWvuMSECSheqOK6rAiEtujmqmRBiSWaxXxgfH0,p,1830000000,C-wMIwi74DAQG3gPlNQTdiJZctpBv1fZWJs8XEPKWtOn6YjuNoZAOgYpIaGdnfUtQhdltBlfutRcejytbpdmAQ",
       "signed": [
         "OLY4~Tëst Plâyer-ClassicBetaPvP~Olympus Vanguard~r~Horde~a1b2c3d4e5f60718~H4N8PZ6R1B~9c5ac51afcd0bbee~1799990200~player01~Other Player-ClassicBetaPvP",
         "OLY4~Tëst Plâyer-ClassicBetaPvP~Olympus Vanguard~c~Horde~a1b2c3d4e5f60718~H4N8PZ6R1B~9c5ac51afcd0bbee~1799990245~player02~Third Player-ClassicBetaPvP2",
         "OLY4~Tëst Plâyer-ClassicBetaPvP~Olympus Vanguard~c~Horde~a1b2c3d4e5f60718~H4N8PZ6R1B~9c5ac51afcd0bbee~1799990301~player03~Fourth Player-ClassicBetaPvP"
+      ]
+    },
+    {
+      "name": "a councillor certified by the council authority",
+      "tag": "5f2f66f046a1db8a",
+      "tag_of": "TmJVCJJtjs5W_sOXnQm3G10J3y5xwVQkii6zRhi0EO-5AmL__PtEg1Ao7VaiUivi1Jslf4i1OJUxMDDNXtG4Ag~Some Player-ClassicBetaPvP",
+      "bundle": "OLB5~Some Player-ClassicBetaPvP~Olympus II~Alliance~0123456789abcdef~7K3M9QX2TB~5f2f66f046a1db8a~1799990120,60d7d2f2c939,Third Councillor-ClassicBetaPvP,w,sXCNKxKUl-QJK2jYzERR7iX3bmGOqCUrMkbN4fuAj3QASQYP_YMMhvlLylLsNuVKGFMhO8DaH17AxRF1g0AxCw,TWEg_Kdv2zv2_hgOIVsbCjFsOixH-Sn-gZeDej8X0eI,c,1830000000,5wTsFv1jb3Q7WjgtwG1pX3dzfgOiD3KqB7o_TBeENqexSXDTGC1HMjdBi-1Eiyng12a8oSnurl0RnkcqfxEICg",
+      "signed": [
+        "OLY4~Some Player-ClassicBetaPvP~Olympus II~w~Alliance~0123456789abcdef~7K3M9QX2TB~5f2f66f046a1db8a~1799990120~60d7d2f2c939~Third Councillor-ClassicBetaPvP"
       ]
     }
   ],
@@ -718,7 +824,8 @@ CREATE TABLE IF NOT EXISTS codes (
 );
 CREATE INDEX IF NOT EXISTS codes_by_user ON codes (discord_id, created);
 
--- Confirmer public keys. Confirm-only: they sign OLY4 confirmations and nothing else.
+-- Confirmer public keys registered here. Confirm-only: they sign OLY4 confirmations and nothing
+-- else, each from the one character its certificate names.
 CREATE TABLE IF NOT EXISTS keys (
   key_id           TEXT PRIMARY KEY                -- [a-z0-9]{6,16}, never reused
                    CHECK (length(key_id) BETWEEN 6 AND 16 AND key_id NOT GLOB '*[^a-z0-9]*'),
@@ -727,6 +834,8 @@ CREATE TABLE IF NOT EXISTS keys (
   owner_discord_id TEXT NOT NULL                   -- a Discord id: digits only
                    CHECK (length(owner_discord_id) BETWEEN 5 AND 25 AND owner_discord_id NOT GLOB '*[^0-9]*'),
   owner_username   TEXT,
+  character        TEXT NOT NULL                   -- the one character that confirms with it ("Name-Realm"), named in its certificate
+                   CHECK (length(character) BETWEEN 3 AND 64),
   kind             TEXT NOT NULL CHECK (kind IN ('c', 'p')), -- councillor or drawn player (the certificate's tier)
   bootstrap        INTEGER NOT NULL DEFAULT 0,     -- 1: a councillor key trusted before its owner linked a character
   created          INTEGER NOT NULL,
@@ -738,6 +847,26 @@ CREATE TABLE IF NOT EXISTS keys (
 -- One certified key per Discord account. A new key may wait for its certificate next to it (a
 -- player key until it counts); its first certificate replaces the older one, and revoking ends a key.
 CREATE UNIQUE INDEX IF NOT EXISTS keys_one_per_owner ON keys (owner_discord_id) WHERE revoked = 0 AND replaced_at IS NULL AND cert_exp IS NOT NULL;
+
+-- High Councillors' keys made in game and certified by the council authority (the author's
+-- client; LINK_CA_PUBLIC), never registered: each recorded for the character its certificate
+-- names the first time a link carries it. Their id is the first 12 hex of SHA-256 of the key.
+CREATE TABLE IF NOT EXISTS council_keys (
+  key_id     TEXT PRIMARY KEY
+             CHECK (length(key_id) = 12 AND key_id NOT GLOB '*[^0-9a-f]*'),
+  public_key TEXT NOT NULL                         -- 64 lowercase hex (Ed25519)
+             CHECK (length(public_key) = 64 AND public_key NOT GLOB '*[^0-9a-f]*'),
+  character  TEXT NOT NULL,                        -- the councillor ("Name-Realm")
+  cert_exp   INTEGER NOT NULL,                     -- the latest end of its certificate seen
+  first_seen INTEGER NOT NULL
+);
+
+-- The revocation list of the council authority's keys: a key id here counts no more, whether a
+-- link carried it before or not (POST /api/link/keys {"key_id", "revoke": true}).
+CREATE TABLE IF NOT EXISTS revoked_keys (
+  key_id     TEXT PRIMARY KEY,
+  revoked_at INTEGER NOT NULL
+);
 
 -- Proofs already counted: (code, key) pairs.
 CREATE TABLE IF NOT EXISTS used (
@@ -791,6 +920,10 @@ connect to your login (step 4).
 //   DB                   D1 database with web/worker/schema.sql
 //   LINK_BACKEND_SEED    secret: the backend's Ed25519 seed, base64url (scripts/link-keys.py backend)
 //   LINK_BACKEND_PUBLIC  var: its public key, 64 hex (the same one is in the addon's ns.LINK_BACKEND_KEYS)
+//   LINK_CA_PUBLIC       var: the council authority's public key, 64 hex (scripts/link-keys.py ca; the same
+//                        one is in the addon's ns.LINK_CA_KEYS; two, comma-separated, while it changes):
+//                        the author's client certifies High Councillors' keys with it, and this Worker
+//                        takes those keys without registering them
 //   LINK_MODE            var: "c" councillors only (launch), "a" councillors or three drawn players
 //   LINK_GUILD_POLICY    var: "verified" (the default): a link needs a confirmer who checked the
 //                        guild in game (its roster or a recent /who); "claimed": the guild is taken as named
@@ -809,7 +942,8 @@ export const LINK = {
 	TOKEN_LIFE: 24 * 3600, // a code works for a day...
 	REUSE_LEFT: 12 * 3600, // ...and is handed out again while it has this long left
 	CODES_PER_DAY: 3,
-	DELIVERY_GRACE: 7 * 24 * 3600, // the addon holds a finished link 7 days for the watcher
+	DELIVERY_GRACE: 7 * 24 * 3600, // a link is taken until its code's expiry + this: the addon hands it to a
+	// watcher until 5 days after the expiry, so the watcher's keeper has 2 days to upload it
 	CLOCK_SKEW: 300, // game server clock vs ours
 	WINDOW: 300, // three player proofs within 5 minutes of each other
 	PLAYERS_NEEDED: 3,
@@ -837,8 +971,10 @@ const PUBLIC_B64_RE = /^[A-Za-z0-9_-]{43}$/;
 const FORBIDDEN = /[|~;,\u0000-\u001f\u007f]/;
 const GV_RE = /^[rwc]$/; // how a confirmer checked the guild: r its own roster, w a recent /who, c claimed only
 const CHECKED = (gv) => gv === 'r' || gv === 'w';
+const CA_KEYID_RE = /^[0-9a-f]{12}$/; // a council authority's key: the first 12 hex of SHA-256 of the key
 const MAX_PROOFS = 4;
-const MAX_BUNDLE_BYTES = 1600;
+const MAX_BUNDLE_BYTES = 2400; // four proofs, each with its certificate (the addon's Link.MAX_BUNDLE)
+const MAX_CERT_BYTES = 240; // a certificate fits one chat line: DV~1~<certificate> (the addon's Link.MAX_CERT)
 const NO_DRAW = '00000000'; // T of a mode "c" code: no player key is drawn
 const ALL_DRAWN = 'ffffffff'; // T when there are M player keys or fewer
 
@@ -1119,9 +1255,10 @@ export function certFrom(key) {
 // Bundles
 
 // What the addon's Link.Parse reads (Olympus/Link.lua; the page's web/public/core.js reads the
-// same). Whether the proofs count is acceptBundle's call: a key or owner is counted once.
+// same). Whether the proofs count is acceptBundle's call: a key or owner is counted once. Each
+// proof carries its key's certificate for its confirmer: <public key>,<tier>,<cert exp>,<cert sig>.
 export function parseBundle(text) {
-	if (typeof text !== 'string' || !text.startsWith('OLB4~')) return { ok: false, error: 'prefix' };
+	if (typeof text !== 'string' || !text.startsWith('OLB5~')) return { ok: false, error: 'prefix' };
 	if (enc.encode(text).length > MAX_BUNDLE_BYTES) return { ok: false, error: 'size' };
 	const f = text.split('~');
 	if (f.length !== 8) return { ok: false, error: 'fields' };
@@ -1137,11 +1274,13 @@ export function parseBundle(text) {
 	const proofs = [];
 	for (const part of parts) {
 		const p = part.split(',');
-		if (p.length !== 5) return { ok: false, error: 'proof' };
-		const [issued, keyId, confirmer, gv, sig] = p;
+		if (p.length !== 9) return { ok: false, error: 'proof' };
+		const [issued, keyId, confirmer, gv, sig, pub, tier, certExp, certSig] = p;
 		if (!ISSUED_RE.test(issued) || !KEYID_RE.test(keyId) || !validCharacter(confirmer) || !GV_RE.test(gv)) return { ok: false, error: 'proof' };
 		if (!SIG_RE.test(sig) || b64urlEncode(b64urlDecode(sig)) !== sig) return { ok: false, error: 'sig' };
-		proofs.push({ issued: Number(issued), keyId, confirmer, gv, sig });
+		if (!PUBLIC_B64_RE.test(pub) || b64urlEncode(b64urlDecode(pub)) !== pub || (tier !== 'c' && tier !== 'p') || !ISSUED_RE.test(certExp)) return { ok: false, error: 'cert' };
+		if (!SIG_RE.test(certSig) || b64urlEncode(b64urlDecode(certSig)) !== certSig) return { ok: false, error: 'cert' };
+		proofs.push({ issued: Number(issued), keyId, confirmer, gv, sig, pub, tier, certExp: Number(certExp), certSig });
 	}
 	return { ok: true, bundle: { requester, guild, faction, nonce, R, tag, proofs } };
 }
@@ -1158,6 +1297,11 @@ function validCharacter(s) {
 
 export function signedMessage(b, p) {
 	return ['OLY4', b.requester, b.guild, p.gv, b.faction, b.nonce, b.R, b.tag, p.issued, p.keyId, p.confirmer].join('~');
+}
+
+// The certificate a proof carries: its key's, for its confirmer (a parsed certificate, below).
+export function proofCertificate(p) {
+	return parseCertificate(`OLK2.${p.keyId}.${p.pub}.${p.tier}.${p.certExp}.${p.confirmer}.${p.certSig}`);
 }
 
 // The tag that binds a link to the command it was made with: the first 16 hex of
@@ -1265,22 +1409,58 @@ export async function acceptBundle(env, text, opts = {}) {
 
 async function checkProof(env, b, p, code, t) {
 	const bad = (why) => ({ ok: false, proof: p, why });
-	const key = await env.DB.prepare('SELECT * FROM keys WHERE key_id = ?').bind(p.keyId).first();
-	if (!key) return bad('unknown key');
-	if (key.revoked) return bad('revoked key');
-	if (key.owner_discord_id === code.discord_id) return bad("the requester's own key");
+	const found = await proofKey(env, p, t);
+	if (found.why) return bad(found.why);
+	const key = found.key;
+	if (key.owner_discord_id && key.owner_discord_id === code.discord_id) return bad("the requester's own key");
 	if (p.issued < code.created - LINK.CLOCK_SKEW || p.issued > code.exp) return bad('signed outside the code\'s life');
 	if (p.issued > t + LINK.CLOCK_SKEW) return bad('signed in the future');
 	if (!(await ed25519Verify(key.public_key, b64urlDecode(p.sig), enc.encode(signedMessage(b, p))))) return bad('bad signature');
-	if (!(key.kind === 'c' && key.bootstrap)) {
+	if (!key.council && !(key.kind === 'c' && key.bootstrap)) {
 		const mine = await env.DB.prepare('SELECT 1 AS x FROM members WHERE character = ? AND discord_id = ?').bind(p.confirmer, key.owner_discord_id).first();
 		if (!mine) return bad("the confirmer is not a linked character of the key's owner");
 	}
-	const own = await env.DB.prepare('SELECT 1 AS x FROM members WHERE character = ? AND discord_id = ?').bind(b.requester, key.owner_discord_id).first();
-	if (own) return bad("the requester is the key owner's own character");
+	if (p.confirmer === b.requester) return bad('the confirmer is the requester');
+	if (key.owner_discord_id) {
+		const own = await env.DB.prepare('SELECT 1 AS x FROM members WHERE character = ? AND discord_id = ?').bind(b.requester, key.owner_discord_id).first();
+		if (own) return bad("the requester is the key owner's own character");
+	}
 	const reused = await env.DB.prepare('SELECT 1 AS x FROM used WHERE r = ? AND key_id = ?').bind(b.R, p.keyId).first();
 	if (reused) return bad('already counted');
 	return { ok: true, proof: p, key };
+}
+
+// The key a proof is checked with: { key } or { why }. A key registered here (keys) is D1's: the
+// certificate the proof carries must name its public key, tier and character, and D1 says
+// whether it is revoked. A key this Worker never registered counts only as a High Councillor's
+// certified by the council authority (the author's client, LINK_CA_PUBLIC): the certificate the
+// proof carries is then checked here (tier c, the key's id the first 12 hex of SHA-256 of it,
+// valid when the proof was signed), the key is recorded for the character it names the first
+// time it is seen (council_keys), and the revocation list (revoked_keys) can end it.
+async function proofKey(env, p, t) {
+	const cert = proofCertificate(p);
+	if (!cert) return { why: 'a certificate that does not read' };
+	const row = await env.DB.prepare('SELECT * FROM keys WHERE key_id = ?').bind(p.keyId).first();
+	if (row) {
+		if (row.revoked) return { why: 'revoked key' };
+		if (row.public_key !== cert.publicHex || row.kind !== cert.tier || row.character !== cert.character) {
+			return { why: "its certificate is not the one registered for this key (public key, tier and character)" };
+		}
+		return { key: row };
+	}
+	if (!CA_KEYID_RE.test(p.keyId)) return { why: 'unknown key' };
+	if (await env.DB.prepare('SELECT 1 AS x FROM revoked_keys WHERE key_id = ?').bind(p.keyId).first()) return { why: 'revoked key' };
+	if (!(await councilCertificate(env, cert))) return { why: 'unknown key (not certified by the council authority)' };
+	if (p.issued >= cert.exp) return { why: 'signed after its certificate ended' };
+	await env.DB.prepare('INSERT OR IGNORE INTO council_keys (key_id, public_key, character, cert_exp, first_seen) VALUES (?, ?, ?, ?, ?)')
+		.bind(p.keyId, cert.publicHex, cert.character, cert.exp, t)
+		.run();
+	const known = await env.DB.prepare('SELECT * FROM council_keys WHERE key_id = ?').bind(p.keyId).first();
+	if (!known || known.public_key !== cert.publicHex || known.character !== cert.character) return { why: 'a council key recorded for another character' };
+	if (cert.exp > known.cert_exp) await env.DB.prepare('UPDATE council_keys SET cert_exp = ? WHERE key_id = ?').bind(cert.exp, p.keyId).run();
+	// Its owner, when the councillor's character is linked: never confirms that account's codes or characters.
+	const owner = await env.DB.prepare('SELECT discord_id FROM members WHERE character = ?').bind(cert.character).first();
+	return { key: { key_id: p.keyId, public_key: cert.publicHex, kind: 'c', bootstrap: 1, council: true, character: cert.character, owner_discord_id: owner ? owner.discord_id : null } };
 }
 
 // Mode "a": three drawn players from three owners, signed within 5 minutes of each other. A
@@ -1336,36 +1516,64 @@ async function logUpload(env, source, text, result, extra) {
 // Confirmer keys and their certificates
 //
 // A certificate tells every requester's addon, without the bot online, that a key is
-// registered and whether it is a councillor's (c) or a drawn player's (p):
-//   OLK1.<keyId>.<public key, 43 base64url>.<tier>.<exp>.<sig>
-// sig: the backend key's Ed25519 over the ASCII bytes of everything before the last dot. The
-// confirmer types it in game (/oly discord cert <certificate>) and its addon announces it.
+// certified, whether it is a councillor's (c) or a drawn player's (p), and for which character:
+//   OLK2.<keyId>.<public key, 43 base64url>.<tier>.<exp>.<Name-Realm>.<sig>
+// sig: Ed25519 over the UTF-8 bytes of everything before the last dot, by the backend key (a
+// key registered here), or, tier c only and for a key whose id is the first 12 hex of SHA-256 of
+// it, by the council authority's (a High Councillor's key made in game, certified by the
+// author's client). The character is read from both ends (it may hold dots). Only that character
+// announces it and confirms with it, and every proof carries it in the link.
 
-export async function makeCertificate(env, keyId, publicHex, tier, exp) {
-	const payload = `OLK1.${keyId}.${b64urlEncode(hexToBytes(publicHex))}.${tier}.${exp}`;
+export async function makeCertificate(env, keyId, publicHex, tier, exp, character) {
+	const payload = `OLK2.${keyId}.${b64urlEncode(hexToBytes(publicHex))}.${tier}.${exp}.${character}`;
 	return `${payload}.${await backendSign(env, payload)}`;
 }
 
-// { keyId, publicHex, tier, exp, sig, payload } or null.
+// { keyId, publicHex, tier, exp, character, sig, payload } or null.
 export function parseCertificate(text) {
-	const m = /^OLK1\.([a-z0-9]{6,16})\.([A-Za-z0-9_-]{43})\.([cp])\.([1-9][0-9]{0,11})\.([A-Za-z0-9_-]{86})$/.exec(String(text));
-	if (!m) return null;
-	const [, keyId, pub, tier, exp, sig] = m;
-	if (b64urlEncode(b64urlDecode(pub)) !== pub || b64urlEncode(b64urlDecode(sig)) !== sig) return null;
-	return { keyId, publicHex: bytesToHex(b64urlDecode(pub)), tier, exp: Number(exp), sig, payload: m[0].slice(0, m[0].length - sig.length - 1) };
+	const s = String(text);
+	const m = /^OLK2\.([a-z0-9]{6,16})\.([A-Za-z0-9_-]{43})\.([cp])\.([1-9][0-9]{0,11})\.(.+)\.([A-Za-z0-9_-]{86})$/s.exec(s);
+	if (!m || enc.encode(s).length > MAX_CERT_BYTES) return null;
+	const [, keyId, pub, tier, exp, character, sig] = m;
+	if (!validCharacter(character) || b64urlEncode(b64urlDecode(pub)) !== pub || b64urlEncode(b64urlDecode(sig)) !== sig) return null;
+	return { keyId, publicHex: bytesToHex(b64urlDecode(pub)), tier, exp: Number(exp), character, sig, payload: s.slice(0, s.length - sig.length - 1) };
 }
 
-// The certificate when the backend key `publicHex` signed it, else null.
+// The certificate when the key `publicHex` (the backend's, or the council authority's) signed
+// it, else null.
 export async function verifyCertificate(publicHex, text) {
-	const c = parseCertificate(text);
+	const c = typeof text === 'string' ? parseCertificate(text) : text;
 	if (!c || !(await ed25519Verify(publicHex, b64urlDecode(c.sig), enc.encode(c.payload)))) return null;
 	return c;
 }
 
-// Your key tool (admin token): register a confirmer's public key, get its certificate (a
-// player key's once it counts: certFrom), renew it, or revoke a key. The seed never comes here:
-// it stays with the confirmer.
-//   {"key_id", "public_key", "owner_discord_id", "owner_username", "kind", "bootstrap", "days", "replace"}
+// The council authority's public keys (LINK_CA_PUBLIC: one, or two while it changes).
+export function councilAuthorityKeys(env) {
+	return String((env && env.LINK_CA_PUBLIC) || '')
+		.split(/[\s,]+/)
+		.map((k) => k.toLowerCase())
+		.filter((k) => PUBLIC_HEX_RE.test(k));
+}
+
+// The id of a key the council authority certifies: the first 12 hex of SHA-256 of its 32 bytes.
+export async function councilKeyId(publicHex) {
+	return bytesToHex(new Uint8Array(await crypto.subtle.digest('SHA-256', hexToBytes(publicHex)))).slice(0, 12);
+}
+
+// A parsed certificate the council authority signed for a High Councillor's key, else null.
+export async function councilCertificate(env, c) {
+	if (!c || c.tier !== 'c' || c.keyId !== (await councilKeyId(c.publicHex))) return null;
+	for (const pk of councilAuthorityKeys(env)) {
+		if (await verifyCertificate(pk, c)) return c;
+	}
+	return null;
+}
+
+// Your key tool (admin token): register a confirmer's public key for one character, get its
+// certificate (a player key's once it counts: certFrom), renew it, or revoke a key (a High
+// Councillor's key the council authority certified too: its id goes on the revocation list,
+// seen here or not). The seed never comes here: it stays with the confirmer.
+//   {"key_id", "public_key", "owner_discord_id", "owner_username", "character", "kind", "bootstrap", "days", "replace"}
 //   {"key_id", "renew": true, "days"}
 //   {"key_id", "revoke": true}
 async function routeKeys(request, env) {
@@ -1382,7 +1590,14 @@ async function routeKeys(request, env) {
 	const existing = await env.DB.prepare('SELECT * FROM keys WHERE key_id = ?').bind(keyId).first();
 
 	if (body.revoke === true) {
-		if (!existing) return fail('unknown-key', 'No such key.', 404);
+		if (!existing) {
+			// A councillor's key the council authority certified (never registered here): on the
+			// revocation list at once, whether a link has used it yet or not.
+			if (!CA_KEYID_RE.test(keyId)) return fail('unknown-key', 'No such key.', 404);
+			await env.DB.prepare('INSERT OR IGNORE INTO revoked_keys (key_id, revoked_at) VALUES (?, ?)').bind(keyId, t).run();
+			const known = await env.DB.prepare('SELECT character FROM council_keys WHERE key_id = ?').bind(keyId).first();
+			return json({ status: 'ok', key_id: keyId, revoked: true, council: true, character: known ? known.character : null });
+		}
 		await env.DB.prepare('UPDATE keys SET revoked = 1, revoked_at = ? WHERE key_id = ? AND revoked = 0').bind(t, keyId).run();
 		return json({ status: 'ok', key_id: keyId, revoked: true });
 	}
@@ -1393,7 +1608,7 @@ async function routeKeys(request, env) {
 		const from = certFrom(existing);
 		if (t < from) return fail('too-early', `This player key counts from ${when(from)}: ask for its certificate then.`, 409, { cert_from: from });
 		const exp = certExp(existing.kind);
-		const cert = await makeCertificate(env, keyId, existing.public_key, existing.kind, exp);
+		const cert = await makeCertificate(env, keyId, existing.public_key, existing.kind, exp, existing.character);
 		const first = existing.cert_exp === null || existing.cert_exp === undefined;
 		// A key's first certificate replaces the older key of its owner (a rotation).
 		const older = first ? await activeKeys(env, existing.owner_discord_id, keyId) : [];
@@ -1409,21 +1624,29 @@ async function routeKeys(request, env) {
 	const username = body.owner_username === undefined || body.owner_username === null ? null : String(body.owner_username);
 	const kind = body.kind;
 	const bootstrap = body.bootstrap === true ? 1 : 0;
+	const character = typeof body.character === 'string' ? body.character : '';
+	if (CA_KEYID_RE.test(keyId)) return fail('format', 'key_id: 12 hex digits name the council authority\'s keys: pick another id.');
 	if (!pub) return fail('format', 'public_key: 64 hex digits (or 43 of base64url).');
 	if (!DISCORD_ID_RE.test(owner)) return fail('format', "owner_discord_id: the confirmer's Discord id.");
 	if (username !== null && !USERNAME_RE.test(username)) return fail('format', 'owner_username: a Discord username.');
+	if (!validCharacter(character)) return fail('format', 'character: the one character that confirms with this key, "Name-Realm" as the game writes it.');
 	if (kind !== 'c' && kind !== 'p') return fail('format', 'kind: "c" (a High Councillor) or "p" (a drawn player).');
 	if (bootstrap && kind !== 'c') return fail('format', 'Only a councillor key can be a bootstrap key.');
 	if (existing) return fail('key-id-used', 'This key id exists already: ids are never reused.', 409);
 	if (await env.DB.prepare('SELECT 1 AS x FROM keys WHERE public_key = ?').bind(pub).first()) return fail('public-key-used', 'This public key is registered already.', 409);
+	// The character confirms for its owner: one of the owner's linked characters (a bootstrap
+	// councillor key excepted: at launch nobody has linked one yet).
+	if (!bootstrap && !(await env.DB.prepare('SELECT 1 AS x FROM members WHERE character = ? AND discord_id = ?').bind(character, owner).first())) {
+		return fail('character-not-linked', `${character} is not a linked character of this Discord account: a key confirms from one of its owner's linked characters.`, 409);
+	}
 	const mine = await activeKeys(env, owner, keyId);
 	if (mine.length && body.replace !== true) {
 		return fail('owner-has-key', `This account's key is ${replacedId(mine)}: send "replace": true to rotate it.`, 409);
 	}
-	const key = { key_id: keyId, public_key: pub, owner_discord_id: owner, kind, created: t, cert_exp: null };
+	const key = { key_id: keyId, public_key: pub, owner_discord_id: owner, character, kind, created: t, cert_exp: null };
 	const ready = t >= certFrom(key);
 	const exp = ready ? certExp(kind) : null;
-	const cert = ready ? await makeCertificate(env, keyId, pub, kind, exp) : null;
+	const cert = ready ? await makeCertificate(env, keyId, pub, kind, exp, character) : null;
 	// Rotating: the older key is replaced when the new one gets its certificate (a councillor's at
 	// once, a player's once it counts): until then the confirmer has only the old one in game, and
 	// it keeps counting. A replaced key leaves the draw and still checks the proofs it signed until
@@ -1432,8 +1655,8 @@ async function routeKeys(request, env) {
 	const older = ready ? mine : mine.filter((k) => k.cert_exp === null);
 	await env.DB.batch([
 		...older.map((k) => env.DB.prepare('UPDATE keys SET replaced_at = ? WHERE key_id = ?').bind(t, k.key_id)),
-		env.DB.prepare('INSERT INTO keys (key_id, public_key, owner_discord_id, owner_username, kind, bootstrap, created, cert_exp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-			.bind(keyId, pub, owner, username, kind, bootstrap, t, exp),
+		env.DB.prepare('INSERT INTO keys (key_id, public_key, owner_discord_id, owner_username, character, kind, bootstrap, created, cert_exp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+			.bind(keyId, pub, owner, username, character, kind, bootstrap, t, exp),
 	]);
 	return json(keyAnswer(key, cert, exp, ready ? replacedId(older) : null));
 }
@@ -1454,6 +1677,7 @@ function keyAnswer(key, cert, certExp, replaced) {
 		status: 'ok',
 		key_id: key.key_id,
 		kind: key.kind,
+		character: key.character,
 		public_key: key.public_key,
 		cert,
 		cert_exp: certExp,

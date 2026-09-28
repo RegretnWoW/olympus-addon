@@ -23,7 +23,7 @@ test('the page: every bundle in the file, in order, once', () => {
 	const found = bundlesFromSavedVariables(text);
 	assert.deepEqual(found.map((f) => f.text), [B3.bundle, B1.bundle, B4.bundle]);
 	assert.equal(found[0].bundle.requester, 'Tëst Plâyer-ClassicBetaPvP');
-	assert.ok(text.includes('"OLB4~not-a-bundle"') || text.includes('\\"OLB4~not-a-bundle\\"'));
+	assert.ok(text.includes('"OLB5~not-a-bundle"') || text.includes('\\"OLB5~not-a-bundle\\"'));
 });
 
 test('the page: the bundle of this code first, else the only one, else a choice', () => {

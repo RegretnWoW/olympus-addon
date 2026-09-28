@@ -1,5 +1,5 @@
 {
- "about": "Olympus Link v5 test vectors, written by web/test/fixtures/make-vectors.py with python3 cryptography. Throwaway test keys only: never register them.",
+ "about": "Olympus Link v6 test vectors, written by web/test/fixtures/make-vectors.py with python3 cryptography. Throwaway test keys only: never register them.",
  "rfc8032": [
   {
    "name": "TEST 1",
@@ -91,14 +91,15 @@
    "bootstrap": 1,
    "owner_discord_id": "100000000000000001",
    "owner_username": "test_councillor",
+   "character": "Test Councillor-ClassicBetaPvP",
    "created": 1780000000,
    "seed_hex": "a8d5c4d53573bdff5005fdfa934dc9b8b322fcc91ec40e299e9e4ccb3e7b5497",
    "seed_b64url": "qNXE1TVzvf9QBf36k03JuLMi_MkexA4pnp5Myz57VJc",
    "public_hex": "ec8625fa537ee50453146f50c298eb2922590c60ded7b54ade9e85702a70219b",
    "public_b64url": "7IYl-lN-5QRTFG9QwpjrKSJZDGDe17VK3p6FcCpwIZs",
    "cert_exp": 1830000000,
-   "cert_payload": "OLK1.council01.7IYl-lN-5QRTFG9QwpjrKSJZDGDe17VK3p6FcCpwIZs.c.1830000000",
-   "cert": "OLK1.council01.7IYl-lN-5QRTFG9QwpjrKSJZDGDe17VK3p6FcCpwIZs.c.1830000000.arYTictUuQ8GAtyDKuatSY5u4TcmBIk3TOkSRnj9wQeGZf1f2uloU-udjLiOpak4aQFRthop8705u3HU0Yw8Dw"
+   "cert_payload": "OLK2.council01.7IYl-lN-5QRTFG9QwpjrKSJZDGDe17VK3p6FcCpwIZs.c.1830000000.Test Councillor-ClassicBetaPvP",
+   "cert": "OLK2.council01.7IYl-lN-5QRTFG9QwpjrKSJZDGDe17VK3p6FcCpwIZs.c.1830000000.Test Councillor-ClassicBetaPvP.kuaVPJGR4ZwtCf2mtveDYem8nJmMfU-R4I-FndUaJCswUEoqDNECnB_oFNIj3DPMA18UgHkSK7L7X1oWZSMDCQ"
   },
   {
    "key_id": "player01",
@@ -106,14 +107,15 @@
    "bootstrap": 0,
    "owner_discord_id": "100000000000000011",
    "owner_username": "test_player_1",
+   "character": "Other Player-ClassicBetaPvP",
    "created": 1780000000,
    "seed_hex": "88a9e14163bcd02a9c2f77cdaacdfdb9a417591fbe216fbbdeeba29cc2806574",
    "seed_b64url": "iKnhQWO80CqcL3fNqs39uaQXWR--IW-73uuinMKAZXQ",
    "public_hex": "6237dcc3647b0995f0815a34a06541548363f74da2a4f7541415d582245d421a",
    "public_b64url": "Yjfcw2R7CZXwgVo0oGVBVINj902ipPdUFBXVgiRdQho",
    "cert_exp": 1830000000,
-   "cert_payload": "OLK1.player01.Yjfcw2R7CZXwgVo0oGVBVINj902ipPdUFBXVgiRdQho.p.1830000000",
-   "cert": "OLK1.player01.Yjfcw2R7CZXwgVo0oGVBVINj902ipPdUFBXVgiRdQho.p.1830000000.n2pUb9BAK9CPrT-xGpJ_66YBnKW1amfjwcqmEcHhRhP8C1RL6fsKAWlZGTKjX88EEahzU9lCHlVHhUGM47xeBg"
+   "cert_payload": "OLK2.player01.Yjfcw2R7CZXwgVo0oGVBVINj902ipPdUFBXVgiRdQho.p.1830000000.Other Player-ClassicBetaPvP",
+   "cert": "OLK2.player01.Yjfcw2R7CZXwgVo0oGVBVINj902ipPdUFBXVgiRdQho.p.1830000000.Other Player-ClassicBetaPvP.VVCteYcVvEC94tf4AYXgFoqVIMF3lwmT0Oa_wHjjDReZqnCqwc3dBRyRa2_lsdC82VETV6yC1ynAfYkO0218Aw"
   },
   {
    "key_id": "player02",
@@ -121,14 +123,15 @@
    "bootstrap": 0,
    "owner_discord_id": "100000000000000012",
    "owner_username": "test_player_2",
+   "character": "Third Player-ClassicBetaPvP2",
    "created": 1780000000,
    "seed_hex": "050c31d38614051dc2afdfaa3f010a5a12d25d67735b196ae19d354e87c021ac",
    "seed_b64url": "BQwx04YUBR3Cr9-qPwEKWhLSXWdzWxlq4Z01TofAIaw",
    "public_hex": "86dcd40827cbcb608b4419cc4afb1a68eb36b8002b208f05998a0dba2b4f4cba",
    "public_b64url": "htzUCCfLy2CLRBnMSvsaaOs2uAArII8FmYoNuitPTLo",
    "cert_exp": 1830000000,
-   "cert_payload": "OLK1.player02.htzUCCfLy2CLRBnMSvsaaOs2uAArII8FmYoNuitPTLo.p.1830000000",
-   "cert": "OLK1.player02.htzUCCfLy2CLRBnMSvsaaOs2uAArII8FmYoNuitPTLo.p.1830000000._XlSBnNuy2SJwh4e9s5shqR3WzRdeMd1ecRpLPOWbbPUVudFTJN0mdyVb-P-ijE09A0DJOBmyvbHhoJzpTcNCQ"
+   "cert_payload": "OLK2.player02.htzUCCfLy2CLRBnMSvsaaOs2uAArII8FmYoNuitPTLo.p.1830000000.Third Player-ClassicBetaPvP2",
+   "cert": "OLK2.player02.htzUCCfLy2CLRBnMSvsaaOs2uAArII8FmYoNuitPTLo.p.1830000000.Third Player-ClassicBetaPvP2.AhXwg-IeO7pvCaCiMB99vAmq4z4LEIC2jOfExrd_baQIEOcGeh9O_oyPxJKQqioKuXc3Am3z_o4BsMtEa-EnAg"
   },
   {
    "key_id": "player03",
@@ -136,14 +139,15 @@
    "bootstrap": 0,
    "owner_discord_id": "100000000000000013",
    "owner_username": "test_player_3",
+   "character": "Fourth Player-ClassicBetaPvP",
    "created": 1780000000,
    "seed_hex": "16b8f0f92843199f7a07aa0480a5b5959e7e04d27342c39ca7e63ba2ebb906fb",
    "seed_b64url": "Frjw-ShDGZ96B6oEgKW1lZ5-BNJzQsOcp-Y7ouu5Bvs",
    "public_hex": "24b7aace15afb8c48409285ea8e2baac0884b6e8e6aa644189259ac57c607c7d",
    "public_b64url": "JLeqzhWvuMSECSheqOK6rAiEtujmqmRBiSWaxXxgfH0",
    "cert_exp": 1830000000,
-   "cert_payload": "OLK1.player03.JLeqzhWvuMSECSheqOK6rAiEtujmqmRBiSWaxXxgfH0.p.1830000000",
-   "cert": "OLK1.player03.JLeqzhWvuMSECSheqOK6rAiEtujmqmRBiSWaxXxgfH0.p.1830000000.wIOxnEwfrX3YL5EJWO7iPcjUp9EQP4DrhoPlKYXi8zFb0Gv9oc97hp1aib4f9pXi5hwrOvE9nbPCagZFMjlZAQ"
+   "cert_payload": "OLK2.player03.JLeqzhWvuMSECSheqOK6rAiEtujmqmRBiSWaxXxgfH0.p.1830000000.Fourth Player-ClassicBetaPvP",
+   "cert": "OLK2.player03.JLeqzhWvuMSECSheqOK6rAiEtujmqmRBiSWaxXxgfH0.p.1830000000.Fourth Player-ClassicBetaPvP.C-wMIwi74DAQG3gPlNQTdiJZctpBv1fZWJs8XEPKWtOn6YjuNoZAOgYpIaGdnfUtQhdltBlfutRcejytbpdmAQ"
   },
   {
    "key_id": "player04",
@@ -151,14 +155,15 @@
    "bootstrap": 0,
    "owner_discord_id": "100000000000000014",
    "owner_username": "test_player_4",
+   "character": "Fifth Player-ClassicBetaPvP",
    "created": 1780000000,
    "seed_hex": "936e9145ff0a7abfefb1970d9617a81c528360d6547019773f0abd238bfb2d1e",
    "seed_b64url": "k26RRf8Ker_vsZcNlheoHFKDYNZUcBl3Pwq9I4v7LR4",
    "public_hex": "33a67f61cf0645678c34e8cba61d47b4d08c3e7f5fe8f02e093b687eb70e1492",
    "public_b64url": "M6Z_Yc8GRWeMNOjLph1HtNCMPn9f6PAuCTtofrcOFJI",
    "cert_exp": 1830000000,
-   "cert_payload": "OLK1.player04.M6Z_Yc8GRWeMNOjLph1HtNCMPn9f6PAuCTtofrcOFJI.p.1830000000",
-   "cert": "OLK1.player04.M6Z_Yc8GRWeMNOjLph1HtNCMPn9f6PAuCTtofrcOFJI.p.1830000000.9oWYF8gHTaj8_Z49oXaR8iiZc0iplnoJbJhSuXEPfS5Ds0zjgCL6kcr8AUCZiq-J-_p1L4A498jx_QYQufNPBQ"
+   "cert_payload": "OLK2.player04.M6Z_Yc8GRWeMNOjLph1HtNCMPn9f6PAuCTtofrcOFJI.p.1830000000.Fifth Player-ClassicBetaPvP",
+   "cert": "OLK2.player04.M6Z_Yc8GRWeMNOjLph1HtNCMPn9f6PAuCTtofrcOFJI.p.1830000000.Fifth Player-ClassicBetaPvP.JRPvWvyKVJqHTaSheHgX5YCqBm9Qw_d0v4plkCLH2guQuzlMqRRdOUSZ7m74yc9VlOg7HwRVa4XYYscli9r_Cg"
   },
   {
    "key_id": "player05",
@@ -166,14 +171,15 @@
    "bootstrap": 0,
    "owner_discord_id": "100000000000000015",
    "owner_username": "test_player_5",
+   "character": "Sixth Player-ClassicBetaPvP",
    "created": 1780000000,
    "seed_hex": "82039021c9f3afe3799c5f110c7e354775e9c1510738490c54350ea7a096401e",
    "seed_b64url": "ggOQIcnzr-N5nF8RDH41R3XpwVEHOEkMVDUOp6CWQB4",
    "public_hex": "4ec0e4db25f92a5fb0d76dfaff122a8d556e7596c959a4ce79cd116624645d5b",
    "public_b64url": "TsDk2yX5Kl-w1236_xIqjVVudZbJWaTOec0RZiRkXVs",
    "cert_exp": 1830000000,
-   "cert_payload": "OLK1.player05.TsDk2yX5Kl-w1236_xIqjVVudZbJWaTOec0RZiRkXVs.p.1830000000",
-   "cert": "OLK1.player05.TsDk2yX5Kl-w1236_xIqjVVudZbJWaTOec0RZiRkXVs.p.1830000000.ELuoNm6_Q2pxN78JJR0SoZoHWWBLyg81xGKtfyyO_L-b7KLj99Y1NUPoZ-IwUqOBu9V_4MvzAC5NQ22frMmGCA"
+   "cert_payload": "OLK2.player05.TsDk2yX5Kl-w1236_xIqjVVudZbJWaTOec0RZiRkXVs.p.1830000000.Sixth Player-ClassicBetaPvP",
+   "cert": "OLK2.player05.TsDk2yX5Kl-w1236_xIqjVVudZbJWaTOec0RZiRkXVs.p.1830000000.Sixth Player-ClassicBetaPvP.fvSPCmF1vXtzLEDxQmefrUxo2fTzPjDrLYr9IzWzJk4BJgJcuFZgXdVKra7oNtyhHl2iIN_cI_r1kAlUmbQEBw"
   },
   {
    "key_id": "council02",
@@ -181,14 +187,34 @@
    "bootstrap": 1,
    "owner_discord_id": "100000000000000002",
    "owner_username": "test_councillor_2",
+   "character": "Other Councillor-ClassicBetaPvP",
    "created": 1780000000,
    "seed_hex": "26c927471cdcad3f81acff98ab778320e313945d912aa0edd6a44e75cb9ac11a",
    "seed_b64url": "JsknRxzcrT-BrP-Yq3eDIOMTlF2RKqDt1qROdcuawRo",
    "public_hex": "20c8f6a546cd110a90a3b2c7e62fd969093f29ae609ce3b1a8f2595cb48f0315",
    "public_b64url": "IMj2pUbNEQqQo7LH5i_ZaQk_Ka5gnOOxqPJZXLSPAxU",
    "cert_exp": 1830000000,
-   "cert_payload": "OLK1.council02.IMj2pUbNEQqQo7LH5i_ZaQk_Ka5gnOOxqPJZXLSPAxU.c.1830000000",
-   "cert": "OLK1.council02.IMj2pUbNEQqQo7LH5i_ZaQk_Ka5gnOOxqPJZXLSPAxU.c.1830000000.BZPibX8nsg0M-gvuh2QkBEZu3DJ6mHhm0tNcBacWkGZ7axMUbZ85lu0Luar9ywAK6-ICoipMoGJov4wjwVu-DQ"
+   "cert_payload": "OLK2.council02.IMj2pUbNEQqQo7LH5i_ZaQk_Ka5gnOOxqPJZXLSPAxU.c.1830000000.Other Councillor-ClassicBetaPvP",
+   "cert": "OLK2.council02.IMj2pUbNEQqQo7LH5i_ZaQk_Ka5gnOOxqPJZXLSPAxU.c.1830000000.Other Councillor-ClassicBetaPvP.IIDM-HOTLp_3tD-ybEIjyGTvNcOCULjveuwHpVDGlwoboYXC0piGvJs72MEs9Bbk43ca8X-YPfOsnzdDn9QsAg"
+  }
+ ],
+ "council_authority": {
+  "seed_hex": "47954b8415aac29bc4dd7167965da3a661eb65e9310e37e9d532bdf58c04f955",
+  "seed_b64url": "R5VLhBWqwpvE3XFnll2jpmHrZekxDjfp1TK99YwE-VU",
+  "public_hex": "482fa6ee7b8220b00c1b0df468065f66cd5d1b87e46d66c00eafa63a0ba91740"
+ },
+ "council_keys": [
+  {
+   "key_id": "60d7d2f2c939",
+   "label": "council03",
+   "character": "Third Councillor-ClassicBetaPvP",
+   "seed_hex": "eb7648053f1bddf66f3eaa83d0b70ce6b71c1fb33687ae69cc0aec461b4837c9",
+   "seed_b64url": "63ZIBT8b3fZvPqqD0LcM5rccH7M2h65pzArsRhtIN8k",
+   "public_hex": "4d6120fca76fdb3bf6fe180e215b1b0a316c3a2c47f929fe8197837a3f17d1e2",
+   "public_b64url": "TWEg_Kdv2zv2_hgOIVsbCjFsOixH-Sn-gZeDej8X0eI",
+   "cert_exp": 1830000000,
+   "cert_payload": "OLK2.60d7d2f2c939.TWEg_Kdv2zv2_hgOIVsbCjFsOixH-Sn-gZeDej8X0eI.c.1830000000.Third Councillor-ClassicBetaPvP",
+   "cert": "OLK2.60d7d2f2c939.TWEg_Kdv2zv2_hgOIVsbCjFsOixH-Sn-gZeDej8X0eI.c.1830000000.Third Councillor-ClassicBetaPvP.5wTsFv1jb3Q7WjgtwG1pX3dzfgOiD3KqB7o_TBeENqexSXDTGC1HMjdBi-1Eiyng12a8oSnurl0RnkcqfxEICg"
   }
  ],
  "site": "https://link.example.org/olympus",
@@ -213,9 +239,9 @@
    "messages": [
     "OLY4~Some Player-ClassicBetaPvP~Olympus II~w~Alliance~0123456789abcdef~7K3M9QX2TB~5f2f66f046a1db8a~1799990100~council01~Test Councillor-ClassicBetaPvP"
    ],
-   "bundle": "OLB4~Some Player-ClassicBetaPvP~Olympus II~Alliance~0123456789abcdef~7K3M9QX2TB~5f2f66f046a1db8a~1799990100,council01,Test Councillor-ClassicBetaPvP,w,wYG_TW3fCOBxV9hteWMsnq2R8sBus8YaG-Dyb4SePjkl9a9Ub27i1okdpFxUh5aQASIZKKcXQbv0ocuXxvObBA",
-   "bytes": 237,
-   "url": "https://link.example.org/olympus#b=OLB4~Some%20Player-ClassicBetaPvP~Olympus%20II~Alliance~0123456789abcdef~7K3M9QX2TB~5f2f66f046a1db8a~1799990100%2Ccouncil01%2CTest%20Councillor-ClassicBetaPvP%2Cw%2CwYG_TW3fCOBxV9hteWMsnq2R8sBus8YaG-Dyb4SePjkl9a9Ub27i1okdpFxUh5aQASIZKKcXQbv0ocuXxvObBA"
+   "bundle": "OLB5~Some Player-ClassicBetaPvP~Olympus II~Alliance~0123456789abcdef~7K3M9QX2TB~5f2f66f046a1db8a~1799990100,council01,Test Councillor-ClassicBetaPvP,w,wYG_TW3fCOBxV9hteWMsnq2R8sBus8YaG-Dyb4SePjkl9a9Ub27i1okdpFxUh5aQASIZKKcXQbv0ocuXxvObBA,7IYl-lN-5QRTFG9QwpjrKSJZDGDe17VK3p6FcCpwIZs,c,1830000000,kuaVPJGR4ZwtCf2mtveDYem8nJmMfU-R4I-FndUaJCswUEoqDNECnB_oFNIj3DPMA18UgHkSK7L7X1oWZSMDCQ",
+   "bytes": 381,
+   "url": "https://link.example.org/olympus#b=OLB5~Some%20Player-ClassicBetaPvP~Olympus%20II~Alliance~0123456789abcdef~7K3M9QX2TB~5f2f66f046a1db8a~1799990100%2Ccouncil01%2CTest%20Councillor-ClassicBetaPvP%2Cw%2CwYG_TW3fCOBxV9hteWMsnq2R8sBus8YaG-Dyb4SePjkl9a9Ub27i1okdpFxUh5aQASIZKKcXQbv0ocuXxvObBA%2C7IYl-lN-5QRTFG9QwpjrKSJZDGDe17VK3p6FcCpwIZs%2Cc%2C1830000000%2CkuaVPJGR4ZwtCf2mtveDYem8nJmMfU-R4I-FndUaJCswUEoqDNECnB_oFNIj3DPMA18UgHkSK7L7X1oWZSMDCQ"
   },
   {
    "name": "three drawn players, non-ASCII requester",
@@ -251,9 +277,9 @@
     "OLY4~Tëst Plâyer-ClassicBetaPvP~Olympus Vanguard~c~Horde~a1b2c3d4e5f60718~H4N8PZ6R1B~9c5ac51afcd0bbee~1799990245~player02~Third Player-ClassicBetaPvP2",
     "OLY4~Tëst Plâyer-ClassicBetaPvP~Olympus Vanguard~c~Horde~a1b2c3d4e5f60718~H4N8PZ6R1B~9c5ac51afcd0bbee~1799990301~player03~Fourth Player-ClassicBetaPvP"
    ],
-   "bundle": "OLB4~Tëst Plâyer-ClassicBetaPvP~Olympus Vanguard~Horde~a1b2c3d4e5f60718~H4N8PZ6R1B~9c5ac51afcd0bbee~1799990200,player01,Other Player-ClassicBetaPvP,r,jRr01ESNDrVEohLRRZYhLAVPD9ue32uDrRA2GQByQq2dsCQ-6o79nFWcL__shopaQ2Umy1aV9f8sDIaMQLzyBw;1799990245,player02,Third Player-ClassicBetaPvP2,c,K7sW12b4A_uTxycWnR8rRE1Ip3wzAxA2GYOgNMitKtbx1KfI6IxWMJLEu2oEoJ042TuWxlbk_RU6k81b4kuEAA;1799990301,player03,Fourth Player-ClassicBetaPvP,c,7sEYRUmeAZOZyqJUGu8_hZ_O2Mn8mFuWIKdWMTJ_0Zs4KYzelPEDfnjfq3bcU-uYal7tiPtuBY6zijo0mJCqDQ",
-   "bytes": 514,
-   "url": "https://link.example.org/olympus#b=OLB4~T%C3%ABst%20Pl%C3%A2yer-ClassicBetaPvP~Olympus%20Vanguard~Horde~a1b2c3d4e5f60718~H4N8PZ6R1B~9c5ac51afcd0bbee~1799990200%2Cplayer01%2COther%20Player-ClassicBetaPvP%2Cr%2CjRr01ESNDrVEohLRRZYhLAVPD9ue32uDrRA2GQByQq2dsCQ-6o79nFWcL__shopaQ2Umy1aV9f8sDIaMQLzyBw%3B1799990245%2Cplayer02%2CThird%20Player-ClassicBetaPvP2%2Cc%2CK7sW12b4A_uTxycWnR8rRE1Ip3wzAxA2GYOgNMitKtbx1KfI6IxWMJLEu2oEoJ042TuWxlbk_RU6k81b4kuEAA%3B1799990301%2Cplayer03%2CFourth%20Player-ClassicBetaPvP%2Cc%2C7sEYRUmeAZOZyqJUGu8_hZ_O2Mn8mFuWIKdWMTJ_0Zs4KYzelPEDfnjfq3bcU-uYal7tiPtuBY6zijo0mJCqDQ"
+   "bundle": "OLB5~Tëst Plâyer-ClassicBetaPvP~Olympus Vanguard~Horde~a1b2c3d4e5f60718~H4N8PZ6R1B~9c5ac51afcd0bbee~1799990200,player01,Other Player-ClassicBetaPvP,r,jRr01ESNDrVEohLRRZYhLAVPD9ue32uDrRA2GQByQq2dsCQ-6o79nFWcL__shopaQ2Umy1aV9f8sDIaMQLzyBw,Yjfcw2R7CZXwgVo0oGVBVINj902ipPdUFBXVgiRdQho,p,1830000000,VVCteYcVvEC94tf4AYXgFoqVIMF3lwmT0Oa_wHjjDReZqnCqwc3dBRyRa2_lsdC82VETV6yC1ynAfYkO0218Aw;1799990245,player02,Third Player-ClassicBetaPvP2,c,K7sW12b4A_uTxycWnR8rRE1Ip3wzAxA2GYOgNMitKtbx1KfI6IxWMJLEu2oEoJ042TuWxlbk_RU6k81b4kuEAA,htzUCCfLy2CLRBnMSvsaaOs2uAArII8FmYoNuitPTLo,p,1830000000,AhXwg-IeO7pvCaCiMB99vAmq4z4LEIC2jOfExrd_baQIEOcGeh9O_oyPxJKQqioKuXc3Am3z_o4BsMtEa-EnAg;1799990301,player03,Fourth Player-ClassicBetaPvP,c,7sEYRUmeAZOZyqJUGu8_hZ_O2Mn8mFuWIKdWMTJ_0Zs4KYzelPEDfnjfq3bcU-uYal7tiPtuBY6zijo0mJCqDQ,JLeqzhWvuMSECSheqOK6rAiEtujmqmRBiSWaxXxgfH0,p,1830000000,C-wMIwi74DAQG3gPlNQTdiJZctpBv1fZWJs8XEPKWtOn6YjuNoZAOgYpIaGdnfUtQhdltBlfutRcejytbpdmAQ",
+   "bytes": 946,
+   "url": "https://link.example.org/olympus#b=OLB5~T%C3%ABst%20Pl%C3%A2yer-ClassicBetaPvP~Olympus%20Vanguard~Horde~a1b2c3d4e5f60718~H4N8PZ6R1B~9c5ac51afcd0bbee~1799990200%2Cplayer01%2COther%20Player-ClassicBetaPvP%2Cr%2CjRr01ESNDrVEohLRRZYhLAVPD9ue32uDrRA2GQByQq2dsCQ-6o79nFWcL__shopaQ2Umy1aV9f8sDIaMQLzyBw%2CYjfcw2R7CZXwgVo0oGVBVINj902ipPdUFBXVgiRdQho%2Cp%2C1830000000%2CVVCteYcVvEC94tf4AYXgFoqVIMF3lwmT0Oa_wHjjDReZqnCqwc3dBRyRa2_lsdC82VETV6yC1ynAfYkO0218Aw%3B1799990245%2Cplayer02%2CThird%20Player-ClassicBetaPvP2%2Cc%2CK7sW12b4A_uTxycWnR8rRE1Ip3wzAxA2GYOgNMitKtbx1KfI6IxWMJLEu2oEoJ042TuWxlbk_RU6k81b4kuEAA%2ChtzUCCfLy2CLRBnMSvsaaOs2uAArII8FmYoNuitPTLo%2Cp%2C1830000000%2CAhXwg-IeO7pvCaCiMB99vAmq4z4LEIC2jOfExrd_baQIEOcGeh9O_oyPxJKQqioKuXc3Am3z_o4BsMtEa-EnAg%3B1799990301%2Cplayer03%2CFourth%20Player-ClassicBetaPvP%2Cc%2C7sEYRUmeAZOZyqJUGu8_hZ_O2Mn8mFuWIKdWMTJ_0Zs4KYzelPEDfnjfq3bcU-uYal7tiPtuBY6zijo0mJCqDQ%2CJLeqzhWvuMSECSheqOK6rAiEtujmqmRBiSWaxXxgfH0%2Cp%2C1830000000%2CC-wMIwi74DAQG3gPlNQTdiJZctpBv1fZWJs8XEPKWtOn6YjuNoZAOgYpIaGdnfUtQhdltBlfutRcejytbpdmAQ"
   },
   {
    "name": "four drawn players, long names",
@@ -296,9 +322,9 @@
     "OLY4~Ëlüñé Stârwhîspêr-ClassicBetaPvP2~Olympus Vanguard~w~Horde~ffeeddccbbaa9988~H4N8PZ6R1B~ff48b82d62c7bd44~1799990301~player03~Fourth Player-ClassicBetaPvP",
     "OLY4~Ëlüñé Stârwhîspêr-ClassicBetaPvP2~Olympus Vanguard~c~Horde~ffeeddccbbaa9988~H4N8PZ6R1B~ff48b82d62c7bd44~1799990330~player04~Fifth Player-ClassicBetaPvP"
    ],
-   "bundle": "OLB4~Ëlüñé Stârwhîspêr-ClassicBetaPvP2~Olympus Vanguard~Horde~ffeeddccbbaa9988~H4N8PZ6R1B~ff48b82d62c7bd44~1799990200,player01,Other Player-ClassicBetaPvP,c,p737JdBmSC_4a13IcWbNffLX4IjzTim1GDcPWYJUorgp0gdXCQgPIPs4ZhLihbhH4hqewV0DNgcFBObtfFItDQ;1799990245,player02,Third Player-ClassicBetaPvP2,c,Kno5apEZP9x7lLY6bL6o6AAJhV5C3EMFeRdjRFE6uA_cbWzoN8iT52JWkDSqsi0h94khaICjVprmD4XCzWygDQ;1799990301,player03,Fourth Player-ClassicBetaPvP,w,kZd6DkJhsAHMgkL5Au9Lys1DCAeKVwRqshCsz8aQuQv74GiLEU5zwwVXq4ZM1OpAZ6ACqPeMoiACKWOLaKvdAg;1799990330,player04,Fifth Player-ClassicBetaPvP,c,kiD-KoZKR5HFqqLKaDhf_lA1A2RuNxQvPPArAlYFqW7CvfvQwgxA-iNFiIDDuwQFeMMkUih5jSD8SNJYCXcKCg",
-   "bytes": 663,
-   "url": "https://link.example.org/olympus#b=OLB4~%C3%8Bl%C3%BC%C3%B1%C3%A9%20St%C3%A2rwh%C3%AEsp%C3%AAr-ClassicBetaPvP2~Olympus%20Vanguard~Horde~ffeeddccbbaa9988~H4N8PZ6R1B~ff48b82d62c7bd44~1799990200%2Cplayer01%2COther%20Player-ClassicBetaPvP%2Cc%2Cp737JdBmSC_4a13IcWbNffLX4IjzTim1GDcPWYJUorgp0gdXCQgPIPs4ZhLihbhH4hqewV0DNgcFBObtfFItDQ%3B1799990245%2Cplayer02%2CThird%20Player-ClassicBetaPvP2%2Cc%2CKno5apEZP9x7lLY6bL6o6AAJhV5C3EMFeRdjRFE6uA_cbWzoN8iT52JWkDSqsi0h94khaICjVprmD4XCzWygDQ%3B1799990301%2Cplayer03%2CFourth%20Player-ClassicBetaPvP%2Cw%2CkZd6DkJhsAHMgkL5Au9Lys1DCAeKVwRqshCsz8aQuQv74GiLEU5zwwVXq4ZM1OpAZ6ACqPeMoiACKWOLaKvdAg%3B1799990330%2Cplayer04%2CFifth%20Player-ClassicBetaPvP%2Cc%2CkiD-KoZKR5HFqqLKaDhf_lA1A2RuNxQvPPArAlYFqW7CvfvQwgxA-iNFiIDDuwQFeMMkUih5jSD8SNJYCXcKCg"
+   "bundle": "OLB5~Ëlüñé Stârwhîspêr-ClassicBetaPvP2~Olympus Vanguard~Horde~ffeeddccbbaa9988~H4N8PZ6R1B~ff48b82d62c7bd44~1799990200,player01,Other Player-ClassicBetaPvP,c,p737JdBmSC_4a13IcWbNffLX4IjzTim1GDcPWYJUorgp0gdXCQgPIPs4ZhLihbhH4hqewV0DNgcFBObtfFItDQ,Yjfcw2R7CZXwgVo0oGVBVINj902ipPdUFBXVgiRdQho,p,1830000000,VVCteYcVvEC94tf4AYXgFoqVIMF3lwmT0Oa_wHjjDReZqnCqwc3dBRyRa2_lsdC82VETV6yC1ynAfYkO0218Aw;1799990245,player02,Third Player-ClassicBetaPvP2,c,Kno5apEZP9x7lLY6bL6o6AAJhV5C3EMFeRdjRFE6uA_cbWzoN8iT52JWkDSqsi0h94khaICjVprmD4XCzWygDQ,htzUCCfLy2CLRBnMSvsaaOs2uAArII8FmYoNuitPTLo,p,1830000000,AhXwg-IeO7pvCaCiMB99vAmq4z4LEIC2jOfExrd_baQIEOcGeh9O_oyPxJKQqioKuXc3Am3z_o4BsMtEa-EnAg;1799990301,player03,Fourth Player-ClassicBetaPvP,w,kZd6DkJhsAHMgkL5Au9Lys1DCAeKVwRqshCsz8aQuQv74GiLEU5zwwVXq4ZM1OpAZ6ACqPeMoiACKWOLaKvdAg,JLeqzhWvuMSECSheqOK6rAiEtujmqmRBiSWaxXxgfH0,p,1830000000,C-wMIwi74DAQG3gPlNQTdiJZctpBv1fZWJs8XEPKWtOn6YjuNoZAOgYpIaGdnfUtQhdltBlfutRcejytbpdmAQ;1799990330,player04,Fifth Player-ClassicBetaPvP,c,kiD-KoZKR5HFqqLKaDhf_lA1A2RuNxQvPPArAlYFqW7CvfvQwgxA-iNFiIDDuwQFeMMkUih5jSD8SNJYCXcKCg,M6Z_Yc8GRWeMNOjLph1HtNCMPn9f6PAuCTtofrcOFJI,p,1830000000,JRPvWvyKVJqHTaSheHgX5YCqBm9Qw_d0v4plkCLH2guQuzlMqRRdOUSZ7m74yc9VlOg7HwRVa4XYYscli9r_Cg",
+   "bytes": 1239,
+   "url": "https://link.example.org/olympus#b=OLB5~%C3%8Bl%C3%BC%C3%B1%C3%A9%20St%C3%A2rwh%C3%AEsp%C3%AAr-ClassicBetaPvP2~Olympus%20Vanguard~Horde~ffeeddccbbaa9988~H4N8PZ6R1B~ff48b82d62c7bd44~1799990200%2Cplayer01%2COther%20Player-ClassicBetaPvP%2Cc%2Cp737JdBmSC_4a13IcWbNffLX4IjzTim1GDcPWYJUorgp0gdXCQgPIPs4ZhLihbhH4hqewV0DNgcFBObtfFItDQ%2CYjfcw2R7CZXwgVo0oGVBVINj902ipPdUFBXVgiRdQho%2Cp%2C1830000000%2CVVCteYcVvEC94tf4AYXgFoqVIMF3lwmT0Oa_wHjjDReZqnCqwc3dBRyRa2_lsdC82VETV6yC1ynAfYkO0218Aw%3B1799990245%2Cplayer02%2CThird%20Player-ClassicBetaPvP2%2Cc%2CKno5apEZP9x7lLY6bL6o6AAJhV5C3EMFeRdjRFE6uA_cbWzoN8iT52JWkDSqsi0h94khaICjVprmD4XCzWygDQ%2ChtzUCCfLy2CLRBnMSvsaaOs2uAArII8FmYoNuitPTLo%2Cp%2C1830000000%2CAhXwg-IeO7pvCaCiMB99vAmq4z4LEIC2jOfExrd_baQIEOcGeh9O_oyPxJKQqioKuXc3Am3z_o4BsMtEa-EnAg%3B1799990301%2Cplayer03%2CFourth%20Player-ClassicBetaPvP%2Cw%2CkZd6DkJhsAHMgkL5Au9Lys1DCAeKVwRqshCsz8aQuQv74GiLEU5zwwVXq4ZM1OpAZ6ACqPeMoiACKWOLaKvdAg%2CJLeqzhWvuMSECSheqOK6rAiEtujmqmRBiSWaxXxgfH0%2Cp%2C1830000000%2CC-wMIwi74DAQG3gPlNQTdiJZctpBv1fZWJs8XEPKWtOn6YjuNoZAOgYpIaGdnfUtQhdltBlfutRcejytbpdmAQ%3B1799990330%2Cplayer04%2CFifth%20Player-ClassicBetaPvP%2Cc%2CkiD-KoZKR5HFqqLKaDhf_lA1A2RuNxQvPPArAlYFqW7CvfvQwgxA-iNFiIDDuwQFeMMkUih5jSD8SNJYCXcKCg%2CM6Z_Yc8GRWeMNOjLph1HtNCMPn9f6PAuCTtofrcOFJI%2Cp%2C1830000000%2CJRPvWvyKVJqHTaSheHgX5YCqBm9Qw_d0v4plkCLH2guQuzlMqRRdOUSZ7m74yc9VlOg7HwRVa4XYYscli9r_Cg"
   },
   {
    "name": "two councillors, the guild claimed only",
@@ -327,9 +353,33 @@
     "OLY4~Some Player-ClassicBetaPvP~Olympus II~c~Alliance~00ff00ff00ff00ff~7K3M9QX2TB~5f2f66f046a1db8a~1799990150~council01~Test Councillor-ClassicBetaPvP",
     "OLY4~Some Player-ClassicBetaPvP~Olympus II~c~Alliance~00ff00ff00ff00ff~7K3M9QX2TB~5f2f66f046a1db8a~1799990170~council02~Other Councillor-ClassicBetaPvP"
    ],
-   "bundle": "OLB4~Some Player-ClassicBetaPvP~Olympus II~Alliance~00ff00ff00ff00ff~7K3M9QX2TB~5f2f66f046a1db8a~1799990150,council01,Test Councillor-ClassicBetaPvP,c,BmoBgdtie0trYF2Ytd1egzI2OxtaTqRNL0PyRbkCBSu_VfwE2zkAld8xMJMkm1DPAbMKh03BEO7J6K8LBXBMCA;1799990170,council02,Other Councillor-ClassicBetaPvP,c,JAn1O8jF-gkGYV7ytRntIokfB3uTnKORT6LV08DGI_hDiRw9LXLnDbqiBTEAJKazdYJ1kdxlx9SZAcNd7YazBA",
-   "bytes": 379,
-   "url": "https://link.example.org/olympus#b=OLB4~Some%20Player-ClassicBetaPvP~Olympus%20II~Alliance~00ff00ff00ff00ff~7K3M9QX2TB~5f2f66f046a1db8a~1799990150%2Ccouncil01%2CTest%20Councillor-ClassicBetaPvP%2Cc%2CBmoBgdtie0trYF2Ytd1egzI2OxtaTqRNL0PyRbkCBSu_VfwE2zkAld8xMJMkm1DPAbMKh03BEO7J6K8LBXBMCA%3B1799990170%2Ccouncil02%2COther%20Councillor-ClassicBetaPvP%2Cc%2CJAn1O8jF-gkGYV7ytRntIokfB3uTnKORT6LV08DGI_hDiRw9LXLnDbqiBTEAJKazdYJ1kdxlx9SZAcNd7YazBA"
+   "bundle": "OLB5~Some Player-ClassicBetaPvP~Olympus II~Alliance~00ff00ff00ff00ff~7K3M9QX2TB~5f2f66f046a1db8a~1799990150,council01,Test Councillor-ClassicBetaPvP,c,BmoBgdtie0trYF2Ytd1egzI2OxtaTqRNL0PyRbkCBSu_VfwE2zkAld8xMJMkm1DPAbMKh03BEO7J6K8LBXBMCA,7IYl-lN-5QRTFG9QwpjrKSJZDGDe17VK3p6FcCpwIZs,c,1830000000,kuaVPJGR4ZwtCf2mtveDYem8nJmMfU-R4I-FndUaJCswUEoqDNECnB_oFNIj3DPMA18UgHkSK7L7X1oWZSMDCQ;1799990170,council02,Other Councillor-ClassicBetaPvP,c,JAn1O8jF-gkGYV7ytRntIokfB3uTnKORT6LV08DGI_hDiRw9LXLnDbqiBTEAJKazdYJ1kdxlx9SZAcNd7YazBA,IMj2pUbNEQqQo7LH5i_ZaQk_Ka5gnOOxqPJZXLSPAxU,c,1830000000,IIDM-HOTLp_3tD-ybEIjyGTvNcOCULjveuwHpVDGlwoboYXC0piGvJs72MEs9Bbk43ca8X-YPfOsnzdDn9QsAg",
+   "bytes": 667,
+   "url": "https://link.example.org/olympus#b=OLB5~Some%20Player-ClassicBetaPvP~Olympus%20II~Alliance~00ff00ff00ff00ff~7K3M9QX2TB~5f2f66f046a1db8a~1799990150%2Ccouncil01%2CTest%20Councillor-ClassicBetaPvP%2Cc%2CBmoBgdtie0trYF2Ytd1egzI2OxtaTqRNL0PyRbkCBSu_VfwE2zkAld8xMJMkm1DPAbMKh03BEO7J6K8LBXBMCA%2C7IYl-lN-5QRTFG9QwpjrKSJZDGDe17VK3p6FcCpwIZs%2Cc%2C1830000000%2CkuaVPJGR4ZwtCf2mtveDYem8nJmMfU-R4I-FndUaJCswUEoqDNECnB_oFNIj3DPMA18UgHkSK7L7X1oWZSMDCQ%3B1799990170%2Ccouncil02%2COther%20Councillor-ClassicBetaPvP%2Cc%2CJAn1O8jF-gkGYV7ytRntIokfB3uTnKORT6LV08DGI_hDiRw9LXLnDbqiBTEAJKazdYJ1kdxlx9SZAcNd7YazBA%2CIMj2pUbNEQqQo7LH5i_ZaQk_Ka5gnOOxqPJZXLSPAxU%2Cc%2C1830000000%2CIIDM-HOTLp_3tD-ybEIjyGTvNcOCULjveuwHpVDGlwoboYXC0piGvJs72MEs9Bbk43ca8X-YPfOsnzdDn9QsAg"
+  },
+  {
+   "name": "a councillor certified by the council authority",
+   "requester": "Some Player-ClassicBetaPvP",
+   "guild": "Olympus II",
+   "faction": "Alliance",
+   "nonce": "0123456789abcdef",
+   "R": "7K3M9QX2TB",
+   "tag": "5f2f66f046a1db8a",
+   "tag_input": "TmJVCJJtjs5W_sOXnQm3G10J3y5xwVQkii6zRhi0EO-5AmL__PtEg1Ao7VaiUivi1Jslf4i1OJUxMDDNXtG4Ag~Some Player-ClassicBetaPvP",
+   "proofs": [
+    {
+     "issued": 1799990120,
+     "key_id": "60d7d2f2c939",
+     "confirmer": "Third Councillor-ClassicBetaPvP",
+     "gv": "w"
+    }
+   ],
+   "messages": [
+    "OLY4~Some Player-ClassicBetaPvP~Olympus II~w~Alliance~0123456789abcdef~7K3M9QX2TB~5f2f66f046a1db8a~1799990120~60d7d2f2c939~Third Councillor-ClassicBetaPvP"
+   ],
+   "bundle": "OLB5~Some Player-ClassicBetaPvP~Olympus II~Alliance~0123456789abcdef~7K3M9QX2TB~5f2f66f046a1db8a~1799990120,60d7d2f2c939,Third Councillor-ClassicBetaPvP,w,sXCNKxKUl-QJK2jYzERR7iX3bmGOqCUrMkbN4fuAj3QASQYP_YMMhvlLylLsNuVKGFMhO8DaH17AxRF1g0AxCw,TWEg_Kdv2zv2_hgOIVsbCjFsOixH-Sn-gZeDej8X0eI,c,1830000000,5wTsFv1jb3Q7WjgtwG1pX3dzfgOiD3KqB7o_TBeENqexSXDTGC1HMjdBi-1Eiyng12a8oSnurl0RnkcqfxEICg",
+   "bytes": 385,
+   "url": "https://link.example.org/olympus#b=OLB5~Some%20Player-ClassicBetaPvP~Olympus%20II~Alliance~0123456789abcdef~7K3M9QX2TB~5f2f66f046a1db8a~1799990120%2C60d7d2f2c939%2CThird%20Councillor-ClassicBetaPvP%2Cw%2CsXCNKxKUl-QJK2jYzERR7iX3bmGOqCUrMkbN4fuAj3QASQYP_YMMhvlLylLsNuVKGFMhO8DaH17AxRF1g0AxCw%2CTWEg_Kdv2zv2_hgOIVsbCjFsOixH-Sn-gZeDej8X0eI%2Cc%2C1830000000%2C5wTsFv1jb3Q7WjgtwG1pX3dzfgOiD3KqB7o_TBeENqexSXDTGC1HMjdBi-1Eiyng12a8oSnurl0RnkcqfxEICg"
   }
  ],
  "ed25519": [
@@ -397,10 +447,20 @@
    "seed_hex": "f8b562176148cbec194b0b09e63cf8f6bb0e156e6ea8620e8d2a7b53c4e5e77e",
    "seed_b64url": "-LViF2FIy-wZSwsJ5jz49rsOFW5uqGIOjSp7U8Tl534",
    "public_hex": "070a599da007dbca7a54999daeab8eec7bd9e1cd4dd53659322552bc33f2225b",
-   "message": "OLK1.council01.7IYl-lN-5QRTFG9QwpjrKSJZDGDe17VK3p6FcCpwIZs.c.1830000000",
-   "message_hex": "4f4c4b312e636f756e63696c30312e3749596c2d6c4e2d355152544647395177706a724b534a5a444744653137564b3370364663437077495a732e632e31383330303030303030",
-   "signature_hex": "6ab61389cb54b90f0602dc832ae6ad498e6ee137260489374ce9124678fdc1078665fd5fdae96853eb9d8cb88ea5a938690151b61a29f3bd39bb71d4d18c3c0f",
-   "signature_b64url": "arYTictUuQ8GAtyDKuatSY5u4TcmBIk3TOkSRnj9wQeGZf1f2uloU-udjLiOpak4aQFRthop8705u3HU0Yw8Dw"
+   "message": "OLK2.council01.7IYl-lN-5QRTFG9QwpjrKSJZDGDe17VK3p6FcCpwIZs.c.1830000000.Test Councillor-ClassicBetaPvP",
+   "message_hex": "4f4c4b322e636f756e63696c30312e3749596c2d6c4e2d355152544647395177706a724b534a5a444744653137564b3370364663437077495a732e632e313833303030303030302e5465737420436f756e63696c6c6f722d436c617373696342657461507650",
+   "signature_hex": "92e6953c9191e19c2d09fda6b6f78361e9bc9c998c7d4f91e08f859dd51a242b30504a2a0cd1029c1fe814d223dc33cc035f148079122bb2fb5f5a1665230309",
+   "signature_b64url": "kuaVPJGR4ZwtCf2mtveDYem8nJmMfU-R4I-FndUaJCswUEoqDNECnB_oFNIj3DPMA18UgHkSK7L7X1oWZSMDCQ"
+  },
+  {
+   "name": "council authority key, councillor certificate",
+   "seed_hex": "47954b8415aac29bc4dd7167965da3a661eb65e9310e37e9d532bdf58c04f955",
+   "seed_b64url": "R5VLhBWqwpvE3XFnll2jpmHrZekxDjfp1TK99YwE-VU",
+   "public_hex": "482fa6ee7b8220b00c1b0df468065f66cd5d1b87e46d66c00eafa63a0ba91740",
+   "message": "OLK2.60d7d2f2c939.TWEg_Kdv2zv2_hgOIVsbCjFsOixH-Sn-gZeDej8X0eI.c.1830000000.Third Councillor-ClassicBetaPvP",
+   "message_hex": "4f4c4b322e3630643764326632633933392e545745675f4b6476327a76325f68674f49567362436a46734f6978482d536e2d675a6544656a38583065492e632e313833303030303030302e546869726420436f756e63696c6c6f722d436c617373696342657461507650",
+   "signature_hex": "e704ec16fd636f743b5a382dc06d695f77737e03a20f72aa07ba3f4c178436a7b14970d3182d473237418bed448b29e0d766bca129eeae5d119e472a7f11080a",
+   "signature_b64url": "5wTsFv1jb3Q7WjgtwG1pX3dzfgOiD3KqB7o_TBeENqexSXDTGC1HMjdBi-1Eiyng12a8oSnurl0RnkcqfxEICg"
   }
  ],
  "rejects": [

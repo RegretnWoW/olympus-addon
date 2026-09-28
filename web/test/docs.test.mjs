@@ -11,7 +11,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { REPO, guideVectors, verify } from './helpers.mjs';
 import { parseBundle, parseToken, signedMessage, linkTag, drawThreshold } from '../public/core.js';
-import { verifyCertificate } from '../worker/link-worker.js';
+import { verifyCertificate, councilCertificate, councilKeyId } from '../worker/link-worker.js';
 
 const GUIDE = join(REPO, 'web', 'WORKER.md');
 
@@ -67,9 +67,18 @@ if (process.argv[1] === fileURLToPath(import.meta.url) && process.argv.includes(
 		for (const k of v.keys) {
 			const cert = await verifyCertificate(v.backend.public_hex, k.cert);
 			assert.ok(cert, k.key_id);
-			assert.deepEqual([cert.keyId, cert.publicHex, cert.tier, cert.exp], [k.key_id, k.public_hex, k.kind, k.cert_exp]);
+			assert.deepEqual([cert.keyId, cert.publicHex, cert.tier, cert.exp, cert.character], [k.key_id, k.public_hex, k.kind, k.cert_exp, k.character]);
 		}
-		const keys = Object.fromEntries(v.keys.map((k) => [k.key_id, k.public_hex]));
+		// The council authority's: a High Councillor's key, its id the key's hash, never registered.
+		assert.ok(v.council_authority.keys.length >= 1);
+		for (const k of v.council_authority.keys) {
+			const cert = await verifyCertificate(v.council_authority.public_hex, k.cert);
+			assert.ok(cert, k.key_id);
+			assert.deepEqual([cert.keyId, cert.publicHex, cert.tier, cert.exp, cert.character], [k.key_id, k.public_hex, 'c', k.cert_exp, k.character]);
+			assert.equal(await councilKeyId(k.public_hex), k.key_id);
+			assert.ok(await councilCertificate({ LINK_CA_PUBLIC: v.council_authority.public_hex }, cert));
+		}
+		const keys = Object.fromEntries([...v.keys, ...v.council_authority.keys].map((k) => [k.key_id, k.public_hex]));
 		assert.ok(v.bundles.length >= 2);
 		for (const b of v.bundles) {
 			const parsed = parseBundle(b.bundle);
