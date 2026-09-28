@@ -48,9 +48,13 @@ until you turn it on.
   (dated; the newest wins and the King's newer word always wins), and the Crown's decrees for
   `<Olympus>` on every client. Never the King's crown on the map, his court, writs, pardons, the
   untabarded list, or his own book of the treasury and his yes to share it. No name is written in
-  the code and no census vote makes one; a newer signed list without him ends it at once. The
-  trust this adds is in the author's key: whoever holds it can make a character act for the King
-  in these, as it can name the High Council.
+  the code and no census vote makes one; a newer signed list without him ends it at once, and a
+  list of Hands he set counts no longer than he does. Every client keeps the newest list of Hands
+  it took and never goes back to an older one (a list saved in an earlier session goes out held
+  back until confirmed); a player's word that a newer list is held only holds back the King's or
+  the Steward's own saved list on his client, and never names or removes a Hand. The trust this
+  adds is in the author's key: whoever holds it can make a character act for the King in these,
+  as it can name the High Council.
 - **Ranks of other guilds come from the census**, the picture most senders agree on, and a
   census report is its sender's word: nothing the server tells an addon proves which guild a
   sender belongs to. So a few characters working together can, today (1.0.0):

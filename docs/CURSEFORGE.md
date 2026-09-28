@@ -258,11 +258,27 @@ stamps on every message: each client takes the Hands, the keepers and the switch
 the King's character or from a Steward its signed titles list names, each list dated by the
 server's clock. The newest wins, and on the same second the King's: **the King's newer word
 always wins** (his screen tells him when his Steward changed one of them; the name is cut short
-there while the council's names are hidden on his stream). The King's client and the Steward's
-take the newest list as theirs and repeat it, so the Hands no longer lapse while either of them
-is online (they end 20 minutes after both stopped repeating them, as before), and each answers
-an older list it hears with the newer one. Clients before 1.0.0 follow the King's own list
-alone, as they always did.
+there while the council's names are hidden on his stream; a Steward's screen tells him when the
+King's own word replaced his list of Hands). The King's client and the Steward's take the
+newest list as theirs and repeat it, and each answers an older list it hears with the newer one.
+
+**When they are not online together** (the usual case), every client keeps the newest list of
+Hands it took, across sessions, and never goes back to an older one. The Hands last while the
+King's client or a Steward's is online, whatever list it repeats, and end 20 minutes after both
+logged off, as before. A list the King's or the Steward's client saved in an earlier session
+goes out *held back* for 30 seconds: no client takes it, and a few of the clients that hold a
+newer list say so. That client then keeps its list held back and tells its player (the Hands
+page says so too) until he hears the newer list from whoever set it, or names the Hands again,
+which makes his own word the newest. That claim is anybody's word, so it does nothing else: it never names or
+removes a Hand. A client that never heard the newer list still takes a saved list nobody
+answered within those 30 seconds, until a client that holds the newer one is online. A list a
+Steward set counts no longer than he does: once a newer signed list drops him, the King's list
+replaces it, whatever its date.
+
+Clients before 1.0.0 follow the King's own list alone, as they always did (the held-back mark is
+no name to them). A King's client before 1.0.0 sends his list without a date: a 1.0.0 client
+takes it where it holds nothing newer, and over the Steward's list only when the King changes
+his, so a King still on 0.9.x replaces his Steward's Hands each time he changes his own list.
 
 **Who he is.** Only the author names a Steward, with the same key that signs the council (the
 README on GitHub says how): no name is written in the addon, no census vote counts, and nobody
@@ -527,7 +543,11 @@ few characters working together can still reach is said plainly further down
     and the King's newer word always over his; and the Crown's decrees for `<Olympus>` on every
     client. Never the King's crown on the map, his court, writs, pardons, untabarded list, book
     or yes. This adds trust in the author's key: whoever holds it can make a character act for
-    the King in these, as it can name the council. A newer signed list without him ends it.
+    the King in these, as it can name the council. A newer signed list without him ends it,
+    and a list of Hands he set counts no longer than he does. Every client keeps the newest
+    list of Hands it took and never goes back to an older one; a player's word that a newer
+    list is held only holds back the King's or the Steward's own saved list on his client: it
+    never names or removes a Hand.
   - A decree counts only if its sender is the Lord or a Captain of that guild as the census
     pictures it (below), or as our own roster says for our own guild; the King's by his name.
     The rank written inside the message is ignored. Since 1.0.0 a sender speaks for one guild

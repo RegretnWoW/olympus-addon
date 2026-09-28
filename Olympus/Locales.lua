@@ -959,6 +959,12 @@ L.STEWARD_SET_KEEPERS = "Your Steward %s changed the treasury's keepers."
 L.STEWARD_YOU = "The author's signed list names you the King's Steward: the Throne tab is open to you, to act for %s."
 L.STEWARD_NO_LONGER = "You are no longer the King's Steward."
 L.TREASURY_DETAIL_STEWARD = "The treasury as its keepers' addons send it. In the King's name your buttons choose what the army sees, and you name its keepers."
+-- 1.0.0: a list of Hands older than one the army holds (the King's client or a Steward's, back after a while).
+L.HANDS_NEWER_HELD = "The army holds a newer list of Hands than yours (set by %s while you were away). Yours is held back: you take the newer one when you hear it, or name the Hands again to make yours the newest."
+L.HANDS_HELD_BACK = "Held back: the army holds a newer list (set by %s while you were away). You take it when you hear it; naming the Hands again makes yours the newest."
+L.HANDS_BY_KING = "the King"
+L.HANDS_BY_STEWARD = "a Steward"
+L.STEWARD_KING_HANDS = "The King's own newer word replaced your list of Hands (the Hands button shows it)."
 if GetLocale and GetLocale() == "ptBR" then
 	L.THOUSANDS = "."
 	L.ARMY_TOTAL = "%s soldados"
@@ -1907,4 +1913,9 @@ if GetLocale and GetLocale() == "ptBR" then
 	L.STEWARD_YOU = "A lista assinada do autor te nomeia Senescal do Rei (o braço direito dele): a aba Trono está aberta para você, para agir por %s."
 	L.STEWARD_NO_LONGER = "Você não é mais o Senescal do Rei."
 	L.TREASURY_DETAIL_STEWARD = "O tesouro como os addons dos guardiões mandam. Em nome do Rei seus botões escolhem o que o exército vê, e você nomeia os guardiões."
+	L.HANDS_NEWER_HELD = "O exército tem uma lista de Mãos mais nova que a sua (definida por %s enquanto você estava fora). A sua fica retida: você recebe a mais nova quando ouvi-la, ou nomeie as Mãos de novo para que a sua seja a mais nova."
+	L.HANDS_HELD_BACK = "Retida: o exército tem uma lista mais nova (definida por %s enquanto você estava fora). Você a recebe quando ouvi-la; nomear as Mãos de novo faz da sua a mais nova."
+	L.HANDS_BY_KING = "o Rei"
+	L.HANDS_BY_STEWARD = "um Senescal"
+	L.STEWARD_KING_HANDS = "A palavra mais nova do próprio Rei substituiu a sua lista de Mãos (o botão Mãos mostra a lista)."
 end
