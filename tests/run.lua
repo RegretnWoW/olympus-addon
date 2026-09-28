@@ -4206,7 +4206,8 @@ local function OldCodec()
 end
 
 -- Comm.lua loaded into a namespace of its own (fresh peers, stats and guard) with a clock the
--- test moves. Deliver(dist, sender, text) goes through the real CHAT_MSG_ADDON handler.
+-- test moves. Deliver(dist, sender, text) goes through the real CHAT_MSG_ADDON handler, and
+-- DeliverLogged (1.0.0) through the real CHAT_MSG_ADDON_LOGGED one (the logged API's).
 -- old (1.0.0): a client of 0.9.8 or 0.9.9 instead, their Comm and Codec (tests/fixtures).
 local function FreshComm(old)
 	local events, login = {}, {}
@@ -4223,12 +4224,15 @@ local function FreshComm(old)
 	local function Deliver(dist, sender, text)
 		for _, fn in ipairs(events.CHAT_MSG_ADDON) do fn(ns.PREFIX, text, dist, sender) end
 	end
+	local function DeliverLogged(dist, sender, text)
+		for _, fn in ipairs(events.CHAT_MSG_ADDON_LOGGED) do fn(ns.PREFIX, text, dist, sender) end
+	end
 	local id = 0
 	local function Report(sender, r)
 		id = id + 1
 		for _, c in ipairs(ns.Codec.Chunk(ns.Codec.EncodeReport(r), tostring(id))) do Deliver("CHANNEL", sender, c) end
 	end
-	return cns, Deliver, Report
+	return cns, Deliver, Report, DeliverLogged
 end
 
 test("runner-up: only a 0.7.11+ peer on the reporter's channel", function()
@@ -19694,6 +19698,225 @@ test("1.0.0 treasury: the reminder a sharing keeper gets says what he shares goe
 	assert(rawget(pt.L, "TREASURY_YOU_AND_KING"):find("todo cliente nele recebe", 1, true))
 	assert(rawget(pt.L, "TREASURY_YOU_AND_KING_BUT"):find("todo cliente nele recebe", 1, true))
 end)
+
+---------------------------------------------------------------------------
+-- 1.0.0: decrees against colluding characters. A decree's sender needed only a census rank, and
+-- census ranks are anyone's votes: a few characters could make one of theirs a Captain or a Lord
+-- of a made-up Olympus guild, fill the army's flood guard (6 decrees a minute) with raid
+-- warnings, and so drop every other decree, the King's own and our own officers'. The King now
+-- counts by his pinned name alone, the King and our own guild's officers (our roster: the
+-- server's word) never wait behind the flood guard, and anyone else speaks for the one guild its
+-- reports and chat lines speak for (Data.ClaimGuild). A decree's words come through the logged
+-- API, as a chat line's do. Names are made up; the King's is read from ns.KingCharacter().
+---------------------------------------------------------------------------
+do
+	local D = ns.Data
+	local LEVELS = "~0,0,0,0,0,0,0~~"
+	-- A census report of `guild` as its sender would send it (Codec.DecodeReport).
+	local function R(guild, leader, officers, total, online)
+		return Codec.DecodeReport(("R2~%s~%d~%d~%s~1~1~~"):format(guild, total or 40, online or 9, leader) .. LEVELS .. (officers or ""))
+	end
+
+	-- A clock for Data (ns.Now), the Crown's login wait long past, a receiver in "Olympus II" at
+	-- `rank` (its roster: Member1 its guild master, Member2 to Member6 its officers).
+	local function Scene(rank, fn)
+		local saved = { now = ns.Now, login = ns.Comm.loginAt, guild = GetGuildInfo, guilds = ns.rdb.guilds, me = ns.me,
+			notice = RaidNotice_AddMessage, frame = RaidWarningFrame, alert = ns.PlayAlert, print = ns.Print, chat = C_ChatInfo }
+		local s = { clock = os.time() + 7 * 86400, warnings = {}, alerts = {} }
+		ns.Now = function() return s.clock end
+		ns.Comm.loginAt = s.clock - 3600
+		GetGuildInfo = function() return "Olympus II", "rank", rank end
+		ns.me = "Tester-Realm"
+		ns.rdb.guilds = {}
+		RaidWarningFrame = {}
+		RaidNotice_AddMessage = function(_, text) s.warnings[#s.warnings + 1] = text end
+		ns.PlayAlert = function(kind) s.alerts[#s.alerts + 1] = kind end
+		ns.Print = function() end
+		ns.Roster.Scan()
+		local ok, err = pcall(fn, s)
+		ns.Now, ns.Comm.loginAt, GetGuildInfo, ns.rdb.guilds, ns.me = saved.now, saved.login, saved.guild, saved.guilds, saved.me
+		RaidNotice_AddMessage, RaidWarningFrame, ns.PlayAlert, ns.Print, C_ChatInfo = saved.notice, saved.frame, saved.alert, saved.print, saved.chat
+		if not ok then error(err, 0) end
+	end
+
+	-- The real receive path: a fresh Comm (FreshComm) with Decree.lua loaded on it, so a D1 goes
+	-- through the addon message handler, admission and the decree handler as in the game.
+	-- Decree(...) comes with the plain API, Logged(...) with the logged one.
+	local function DecreeClient(s)
+		local cns, Deliver, _, DeliverLogged = FreshComm()
+		cns.Now = function() return s.clock end
+		cns.Comm.loginAt = s.clock - 3600
+		assert(loadfile(ADDON_DIR .. "Decree.lua"))("Olympus", cns)
+		local function Decree(sender, kind, guild, text)
+			Deliver("CHANNEL", sender, Codec.EncodeDecree(kind, 1453, 0.5, 0.5, guild, 0, text or "x"))
+		end
+		local function Logged(sender, kind, guild, text)
+			DeliverLogged("CHANNEL", sender, Codec.EncodeDecree(kind, 1453, 0.5, 0.5, guild, 0, text or "x"))
+		end
+		return cns, Decree, Logged, Deliver
+	end
+
+	local n = 90000
+	local function Line(sender, tier, guild)
+		n = n + 1
+		local shown, why = ns.Channels.Receive("CHANNEL", sender, Msg(tier, guild, n % 10000, "line " .. n), 500000 + n * 10)
+		return shown and "shown" or why
+	end
+
+	-- Six Captains of a made-up guild (one report names them) send six raid warnings in six
+	-- seconds: the army's flood guard is full for a minute.
+	local function Flood(s, Decree, prefix)
+		local caps = {}
+		for i = 1, 6 do caps[i] = prefix .. string.char(96 + i) .. ":1:0" end
+		eq(D.Receive(R("Olympus " .. prefix, "Nobody", table.concat(caps, ",")), prefix .. "herald-Realm"), true)
+		for i = 1, 6 do
+			s.clock = s.clock + 1
+			Decree(prefix .. string.char(96 + i) .. "-Realm", "ARMS", "Olympus " .. prefix)
+		end
+	end
+
+	test("1.0.0 decrees: our own guild's officers get through however many census Captains filled the flood guard", function()
+		Scene(3, function(s)
+			local cns, Decree = DecreeClient(s)
+			Flood(s, Decree, "Blare")
+			eq(#cns.Decree.Active(), 6, "six raid warnings")
+			s.clock = s.clock + 1
+			Decree("Blareg-Realm", "ARMS", "Olympus Blare")
+			eq(#cns.Decree.Active(), 6, "a seventh census decree still waits")
+			-- Our officer (Member2, rank 1 in our roster: the server's word).
+			Decree("Member2-Realm", "ARMS", "Olympus II", "real attack")
+			eq(#cns.Decree.Active(), 7, "our officer's Call to Arms is shown")
+			eq(cns.Decree.Active()[1].sender, "Member2")
+			-- And it takes no room in the guard: the census still waits.
+			Decree("Blareh-Realm", "ARMS", "Olympus Blare")
+			eq(#cns.Decree.Active(), 7)
+			-- (Each sender keeps its own minute: our officer's second decree waits.)
+			s.clock = s.clock + 1
+			Decree("Member2-Realm", "MUSTER", "Olympus II")
+			eq(#cns.Decree.Active(), 7, "one a minute per sender")
+		end)
+	end)
+
+	test("1.0.0 decrees: the King's own needs no census and gets through a flood guard six census Captains filled", function()
+		Scene(3, function(s)
+			local KING = ns.KingCharacter()
+			local cns, Decree = DecreeClient(s)
+			Flood(s, Decree, "Clang")
+			eq(#cns.Decree.Active(), 6)
+			-- No <Olympus> report at all on this client (a fresh login): his pinned name is enough.
+			eq(ns.rdb.guilds.Olympus, nil)
+			s.clock = s.clock + 1
+			Decree(KING .. "-Realm", "ROYAL", "Olympus", "the King's real decree")
+			eq(#cns.Decree.Active(), 7, "the King's decree is shown")
+			eq(cns.Decree.Active()[1].guild, "Olympus"); eq(cns.Decree.Active()[1].kind, "ROYAL")
+			-- A namesake on another realm group is not him: census rules, and the flood guard, apply.
+			s.clock = s.clock + 1
+			Decree(KING .. "-Elsewhere", "ARMS", "Olympus", "a namesake")
+			eq(#cns.Decree.Active(), 7, "the namesake's decree is not shown")
+		end)
+	end)
+
+	test("1.0.0 decrees: a sender speaks for the one guild it speaks for (Data.ClaimGuild), as in the chats", function()
+		Scene(3, function(s)
+			-- Xander reports Olympus Xanadu; Yorick's report names Xander an officer of Olympus Yonder.
+			eq(D.Receive(R("Olympus Xanadu", "Nobody", "Yorick:1:0"), "Xander-Realm"), true)
+			eq(D.Receive(R("Olympus Yonder", "Nobody", "Xander:1:0"), "Yorick-Realm"), true)
+			eq(D.KnownRank("Xander-Realm", "Olympus Yonder"), 1, "the census names him an officer there")
+			local cns, Decree = DecreeClient(s)
+			Decree("Xander-Realm", "MUSTER", "Olympus Yonder")
+			eq(#cns.Decree.Active(), 0, "he reports Olympus Xanadu: no decree as Olympus Yonder")
+			-- A census Captain who reports nothing still sends his (the claim is his guild's),
+			-- and his chat lines as that guild still show.
+			eq(D.Receive(R("Olympus Gust", "Nobody", "Pansy:1:0"), "Vance-Realm"), true)
+			Decree("Pansy-Realm", "ARMS", "Olympus Gust")
+			eq(#cns.Decree.Active(), 1)
+			GetGuildInfo = function() return "Olympus II", "rank", 1 end
+			eq(Line("Pansy-Realm", "C", "Olympus Gust"), "shown")
+			-- Having spoken for Olympus Gust, not for another guild (for CLAIM_TTL).
+			eq(D.Receive(R("Olympus Sleet", "Nobody", "Pansy:1:0"), "Wendel-Realm"), true)
+			s.clock = s.clock + 61
+			Decree("Pansy-Realm", "ARMS", "Olympus Sleet")
+			eq(#cns.Decree.Active(), 1, "not as Olympus Sleet")
+		end)
+	end)
+
+	test("1.0.0 decrees: their words come through the logged API; one sent with the plain API (0.9.x) still shows, without them", function()
+		Scene(3, function(s)
+			local cns, Decree, Logged, Deliver = DecreeClient(s)
+			C_ChatInfo.SendAddonMessageLogged = function() end -- (this client has both APIs, as Forever's)
+			-- A 1.0.0 officer's decree, logged: its words shown.
+			Logged("Member3-Realm", "ARMS", "Olympus II", "Horde at the bridge")
+			eq(#cns.Decree.Active(), 1)
+			eq(cns.Decree.Active()[1].text, "Horde at the bridge")
+			assert(s.warnings[#s.warnings]:find("Horde at the bridge", 1, true), s.warnings[#s.warnings])
+			-- A 0.9.x client's (its own encoder, the plain API): shown, without its words.
+			s.clock = s.clock + 1
+			Deliver("CHANNEL", "Member4-Realm", OldCodec().EncodeDecree("MUSTER", 1453, 0.5, 0.5, "Olympus II", 1, "come to Goldshire"))
+			eq(#cns.Decree.Active(), 2, "its decree shows")
+			local d = cns.Decree.Active()[1]
+			eq(d.kind, "MUSTER"); eq(d.sender, "Member4"); eq(d.text, "", "without its words")
+			eq(s.warnings[#s.warnings]:find("Goldshire", 1, true), nil, "nor in the raid warning")
+			eq(#s.warnings, 2, "a raid warning all the same")
+			-- The same for the King's (a 0.9.x King): his decree, without its words.
+			s.clock = s.clock + 1
+			Decree(ns.KingCharacter() .. "-Realm", "ROYAL", "Olympus", "unlogged words")
+			eq(cns.Decree.Active()[1].kind, "ROYAL"); eq(cns.Decree.Active()[1].text, "")
+			-- A client without the logged API can't tell: the words as before.
+			C_ChatInfo.SendAddonMessageLogged = nil
+			s.clock = s.clock + 1
+			Decree("Member5-Realm", "MUSTER", "Olympus II", "at the gates")
+			eq(cns.Decree.Active()[1].text, "at the gates")
+		end)
+	end)
+
+	test("1.0.0 decrees: ours go out with the logged API where the client has it, the plain one where it has not", function()
+		local saved = { channel = GetChannelName, pos = C_Map.GetPlayerMapPosition, map = C_Map.GetBestMapForUnit, guild = GetGuildInfo,
+			print = ns.Print, alert = ns.PlayAlert, notice = RaidNotice_AddMessage }
+		local ok, err = pcall(function()
+			GetChannelName = function() return 5 end
+			C_Map.GetBestMapForUnit = function() return 1453 end
+			C_Map.GetPlayerMapPosition = function() return { GetXY = function() return 0.42, 0.51 end } end
+			GetGuildInfo = function() return "Olympus II", "Captain", 1 end
+			ns.Print, ns.PlayAlert, RaidNotice_AddMessage = function() end, function() end, nil
+			local want = Codec.EncodeDecree("MUSTER", 1453, 0.42, 0.51, "Olympus II", 1, "at the bridge")
+			for _, logged in ipairs({ true, false }) do
+				local cns = FreshComm()
+				cns.Comm.loginAt = cns.clock - 1000
+				cns.Comm.JoinChannel()
+				assert(loadfile(ADDON_DIR .. "Decree.lua"))("Olympus", cns)
+				local sent = {}
+				C_ChatInfo.SendAddonMessage = function(_, msg, dist) sent[#sent + 1] = { "plain", dist, msg } end
+				if logged then C_ChatInfo.SendAddonMessageLogged = function(_, msg, dist) sent[#sent + 1] = { "logged", dist, msg } end end
+				cns.Decree.Send("MUSTER", "at the bridge")
+				for _ = 1, 5 do cns.Comm.Pump() end
+				local found
+				for _, m in ipairs(sent) do if m[3] == want then found = m end end
+				assert(found, "the decree went out")
+				eq(found[1], logged and "logged" or "plain"); eq(found[2], "CHANNEL")
+			end
+		end)
+		GetChannelName, C_Map.GetPlayerMapPosition, C_Map.GetBestMapForUnit, GetGuildInfo = saved.channel, saved.pos, saved.map, saved.guild
+		ns.Print, ns.PlayAlert, RaidNotice_AddMessage, C_ChatInfo = saved.print, saved.alert, saved.notice, nil
+		if not ok then error(err, 0) end
+	end)
+
+	test("1.0.0 decrees: a 0.9.8 or 0.9.9 client hands a logged decree to its handler, words and all (no protocol change)", function()
+		local savedChannel = GetChannelName
+		local ok, err = pcall(function()
+			GetChannelName = function() return 5 end
+			local old, _, _, DeliverLogged = FreshComm(true)
+			local got
+			old.Comm.Handle("D1", function(dist, sender, text) got = { dist = dist, sender = sender, text = text } end)
+			local msg = Codec.EncodeDecree("ARMS", 1453, 0.5, 0.5, "Olympus II", 1, "Horde at the farm")
+			DeliverLogged("CHANNEL", "Member2-Realm", msg)
+			assert(got, "handed to its D1 handler")
+			eq(got.dist, "CHANNEL"); eq(got.text, msg)
+			eq(OldCodec().DecodeDecree(msg).text, "Horde at the farm", "and its decoder reads it")
+		end)
+		GetChannelName, C_ChatInfo = savedChannel, nil
+		if not ok then error(err, 0) end
+	end)
+end
 
 print(("\n%d passed, %d failed"):format(passed, failed))
 os.exit(failed == 0 and 0 or 1)

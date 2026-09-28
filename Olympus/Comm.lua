@@ -146,11 +146,11 @@ end
 
 -- urgent: ahead of everything waiting (a player waits for the answer: a layer ask, an offer,
 -- a vote), behind the other urgent ones.
-local function Enqueue(dist, msg, key, target, urgent)
+local function Enqueue(dist, msg, key, target, urgent, logged)
 	if key then
 		for _, item in ipairs(queue) do
 			if item[3] == key then
-				item[2], item[4] = msg, target
+				item[2], item[4], item[6] = msg, target, logged or nil
 				return
 			end
 		end
@@ -163,7 +163,7 @@ local function Enqueue(dist, msg, key, target, urgent)
 		end
 		table.remove(queue, drop)
 	end
-	local item = { dist, msg, key, target, urgent or nil }
+	local item = { dist, msg, key, target, urgent or nil, logged or nil }
 	if urgent then
 		local at = 1
 		while queue[at] and queue[at][5] do at = at + 1 end
@@ -174,12 +174,14 @@ local function Enqueue(dist, msg, key, target, urgent)
 end
 
 -- Other modules send small messages through here and register a handler per type.
---   Comm.Send("GUILD" | "CHANNEL", msg, dedupeKey)
+--   Comm.Send("GUILD" | "CHANNEL", msg, dedupeKey, urgent, logged)
 --   Comm.Handle("P1", function(dist, sender, text) ... end)
+-- logged (1.0.0): a player's own words (a decree's), sent with the logged API where the client
+-- has it (SendNow), as chat lines are: the server keeps them, so abuse can be reported.
 local handlers = {}
-function Comm.Send(dist, msg, key, urgent)
+function Comm.Send(dist, msg, key, urgent, logged)
 	if dist == "GUILD" and not IsInGuild() then return end
-	Enqueue(dist, msg, key, nil, urgent)
+	Enqueue(dist, msg, key, nil, urgent, logged)
 end
 -- An addon message to one player only (answers to the King, Throne tab).
 function Comm.Whisper(target, msg, key, urgent)
@@ -290,9 +292,9 @@ local function Pump()
 		end
 	end
 	if not index then return end
-	local dist, msg, target = queue[index][1], queue[index][2], queue[index][4]
+	local dist, msg, target, logged = queue[index][1], queue[index][2], queue[index][4], queue[index][6]
 	table.remove(queue, index)
-	SendNow(dist, msg, false, target)
+	SendNow(dist, msg, logged == true, target)
 end
 Comm.Pump = Pump -- for tests
 
