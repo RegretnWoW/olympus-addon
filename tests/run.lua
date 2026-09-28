@@ -14825,7 +14825,49 @@ test("Olympus Link: junk never takes a watcher's place (A2): guildless character
 	end)
 end)
 
-test("Olympus Link: a watcher's inbox: per code and sender, capped per code, per sender and in all; nothing kept is ever dropped for room (M2)", function()
+test("Olympus Link: strangers' real links for a streamer's code never lock the streamer's own out of a watcher: viewers with councillors' real proofs and made-up tags, then the streamer's link, kept and told", function()
+	WithLink(function(w)
+		local R = "7K3M9QX2TB" -- read off the streamer's QR code
+		local councillor, council = "Other Councillor-Realm", TestKey("council02", "c")
+		local viewers = { "Viewer A-Realm", "Viewer B-Realm", "Viewer C-Realm", "Viewer D-Realm" }
+		local bundles = {}
+		for _, v in ipairs(viewers) do
+			-- Each viewer whispers an online councillor a request of its own, with the streamer's R
+			-- and a made-up tag, for a guild the councillor can only take its word for: its addon signs.
+			AsConfirmer(councillor, council)
+			local before = #Whispers(w, "DA~")
+			Link.HandleRequest("WHISPER", v, "DR~0123456789abcdef~Olympus II~Alliance~" .. R .. "~0000000000000000")
+			RunFrames(w)
+			local da = Whispers(w, "DA~")
+			eq(#da, before + 1, "a councillor's real proof for " .. v)
+			local issued, keyId, gv, sig = da[#da].msg:match("^DA~([^~]*)~([^~]*)~([^~]*)~([^~]*)$")
+			eq(gv, "c")
+			local c = Link.ParseCert(council.CertFor(councillor))
+			bundles[v] = assert(Link.Build({ requester = v, guild = "Olympus II", faction = "Alliance", nonce = "0123456789abcdef", R = R, tag = "0000000000000000" },
+				{ { issued = issued, keyId = keyId, confirmer = councillor, gv = gv, sig = sig, pub = c.pub, tier = "c", certExp = tostring(c.exp), certSig = c.sig } }))
+		end
+		-- The watcher cannot tell those links from the real one (only the bot checks the tag): kept.
+		ns.me = "Test Councillor-Realm"
+		GetGuildInfo = function() return "Olympus", "Member", 3 end
+		Link.Store().watch[ns.me] = true
+		for i, v in ipairs(viewers) do
+			for _, piece in ipairs(ns.Codec.Chunk(bundles[v], "V" .. i)) do Link.HandleBundle("WHISPER", v, "DB~" .. piece) end
+			RunFrames(w)
+			assert(Link.Store().inbox[R][v], v)
+		end
+		eq(#Whispers(w, "DK~"), #viewers)
+		-- The streamer's own link: kept beside them, and told.
+		local real = Bundle("Streamer-Realm", R, w.clock)
+		for _, piece in ipairs(ns.Codec.Chunk(real, "S1")) do Link.HandleBundle("WHISPER", "Streamer-Realm", "DB~" .. piece) end
+		RunFrames(w)
+		eq(Link.Store().inbox[R]["Streamer-Realm"] and Link.Store().inbox[R]["Streamer-Realm"].bundle, real, "the streamer's link kept")
+		local dk = Whispers(w, "DK~")
+		eq(#dk, #viewers + 1)
+		eq(dk[#dk].to, "Streamer-Realm"); eq(dk[#dk].msg, "DK~" .. R)
+	end)
+end)
+
+test("Olympus Link: a watcher's inbox: per code and sender, one per sender (its latest), no cap per code, 500 in all; nothing of another sender's is ever dropped for room (M2)", function()
 	WithLink(function(w)
 		ns.me = "Test Councillor-Realm"
 		local function Send(from, R, bundle)
@@ -14857,34 +14899,44 @@ test("Olympus Link: a watcher's inbox: per code and sender, capped per code, per
 		RunFrames(w)
 		eq(Link.Store().inbox.ABCDEFGHJK, nil)
 		eq(#Whispers(w, "DK~"), 2)
-		-- Another sender for the same code (someone who saw it on a stream and got a councillor's
-		-- real proof for their own character): kept beside the first, which stays; three senders per
-		-- code at most, the fourth refused without a word.
+		-- Other senders for the same code (someone who saw it on a stream and got a councillor's
+		-- real proof for their own character): kept beside the first, which stays. No cap per code
+		-- (0.9.10 took three senders a code: strangers who read R could lock its requester out).
 		Send("Another Player-Realm", "7K3M9QX2TB")
 		Send("Third Player-Realm", "7K3M9QX2TB", Bundle("Third Player-Realm", "7K3M9QX2TB", 1799990100))
-		eq(Link.Store().inbox["7K3M9QX2TB"]["Some Player-Realm"].from, "Some Player-Realm", "the first one stays")
-		eq(#Whispers(w, "DK~"), 4)
 		Send("Fourth Player-Realm", "7K3M9QX2TB")
-		eq(Link.Store().inbox["7K3M9QX2TB"]["Fourth Player-Realm"], nil)
-		eq(#Whispers(w, "DK~"), 4, "no word: its requester tries again later")
-		-- One link checked per requester a minute, five codes each at most.
+		eq(Link.Store().inbox["7K3M9QX2TB"]["Some Player-Realm"].from, "Some Player-Realm", "the first one stays")
+		assert(Link.Store().inbox["7K3M9QX2TB"]["Fourth Player-Realm"], "a fourth sender for one code: kept too")
+		eq(#Whispers(w, "DK~"), 5)
+		-- One link checked per requester a minute, and one entry per sender, its latest (0.9.10 kept
+		-- five a sender, so a hundred characters filled the inbox; now it takes 500): its link for
+		-- another code replaces its older one (its addon holds one request at a time).
 		Send("Another Player-Realm", "BCDEFGHJKM")
 		eq(Link.Store().inbox.BCDEFGHJKM, nil, "too soon")
-		local codes = { "BCDEFGHJKM", "CDEFGHJKMN", "DEFGHJKMNP", "EFGHJKMNPQ", "FGHJKMNPQR" }
-		for _, R in ipairs(codes) do
-			w.clock = w.clock + 61
-			Send("Another Player-Realm", R)
-		end
-		for i = 1, 4 do assert(Link.Store().inbox[codes[i]], codes[i]) end
-		eq(Link.Store().inbox[codes[5]], nil, "a sixth entry of the same sender: refused")
-		-- The same sender's newer link for a code it has: replaces its own.
+		assert(Link.Store().inbox["7K3M9QX2TB"]["Another Player-Realm"])
 		w.clock = w.clock + 61
-		local newer = Bundle("Another Player-Realm", codes[1], 1799990001)
-		Send("Another Player-Realm", codes[1], newer)
-		eq(Link.Store().inbox[codes[1]]["Another Player-Realm"].bundle, newer)
-		-- 500 in all (the rest filled as the addon keeps them): a new one is refused; none of those
-		-- kept goes.
+		Send("Another Player-Realm", "BCDEFGHJKM")
+		eq(Link.Store().inbox.BCDEFGHJKM["Another Player-Realm"].from, "Another Player-Realm", "its newer link kept...")
+		eq(Link.Store().inbox["7K3M9QX2TB"]["Another Player-Realm"], nil, "...in place of its older one")
+		eq(#Whispers(w, "DK~"), 6)
+		-- The same sender's newer link for the code it has: replaces its own too.
+		w.clock = w.clock + 61
+		local newer = Bundle("Another Player-Realm", "BCDEFGHJKM", 1799990001)
+		Send("Another Player-Realm", "BCDEFGHJKM", newer)
+		eq(Link.Store().inbox.BCDEFGHJKM["Another Player-Realm"].bundle, newer)
+		eq(Entries(), 4)
+		-- An inbox an older version wrote with several links of one sender: its next link leaves one.
 		local inbox = Link.Store().inbox
+		for n, R in ipairs({ "CDEFGHJKMN", "DEFGHJKMNP", "EFGHJKMNPQ" }) do
+			inbox[R] = { ["Old Sender-Realm"] = { bundle = "OLB5~kept", from = "Old Sender-Realm", t = w.clock - n, keep = w.clock + 10 * 86400 } }
+		end
+		w.clock = w.clock + 61
+		Send("Old Sender-Realm", "FGHJKMNPQR")
+		assert(inbox.FGHJKMNPQR["Old Sender-Realm"])
+		for _, R in ipairs({ "CDEFGHJKMN", "DEFGHJKMNP", "EFGHJKMNPQ" }) do eq(inbox[R], nil, R) end
+		eq(Entries(), 5)
+		-- 500 in all (the rest filled as the addon keeps them): a new sender is refused; none of those
+		-- kept goes. A sender already in it still replaces its own.
 		local i = 0
 		while Entries() < Link.INBOX_MAX do
 			i = i + 1
@@ -14897,6 +14949,10 @@ test("Olympus Link: a watcher's inbox: per code and sender, capped per code, per
 		eq(inbox.YYYYYYYYYY, nil, "full: refused")
 		eq(Entries(), Link.INBOX_MAX)
 		eq(inbox["7K3M9QX2TB"]["Some Player-Realm"], oldest, "the oldest is still there")
+		Send("Fourth Player-Realm", "GHJKMNPQRS")
+		assert(inbox.GHJKMNPQRS["Fourth Player-Realm"], "full, but its own older link made room")
+		eq(inbox["7K3M9QX2TB"]["Fourth Player-Realm"], nil)
+		eq(Entries(), Link.INBOX_MAX)
 		-- Once a code can no longer be used (the bot's limit), its entries go, and there is room again.
 		w.clock = oldest.keep
 		Send("Late Player-Realm", "YYYYYYYYYY", Bundle("Late Player-Realm", "YYYYYYYYYY", w.clock - 3600))

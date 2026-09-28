@@ -423,9 +423,9 @@ def inbox_lines(v):
     entries = [(v["R"], v["requester"], v["bundle_council"], 1799990400), (v["R"], OTHER, v["bundle_impostor"], 1799990460)]
     out = [
         "-- A watcher's SavedVariables (WTF/Account/<account>/SavedVariables/Olympus.lua) as the addon writes its",
-        "-- Olympus Link inbox (0.9.10): OlympusDB.discord.inbox[R][sender] = { bundle, from, t, keep }. Up to 3",
-        "-- senders per code, 5 entries per sender and 500 in all, each checked first; nothing is dropped while",
-        "-- its code can still be used (keep: until when, Link.KeepUntil).",
+        "-- Olympus Link inbox (0.9.10): OlympusDB.discord.inbox[R][sender] = { bundle, from, t, keep }. One per",
+        "-- sender (its latest), any number per code, 500 in all, each checked first; nothing another sender",
+        "-- sent is dropped while its code can still be used (keep: until when, Link.KeepUntil).",
         "-- Made by tests/fixtures/make-link-vectors.py from link-sample.txt; tests/run.lua checks the addon keeps",
         "-- exactly this, and web/tools/read-inbox.mjs reads it. Throwaway test keys only.",
         "OlympusDB = {",

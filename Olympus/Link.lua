@@ -56,7 +56,8 @@ local L = ns.L
 -- <confirmer>.<certificate's sig>), so a watcher and the bot check it without having heard it. In
 -- the URL <ns.LINK_SITE>#b=<the bundle, URL-encoded>: a fragment, never sent to any server.
 -- A watcher's inbox (SavedVariables): OlympusDB.discord.inbox[R][sender] = { bundle, from, t, keep },
--- only links whose every proof checks with its certificate and that are enough for the bot.
+-- only links whose every proof checks with its certificate and that are enough for the bot, one per
+-- sender (its latest), and no cap per code: R is public.
 -- The author's client records every certificate it signs as the council authority:
 -- OlympusDB.discord.certified[keyId] = { name, pub, exp, t } (a key for one character only).
 -- A confirmer's key never leaves OlympusDB.discord.keys, nor the council authority's seed
@@ -109,9 +110,8 @@ Link.GIVE_GAP = 60           -- a confirmer: one proof per requesting character 
 Link.GIVE_DAY = 5            -- ...five a day...
 Link.GIVE_MINUTE = 30        -- ...and thirty a minute in all
 Link.WHO_FRESH = 15 * 60     -- a /who this recent tells a confirmer the requester's guild ("w")
-Link.INBOX_MAX = 500         -- a watcher keeps this many proofs...
-Link.INBOX_PER_CODE = 3      -- ...this many senders' per code...
-Link.INBOX_PER_SENDER = 5    -- ...and this many of one sender; a new one past these is refused
+Link.INBOX_MAX = 500         -- a watcher keeps this many proofs (a new sender past it is refused)...
+Link.INBOX_PER_SENDER = 1    -- ...and this many of one sender: its newest replaces its oldest
 Link.INBOX_GAP = 60          -- one link checked per requesting character a minute...
 Link.INBOX_CHECKS = 2        -- ...and this many at once
 Link.MAX_ANNOUNCERS = 3000
@@ -1161,10 +1161,14 @@ function Link.HandleAck(dist, sender, text)
 	ns.Log("discord link: proof kept by a watcher")
 end
 
--- A watcher keeps a proof: one per code and sender (the same sender's newer one replaces it),
--- INBOX_PER_CODE senders per code, INBOX_PER_SENDER entries per sender, INBOX_MAX in all. A proof
--- kept was acknowledged (DK), so nothing is dropped to make room: past a limit a new one is
--- refused, without DK. An entry goes once its code can't be used any more (keep: KeepUntil).
+-- A watcher keeps a proof: INBOX_PER_SENDER per sender (one: a character's latest link, since its
+-- addon holds one request at a time; a newer one, for this code or another, replaces its older
+-- one) and INBOX_MAX in all. No cap per code: R is public (a stream's QR code shows it), any
+-- character can get a councillor's real proof for itself with someone's R and a made-up tag, and
+-- only the bot can check the tag, so a cap per code would let three such characters lock the real
+-- requester out. A proof kept was acknowledged (DK), so nothing of another sender's is dropped to
+-- make room: past INBOX_MAX a new sender is refused, without DK. An entry goes once its code can't
+-- be used any more (keep: KeepUntil).
 Keep = function(bundle, from, now, keep)
 	local b = Link.Parse(bundle)
 	if not b or b.requester ~= from or not keep then return false end
@@ -1176,15 +1180,29 @@ Keep = function(bundle, from, now, keep)
 		stats.kept = stats.kept + 1
 		return b
 	end
-	local function Full()
-		local n, mine = InboxCount(inbox, from)
-		local here = 0
-		for _ in pairs(type(inbox[b.R]) == "table" and inbox[b.R] or {}) do here = here + 1 end
-		return n >= Link.INBOX_MAX or mine >= Link.INBOX_PER_SENDER or here >= Link.INBOX_PER_CODE
+	-- The sender's own entries for other codes (older links of its own).
+	local mine = {}
+	for R, s in pairs(inbox) do
+		if type(s) == "table" and s[from] ~= nil then mine[#mine + 1] = R end
 	end
-	if Full() then
+	if #mine < Link.INBOX_PER_SENDER and InboxCount(inbox) >= Link.INBOX_MAX then
 		PruneInbox(inbox, now)
-		if Full() then return false end
+		if InboxCount(inbox) >= Link.INBOX_MAX then return false end
+	end
+	local function Age(R)
+		local x = type(inbox[R]) == "table" and inbox[R][from]
+		return type(x) == "table" and tonumber(x.t) or -math.huge
+	end
+	while #mine >= Link.INBOX_PER_SENDER do
+		local oldest = 1
+		for i = 2, #mine do
+			if Age(mine[i]) < Age(mine[oldest]) then oldest = i end
+		end
+		local R = table.remove(mine, oldest)
+		if type(inbox[R]) == "table" then
+			inbox[R][from] = nil
+			if next(inbox[R]) == nil then inbox[R] = nil end
+		end
 	end
 	slot = inbox[b.R]
 	if type(slot) ~= "table" then
@@ -1200,7 +1218,7 @@ end
 -- its certificate names its confirmer (the link carries it so), the bot or the council authority
 -- signed it, it was valid when the proof was signed, and the proof's signature checks with it.
 -- And together they are enough for the bot: a High Councillor's (the signed list), or three
--- players' from three keys. Junk never takes one of the INBOX_PER_CODE places of a code.
+-- players' from three keys. Junk never takes a place in the inbox.
 local function CheckBundle(b)
 	local c, players, keys = 0, 0, {}
 	for _, p in ipairs(b.proofs) do

@@ -385,9 +385,12 @@ python3 scripts/link-keys.py confirmer <id> p --character "<Name-Realm>" --owner
 On one of your High Councillor characters, type `/oly discord watcher on`. While it is online,
 players whose proof is ready deliver it to it, and it keeps them in its SavedVariables
 (`OlympusDB.discord.inbox`, 500 at most). Its addon first checks every confirmation of a link
-with the certificate the link carries (and that together they are enough), so nobody fills the
-inbox with made-up links; an entry stays until the Worker can no longer take it (7 days after its
-code expired). WoW writes that file on `/reload`, logout or quit. Then, every day or two:
+with the certificate the link carries (and that together they are enough), so made-up links never
+take a place. It keeps one link per character (its latest) and no cap per code: a code's `R` is
+public on a stream and only this Worker can check the tag, so a character that got a councillor's
+real confirmation for itself with someone's `R` takes its own place (you will see it refused as
+`tag`), never the real requester's. An entry stays until the Worker can no longer take it (7 days
+after its code expired). WoW writes that file on `/reload`, logout or quit. Then, every day or two:
 
 ```sh
 # macOS

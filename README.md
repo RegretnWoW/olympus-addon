@@ -342,9 +342,13 @@ list stops at once. A High Councillor who could only take someone's word for the
 their `/who` quietly with the next click in the Olympus window (mouse and keyboard only). High
 Councillors can turn on `/oly discord watcher on`: the proofs players hand you are kept in your
 SavedVariables once your addon has checked them (every signature against the certificate the
-link carries, and enough for the bot), so nobody fills your inbox with made-up links (three
-senders per code, five entries per sender, 500 in all; nothing kept is dropped to make room, and
-an entry goes once the bot can no longer take it, 7 days after its code expired).
+link carries, and enough for the bot), so made-up links never take a place. It keeps one link per
+character (its latest: a newer one replaces it) and 500 in all, with no cap per code: a code's id
+is public on a stream, and only the bot can check a link's tag, so a character that got a
+councillor's real proof for itself with someone else's code takes its own place (the bot refuses
+that link) and never the real requester's. Filling the inbox takes 500 characters; nothing
+another character sent is dropped to make room, and an entry goes once the bot can no longer take
+it, 7 days after its code expired.
 
 ### Everywhere
 - **Copy**: every tab produces a ready-to-paste text for Discord.
