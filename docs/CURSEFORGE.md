@@ -263,6 +263,12 @@ for the King, and for every member once the King shows the army something of it.
 
 ### Everywhere
 - **Copy**: every tab produces a ready-to-paste text for Discord.
+- **Search**: a box on top of the Census (a guild or its Lord), the Realm (guilds, Lords, Captains,
+  members seen online, the Olympus chats' lines), the Tabards (inspected and untabarded players,
+  by name or guild) and the Treasury (donors in the ranking and the book). Any case, accents too;
+  only what matches shows, under the headers it belongs to (a Captain under his guild, opened
+  for you), with an **x** to empty it. Each tab keeps its text until you log out or `/reload`. It only changes
+  what the list shows: **Copy** still gives everything, and nothing is sent.
 - The window opens from `/oly`, the minimap button, or the round button in your guild window:
   the old Guild tab or the new Guild & Communities window, whichever one you use.
 - Next to Forever's Guild & Communities window it takes that window's look: icon tabs down

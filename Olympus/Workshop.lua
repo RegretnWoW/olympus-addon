@@ -204,16 +204,8 @@ end
 
 local function TrimText(s) return (tostring(s or ""):gsub("^%s+", ""):gsub("%s+$", "")) end
 
--- Letters folded for the search, byte by byte: A-Z, and Latin-1's accented capitals (À to Þ but
--- ×, in UTF-8 C3 80-9E, their small letters C3 A0-BE). Not the C library's lower(): its idea of a
--- letter can change with the locale and split a UTF-8 letter. Any other letter stays whole.
-local function Fold(s)
-	s = tostring(s or ""):gsub("[A-Z]", function(c) return string.char(c:byte() + 32) end)
-	return (s:gsub("\195([\128-\158])", function(c)
-		if c == "\151" then return nil end
-		return "\195" .. string.char(c:byte() + 32)
-	end))
-end
+-- Letters folded for the search (ns.Fold, Core.lua: the tabs' searches fold them the same way).
+local Fold = ns.Fold
 Workshop.Fold = Fold
 
 -- A player's name as the author may type it: letters (any, UTF-8 ones too), Forever's "First

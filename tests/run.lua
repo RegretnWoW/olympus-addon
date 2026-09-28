@@ -1815,7 +1815,9 @@ test("HD window: docked past the Communities window's side tabs, with icon tabs 
 		header:Click()
 		eq(ns.Views.sort.key, "name", "sorted by guild")
 		ns.Views.sort = sort
-		eq(main.views.census.rows[1].h, 20, "the roster's rows")
+		-- (1.0.0: the search box's row tops the list, as tall as its box; the rows follow.)
+		eq(main.views.census.rows[1].h, 24, "the search box's row")
+		eq(main.views.census.rows[2].h, 20, "the roster's rows")
 		-- The Communities side tabs go (minimized, Guild Finder) and come back.
 		CommunitiesFrame.ChatTab:Hide()
 		eq(Anchor(main), "TOPLEFT CommunitiesFrame TOPRIGHT 32 0", "Blizzard's gap only")
@@ -1856,7 +1858,7 @@ test("HD and old windows: each guild window gets its look, switched without /rel
 		eq(old.tab, "census", "a guild window's button opens the Census, as always")
 		eq(Anchor(old.buttons[1]), "BOTTOMLEFT OlympusFrame BOTTOMLEFT 8 8"); eq(old.buttons[1].h, 22)
 		eq(Anchor(old.scroll), "TOPLEFT OlympusFrame TOPLEFT 10 -80"); eq(old.views.census:GetWidth(), 385 - 42)
-		eq(old.views.census.rows[1].h, 16)
+		eq(old.views.census.rows[2].h, 16) -- (under the search box's row, 1.0.0)
 		-- Back in the Communities window: the HD one again.
 		new:Click()
 		eq(hd:IsShown(), true); eq(old:IsShown(), false); eq(UI.DockedTo(), CommunitiesFrame)
@@ -2929,6 +2931,9 @@ test("census: guilds only seen with /who are grey rows after the reported ones",
 		ns.UI = { StatusLine = function() return "status" end }
 		ns.Views.sort = { key = "members", desc = false } -- sorting moves reported guilds only
 		local lines = ns.Views.Build("census")
+		-- (1.0.0: the search box tops the list; nothing typed, the list under it as before.)
+		assert(lines[1].input and lines[1].input.text == "", "the search box")
+		table.remove(lines, 1)
 		assert(lines[1].onClick and not lines[1].cols, "the King is online: his layer line comes first")
 		table.remove(lines, 1)
 		eq(lines[1].cols[1], "Olympus II"); eq(lines[2].cols[1], "Olympus")
@@ -2946,7 +2951,7 @@ test("census: guilds only seen with /who are grey rows after the reported ones",
 		assert(text:find(L.SEEN_TIP, 1, true) and text:find(L.SEEN_CAPPED_TIP, 1, true) and text:find("12+", 1, true), text)
 		-- Nothing seen: no grey rows and no hint.
 		ns.rdb.seen = {}
-		eq(#ns.Views.Build("census"), 3, "the King's layer line and 2 guilds")
+		eq(#ns.Views.Build("census"), 4, "the search box, the King's layer line and 2 guilds")
 		ns.Views.sort = { key = "members", desc = true }
 	end)
 end)
@@ -2966,7 +2971,7 @@ test("census Refresh: the roster, and one /who per click for the grey guilds", f
 			eq(scans, 2, "the roster every click"); eq(#server.sent, 1, "/who at most every 10 seconds")
 			server.Answer({ { "Aa", "OLYMPUS VII", 12 } })
 			UI.Refresh()
-			local row = OlympusFrame.views.census.rows[4] -- after the King's layer line and 2 guilds
+			local row = OlympusFrame.views.census.rows[5] -- after the search box (1.0.0), the King's layer line and 2 guilds
 			eq(row.cols[1]:GetText(), ns.Views.Grey("OLYMPUS VII"), "the grey row is drawn")
 			-- The person panel's Who goes through Who.lua: not right after our search.
 			UI.ShowPerson({ name = "Aa-Realm", guild = "OLYMPUS VII" })
@@ -5085,7 +5090,7 @@ test("layer hop: the King's layer line tops the Census and the Realm only while 
 		assert(H.KingLine().text:find("Ask invite for Asmon Layer", 1, true), H.KingLine().text)
 		H.KingLine().onClick()
 		eq(w.sent[1], "CHANNEL LQ~1~1453~9", "asks for the King's layer")
-		assert(ns.Views.Build("census")[1].text:find("Asmon", 1, true), "tops the Census")
+		assert(ns.Views.Build("census")[2].text:find("Asmon", 1, true), "tops the Census (under its search box, 1.0.0)")
 		assert(ns.Views.RealmLines()[1].text:find("Asmon", 1, true), "tops the Realm")
 		-- On his layer: says so, nothing to click.
 		H.Reset()
@@ -5095,7 +5100,7 @@ test("layer hop: the King's layer line tops the Census and the Realm only while 
 		-- Offline: no line at all.
 		ns.rdb.guilds["Olympus"].leaderOnline = false
 		eq(H.KingLine(), nil, "not online: no line")
-		assert(not ns.Views.Build("census")[1].onClick or ns.Views.Build("census")[1].cols, "the Census starts with the guilds")
+		assert(not ns.Views.Build("census")[2].onClick or ns.Views.Build("census")[2].cols, "the Census starts with the guilds (under its search box)")
 		-- The King himself never gets the line, nor requests.
 		ns.rdb.guilds["Olympus"].leaderOnline = true
 		GetGuildInfo = function() return "Olympus", "King", 0 end
@@ -5952,7 +5957,7 @@ test("Hold Court: the King opens it, players in his zone ask, he calls them one 
 		K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", open)
 		assert(Printed(w, "holds court in Stormwind City"), "told once")
 		local census = ns.Views.Build("census")
-		assert(census[1].text:find("holds court in Stormwind City", 1, true), census[1].text)
+		assert(census[2].text:find("holds court in Stormwind City", 1, true), census[2].text) -- (under the search box, 1.0.0)
 		map = 1429
 		eq(C.Line(), nil, "another zone: no line")
 		map = 1453
@@ -12575,9 +12580,11 @@ do
 				b:Click()
 				eq(W.FullRunning(), false); eq(b:GetText(), ns.L.WORKSHOP_FULL_BTN)
 				eq(main.detailButtons[2]:GetText(), ns.L.DEV_KING_VIEW_ON, "the author's views after it")
-				-- Another tab: that list has no box, and this one stays in the Workshop's.
+				-- Another tab: its own box (1.0.0: the Census has a search of its own), empty, and
+				-- what was typed here stays in the Workshop's.
 				UI.SelectTab("census")
-				eq(main.views.census.input, nil)
+				assert(main.views.census.input and main.views.census.input ~= eb, "the Census's own box")
+				eq(main.views.census.input:GetText() or "", ""); eq(eb:GetText(), "an")
 				eq(#focused, 0)
 			end)
 			Widget.SetFocus, Widget.SetAutoFocus, Widget.ClearFocus = nil, nil, nil
@@ -12604,6 +12611,602 @@ do
 			eq(select(2, pt.L[key]:gsub("%%[ds]", "")), select(2, ns.L[key]:gsub("%%[ds]", "")), key)
 		end
 		assert(pt.L.WORKSHOP_ASK_ONE_TIP:find("0.9.9", 1, true))
+	end)
+end
+
+---------------------------------------------------------------------------
+-- 1.0.0: a search on top of the Census, the Realm, the Tabards and the Treasury (Views.lua): the
+-- Workshop's box, remembered per tab for the session, changing only what the list shows.
+---------------------------------------------------------------------------
+
+do
+	local V, L = ns.Views, ns.L
+	-- The box on top of a list, and the list under it.
+	local function Box(lines) return lines[1] and lines[1].input and lines[1] or nil end
+	local function Body(lines)
+		local out = {}
+		for i = 2, #lines do out[#out + 1] = lines[i] end
+		return out
+	end
+	-- The first line whose text holds `text`, and its place.
+	local function At(lines, text)
+		for i, l in ipairs(lines) do
+			if type(l.text) == "string" and l.text:find(text, 1, true) then return l, i end
+		end
+	end
+	local function Bare(s) return (tostring(s or ""):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")) end
+	-- The Census's rows by their guild, colour codes left out.
+	local function Guilds(lines)
+		local out = {}
+		for _, l in ipairs(lines) do if l.cols then out[#out + 1] = Bare(l.cols[1]) end end
+		return table.concat(out, ",")
+	end
+	-- The rows that open a person (their key), in order.
+	local function Keys(lines)
+		local out = {}
+		for _, l in ipairs(lines) do if l.key then out[#out + 1] = l.key end end
+		return table.concat(out, ",")
+	end
+	local NO_MATCH = "|cff9d9d9d" .. L.SEARCH_NO_MATCH .. "|r"
+	-- Whatever is typed, nothing goes out: no message, no whisper, no /who.
+	local function Quiet(fn)
+		local saved = { send = ns.Comm.Send, whisper = ns.Comm.Whisper, chunked = ns.Comm.SendChunked, who = ns.Who.Search,
+			guildWho = ns.Who.SearchGuild, ui = ns.UI }
+		local calls = {}
+		ns.Comm.Send = function() calls[#calls + 1] = "send" end
+		ns.Comm.Whisper = function() calls[#calls + 1] = "whisper" end
+		ns.Comm.SendChunked = function() calls[#calls + 1] = "chunked" end
+		ns.Who.Search = function() calls[#calls + 1] = "who" end
+		ns.Who.SearchGuild = function() calls[#calls + 1] = "guild who" end
+		ns.UI = { Refresh = function() end, ShowPerson = function() end, StatusLine = function() return "status" end }
+		V.ClearFilters()
+		local ok, err = pcall(fn, calls)
+		ns.Comm.Send, ns.Comm.Whisper, ns.Comm.SendChunked, ns.Who.Search = saved.send, saved.whisper, saved.chunked, saved.who
+		ns.Who.SearchGuild, ns.UI = saved.guildWho, saved.ui
+		V.ClearFilters()
+		V.ExpandAll(false)
+		V.ClearFilters()
+		if not ok then error(err, 0) end
+	end
+
+	test("1.0.0 search: what a row shows, any case, accented capitals, as plain text", function()
+		local F = ns.Fold
+		eq(ns.Holds(F("ÉLO"), "Élodie"), true); eq(ns.Holds(F("élo"), "ÉLODIE"), true); eq(ns.Holds(F("ÇÃO"), "ação"), true)
+		eq(ns.Holds(F("Łó"), "łódź"), false, "other letters stay whole, as in the Workshop")
+		for _, magic in ipairs({ ".", "%a", "[o]", "olymp.s", "(", "^o" }) do eq(ns.Holds(F(magic), "Olympus"), false, magic) end
+		eq(ns.Holds(F("50%"), "at 50% now"), true); eq(ns.Holds(F("[o]"), "a [o] b"), true)
+		eq(ns.Holds(F("red"), "|cffff0000Red|r"), true)
+		eq(ns.Holds(F("ff0000"), "|cffff0000Red|r"), false, "a colour code is not shown")
+		eq(ns.Holds(F("sword"), "|Hitem:19019|h[Sword]|h"), true)
+		eq(ns.Holds(F("19019"), "|Hitem:19019|h[Sword]|h"), false, "a link's data is not shown")
+		eq(ns.Holds(F("|cff"), "second ||cffff0000red"), true, "an escaped bar shows as one, and starts no code")
+		eq(ns.Holds(F("x"), nil, 5, "box"), true, "any of the texts, the rest skipped")
+		eq(ns.Holds(nil, "anything"), true); eq(ns.Holds("", "anything"), true)
+		eq(ns.Workshop.Fold, ns.Fold, "the Workshop's search folds the same way")
+	end)
+
+	test("1.0.0 search: the Census by guild or Lord, any case, as plain text; nothing else while typed; the copy keeps every guild", function()
+		local saved = { guilds = ns.rdb.guilds, seen = ns.rdb.seen }
+		local ok, err = pcall(Quiet, function(calls)
+			ns.rdb.guilds = SampleGuilds()
+			ns.rdb.guilds["Olympus Ébano"] = { total = 50, online = 5, zones = {}, t = os.time(), leader = "Ágata", leaderOnline = true, officers = {} }
+			ns.rdb.seen = { ["OLYMPUS VII"] = { online = 12, t = os.time() } }
+			local copy = ns.Data.DiscordText()
+			-- Nothing typed: the box, then the list as ever (the King's layer line, the guilds, the
+			-- one only seen and its hint).
+			local lines = V.Build("census")
+			local box = Box(lines)
+			assert(box and box.text == L.SEARCH and box.input.text == "" and box.input.onChange, "the box on top")
+			eq(Guilds(lines), "Olympus,Olympus II,Olympus Ébano,OLYMPUS VII")
+			assert(lines[2].onClick and not lines[2].cols, "the King's layer line under it")
+			assert(At(lines, L.SEEN_HINT), "the hint")
+			local tip = {}
+			box.tooltip({ AddLine = function(_, s) tip[#tip + 1] = s end })
+			eq(tip[1], L.SEARCH); eq(tip[2], L.SEARCH_TIP_CENSUS)
+			-- A Lord, any case: his guild alone, and nothing else.
+			box.input.onChange("LORDY")
+			eq(V.Filter("census"), "LORDY")
+			lines = V.Build("census")
+			eq(Box(lines).input.text, "LORDY", "what was typed stays in the box")
+			eq(Guilds(lines), "Olympus II"); eq(#lines, 2, "the box and the guild: no layer line, no hint, no /who status")
+			-- A guild's name: reported ones as ordered, then the ones only seen.
+			V.SetFilter("census", "olympus v")
+			eq(Guilds(V.Build("census")), "OLYMPUS VII")
+			V.SetFilter("census", "OLYMPUS")
+			eq(Guilds(V.Build("census")), "Olympus,Olympus II,Olympus Ébano,OLYMPUS VII", "the order as ever")
+			-- Accented capitals find their small letters, and the other way round.
+			V.SetFilter("census", "ÉBANO"); eq(Guilds(V.Build("census")), "Olympus Ébano")
+			V.SetFilter("census", "ágata"); eq(Guilds(V.Build("census")), "Olympus Ébano", "by its Lord")
+			V.SetFilter("census", "ÁGATA"); eq(Guilds(V.Build("census")), "Olympus Ébano")
+			-- Plain text: what a Lua pattern would read as magic finds only itself: no match.
+			for _, text in ipairs({ ".", "%a", "[o]", "olymp.s", "(" }) do
+				V.SetFilter("census", text)
+				lines = V.Build("census")
+				eq(#lines, 2, text); eq(lines[2].text, NO_MATCH, text)
+			end
+			-- Spaces around are nothing; spaces alone, the whole list as ever.
+			V.SetFilter("census", "  lordy "); eq(Guilds(V.Build("census")), "Olympus II")
+			V.SetFilter("census", "   ")
+			lines = V.Build("census")
+			eq(Guilds(lines), "Olympus,Olympus II,Olympus Ébano,OLYMPUS VII"); assert(At(lines, L.SEEN_HINT))
+			-- The copy for Discord: every guild, whatever is typed.
+			V.SetFilter("census", "lordy")
+			eq(ns.Data.DiscordText(), copy)
+			assert(copy:find("Olympus Ébano", 1, true) and copy:find("Asmongold", 1, true), copy)
+			eq(#calls, 0, "nothing sent, no /who")
+		end)
+		ns.rdb.guilds, ns.rdb.seen = saved.guilds, saved.seen
+		if not ok then error(err, 0) end
+	end)
+
+	test("1.0.0 search: the Realm: a guild by its name as ever, a Lord, Captain or member under their guild opened for them, a page at a time", function()
+		local saved = { guilds = ns.rdb.guilds, guild = GetGuildInfo, online = ns.Roster.online, sweep = ns.Who.sweep }
+		local ok, err = pcall(Quiet, function(calls)
+			GetGuildInfo = function() return "Olympus II", "Member", 3 end
+			ns.rdb.guilds = SampleGuilds()
+			ns.Roster.online = { { name = "Mate", level = 22, class = "MA", rank = "Knight", rankIndex = 3 },
+				{ name = "Élodie", level = 30, class = "PR", rank = "Knight", rankIndex = 3 } }
+			for k = 1, 40 do ns.Roster.online[#ns.Roster.online + 1] = { name = "Recruit" .. k, level = 10, class = "WA", rank = "Recruit", rankIndex = 5 } end
+			ns.Who.sweep = { list = { { name = "Scout-Realm", guild = "Olympus", level = 18, class = "ROGUE" } } }
+			V.ExpandAll(false)
+			local copy = ns.Data.DiscordText()
+			-- Nothing typed: the box, then the tree exactly as ever.
+			local lines = V.Build("realm")
+			assert(Box(lines), "the box on top")
+			eq(Texts(Body(lines)), Texts(V.RealmLines()), "nothing typed: the Realm as ever under it")
+			assert(At(lines, L.KING .. ": ") and At(lines, L.LEVEL_RACE) and At(lines, L.RECRUITING))
+			-- A Captain: his guild's header opened for him, the Captains' header, and him alone.
+			V.SetFilter("realm", "CAPT")
+			lines = V.Build("realm")
+			local header, at = At(lines, "<Olympus>")
+			assert(header and header.text:find("[-] ", 1, true), "opened for the search: " .. Texts(lines))
+			eq(lines[at + 1].text, "|cffffd200" .. L.CAPTAINS:format(1) .. "|r"); eq(lines[at + 1].indent, 1)
+			eq(lines[at + 2].key, "Capt"); eq(lines[at + 2].indent, 2); eq(#lines, at + 2, "nothing more")
+			eq(Keys(lines), "Capt")
+			for _, gone in ipairs({ L.KING .. ": ", L.LEVEL_RACE, L.RECRUITING, L.RANKS, "<Olympus II>", L.LAYERS_IN:format("") }) do
+				eq(At(lines, gone), nil, "not while searching: " .. gone)
+			end
+			-- Its header folds what the search opened, and opens it again; the guild's own state
+			-- (Expand all, a click without a search) is untouched.
+			header.onClick()
+			lines = V.Build("realm")
+			header, at = At(lines, "<Olympus>")
+			assert(header.text:find("[+] ", 1, true), header.text); eq(Keys(lines), "")
+			header.onClick()
+			eq(Keys(V.Build("realm")), "Capt")
+			V.SetFilter("realm", "")
+			assert(At(V.Build("realm"), "[+] |cff40ff40<Olympus>"), "closed as it was, once the box is empty")
+			-- A Lord: his row under his guild's header.
+			V.SetFilter("realm", "lordy")
+			lines = V.Build("realm")
+			header, at = At(lines, "<Olympus II>")
+			assert(header.text:find("[-] ", 1, true)); eq(lines[at + 1].key, "Lordy"); eq(Keys(lines), "Lordy")
+			-- A member online in our roster, any case and accented, under the guild's members' header.
+			V.SetFilter("realm", "ÉLO")
+			lines = V.Build("realm")
+			header, at = At(lines, "<Olympus II>")
+			eq(lines[at + 1].text, "|cffffd200" .. L.MEMBERS_ONLINE:format(42) .. "|r", "the header they belong to")
+			eq(Keys(lines), "Élodie")
+			-- A member /who saw in another guild.
+			V.SetFilter("realm", "scout")
+			lines = V.Build("realm")
+			header, at = At(lines, "<Olympus>")
+			eq(lines[at + 1].text, "|cffffd200" .. L.MEMBERS_SEEN:format(1) .. "|r"); eq(Keys(lines), "Scout")
+			-- Many members found: the first 25, the rest on a click, and back.
+			V.SetFilter("realm", "recruit")
+			lines = V.Build("realm")
+			eq(select(2, Keys(lines):gsub("Recruit", "")), V.MAX_MEMBERS)
+			local more = At(lines, L.MEMBERS_MORE:format(40 - V.MAX_MEMBERS))
+			assert(more and more.onClick, "the rest of what was found, on a click")
+			more.onClick()
+			lines = V.Build("realm")
+			eq(select(2, Keys(lines):gsub("Recruit", "")), 40)
+			local fewer = At(lines, L.MEMBERS_FEWER)
+			assert(fewer and fewer.onClick)
+			fewer.onClick()
+			eq(select(2, Keys(V.Build("realm")):gsub("Recruit", "")), V.MAX_MEMBERS)
+			-- A guild by its name: the guild as ever, closed as it is; a click opens all of it.
+			V.SetFilter("realm", "olympus ii")
+			lines = V.Build("realm")
+			header, at = At(lines, "<Olympus II>")
+			assert(header.text:find("[+] ", 1, true), header.text); eq(#lines, at, "closed: its header alone")
+			eq(At(lines, "<Olympus>"), nil)
+			header.onClick()
+			lines = V.Build("realm")
+			assert(At(lines, "[-] |cff40ff40<Olympus II>") and At(lines, L.RANKS) and At(lines, "Mate"), "all of it: " .. Texts(lines))
+			At(lines, "<Olympus II>").onClick()
+			-- Collapse all folds what the search opened too.
+			V.SetFilter("realm", "capt")
+			V.ExpandAll(false)
+			assert(At(V.Build("realm"), "[+] |cff40ff40<Olympus>"))
+			-- Nothing found: the box and "No match" (the chats' link stays, they are searched there).
+			V.SetFilter("realm", "zzz")
+			lines = V.Build("realm")
+			eq(lines[#lines].text, NO_MATCH); eq(Keys(lines), ""); eq(At(lines, "<Olympus"), nil)
+			-- The copy for Discord keeps everything.
+			eq(ns.Data.DiscordText(), copy)
+			eq(#calls, 0, "nothing sent, no /who")
+		end)
+		GetGuildInfo, ns.rdb.guilds, ns.Roster.online, ns.Who.sweep = saved.guild, saved.guilds, saved.online, saved.sweep
+		if not ok then error(err, 0) end
+	end)
+
+	test("1.0.0 search: the Realm's High Council by the names its rows show, for whoever sees it; on the King's stream never what is hidden", function()
+		WithKingsCouncil(function(W)
+			local savedUI = ns.UI
+			local ok, err = pcall(function()
+				ns.UI = { Refresh = function() end, ShowPerson = function() end }
+				V.ClearFilters()
+				local HEADER = L.COUNCIL_CENSUS:format(#KINGS_COUNCIL)
+				-- A soldier: no council to search, the names in the guilds alone.
+				V.SetFilter("realm", "fourth")
+				local lines = V.Build("realm")
+				eq(At(lines, HEADER), nil, "no council for a soldier")
+				eq(Keys(lines), "Fourth Mod", "in our roster")
+				-- A councillor: the council's header, opened, Fourth Mod under his department alone.
+				ns.me = "Third Mod-Realm"
+				lines = V.Build("realm")
+				local header, at = At(lines, HEADER)
+				assert(header and header.text:find("[-] ", 1, true), Texts(lines))
+				assert(lines[at + 1].text:find("Department of Coin", 1, true), lines[at + 1].text)
+				assert(lines[at + 2].text:find("Fourth Mod", 1, true) and lines[at + 2].indent == 2, lines[at + 2].text)
+				eq(At(lines, "Department of War"), nil); eq(At(lines, "Council Speaker"), nil)
+				header.onClick()
+				header = At(V.Build("realm"), HEADER)
+				assert(header.text:find("[+] ", 1, true), "folded by a click"); eq(At(V.Build("realm"), "Keeper of Coin"), nil)
+				-- The King's stream: each name its first four characters; the search sees those alone.
+				AsKing()
+				V.SetFilter("realm", "four")
+				lines = V.Build("realm")
+				header, at = At(lines, HEADER)
+				assert(header, "found by what shows")
+				assert(lines[at + 2].text:find("Four****", 1, true), lines[at + 2].text)
+				eq(At(lines, L.COUNCIL_NAMES_SHOW), nil, "no eye while searching")
+				NoMarkedName(lines, "the King's search")
+				for _, hidden in ipairs({ "fourth", "fourth mod", "mod", "councillor", "wyn" }) do
+					V.SetFilter("realm", hidden)
+					lines = V.Build("realm")
+					eq(At(lines, HEADER), nil, "what is hidden finds no councillor: " .. hidden)
+					NoMarkedName(lines, "the King's search for " .. hidden)
+				end
+				V.SetFilter("realm", "ËÖWY")
+				lines = V.Build("realm")
+				header, at = At(lines, HEADER)
+				assert(header and lines[at + 1].text:find("\195\139\195\182wy****", 1, true), Texts(lines))
+				-- The eye shows the names: whole names are searched.
+				ns.SetCouncilNamesShown(true)
+				V.SetFilter("realm", "fourth mod")
+				header, at = At(V.Build("realm"), HEADER)
+				assert(header, "shown: found by the whole name")
+			end)
+			ns.UI = savedUI
+			V.ClearFilters()
+			if not ok then error(err, 0) end
+		end)
+	end)
+
+	test("1.0.0 search: the Olympus chats in the Realm: the lines whose writer, guild or words hold it; the way back and the channels stay", function()
+		WithThrone(function(w)
+			local savedUI = ns.UI
+			local ok, err = pcall(Quiet, function()
+				ns.rdb.chat = { A = {
+					{ t = w.clock - 120, sender = "Aa-Realm", guild = "Olympus II", text = "first light" },
+					{ t = w.clock - 60, sender = "Bb-Realm", guild = "Olympus Zeus", text = "second |cffff0000red" },
+					{ t = w.clock - 30, sender = "Élise-Realm", guild = "Olympus II", text = "third" },
+				} }
+				AsSoldier()
+				V.ShowChat("A")
+				local lines = V.Build("realm")
+				local box = Box(lines)
+				assert(box, "the Realm's box over the chats")
+				local tip = {}
+				box.tooltip({ AddLine = function(_, s) tip[#tip + 1] = s end })
+				eq(tip[2], L.SEARCH_TIP_CHAT)
+				eq(Texts(Body(lines)), Texts(V.RealmLines()), "nothing typed: the chats as ever")
+				local write = L.CHATS_WRITE:format(L[ns.Channels.TIERS.A.label])
+				assert(At(lines, write))
+				local function Said(ls)
+					local out = {}
+					for _, l in ipairs(ls) do
+						for _, word in ipairs({ "first", "second", "third" }) do
+							if l.right and (l.text or ""):find(word, 1, true) then out[#out + 1] = word end
+						end
+					end
+					return table.concat(out, ",")
+				end
+				eq(Said(lines), "third,second,first", "newest first")
+				-- Words of a line, any case: the way back, the channels, the lines found; no Write line.
+				V.SetFilter("realm", "SECOND")
+				lines = V.Build("realm")
+				assert(lines[2].text:find(L.CHATS_BACK, 1, true), "the way back")
+				assert(At(lines, "[" .. L[ns.Channels.TIERS.A.label] .. "]"), "the channel")
+				eq(At(lines, write), nil, "no Write line while searching")
+				eq(Said(lines), "second")
+				-- A writer's guild, a writer's name (accented capitals too), a word after a bar.
+				V.SetFilter("realm", "olympus zeus"); eq(Said(V.Build("realm")), "second")
+				V.SetFilter("realm", "olympus ii"); eq(Said(V.Build("realm")), "third,first")
+				V.SetFilter("realm", "ÉLISE"); eq(Said(V.Build("realm")), "third")
+				V.SetFilter("realm", "red"); eq(Said(V.Build("realm")), "second")
+				-- Nothing found: "No match" under the channels.
+				V.SetFilter("realm", "zzz")
+				lines = V.Build("realm")
+				eq(lines[#lines].text, NO_MATCH); eq(Said(lines), "")
+				-- Back to the tree: the same search there.
+				lines[2].onClick()
+				eq(V.ChatShown(), false)
+				eq(V.Build("realm")[#V.Build("realm")].text, NO_MATCH)
+			end)
+			ns.UI = savedUI
+			V.ShowChat(nil)
+			if not ok then error(err, 0) end
+		end)
+	end)
+
+	test("1.0.0 search: the Tabards by name or guild: the untabarded and the inspected players under their headers, a page as ever", function()
+		WithThrone(function(w)
+			local I = ns.Inspect
+			local saved = { from = I.SHAME_FROM, inspect = ns.rdb.inspect, rows = V.INSPECT_ROWS }
+			local ok, err = pcall(Quiet, function()
+				I.SHAME_FROM = 0
+				local players = {}
+				local function P(name, guild, status, age)
+					players[name] = { name = name, guild = guild, status = status, t = w.clock - (age or 0), class = "MAGE" }
+				end
+				P("Naked", "Olympus II", "NONE"); P("Pirate", "Olympus Zeus", "OTHER"); P("Good", "Olympus II", "GUILD")
+				P("Élan", "Olympus", "GUILD")
+				for k = 1, 5 do P("Zealot" .. k, "Olympus Zeus", "GUILD", k) end
+				ns.rdb.inspect = { players = players, guildMarks = {} }
+				local copy = I.DiscordText()
+				AsSoldier()
+				local sent, whispered = #w.sent, #w.whispered
+				local lines = V.Build("heraldry")
+				assert(Box(lines), "the box on top")
+				assert(At(lines, L.WALL_OF_SHAME) and At(lines, L.GUILDS) and At(lines, L.INSPECTED_PLAYERS))
+				-- A name: the inspected players' header and the player; the untabarded the King
+				-- does not share and the guilds' counts are not searched: gone while typed.
+				V.SetFilter("heraldry", "NAKED")
+				lines = V.Build("heraldry")
+				eq(At(lines, L.WALL_OF_SHAME), nil); eq(At(lines, L.GUILDS), nil)
+				assert(lines[2].header and lines[2].text == L.INSPECTED_PLAYERS, "the header they belong to")
+				eq(Keys(lines), "Naked"); eq(#lines, 3)
+				-- A guild, accented capitals: its players.
+				V.SetFilter("heraldry", "olympus zeus")
+				eq(Keys(V.Build("heraldry")), "Pirate,Zealot1,Zealot2,Zealot3,Zealot4,Zealot5", "in the list's order")
+				V.SetFilter("heraldry", "ÉLAN"); eq(Keys(V.Build("heraldry")), "Élan")
+				-- The page's cap counts what was found.
+				V.INSPECT_ROWS = 3
+				V.SetFilter("heraldry", "zealot")
+				lines = V.Build("heraldry")
+				eq(Keys(lines), "Zealot1,Zealot2,Zealot3"); eq(lines[#lines].text, "|cff9d9d9d" .. L.AND_MORE:format(2) .. "|r")
+				V.INSPECT_ROWS = saved.rows
+				-- The King: his untabarded list is searched too, under its header as ever.
+				AsKing()
+				V.SetFilter("heraldry", "")
+				assert(At(V.Build("heraldry"), L.THRONE_INSPECT_TITLE), "his Royal Inspection line")
+				V.SetFilter("heraldry", "pirate")
+				lines = V.Build("heraldry")
+				local shame, at = At(lines, L.WALL_OF_SHAME)
+				assert(shame and shame.header and shame.right, "the untabarded header, with what it says")
+				eq(lines[at + 1].key, "Pirate"); eq(lines[at + 1].indent, 1)
+				eq(Keys(lines), "Pirate,Pirate", "on his list and among the inspected")
+				eq(At(lines, L.THRONE_INSPECT_TITLE), nil, "not while searching")
+				V.SetFilter("heraldry", "good")
+				lines = V.Build("heraldry")
+				eq(At(lines, L.WALL_OF_SHAME), nil, "none of his list found: its header goes"); eq(Keys(lines), "Good")
+				-- Nothing found.
+				V.SetFilter("heraldry", "zzz")
+				lines = V.Build("heraldry")
+				eq(#lines, 2); eq(lines[2].text, NO_MATCH)
+				-- The copy for Discord: everyone, whatever is typed; nothing sent.
+				eq(I.DiscordText(), copy)
+				eq(#w.sent, sent); eq(#w.whispered, whispered)
+			end)
+			I.SHAME_FROM, ns.rdb.inspect, V.INSPECT_ROWS = saved.from, saved.inspect, saved.rows
+			if not ok then error(err, 0) end
+		end)
+	end)
+
+	test("1.0.0 search: the Treasury's ranking and book by name, places kept, a page at a time; the box only where donors show", function()
+		WithThrone(function(w)
+			local T = ns.Treasury
+			local savedAlert = ns.PlayAlert
+			local ok, err = pcall(Quiet, function()
+				ns.PlayAlert = function() end
+				AsTreasurer()
+				local function Name(i) return "Donor " .. string.char(65 + math.floor((i - 1) / 26)) .. string.char(97 + (i - 1) % 26) .. "name" end
+				for i = 1, 120 do T.Record(Name(i), 10000 + i, "trade", nil, { quiet = true }) end
+				T.Record("Élodie Mage", 5, "mail", nil, { quiet = true }) -- (121st: past the ranking's 100)
+				T.Show("summary")
+				local copy = T.DiscordText()
+				local lines = V.Build("treasury")
+				assert(Box(lines), "the box, over the Treasurer's summary")
+				eq(Texts(Body(lines)), Texts((T.Build())), "nothing typed: as ever")
+				-- "Donor B": its 26 donors, each at its place in the whole ranking, 25 at a time.
+				V.SetFilter("treasury", "donor b")
+				lines = V.Build("treasury")
+				local rows = {}
+				for _, l in ipairs(lines) do if l.indent == 1 and not l.onClick then rows[#rows + 1] = Bare(l.text) end end
+				eq(#rows, 25); eq(rows[1], "69. Donor Bzname"); eq(rows[25], "93. Donor Bbname")
+				assert(lines[2].header and lines[2].text == L.TREASURY_RANKING, "under the ranking's header")
+				eq(At(lines, L.TREASURY_BALANCE), nil, "the balance is not searched: gone while typed")
+				local more = At(lines, L.SHOW_MORE:format(1, 25, 26))
+				assert(more and more.onClick, "one more")
+				more.onClick()
+				lines = V.Build("treasury")
+				eq(select(2, Texts(lines):gsub("Donor B", "")), 26)
+				-- A new text: its first page again.
+				V.SetFilter("treasury", "donor")
+				lines = V.Build("treasury")
+				assert(At(lines, L.SHOW_MORE:format(25, 25, 100)), "the 100 sent, from the first page: " .. Texts(lines))
+				-- The ranking's first 100 only, as ever; the book has everyone.
+				V.SetFilter("treasury", "ÉLODIE")
+				lines = V.Build("treasury")
+				eq(lines[2].text, NO_MATCH); assert(At(lines, "> " .. L.TREASURY_BOOK), "the way to the book stays")
+				T.Show("book")
+				lines = V.Build("treasury")
+				assert(Box(lines) and Box(lines).input.text == "ÉLODIE", "the same box, the same text")
+				assert(lines[2].text:find(L.TREASURY_TITLE, 1, true), "the way back")
+				assert(At(lines, L.TREASURY_BOOK), "the book's header")
+				eq(At(lines, L.TREASURY_BOOK_HOW:match("^%S+%s+%S+%s+%S+")), nil, "its explanation goes while typed")
+				local found = 0
+				for _, l in ipairs(lines) do if l.right and (l.text or ""):find("Élodie Mage", 1, true) then found = found + 1 end end
+				eq(found, 1, "her line of the book")
+				-- The book a page at a time: 40 of what is found, the older on a click.
+				V.SetFilter("treasury", "donor")
+				lines = V.Build("treasury")
+				local older = At(lines, L.TREASURY_OLDER:format(80))
+				assert(older and older.onClick, "80 older found: " .. Texts(lines))
+				older.onClick()
+				assert(At(V.Build("treasury"), L.TREASURY_OLDER:format(40)))
+				V.SetFilter("treasury", "donor a")
+				lines = V.Build("treasury")
+				eq(select(2, Texts(lines):gsub("Donor A", "")), 26); eq(At(lines, L.TREASURY_OLDER:match("^[^%%]+")), nil)
+				V.SetFilter("treasury", "zzz")
+				lines = V.Build("treasury")
+				eq(#lines, 3); eq(lines[3].text, NO_MATCH)
+				-- The copy for Discord: the whole ranking, whatever is typed.
+				eq(T.DiscordText(), copy)
+				-- The King's copy of the treasury (what the Treasurer sends): searched the same way.
+				local msg = T.Message()
+				AsKing()
+				T.HandleReport("CHANNEL", "Pyralis Ashandar-Realm", msg)
+				T.Show("summary")
+				V.SetFilter("treasury", "DONOR B")
+				lines = V.Build("treasury")
+				assert(Box(lines), "the King's box")
+				assert(At(lines, "69. Donor Bzname") and At(lines, L.SHOW_MORE:format(1, 25, 26)), Texts(lines))
+				T.Show("book")
+				V.SetFilter("treasury", "élodie")
+				lines = V.Build("treasury")
+				found = 0
+				for _, l in ipairs(lines) do if l.right and (l.text or ""):find("Élodie Mage", 1, true) then found = found + 1 end end
+				eq(found, 1, "her line among the latest the Treasurer sent")
+				V.SetFilter("treasury", "donor aa")
+				eq(V.Build("treasury")[3].text, NO_MATCH, "only the latest lines travel: the oldest is not there")
+				-- A member the King shows nothing of: no box, and what was typed filters nothing.
+				T.Show("summary")
+				AsSoldier()
+				lines = V.Build("treasury")
+				eq(Box(lines), nil, "no donors shown: no box")
+				eq(At(lines, L.SEARCH_NO_MATCH), nil)
+			end)
+			ns.PlayAlert = savedAlert
+			if not ok then error(err, 0) end
+		end)
+	end)
+
+	test("1.0.0 search: the box in the window never takes the keyboard (gamepad UI too), its x empties it, each tab keeps its text, a search starts from the top", function()
+		WithUI(function()
+			GetGuildInfo = function() return "Olympus II" end
+			local focused, cleared = {}, 0
+			Widget.SetFocus = function(self) focused[#focused + 1] = self end
+			Widget.SetAutoFocus = function(self, on) self.autoFocus = on end
+			Widget.ClearFocus = function() cleared = cleared + 1 end
+			local ok, err = pcall(function()
+				V.ClearFilters()
+				V.ExpandAll(false)
+				local UI = LoadUI()
+				UI.SelectTab("census")
+				local main = OlympusFrame
+				local view = main.views.census
+				local eb = view.input
+				assert(eb, "the Census's box")
+				eq(eb.kind, "EditBox"); eq(eb.template, "InputBoxTemplate"); eq(eb.olympusBox, true)
+				eq(eb.autoFocus, false, "never takes the keyboard by itself"); eq(eb:IsShown(), true)
+				eq(eb.points[1][2].text, L.SEARCH, "after its label, on the list's first row")
+				eq(eb.clear:IsShown(), false, "no x while it is empty")
+				local function Shown()
+					local out = {}
+					for _, r in ipairs(view.rows) do if r:IsShown() and r.line and r.line.cols then out[#out + 1] = r.line.cols[1] end end
+					return table.concat(out, ",")
+				end
+				eq(Shown(), "Olympus,Olympus II")
+				local scrolls = {}
+				main.scroll.SetVerticalScroll = function(_, v) scrolls[#scrolls + 1] = v end
+				-- The first letter: the list from its top; the next ones leave it where it is.
+				eb:SetText("l"); eb:Fire("OnTextChanged", true)
+				eq(#scrolls, 1); eq(scrolls[1], 0)
+				eb:SetText("lo"); eb:Fire("OnTextChanged", true)
+				eb:SetText("lordy"); eb:Fire("OnTextChanged", true)
+				eq(#scrolls, 1, "not at each letter")
+				UI.Refresh()
+				eq(Shown(), "Olympus II"); eq(eb:GetText(), "lordy"); eq(eb.clear:IsShown(), true, "the x")
+				UI.Refresh()
+				eq(eb:GetText(), "lordy", "redraws keep the text")
+				-- Enter and Escape let go of the keyboard.
+				eb:Fire("OnEnterPressed"); eb:Fire("OnEscapePressed")
+				eq(cleared, 2)
+				-- Each tab its own box and text, for the session.
+				UI.SelectTab("realm")
+				local reb = main.views.realm.input
+				assert(reb and reb ~= eb, "the Realm's own box"); eq(reb:GetText() or "", "")
+				UI.SelectTab("census")
+				eq(eb:GetText(), "lordy"); eq(Shown(), "Olympus II")
+				-- Another tab's search moves nothing here.
+				local n = #scrolls
+				V.SetFilter("heraldry", "nobody"); V.SetFilter("heraldry", "")
+				eq(#scrolls, n)
+				-- The x: the box emptied, the keyboard let go, the whole list where it was.
+				eb.clear:Click()
+				eq(V.Filter("census"), ""); eq(eb:GetText(), ""); eq(cleared, 3); eq(eb.clear:IsShown(), false)
+				eq(#scrolls, n, "emptied: no jump")
+				UI.Refresh()
+				eq(Shown(), "Olympus,Olympus II")
+				eb:SetText("olympus"); eb:Fire("OnTextChanged", true)
+				eq(#scrolls, n + 1, "a new search from the top again")
+				eq(#focused, 0)
+				-- The gamepad UI, the chat box typing: boxes drawn, typed into, emptied and let go,
+				-- and nothing of ours takes the keyboard, opens a popup or a menu, or joins the
+				-- escape list.
+				local savedFocus = GetCurrentKeyBoardFocus
+				GetCurrentKeyBoardFocus = function() return { name = "ChatFrame1EditBox" } end
+				local specials, menus = #UISpecialFrames, 0
+				MenuUtil = setmetatable({}, { __index = function() return function() menus = menus + 1 end end })
+				local shown
+				local okPad, errPad = pcall(WithGamepadUI, true, function(game)
+					UI.SelectTab("realm")
+					reb:SetText("capt"); reb:Fire("OnTextChanged", true)
+					UI.Refresh()
+					local header
+					for _, r in ipairs(main.views.realm.rows) do
+						if r:IsShown() and r.line and (r.line.text or ""):find("<Olympus>", 1, true) then header = r end
+					end
+					assert(header, "the Captain's guild")
+					header:Click()
+					UI.Refresh()
+					reb.clear:Click()
+					UI.SelectTab("heraldry")
+					local heb = main.views.heraldry.input
+					heb:SetText("x"); heb:Fire("OnTextChanged", true)
+					UI.Refresh()
+					heb:Fire("OnEscapePressed")
+					shown = #game.shown
+				end)
+				GetCurrentKeyBoardFocus, MenuUtil = savedFocus, nil
+				assert(okPad, errPad)
+				eq(shown, 0, "no game popup"); eq(menus, 0, "no menu"); eq(#UISpecialFrames, specials, "nothing on the escape list")
+				eq(#focused, 0, "the addon never focuses a box")
+			end)
+			Widget.SetFocus, Widget.SetAutoFocus, Widget.ClearFocus = nil, nil, nil
+			V.ClearFilters()
+			V.ExpandAll(false)
+			V.ClearFilters()
+			if not ok then error(err, 0) end
+		end)
+	end)
+
+	test("1.0.0 search: the locales have every new line, in Portuguese too", function()
+		local savedLocale, pt = GetLocale, {}
+		GetLocale = function() return "ptBR" end
+		local ok, err = pcall(function() assert(loadfile(ADDON_DIR .. "Locales.lua"))("Olympus", pt) end)
+		GetLocale = savedLocale
+		if not ok then error(err, 0) end
+		for _, key in ipairs({ "SEARCH", "SEARCH_NO_MATCH", "SEARCH_CLEAR", "SEARCH_TIP_CENSUS", "SEARCH_TIP_REALM", "SEARCH_TIP_CHAT",
+			"SEARCH_TIP_HERALDRY", "SEARCH_TIP_TREASURY" }) do
+			assert(type(rawget(ns.L, key)) == "string", "English " .. key)
+			assert(type(rawget(pt.L, key)) == "string" and pt.L[key] ~= ns.L[key], "Portuguese " .. key)
+			eq(select(2, pt.L[key]:gsub("%%[ds]", "")), select(2, ns.L[key]:gsub("%%[ds]", "")), key)
+		end
 	end)
 end
 

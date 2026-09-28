@@ -714,6 +714,33 @@ function ns.MaskName(name)
 	return (cut and s:sub(1, cut) or s) .. "****"
 end
 
+-- Letters folded for a search (the Workshop's, 0.9.9; the tabs', 1.0.0), byte by byte: A-Z, and
+-- Latin-1's accented capitals (À to Þ but ×, in UTF-8 C3 80-9E, their small letters C3 A0-BE).
+-- Not the C library's lower(): its idea of a letter can change with the locale and split a UTF-8
+-- letter. Any other letter stays whole.
+function ns.Fold(s)
+	s = tostring(s or ""):gsub("[A-Z]", function(c) return string.char(c:byte() + 32) end)
+	return (s:gsub("\195([\128-\158])", function(c)
+		if c == "\151" then return nil end
+		return "\195" .. string.char(c:byte() + 32)
+	end))
+end
+
+-- Does one of the texts hold `query` (folded, ns.Fold)? As plain text, never a Lua pattern, and
+-- only what a row shows: its colour codes, textures and a link's data left out, the link's
+-- [text] kept, an escaped "||" one "|" (and no code). No query (nil or ""): everything does.
+function ns.Holds(query, ...)
+	if not query or query == "" then return true end
+	for i = 1, select("#", ...) do
+		local s = select(i, ...)
+		if type(s) == "string" and s ~= "" then
+			s = s:gsub("||", "\1"):gsub("|H.-|h(.-)|h", "%1"):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""):gsub("|T.-|t", "")
+			if ns.Fold((s:gsub("\1", "|"))):find(query, 1, true) then return true end
+		end
+	end
+	return false
+end
+
 -- The Crown: guild masters of any Olympus guild, and the officers of the King's guild.
 function ns.IsCrownRank(guild, rankIndex)
 	if not guild or not rankIndex then return false end

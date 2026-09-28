@@ -1731,6 +1731,15 @@ function UI.RefreshSoon()
 	end)
 end
 
+-- Typed into a tab's search box (Views.SetFilter): that list again, soon. A search that starts
+-- (the box was empty) shows its list from the top; while the player goes on typing, or empties
+-- the box, the list stays where it was scrolled to.
+function UI.FilterChanged(tab, fromTop)
+	if not (main and main:IsShown() and main.tab == tab) then return end
+	if fromTop then main.scroll:SetVerticalScroll(0) end
+	UI.RefreshSoon()
+end
+
 ns.On("DATA_CHANGED", function() UI.RefreshSoon() end)
 ns.On("MAP_TOGGLED", function() UI.Refresh() end)
 ns.On("INSPECT_CHANGED", function() if main and main.tab == "heraldry" then UI.RefreshSoon() end end)
