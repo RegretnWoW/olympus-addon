@@ -162,9 +162,9 @@ Before your first line in each channel the addon tells you this and waits for **
 ### The Throne (the King and his Hands)
 A tab with a crown that only the King sees: the guild master of the guild named exactly
 "Olympus" (of his faction), and on the Alliance that very character, Asmongold Asmongler: the
-addon knows him by name, like the Treasurer. It opens on the author's letter, its cover; **the Throne Room**
-(the queue of his court while it is open, and the Treasury) is a click away, and holding
-court takes him there. Each of his tools lives where it belongs:
+addon knows him by name, like the Treasurer. It opens on **the Throne Room** (the queue of
+his court while it is open, and the Treasury), and holding court takes him there. Each of his
+tools lives where it belongs:
 - **The King's Agenda** (a button on the Throne): minutes and an event ("30 Raid on
   Crossroads"). The whole army gets a popup with the appointment (what, in how long, where)
   and sees it on the Census, with reminders 10 minutes and 1 minute before.
@@ -258,6 +258,9 @@ for the King, and for every member once the King shows the army something of it.
 ### World map
 - Soldiers per zone on zone and continent maps, and per continent on the world map (with
   Blizzard's gamepad mode, only per continent: see below).
+- Decrees are round icons (the horn, the war cry...) where they were called, and the King's
+  crown where he stands. Over a zone's circle they move just outside its edge, top right first,
+  so its number stays readable; several around one circle each take a place of their own.
 - The round **Olympus** button in the bottom left corner of the map switches markers
   (army per zone, decrees) on and off.
 
@@ -398,7 +401,10 @@ He can also ask a player on an old version to update: a fixed window with the tw
 numbers and nothing else. Only his character on his realm group
 can do either: every addon checks the sender's name, which nobody else can carry. `/oly
 rollcall off` refuses both. The addon's error catcher keeps only Olympus's own errors (for
-`/oly bug`), never another addon's.
+`/oly bug`), never another addon's. For the store's screenshots he has a photo mode (`/oly
+photo`, his character only): on his own screen it fades everything but Olympus and the world
+map to invisible, and gives every frame its look back on the second `/oly photo` or a
+`/reload`. Never in combat, not with the gamepad UI, and nothing is sent to anyone.
 
 The addon is plain Lua running on each player's computer, so anyone can edit their own
 copy. No addon can prevent that. What this one does is make an edited copy useless:

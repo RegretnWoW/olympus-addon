@@ -52,23 +52,20 @@ local function PinEnter(self)
 	GameTooltip:Show()
 end
 
+-- On the world map a decree is a round icon in a disc of its colour, beside the zone circles
+-- rather than over their numbers (1.0.0, Map.Badge; a square of 34 before). An expired decree's
+-- icon waits for the next one.
+Decree.BADGE = 20
+local COLORS = { ARMS = { 1, 0.25, 0.2 }, MUSTER = { 1, 0.8, 0.2 }, ROYAL = { 0.9, 0.76, 0.36 }, HERALDRY = { 0.35, 0.6, 1 } }
+local spare = {}
+
 local function MakePin(d)
-	local f = CreateFrame("Frame", nil, UIParent)
-	f:SetSize(34, 34)
-	f.icon = f:CreateTexture(nil, "ARTWORK")
-	f.icon:SetAllPoints()
-	f.icon:SetTexture(ICONS[d.kind] or ICONS.MUSTER)
-	f.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-	f.glow = f:CreateTexture(nil, "OVERLAY")
-	f.glow:SetTexture("Interface\\Buttons\\UI-ActionButton-Border")
-	f.glow:SetBlendMode("ADD")
-	f.glow:SetVertexColor(d.kind == "ARMS" and 1 or 1, d.kind == "ARMS" and 0.2 or 0.8, 0.2)
-	f.glow:SetPoint("CENTER")
-	f.glow:SetSize(64, 64)
-	f:EnableMouse(true)
-	f:SetScript("OnEnter", PinEnter)
-	f:SetScript("OnLeave", function() GameTooltip:Hide() end)
-	f.decree = d
+	local f = table.remove(spare) or ns.Map.Badge(Decree.BADGE, true)
+	local c = COLORS[d.kind] or COLORS.MUSTER
+	ns.Map.SetBadge(f, ICONS[d.kind] or ICONS.MUSTER, c[1], c[2], c[3])
+	f.badge.decree = d
+	f.badge:SetScript("OnEnter", PinEnter)
+	f.badge:SetScript("OnLeave", function() GameTooltip:Hide() end)
 	return f
 end
 
@@ -165,6 +162,7 @@ function Decree.Active()
 			if Pins and d.pin then
 				if world then Pins:RemoveWorldMapIcon(Decree, d.pin) end
 				d.pin:Hide()
+				spare[#spare + 1], d.pin = d.pin, nil
 			end
 			table.remove(active, i)
 		end

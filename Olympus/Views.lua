@@ -106,11 +106,21 @@ local function Row(content, i)
 		fs:SetWordWrap(false)
 		r.cols[c] = fs
 	end
+	r.index = i
 	r:SetScript("OnClick", function(self)
 		if not self.line then return end
 		-- HD: the person opened stays lit, like the roster's selected member.
 		if content.style == "hd" and self.line.key then ns.SafeCall("view select", Views.Select, content, self.line.key) end
-		if self.line.onClick then ns.SafeCall("view click", self.line.onClick) end
+		-- Where the row was clicked, for the redraw its click causes (UI.lua keeps it in place):
+		-- its place in the list, the list's offset then (the list is the scroll frame's child).
+		-- A row with nothing to do on a click (a tooltip, a heading) causes no redraw.
+		if self.line.onClick then
+			local scroll = content:GetParent()
+			local offset = scroll and scroll.GetVerticalScroll and scroll:GetVerticalScroll()
+			content.click = { index = self.index, top = self.top or 0, lines = content.lineCount or 0, t = GetTime(),
+				offset = type(offset) == "number" and offset or nil }
+			ns.SafeCall("view click", self.line.onClick)
+		end
 		if ns.UI.Clicked then ns.UI.Clicked() end
 	end)
 	r:SetScript("OnEnter", function(self)
@@ -298,6 +308,7 @@ function Views.Render(content, lines, layout)
 	for i, line in ipairs(lines) do
 		local r = Row(content, i)
 		r.line = line
+		r.top = -y -- how far down the list the row starts (UI.lua keeps the list's place)
 		r:ClearAllPoints()
 		r:SetPoint("TOPLEFT", content, "TOPLEFT", 0, y)
 		r:SetWidth(width)
@@ -366,8 +377,20 @@ function Views.Render(content, lines, layout)
 	end
 	for i = #lines + 1, #(content.rows or {}) do content.rows[i]:Hide() end
 	PlaceInput(content, inputRow)
+	content.lineCount = #lines
 	content:SetHeight(-y + 8)
 end
+
+-- The last row clicked in `content` ({ index, top, lines, t }: where it started, how many lines
+-- the list had, when), once: taken by the redraw that follows (UI.lua).
+function Views.TakeClick(content)
+	local click = content.click
+	content.click = nil
+	return click
+end
+
+-- The id of a guild's row in the Realm tree (line.id): a tab opened on it shows it (UI.SelectTab).
+function Views.GuildId(name) return "guild:" .. tostring(name) end
 
 ---------------------------------------------------------------------------
 -- Shared tooltips
@@ -479,8 +502,9 @@ local function CensusLines(s)
 			dim = not e.fresh,
 			tooltip = GuildTooltip(e),
 			onClick = function()
+				-- Opened in the Realm, and the Realm opens on it (UI.KeepPlace).
 				expanded[e.name] = true
-				ns.UI.SelectTab("realm")
+				ns.UI.SelectTab("realm", Views.GuildId(e.name))
 			end,
 		}
 	end
@@ -585,6 +609,7 @@ end
 local chatTier -- the channel shown instead of the Realm tree, or nil
 
 function Views.ChatShown() return chatTier ~= nil end
+function Views.ChatTier() return chatTier end
 -- Another tab opened: the Realm opens on its tree again next time.
 function Views.CloseChat() chatTier = nil end
 function Views.ShowChat(tier)
@@ -854,6 +879,7 @@ local function RealmLines(s)
 		local g = e.g
 		local open = expanded[e.name]
 		lines[#lines + 1] = {
+			id = Views.GuildId(e.name),
 			text = (open and "[-] " or "[+] ") .. Green("<" .. Plain(e.name) .. ">") .. " " .. Plain(g.leader or "?"),
 			right = Presence(g.leaderOnline, g.leaderDays),
 			onClick = function()

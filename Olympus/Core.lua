@@ -932,6 +932,8 @@ ns.RegisterEvent("ADDON_LOADED", function(name)
 	end
 	-- v0.7.9: demo data is gone (testers took it for real data). Forget the old setting.
 	db.demo = nil
+	-- 1.0.0: the author's letter on the Throne is gone, and with it whether the King read it.
+	db.throneLetterRead = nil
 	if db.configVersion < 3 then db.configVersion = 3 end
 	-- Guild reports and the realm key belong to one realm group (ns.GroupOf): realms whose
 	-- guilds span each other (PvP and PvP 2 in the beta) share them, any other realm keeps
@@ -1145,7 +1147,6 @@ SlashCmdList.OLYMPUS = function(input)
 			ns.Map.SetEnabled(not ns.db.showMap)
 		elseif cmd == "throne" or cmd == "trono" then
 			if ns.King.Visible and ns.King.Visible() then
-				if rest == "letter" or rest == "carta" then ns.King.Show("letter") end
 				ns.UI.SelectTab("throne")
 			else
 				ns.Print(ns.L.THRONE_ONLY_KING)
@@ -1254,6 +1255,9 @@ SlashCmdList.OLYMPUS = function(input)
 		elseif cmd == "minimap" then
 			ns.db.hideMinimap = not ns.db.hideMinimap
 			ns.UI.UpdateMinimapButton()
+		elseif cmd == "photo" then
+			-- The author's photo mode for the store's screenshots (UI.TogglePhoto, 1.0.0).
+			ns.UI.TogglePhoto()
 		elseif cmd == "debug" then
 			ns.db.debug = not ns.db.debug
 			ns.Print("debug = " .. tostring(ns.db.debug))

@@ -100,7 +100,7 @@ local BUTTONS = {
 		{ "MARK_TARGET", function() ns.Inspect.MarkTarget() end },
 		{ "COPY_BTN", function() UI.ShowCopy(L.INSPECT_TITLE, ns.Inspect.DiscordText()) end },
 	},
-	-- The Throne: the agenda (the King and his Hands), the court (the King's), the letter.
+	-- The Throne: the agenda (the King and his Hands), the court (the King's).
 	-- The roll call lives in the Realm, the inspection in the Tabards (King.RollCallLines...).
 	throne = {
 		{ "THRONE_AGENDA", function() ns.King.AgendaPrompt() end },
@@ -110,7 +110,6 @@ local BUTTONS = {
 				tt:AddLine(L.COURT_TITLE, 1, 0.82, 0)
 				tt:AddLine(L.COURT_BTN_TIP, 1, 1, 1, true)
 			end },
-		{ "THRONE_LETTER_BTN", function() ns.King.Show("letter") end },
 	},
 	vox = {
 		{ "VOX_NEW", function() ns.Vox.Prompt() end },
@@ -817,6 +816,11 @@ local function CreateMain(style)
 	if f.listBox then scroll:SetFrameLevel(f.listBox:GetFrameLevel() + 2) end
 	scroll:SetPoint("BOTTOMRIGHT", f.scrollRight or g.scroll.right, g.scroll.bottom)
 	f.scroll = scroll
+	-- The place a redraw gave the list, once more when the client measures the list again
+	-- (UI.KeepPlace): after Blizzard's own handler, whatever it did with the offset.
+	scroll:HookScript("OnScrollRangeChanged", function(self) ns.SafeCall("list place", UI.HoldPlace, f, self) end)
+	-- The player scrolls with the wheel: the list stays where he puts it (UI.Scrolled).
+	scroll:HookScript("OnMouseWheel", function() ns.SafeCall("list scrolled", UI.Scrolled, f) end)
 	f.views = {}
 	for _, t in ipairs(TABS) do
 		local v = CreateFrame("Frame", nil, scroll)
@@ -1198,13 +1202,16 @@ local function SetButtons(list, defs)
 	if list == main.detailButtons then LayoutDetailButtons() end
 end
 
--- Shows tab `key` in the window in use, and the window if it is closed.
-local function ShowTab(key)
+-- Shows tab `key` in the window in use, and the window if it is closed. `focus`: the id of the
+-- row it opens on (Views.lua: a guild clicked in the Census), in sight (UI.KeepPlace).
+local function ShowTab(key, focus)
 	if key ~= "realm" and ns.Views.CloseChat then ns.Views.CloseChat() end
 	main.tab = key
 	for k, v in pairs(main.views) do v:SetShown(k == key) end
 	main.scroll:SetScrollChild(main.views[key])
 	main.scroll:SetVerticalScroll(0)
+	-- A tab opened: its list starts at the top, or at the row it opens on (UI.KeepPlace).
+	main.page, main.wantScroll, main.focus = nil, nil, focus
 	-- The Throne is a page of parchment with dark ink (the rows use line.font).
 	if key == "throne" and not main.parchment then
 		local p = main.scroll:CreateTexture(nil, "BACKGROUND")
@@ -1255,10 +1262,10 @@ function UI.Clicked()
 end
 
 -- Opening the window picks its look again, from the guild window in use (UI.Style).
--- Called from clicks and slash commands only (UI.Clicked).
-function UI.SelectTab(key)
+-- Called from clicks and slash commands only (UI.Clicked). `focus`: see ShowTab.
+function UI.SelectTab(key, focus)
 	if not (main and main:IsShown()) then UseStyle(UI.Style()) end
-	ShowTab(key)
+	ShowTab(key, focus)
 	UI.Clicked()
 end
 
@@ -1267,6 +1274,100 @@ function UI.CensusName()
 	local group = ns.group or ns.realm
 	if #ns.GroupRealms(group) > 1 then return (group:gsub("%+", " + ")) end
 	return GetRealmName and GetRealmName() or ""
+end
+
+---------------------------------------------------------------------------
+-- The list keeps its place (1.0.0). A redraw (a row opened or closed, "Show more", a report
+-- coming in) leaves the list where it was: the row clicked stays where it was on screen, and
+-- when it opened, its first rows below come into sight if they fell under the list's bottom
+-- edge (the row itself never leaves the top). Only another tab, or another page of one (the
+-- Realm's chats, the Throne's pages, the Treasury's book), starts at the top; a tab opened on
+-- a row (a guild clicked in the Census opens in the Realm) starts at that row.
+---------------------------------------------------------------------------
+
+UI.SHOW_BELOW = 3  -- rows under an opened row brought into sight
+UI.CLICK_KEEP = 2  -- seconds a click waits for the redraw it causes (RefreshSoon, DATA_CHANGED)
+UI.PLACE_HOLD = 1  -- seconds a redraw's place is given again when the client measures the list
+
+-- Which page of its tab the list shows: another one starts at the top.
+local function PageOf(tab, locked)
+	if locked then return "join" end
+	local sub
+	if tab == "realm" then sub = ns.Views.ChatTier and ns.Views.ChatTier() or "tree"
+	elseif tab == "throne" then sub = ns.King and ns.King.mode
+	elseif tab == "treasury" then sub = ns.Treasury and ns.Treasury.mode end
+	return tab .. "/" .. tostring(sub or "")
+end
+
+local function Clamp(v, lo, hi) return math.max(lo, math.min(v, hi)) end
+
+-- The shown row of `content` whose line has id `id`.
+local function RowWithId(content, id)
+	for _, r in ipairs(content.rows or {}) do
+		if r:IsShown() and r.line and r.line.id == id then return r end
+	end
+end
+
+-- The list just drawn in `content` goes back to `offset`, the row clicked (Views.TakeClick) to
+-- where it was on screen; on another page, to the top, or to the row `focus` (the id of the
+-- row the tab opened on, ShowTab) when it and its first rows are not in sight there. The scroll
+-- range is taken from the heights (the client measures it again only when it next draws:
+-- UI.HoldPlace then).
+function UI.KeepPlace(content, offset, click, page, focus)
+	local scroll = main.scroll
+	local view = scroll:GetHeight() or 0
+	local want = 0
+	if page == main.page then
+		want = offset
+		local rows = content.rows or {}
+		local r = click and GetTime() - (click.t or 0) <= UI.CLICK_KEEP and rows[click.index]
+		-- The list moved since the click, and not to the top (where the client throws it): the
+		-- player scrolled (the scroll bar; the wheel forgets the click, UI.Scrolled), and this is
+		-- not the redraw the click caused. His offset stays.
+		if r and click.offset and offset > 0.5 and math.abs(offset - click.offset) > 0.5 then r = nil end
+		if r and r:IsShown() and r.top then
+			-- Where it was on screen when clicked (whatever the offset did since).
+			want = (click.offset or offset) + (r.top - (click.top or 0))
+			-- It opened (the list grew): the rows under it into sight, the row staying in.
+			local n = content.lineCount or 0
+			local last = n > (click.lines or 0) and rows[math.min(click.index + UI.SHOW_BELOW, n)]
+			if last and last.top and view > 0 then
+				local bottom = last.top + (last:GetHeight() or 0)
+				if bottom > want + view then want = math.min(bottom - view, r.top) end
+			end
+		end
+	elseif focus then
+		-- Opened on a row: at the top of the list, unless it and its first rows are in sight
+		-- from the top already.
+		local r = RowWithId(content, focus)
+		if r and r.top then
+			local rows, n = content.rows or {}, content.lineCount or 0
+			local last = r.index and rows[math.min(r.index + UI.SHOW_BELOW, n)] or r
+			local bottom = (last.top or r.top) + (last:GetHeight() or 0)
+			if bottom > view then want = r.top end
+		end
+	end
+	main.page = page
+	want = Clamp(want, 0, math.max(0, (content:GetHeight() or 0) - (scroll:GetHeight() or 0)))
+	main.wantScroll, main.wantAt = want, GetTime()
+	scroll:SetVerticalScroll(want)
+end
+
+-- The client measured the list again (OnScrollRangeChanged, after Blizzard's own handler): the
+-- place the last redraw gave it, if the offset moved away from it, within a moment of that
+-- redraw only (later on, the offset is the player's own scrolling).
+function UI.HoldPlace(frame, scroll)
+	local want = frame == main and frame.wantScroll
+	if not want or GetTime() - (frame.wantAt or 0) > UI.PLACE_HOLD then return end
+	want = Clamp(want, 0, scroll:GetVerticalScrollRange() or 0)
+	if math.abs((scroll:GetVerticalScroll() or 0) - want) > 0.5 then scroll:SetVerticalScroll(want) end
+end
+
+-- The player scrolled the list of `frame` himself (the mouse wheel): no redraw puts it back where
+-- a click, or the last redraw, left it.
+function UI.Scrolled(frame)
+	for _, v in pairs(frame.views or {}) do v.click = nil end
+	frame.wantScroll = nil
 end
 
 function UI.Refresh()
@@ -1299,7 +1400,12 @@ function UI.Refresh()
 			end
 		end
 		FitHeader()
-		ns.Views.Render(main.views[main.tab], lines, not locked and ns.Views.COLUMNS[main.tab] or nil)
+		-- Drawn again where it was (UI.KeepPlace): the offset and the row clicked, taken first.
+		local content = main.views[main.tab]
+		local offset, click, focus = main.scroll:GetVerticalScroll() or 0, ns.Views.TakeClick(content), main.focus
+		main.focus = nil
+		ns.Views.Render(content, lines, not locked and ns.Views.COLUMNS[main.tab] or nil)
+		UI.KeepPlace(content, offset, click, PageOf(main.tab, locked), focus)
 		main.detailTitle:SetText(title or "")
 		main.detailText:SetText(text or "")
 		SetButtons(main.buttons, locked and RECRUIT_BUTTONS or Shown(BUTTONS[main.tab]))
@@ -1965,3 +2071,55 @@ ns.On("LOGIN", function()
 	UI.UpdateMinimapButton()
 	ns.Log("ui ready")
 end)
+
+---------------------------------------------------------------------------
+-- Photo mode (1.0.0), the author's, for the store's screenshots: /oly photo hides everything on
+-- the screen but Olympus's own frames, the world map and the tooltip (Olympus's tooltips are
+-- part of the pictures), and /oly photo again, or a /reload, brings it all back. By alpha alone:
+-- each child of UIParent at 0, its own alpha kept and given back as it was, never Hide, Show or
+-- SetPoint on the game's frames. Never in combat, and not with the gamepad UI (its frames are
+-- the game's to handle there); turning it off works with the gamepad UI too.
+---------------------------------------------------------------------------
+
+local photo -- [frame] = its alpha before, while photo mode is on
+
+-- The author's character, or the author's own test build (Dev.lua, never published).
+function UI.PhotoAllowed()
+	return (ns.Workshop and ns.Workshop.IsAuthor and ns.Workshop.IsAuthor() == true) or ns.devThrone ~= nil or ns.devWorkshop ~= nil
+end
+function UI.PhotoMode() return photo ~= nil end
+
+-- Olympus's own: its named frames, and the few unnamed ones on UIParent it marks (map icons).
+local function Ours(f)
+	local name = f.GetName and f:GetName()
+	return f.olympus == true or (type(name) == "string" and name:find("^Olympus") ~= nil)
+end
+
+local function PhotoOff()
+	local was = photo
+	photo = nil
+	for f, alpha in pairs(was or {}) do pcall(f.SetAlpha, f, alpha) end
+end
+
+function UI.TogglePhoto()
+	if not UI.PhotoAllowed() then return ns.Print(L.PHOTO_ONLY_AUTHOR) end
+	if InCombatLockdown and InCombatLockdown() then return ns.Print(L.PHOTO_COMBAT) end
+	if photo then
+		PhotoOff()
+		return ns.Print(L.PHOTO_OFF)
+	end
+	if ns.GamepadUI() then return ns.Print(L.PHOTO_GAMEPAD) end
+	ns.Print(L.PHOTO_ON) -- (first: the chat goes too)
+	photo = {}
+	for _, f in ipairs({ UIParent:GetChildren() }) do
+		local keep = f == WorldMapFrame or f == GameTooltip or (f.IsForbidden and f:IsForbidden()) or Ours(f)
+		local alpha = not keep and f.GetAlpha and f:GetAlpha()
+		if type(alpha) == "number" and alpha > 0 then
+			photo[f] = alpha
+			f:SetAlpha(0)
+		end
+	end
+end
+
+-- A /reload (or logging out) gives every alpha back first: another addon may save its frame's.
+ns.RegisterEvent("PLAYER_LOGOUT", function() if photo then PhotoOff() end end)

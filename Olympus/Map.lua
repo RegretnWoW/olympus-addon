@@ -39,6 +39,7 @@ end
 
 local function CreatePin()
 	local p = CreateFrame("Frame", nil, UIParent)
+	p.olympus = true -- (ours: photo mode leaves it shown, UI.TogglePhoto)
 	p:SetSize(20, 20)
 	p:EnableMouse(true)
 	p.edge = p:CreateTexture(nil, "BACKGROUND", nil, -1)
@@ -225,6 +226,171 @@ function AddContinentTotals(s)
 		end
 	end
 	Map.LayoutOverlay()
+end
+
+---------------------------------------------------------------------------
+-- Round icons beside the circles (1.0.0): the decrees and the King's crown on the world map.
+-- Each is an anchor the pin library puts where the decree was called or the King stands, and a
+-- badge drawn from it: on that very spot, or, when that spot is under a zone's circle, just
+-- outside the circle's edge (top right first, then the other corners and sides), so its number
+-- stays readable. Several around one circle each take a place of their own. Laid out again while
+-- one is on the map (their OnUpdate, a few times a second: the map changes, zooms, the circles
+-- come and go). Mouse and keyboard only: with the gamepad UI none of them is on the world map
+-- (ns.WorldMapIcons), and nothing here runs.
+---------------------------------------------------------------------------
+
+Map.MASK = "Interface\\CharacterFrame\\TempPortraitAlphaMask"
+Map.BADGE_SLOTS = { 45, 135, -45, -135, 0, 180, 90, -90 } -- degrees from the right, counterclockwise: top right first
+Map.BADGE_REACH = 0.75 -- a badge's centre this many of its radii past a circle's edge: over its rim at most
+Map.BADGE_RINGS = 3    -- rings of places around a crowded circle
+Map.BADGE_EVERY = 0.1  -- seconds between layouts while a badge is on the map
+local badges = {}      -- every anchor made (a handful: the crown, the decrees, reused)
+local lastLayout = -math.huge
+
+-- Where each badge goes, all in screen pixels: list = { { x, y, r } } (the spots the badges are
+-- for), circles = { { x, y, r } } (the zone circles on the map). Returns { { dx, dy } }: each
+-- badge's shift from its spot.
+function Map.PlaceBadges(list, circles)
+	local K, placed, out = Map.BADGE_REACH, {}, {}
+	-- A badge (radius r) at x, y over circle c's number.
+	local function Covers(x, y, r, c)
+		local dx, dy = x - c.x, y - c.y
+		return dx * dx + dy * dy < (c.r + K * r) ^ 2
+	end
+	local function Free(x, y, r)
+		for _, c in ipairs(circles) do if Covers(x, y, r, c) then return false end end
+		for _, p in ipairs(placed) do
+			local dx, dy = x - p.x, y - p.y
+			if dx * dx + dy * dy < (r + p.r) ^ 2 then return false end
+		end
+		return true
+	end
+	for i, b in ipairs(list) do
+		-- The circle it covers (the nearest, if several).
+		local home, best
+		for _, c in ipairs(circles) do
+			local d = (b.x - c.x) ^ 2 + (b.y - c.y) ^ 2
+			if Covers(b.x, b.y, b.r, c) and (not best or d < best) then home, best = c, d end
+		end
+		local x, y = b.x, b.y
+		if home then
+			local spot, first
+			for ring = 0, Map.BADGE_RINGS - 1 do
+				local reach = home.r + K * b.r + 0.5 + ring * 2 * b.r
+				for _, a in ipairs(Map.BADGE_SLOTS) do
+					local px, py = home.x + reach * math.cos(math.rad(a)), home.y + reach * math.sin(math.rad(a))
+					first = first or { px, py }
+					if Free(px, py, b.r) then spot = { px, py } break end
+				end
+				if spot then break end
+			end
+			-- Crowded all round: its circle's top right, over a neighbour's rim at worst.
+			spot = spot or first
+			x, y = spot[1], spot[2]
+		end
+		placed[#placed + 1] = { x = x, y = y, r = b.r }
+		out[i] = { dx = x - b.x, dy = y - b.y }
+	end
+	return out
+end
+
+-- A frame on the map as a circle on the screen (centre, and `radius` of its own units, in
+-- pixels), or nil while it is not on the map.
+local function OnScreen(f, radius)
+	if not (f and f.IsVisible and f:IsVisible()) or type(radius) ~= "number" then return nil end
+	local x, y = f:GetCenter()
+	local s = f:GetEffectiveScale()
+	if type(x) ~= "number" or type(y) ~= "number" or type(s) ~= "number" then return nil end
+	return { x = x * s, y = y * s, r = radius * s }
+end
+
+-- Puts every badge on the map where Map.PlaceBadges says, over the zone circles (both stay
+-- readable: the badge keeps off their numbers).
+function Map.LayoutBadges()
+	if ns.GamepadUI() then return end
+	local list, shown = {}, {}
+	for _, a in ipairs(badges) do
+		local c = OnScreen(a, a.reach)
+		if c then list[#list + 1], shown[#shown + 1] = c, a end
+	end
+	if #list == 0 then return end
+	local circles = {}
+	local function Circle(p)
+		local w = p.GetWidth and p:GetWidth()
+		local c = type(w) == "number" and OnScreen(p, w / 2 + 2) -- (its gold edge: 2 past the disc)
+		if c then circles[#circles + 1] = c end
+	end
+	for _, p in ipairs(active) do Circle(p) end
+	for _, f in ipairs(overlay) do Circle(f) end
+	local spots = Map.PlaceBadges(list, circles)
+	for i, a in ipairs(shown) do
+		local s = a:GetEffectiveScale()
+		local dx, dy = spots[i].dx / s, spots[i].dy / s
+		if math.abs(dx - a.dx) > 0.5 or math.abs(dy - a.dy) > 0.5 then
+			a.dx, a.dy = dx, dy
+			a.badge:ClearAllPoints()
+			a.badge:SetPoint("CENTER", a, "CENTER", dx, dy)
+		end
+		local level = (a:GetFrameLevel() or 0) + 3
+		if a.badge:GetFrameLevel() ~= level then a.badge:SetFrameLevel(level) end
+	end
+end
+
+local function BadgeTick()
+	local now = GetTime()
+	if now - lastLayout < Map.BADGE_EVERY then return end
+	lastLayout = now
+	ns.SafeCall("map badges", Map.LayoutBadges)
+end
+
+-- A square icon made round: the portrait mask (Texture:SetMask, on Forever, Era and
+-- Anniversary), or the game's portrait maker on a client without it.
+local function RoundIcon(tex, texture)
+	if tex.olympusRound == nil then
+		tex.olympusRound = tex.SetMask ~= nil and pcall(tex.SetMask, tex, Map.MASK) or false
+	end
+	if tex.olympusRound then
+		tex:SetTexCoord(0.08, 0.92, 0.08, 0.92) -- (the icon's own border cut off)
+	elseif SetPortraitToTexture then
+		pcall(SetPortraitToTexture, tex, texture)
+	end
+end
+
+-- A badge of `size`: the anchor the pin library places (nothing of it shows or takes the
+-- mouse) and anchor.badge, what shows (tooltips go on it). `round`: an icon in a coloured disc,
+-- like the zone circles; otherwise its picture as drawn (the crown).
+function Map.Badge(size, round)
+	local anchor = CreateFrame("Frame", nil, UIParent)
+	anchor.olympus = true -- (ours: photo mode leaves it shown, UI.TogglePhoto)
+	anchor:SetSize(1, 1)
+	anchor:Hide() -- (the pin library shows it when it puts it on the map)
+	local b = CreateFrame("Frame", nil, anchor)
+	b:SetSize(size, size)
+	b:SetPoint("CENTER", anchor, "CENTER", 0, 0)
+	if round then
+		b.edge = b:CreateTexture(nil, "BACKGROUND")
+		b.edge:SetTexture(Map.MASK)
+		b.edge:SetPoint("TOPLEFT", -2, 2)
+		b.edge:SetPoint("BOTTOMRIGHT", 2, -2)
+	end
+	b.icon = b:CreateTexture(nil, "ARTWORK")
+	b.icon:SetAllPoints()
+	b:EnableMouse(true)
+	anchor.badge, anchor.round, anchor.dx, anchor.dy = b, round, 0, 0
+	anchor.reach = size / 2 + (round and 2 or 0) -- its radius on the map, the disc's edge included
+	anchor:SetScript("OnUpdate", BadgeTick)
+	badges[#badges + 1] = anchor
+	return anchor
+end
+
+-- Its picture: `texture`, round in a disc of r, g, b (a round badge), or as drawn.
+function Map.SetBadge(anchor, texture, r, g, b)
+	local icon = anchor.badge.icon
+	icon:SetTexture(texture)
+	if anchor.round then
+		anchor.badge.edge:SetVertexColor(r or 0.9, g or 0.76, b or 0.36, 1)
+		RoundIcon(icon, texture)
+	end
 end
 
 function Map.Refresh()

@@ -38,6 +38,7 @@ end
 
 local function Dot(size)
 	local f = CreateFrame("Frame", nil, UIParent)
+	f.olympus = true -- (ours: photo mode leaves it shown, UI.TogglePhoto)
 	f:SetSize(size, size)
 	f.edge = f:CreateTexture(nil, "BACKGROUND")
 	f.edge:SetTexture("Interface\\CHARACTERFRAME\\TempPortraitAlphaMask")
