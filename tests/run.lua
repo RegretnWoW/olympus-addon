@@ -20192,5 +20192,16 @@ do
 	end)
 end
 
+test("1.0.0 the Hands' hint says they speak with the King's Crown to the other guilds (both languages)", function()
+	assert(ns.L.HANDS_HINT:find("Royal decrees", 1, true), ns.L.HANDS_HINT)
+	local pt = { L = setmetatable({}, { __index = ns.L }) }
+	local savedLocale = GetLocale
+	GetLocale = function() return "ptBR" end
+	local ok, err = pcall(function() assert(loadfile(ADDON_DIR .. "Locales.lua"))("Olympus", pt) end)
+	GetLocale = savedLocale
+	if not ok then error(err, 0) end
+	assert(rawget(pt.L, "HANDS_HINT"):find("decretos reais", 1, true))
+end)
+
 print(("\n%d passed, %d failed"):format(passed, failed))
 os.exit(failed == 0 and 0 or 1)
