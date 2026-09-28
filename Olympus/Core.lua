@@ -726,17 +726,20 @@ function ns.Fold(s)
 	end))
 end
 
--- Does one of the texts hold `query` (folded, ns.Fold)? As plain text, never a Lua pattern, and
--- only what a row shows: its colour codes, textures and a link's data left out, the link's
--- [text] kept, an escaped "||" one "|" (and no code). No query (nil or ""): everything does.
+-- A text as a search reads it: only what a row shows (its colour codes, textures and a link's
+-- data left out, the link's [text] kept, an escaped "||" one "|" and no code), folded (ns.Fold).
+function ns.Searchable(s)
+	s = tostring(s or ""):gsub("||", "\1"):gsub("|H.-|h(.-)|h", "%1"):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""):gsub("|T.-|t", "")
+	return ns.Fold((s:gsub("\1", "|")))
+end
+
+-- Does one of the texts hold `query` (folded, ns.Fold), as a search reads it (ns.Searchable)?
+-- As plain text, never a Lua pattern. No query (nil or ""): everything does.
 function ns.Holds(query, ...)
 	if not query or query == "" then return true end
 	for i = 1, select("#", ...) do
 		local s = select(i, ...)
-		if type(s) == "string" and s ~= "" then
-			s = s:gsub("||", "\1"):gsub("|H.-|h(.-)|h", "%1"):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""):gsub("|T.-|t", "")
-			if ns.Fold((s:gsub("\1", "|"))):find(query, 1, true) then return true end
-		end
+		if type(s) == "string" and s ~= "" and ns.Searchable(s):find(query, 1, true) then return true end
 	end
 	return false
 end

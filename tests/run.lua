@@ -12831,6 +12831,116 @@ do
 		if not ok then error(err, 0) end
 	end)
 
+	test("1.0.0 search: a guild clicked in the Census opens in the Realm even when the Realm's box holds a search that misses it", function()
+		local saved = { guilds = ns.rdb.guilds }
+		local ok, err = pcall(Quiet, function(calls)
+			ns.rdb.guilds = SampleGuilds()
+			V.ExpandAll(false)
+			local opened
+			ns.UI.SelectTab = function(tab) opened = tab end
+			-- Typed in the Realm earlier: a Captain of <Olympus>, nothing of <Olympus II>.
+			V.SetFilter("realm", "capt")
+			eq(At(V.Build("realm"), "<Olympus II>"), nil, "the search misses the guild about to be clicked")
+			V.SetFilter("census", "lordy")
+			local row
+			for _, l in ipairs(V.Build("census")) do if l.cols and Bare(l.cols[1]) == "Olympus II" then row = l end end
+			assert(row and row.onClick, "the Census's row")
+			row.onClick()
+			eq(opened, "realm")
+			eq(V.Filter("realm"), "", "the Realm's box emptied for the guild clicked")
+			eq(V.Filter("census"), "lordy", "the Census's own search kept")
+			local lines = V.Build("realm")
+			eq(Box(lines).input.text, "")
+			assert(At(lines, "[-] |cff40ff40<Olympus II>"), "the guild clicked, opened: " .. Texts(lines))
+			assert(At(lines, L.RANKS) and At(lines, L.KING .. ": "), "the whole Realm, as with nothing typed")
+			eq(#calls, 0, "nothing sent")
+		end)
+		ns.rdb.guilds = saved.guilds
+		if not ok then error(err, 0) end
+	end)
+
+	test("1.0.0 search: the Realm's first letter opens a page of guilds, not all of them, the rest on a click; no member list made where nothing is found; names folded once", function()
+		local saved = { guilds = ns.rdb.guilds, guild = GetGuildInfo, online = ns.Roster.online, sweep = ns.Who.sweep, membersOf = V.MembersOf,
+			fold = ns.Fold }
+		local ok, err = pcall(Quiet, function(calls)
+			-- 60 guilds, 3 Captains each ("Capt..") and 20 players /who saw ("Player.."); our own,
+			-- <Olympus 01>, from our roster ("Mate.."). An "a" is in every Captain and member.
+			GetGuildInfo = function() return "Olympus 01", "Member", 3 end
+			local now, list = os.time(), {}
+			ns.rdb.guilds, ns.Roster.online = {}, {}
+			for i = 1, 60 do
+				local name, officers = ("Olympus %02d"):format(i), {}
+				for k = 1, 3 do officers[k] = { name = ("Capt%02d%s"):format(i, string.char(104 + k)), online = true, days = 0 } end
+				ns.rdb.guilds[name] = { total = 100, online = 20, zones = {}, t = now, leader = ("Lord%02d"):format(i), leaderOnline = true, officers = officers }
+				for k = 1, 20 do list[#list + 1] = { name = ("Player%02d%02d"):format(i, k), guild = name, level = 10, class = "WARRIOR" } end
+			end
+			for k = 1, 20 do ns.Roster.online[k] = { name = ("Mate%02d"):format(k), level = 10, class = "WA", rank = "Knight", rankIndex = 3 } end
+			ns.Who.sweep = { list = list }
+			V.ExpandAll(false)
+			local function Headers(lines)
+				local open, closed = 0, 0
+				for _, l in ipairs(lines) do
+					if type(l.text) == "string" and l.text:find("<Olympus %d%d>") then
+						if l.text:find("[-] ", 1, true) then open = open + 1 else closed = closed + 1 end
+					end
+				end
+				return open, closed
+			end
+			local built = 0
+			V.MembersOf = function(...) built = built + 1 return saved.membersOf(...) end
+			-- The first letter: guilds opened for it a page of rows at a time, not the 60 of them
+			-- (1500 rows and more), and a line for the rest.
+			V.SetFilter("realm", "a")
+			local lines = V.Build("realm")
+			local open, closed = Headers(lines)
+			assert(#lines <= 300, "a page of rows, not every guild opened: " .. #lines)
+			assert(#lines <= V.SEARCH_ROWS + 40, "the page's rows and the guild that fills it: " .. #lines)
+			assert(open > 0 and open < 60, "some guilds, opened: " .. open); eq(closed, 0)
+			assert(built <= open, "member lists made for the guilds shown alone: " .. built .. " for " .. open)
+			local more = At(lines, L.SEARCH_MORE_GUILDS:format(60 - open))
+			assert(more and more.onClick, "the rest on a click: " .. Texts(lines))
+			eq(lines[#lines], more, "at the end of the list")
+			more.onClick()
+			lines = V.Build("realm")
+			local open2 = Headers(lines)
+			assert(open2 > open, "the next page: " .. open2)
+			-- A new text starts from the first page again.
+			V.SetFilter("realm", "A")
+			eq((Headers(V.Build("realm"))), open, "a new text: its first page")
+			-- One player deep in the list: his guild alone, and a member list made for it alone.
+			built = 0
+			V.SetFilter("realm", "player5907")
+			lines = V.Build("realm")
+			eq(Keys(lines), "Player5907"); eq((Headers(lines)), 1)
+			eq(built, 1, "no member list for the 59 guilds where nobody is found")
+			-- Our roster's players under our guild.
+			V.SetFilter("realm", "mate07")
+			eq(Keys(V.Build("realm")), "Mate07")
+			-- Nothing found: no member list at all, "No match".
+			built = 0
+			V.SetFilter("realm", "zzz")
+			lines = V.Build("realm")
+			eq(built, 0, "nothing found, nothing made"); eq(lines[#lines].text, NO_MATCH)
+			-- Guilds found by their names: every one, as ever (closed), no page.
+			V.SetFilter("realm", "olympus")
+			lines = V.Build("realm")
+			eq(select(2, Headers(lines)), 60); eq(At(lines, L.SEARCH_MORE_GUILDS:match("%%d(.*)$")), nil, "no page for them")
+			-- The next letter, the same names: none folded again.
+			V.SetFilter("realm", "zzzz")
+			V.Build("realm")
+			local folds = 0
+			ns.Fold = function(...) folds = folds + 1 return saved.fold(...) end
+			V.SetFilter("realm", "zzzzz")
+			V.Build("realm")
+			ns.Fold = saved.fold
+			assert(folds <= 2, "the text alone folded, not the realm's names: " .. folds)
+			eq(#calls, 0, "nothing sent, no /who")
+		end)
+		ns.Fold, V.MembersOf = saved.fold, saved.membersOf
+		GetGuildInfo, ns.rdb.guilds, ns.Roster.online, ns.Who.sweep = saved.guild, saved.guilds, saved.online, saved.sweep
+		if not ok then error(err, 0) end
+	end)
+
 	test("1.0.0 search: the Realm's High Council by the names its rows show, for whoever sees it; on the King's stream never what is hidden", function()
 		WithKingsCouncil(function(W)
 			local savedUI = ns.UI
@@ -13195,6 +13305,46 @@ do
 		end)
 	end)
 
+	test("1.0.0 search: in the window, a guild clicked in the Census opens in the Realm with the Realm's box emptied, nothing focused (gamepad UI too)", function()
+		WithUI(function()
+			GetGuildInfo = function() return "Olympus II" end
+			local focused = {}
+			Widget.SetFocus = function(self) focused[#focused + 1] = self end
+			local savedFocus = GetCurrentKeyBoardFocus
+			local ok, err = pcall(WithGamepadUI, true, function(game)
+				GetCurrentKeyBoardFocus = function() return { name = "ChatFrame1EditBox" } end
+				V.ClearFilters()
+				V.ExpandAll(false)
+				local UI = LoadUI()
+				UI.SelectTab("realm")
+				local main = OlympusFrame
+				local reb = main.views.realm.input
+				reb:SetText("capt"); reb:Fire("OnTextChanged", true)
+				UI.Refresh()
+				UI.SelectTab("census")
+				local row
+				for _, r in ipairs(main.views.census.rows) do
+					if r:IsShown() and r.line and r.line.cols and r.line.cols[1] == "Olympus II" then row = r end
+				end
+				assert(row, "the Census's row")
+				row:Click()
+				eq(main.tab, "realm")
+				eq(V.Filter("realm"), ""); eq(reb:GetText(), "", "the box shows it emptied"); eq(reb.clear:IsShown(), false)
+				local header
+				for _, r in ipairs(main.views.realm.rows) do
+					if r:IsShown() and r.line and (r.line.text or ""):find("[-] |cff40ff40<Olympus II>", 1, true) then header = r end
+				end
+				assert(header, "the guild clicked, opened in the Realm")
+				eq(#focused, 0, "no box focused"); eq(#game.shown, 0, "no game popup")
+			end)
+			GetCurrentKeyBoardFocus, Widget.SetFocus = savedFocus, nil
+			V.ClearFilters()
+			V.ExpandAll(false)
+			V.ClearFilters()
+			if not ok then error(err, 0) end
+		end)
+	end)
+
 	test("1.0.0 search: the locales have every new line, in Portuguese too", function()
 		local savedLocale, pt = GetLocale, {}
 		GetLocale = function() return "ptBR" end
@@ -13202,7 +13352,7 @@ do
 		GetLocale = savedLocale
 		if not ok then error(err, 0) end
 		for _, key in ipairs({ "SEARCH", "SEARCH_NO_MATCH", "SEARCH_CLEAR", "SEARCH_TIP_CENSUS", "SEARCH_TIP_REALM", "SEARCH_TIP_CHAT",
-			"SEARCH_TIP_HERALDRY", "SEARCH_TIP_TREASURY" }) do
+			"SEARCH_TIP_HERALDRY", "SEARCH_TIP_TREASURY", "SEARCH_MORE_GUILDS" }) do
 			assert(type(rawget(ns.L, key)) == "string", "English " .. key)
 			assert(type(rawget(pt.L, key)) == "string" and pt.L[key] ~= ns.L[key], "Portuguese " .. key)
 			eq(select(2, pt.L[key]:gsub("%%[ds]", "")), select(2, ns.L[key]:gsub("%%[ds]", "")), key)

@@ -267,8 +267,9 @@ for the King, and for every member once the King shows the army something of it.
   members seen online, the Olympus chats' lines), the Tabards (inspected and untabarded players,
   by name or guild) and the Treasury (donors in the ranking and the book). Any case, accents too;
   only what matches shows, under the headers it belongs to (a Captain under his guild, opened
-  for you), with an **x** to empty it. Each tab keeps its text until you log out or `/reload`. It only changes
-  what the list shows: **Copy** still gives everything, and nothing is sent.
+  for you, a page of guilds at a time), with an **x** to empty it. Each tab keeps its text until
+  you log out or `/reload`; a guild clicked in the Census opens in the Realm with its box emptied.
+  It only changes what the list shows: **Copy** still gives everything, and nothing is sent.
 - The window opens from `/oly`, the minimap button, or the round button in your guild window:
   the old Guild tab or the new Guild & Communities window, whichever one you use.
 - Next to Forever's Guild & Communities window it takes that window's look: icon tabs down

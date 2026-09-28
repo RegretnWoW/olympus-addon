@@ -414,8 +414,50 @@ end
 
 local filters = {} -- [tab] = the text in its box, as typed
 local folded = {}  -- [guild name or COUNCIL_ROW] = true: opened by the search, closed by a click (until the text changes)
+-- The Realm's search opens the guilds where it finds a Lord, a Captain or a member a page of
+-- rows at a time (a first letter is in someone of nearly every guild: all of them opened would
+-- be thousands of rows, as Expand all), the rest on a click; a new text, its first page.
+Views.SEARCH_ROWS = 200
+local searchRows = Views.SEARCH_ROWS
 
 local function Trim(s) return (tostring(s or ""):gsub("^%s+", ""):gsub("%s+$", "")) end
+
+-- A name as the search reads it (ns.Searchable) as its row shows it (Plain), and a /who name as
+-- its row shows it (Views.MembersOf), kept: the Realm's search reads every Lord, Captain and
+-- player seen at each letter typed and at each redraw, and a name reads the same each time.
+-- Emptied past SEARCH_NAMES_KEPT, a long session's worth.
+Views.SEARCH_NAMES_KEPT = 20000
+local searchNames, seenNames, namesKept = {}, {}, 0
+local function Kept()
+	namesKept = namesKept + 1
+	if namesKept > Views.SEARCH_NAMES_KEPT then
+		wipe(searchNames)
+		wipe(seenNames)
+		namesKept = 1
+	end
+end
+local function SearchName(s)
+	local k = searchNames[s]
+	if not k then
+		Kept()
+		k = ns.Searchable(Plain(s))
+		searchNames[s] = k
+	end
+	return k
+end
+local function SeenName(name)
+	local shown = seenNames[name]
+	if not shown then
+		Kept()
+		shown = ns.DisplayName(ns.FullName(name)) or ""
+		seenNames[name] = shown
+	end
+	return shown
+end
+-- Does `name` hold the search `q`, as its row shows it?
+local function NameHolds(q, name)
+	return type(name) == "string" and name ~= "" and SearchName(name):find(q, 1, true) ~= nil
+end
 
 function Views.Filter(tab) return filters[tab] or "" end
 
@@ -433,7 +475,10 @@ function Views.SetFilter(tab, text)
 	local before = filters[tab] or ""
 	if text == before then return end
 	filters[tab] = text ~= "" and text or nil
-	if tab == "realm" then wipe(folded) end
+	if tab == "realm" then
+		wipe(folded)
+		searchRows = Views.SEARCH_ROWS
+	end
 	if tab == "treasury" and ns.Treasury and ns.Treasury.FirstPage then ns.Treasury.FirstPage() end
 	if ns.UI and ns.UI.FilterChanged then ns.UI.FilterChanged(tab, Trim(before) == "" and Trim(text) ~= "") end
 end
@@ -442,6 +487,10 @@ end
 function Views.ClearFilters()
 	wipe(filters)
 	wipe(folded)
+	searchRows = Views.SEARCH_ROWS
+	wipe(searchNames)
+	wipe(seenNames)
+	namesKept = 0
 end
 
 -- The box's line, on top of a tab's list; `tip`: what it finds there (L.SEARCH_TIP_...).
@@ -537,7 +586,8 @@ function Views.SortBy(key)
 	end
 end
 
--- A reported guild's row: its name, members, online and Lord; a click opens it in the Realm.
+-- A reported guild's row: its name, members, online and Lord; a click opens it in the Realm,
+-- whose box it empties: a search left there could miss that guild and show nothing of it.
 local function CensusRow(e)
 	local g = e.g
 	local leader = g.leader and ((g.leaderOnline and "|cff40ff40" or "|cff9d9d9d") .. Plain(g.leader) .. "|r") or Grey("?")
@@ -546,6 +596,7 @@ local function CensusRow(e)
 		dim = not e.fresh,
 		tooltip = GuildTooltip(e),
 		onClick = function()
+			Views.SetFilter("realm", "")
 			expanded[e.name] = true
 			ns.UI.SelectTab("realm")
 		end,
@@ -941,20 +992,56 @@ local function SweptByGuild()
 	return out
 end
 
--- What of a guild the Realm's search `q` finds, its name aside: its Lord, its Captains and the
--- members seen online (our roster, /who: `swept`), each by name as its row shows it.
-local function GuildMatches(e, q, swept)
-	local g = e.g
-	local found = { lord = g.leader ~= nil and ns.Holds(q, Plain(g.leader)), officers = {}, members = {} }
+-- The guilds where the Realm's search `q` finds a player seen online (Views.MembersOf's sources:
+-- our roster for our own guild `own`, /who's round for the others), before any member list is
+-- made: [guild] = true.
+local function SeenHits(q, own)
+	local hit = {}
+	local sweep = ns.Who and ns.Who.sweep
+	for _, p in ipairs(sweep and sweep.list or {}) do
+		local guild = p.guild
+		if guild and guild ~= own and not hit[guild] and p.name and NameHolds(q, SeenName(p.name)) then hit[guild] = true end
+	end
+	if own then
+		for _, m in ipairs(ns.Roster.online or {}) do
+			if NameHolds(q, m.name) then
+				hit[own] = true
+				break
+			end
+		end
+	end
+	return hit
+end
+
+-- What of a guild the Realm's search finds, its name aside: its Lord, its Captains and the
+-- members seen online (our roster, /who), each by name as its row shows it. `ctx`: the search
+-- (q, own, hits: SeenHits, swept: SweptByGuild once needed). The member list (Views.MembersOf
+-- makes a table for each player and sorts them) is made only for a guild where someone is found
+-- and only when `rows` (the guild will show): otherwise `n` counts a member found as one.
+local function GuildMatches(e, ctx, rows)
+	local g, q = e.g, ctx.q
+	local found = { lord = NameHolds(q, g.leader), officers = {}, members = {}, all = {} }
 	for _, o in ipairs(g.officers or {}) do
-		if ns.Holds(q, Plain(o.name)) then found.officers[#found.officers + 1] = o end
+		if NameHolds(q, o.name) then found.officers[#found.officers + 1] = o end
 	end
-	local members, fromWho = Views.MembersOf(e.name, g, swept)
-	for _, m in ipairs(members) do
-		if ns.Holds(q, Plain(m.name)) then found.members[#found.members + 1] = m end
+	local seen = ctx.hits[e.name]
+	if not seen and e.name ~= ctx.own then
+		for _, p in ipairs(ns.Who and ns.Who.GuildSeen and ns.Who.GuildSeen(e.name) or {}) do
+			if p.guild == e.name and p.name and NameHolds(q, SeenName(p.name)) then
+				seen = true
+				break
+			end
+		end
 	end
-	found.all, found.fromWho = members, fromWho
-	found.n = (found.lord and 1 or 0) + #found.officers + #found.members
+	if seen and rows then
+		ctx.swept = ctx.swept or SweptByGuild()
+		local members, fromWho = Views.MembersOf(e.name, g, ctx.swept)
+		for _, m in ipairs(members) do
+			if NameHolds(q, m.name) then found.members[#found.members + 1] = m end
+		end
+		found.all, found.fromWho = members, fromWho
+	end
+	found.n = (found.lord and 1 or 0) + #found.officers + (rows and #found.members or seen and 1 or 0)
 	return found
 end
 
@@ -1127,21 +1214,43 @@ local function RealmLines(s, q)
 		if #(g.ranks or {}) == 0 then lines[#lines + 1] = { indent = 2, text = Grey(L.NONE_REPORTED) } end
 		lines[#lines + 1] = { indent = 1, text = Grey(L.INACTIVE_LINE:format(g.inactive7 or 0, g.inactive30 or 0)), gapAfter = true }
 	end
-	local swept = q and SweptByGuild()
+	-- (The guilds opened for a Lord, Captain or member found: `searchRows` of their rows, the
+	-- guilds past them counted in `more`, shown on a click.)
+	local ctx, rows, more
+	if q then
+		local own = GetGuildInfo("player")
+		ctx, rows, more = { q = q, own = own, hits = SeenHits(q, own) }, 0, 0
+	end
 	for _, e in ipairs(s.guilds) do
-		if not q or ns.Holds(q, Plain(e.name)) then
+		if not q or NameHolds(q, e.name) then
 			-- (Found by its name: the guild as ever, opened or not.)
 			if q then found = found + 1 end
 			Guild(e, expanded[e.name])
 		else
-			local only = GuildMatches(e, q, swept)
+			local room = rows < searchRows
+			local only = GuildMatches(e, ctx, room)
 			if only.n > 0 then
 				found = found + only.n
-				Guild(e, not folded[e.name], only, true)
+				if room then
+					local before = #lines
+					Guild(e, not folded[e.name], only, true)
+					rows = rows + #lines - before
+				else
+					more = more + 1
+				end
 			end
 		end
 	end
 	if q then
+		if more > 0 then
+			lines[#lines + 1] = {
+				text = Gold(L.SEARCH_MORE_GUILDS:format(more)),
+				onClick = function()
+					searchRows = searchRows + Views.SEARCH_ROWS
+					ns.UI.Refresh()
+				end,
+			}
+		end
 		if found == 0 then lines[#lines + 1] = NoMatch() end
 		return lines
 	end

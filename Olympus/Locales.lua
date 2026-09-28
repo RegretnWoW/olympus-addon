@@ -852,6 +852,7 @@ L.SEARCH_TIP_REALM = "A guild or a name (a Lord, a Captain, a member seen online
 L.SEARCH_TIP_CHAT = "A name, a guild or words of a line, any case: only the lines that hold it show."
 L.SEARCH_TIP_HERALDRY = "A name or a guild, any case: only the untabarded and inspected players who match show. The copy for Discord keeps everyone."
 L.SEARCH_TIP_TREASURY = "A name, any case: only the donors of the ranking and the lines of the book that match show."
+L.SEARCH_MORE_GUILDS = "... and %d more guilds found: click to show them"
 if GetLocale and GetLocale() == "ptBR" then
 	L.THOUSANDS = "."
 	L.ARMY_TOTAL = "%s soldados"
@@ -1660,4 +1661,5 @@ if GetLocale and GetLocale() == "ptBR" then
 	L.SEARCH_TIP_CHAT = "Um nome, uma guilda ou palavras de uma linha, maiúsculas ou não: só as linhas que têm o texto aparecem."
 	L.SEARCH_TIP_HERALDRY = "Um nome ou uma guilda, maiúsculas ou não: só os jogadores sem tabardo e inspecionados que batem aparecem. A cópia para o Discord continua com todos."
 	L.SEARCH_TIP_TREASURY = "Um nome, maiúsculas ou não: só os doadores do ranking e as linhas do livro que batem aparecem."
+	L.SEARCH_MORE_GUILDS = "... e mais %d guildas encontradas: clique para vê-las"
 end
