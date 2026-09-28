@@ -11,6 +11,10 @@
 //   LINK_BACKEND_PUBLIC  its public key, 64 hex: the addon holds the same one (ns.LINK_BACKEND_KEYS)
 //   LINK_CA_PUBLIC       the council authority's public key, 64 hex (two, comma-separated, while it
 //                        changes): the addon author's client certifies High Councillors' keys with it
+//   LINK_COUNCIL_CHARACTERS  optional: the High Councillors' characters you accept ("Name-Realm",
+//                        comma-separated). Set, a council authority certificate for any other
+//                        character counts for nothing (set but empty: none counts); unset, every
+//                        character the authority certifies is a councillor here
 //   LINK_MODE            "c" councillors only (launch), "a" one councillor or three drawn players
 //   LINK_GUILD_POLICY    "verified" (the default) or "claimed" (web/WORKER.md, "The guild check")
 //   LINK_ORIGIN          the page's origin, "https://dnl-gentile.github.io" (CORS of POST /proof)
@@ -26,7 +30,7 @@
 //              handleProof(request, env, { promote, demote })   the whole POST /proof, CORS included
 //   watcher    acceptInbox(env, body, { promote }) / handleInbox(request, env, { promote })
 //   keys       manageKeys(env, body) / handleKeys(request, env), registerKey, renewKey, revokeKey,
-//              revokeCharacter
+//              revokeCharacter, councilCharacters(env)
 //   people     discordUser(accessToken, { clientId }), forgetUser(env, discordId)
 //   answers    httpStatus(answer), respond(answer, headers), corsHeaders(request, env)
 
@@ -585,11 +589,12 @@ async function checkConfirmation(env, b, p, code, t) {
 // whether it is revoked. A key this Worker never registered counts only as a High Councillor's
 // certified by the council authority (the author's client, LINK_CA_PUBLIC): the certificate the
 // proof carries is then checked here (tier c, the key's id the first 12 hex of SHA-256 of it,
-// valid when the proof was signed), the revocation lists can end it (revoked_keys by its id,
-// revoked_characters every certificate of a character signed before its revocation), and a key
-// already recorded for another character (council_keys, by the key itself) is refused. The
-// record is written with the first link it confirmed, once its signature checked: a certificate
-// for someone else's public key, carried with a signature nobody made, records nothing.
+// valid when the proof was signed), its character on LINK_COUNCIL_CHARACTERS when you set that
+// list, the revocation lists can end it (revoked_keys by its id, revoked_characters every
+// certificate of a character signed before its revocation), and a key already recorded for
+// another character (council_keys, by the key itself) is refused. The record is written with the
+// first link it confirmed, once its signature checked: a certificate for someone else's public
+// key, carried with a signature nobody made, records nothing.
 async function proofKey(env, p) {
 	const DB = database(env);
 	const cert = proofCertificate(p);
@@ -606,6 +611,9 @@ async function proofKey(env, p) {
 	if (await DB.prepare('SELECT 1 AS x FROM revoked_keys WHERE key_id = ?').bind(p.keyId).first()) return { why: 'revoked key' };
 	if (!(await councilCertificate(env, cert))) return { why: 'unknown key (not certified by the council authority)' };
 	if (p.issued >= cert.exp) return { why: 'signed after its certificate ended' };
+	// Your say over who is a councillor here: when you list them, the authority certifies no one else.
+	const listed = councilCharacters(env);
+	if (listed && !listed.has(cert.character)) return { why: 'its character is not on LINK_COUNCIL_CHARACTERS' };
 	// Its character revoked (a councillor off the list, or keys of theirs you can't name): every
 	// certificate for it signed before then, whatever key it names.
 	const gone = await DB.prepare('SELECT revoked_at FROM revoked_characters WHERE character = ?').bind(cert.character).first();
@@ -892,6 +900,21 @@ export function councilAuthorityKeys(env) {
 		.filter((k) => PUBLIC_HEX_RE.test(k));
 }
 
+// The High Councillors' characters you accept from the council authority (LINK_COUNCIL_CHARACTERS:
+// "Name-Realm" as the game writes it, comma-separated), as a Set, or null when the setting is
+// absent: then every character the authority certifies counts. Set but empty, none does. Keys you
+// register yourself (keys) are yours already: the list does not apply to them.
+export function councilCharacters(env) {
+	const list = env ? env.LINK_COUNCIL_CHARACTERS : undefined;
+	if (list === undefined || list === null) return null;
+	return new Set(
+		String(list)
+			.split(/[,\n]/)
+			.map((c) => c.trim())
+			.filter((c) => c !== ''),
+	);
+}
+
 // The id of a key the council authority certifies: the first 12 hex of SHA-256 of its 32 bytes.
 export async function councilKeyId(publicHex) {
 	return bytesToHex(new Uint8Array(await crypto.subtle.digest('SHA-256', hexToBytes(publicHex)))).slice(0, 12);
@@ -1088,7 +1111,7 @@ function publicKeyHex(s) {
 // Everything kept about one Discord account, gone: its linked characters, its codes and its lines
 // in the audit trail; the confirmer keys it owns are revoked (their rows stay, with no username,
 // so an id is never used twice). Take its role away yourself. { ok, status, discord_id,
-// characters, keys }.
+// characters, keys }. `python3 scripts/link-keys.py forget <id>` prints the same as SQL.
 export async function forgetUser(env, discordId, t = now()) {
 	const id = String(discordId);
 	if (!DISCORD_ID_RE.test(id)) return failure('format', 'A Discord id: digits only.');

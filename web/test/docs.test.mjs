@@ -3,15 +3,16 @@
 // to one of those files, rewrite the guide's copies with
 //   node web/test/docs.test.mjs --write
 // The guide's vectors must verify too, and the paths it names must exist. web/FERN.md, the short
-// way in, must name only what link-core.mjs exports, the settings the addon and the page hold, and
-// files that exist.
+// way in, must name only what link-core.mjs exports, the settings the addon, the page and the core
+// hold, the draw as the core makes it, files and tool commands that exist, and Worker code and SQL
+// that run.
 
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { REPO, guideVectors, verify } from './helpers.mjs';
+import { REPO, guideVectors, makeD1, verify } from './helpers.mjs';
 import { parseBundle, parseToken, signedMessage, linkTag, drawThreshold } from '../public/core.js';
 import { verifyCertificate, councilCertificate, councilKeyId } from '../worker/link-worker.js';
 import * as core from '../worker/link-core.mjs';
@@ -153,12 +154,73 @@ if (process.argv[1] === fileURLToPath(import.meta.url) && process.argv.includes(
 		const origin = new URL(CONFIG.PAGE_URL).origin;
 		assert.ok(fern.includes(`LINK_ORIGIN = "${origin}"`) && md.includes(`LINK_ORIGIN = "${origin}"`), 'the origin, in both');
 		assert.ok(fern.includes(`\`${CONFIG.VERIFY_COMMAND}\``), 'the command the page names');
-		const body = /--data '(\{[^']+\})'/.exec(fern);
-		assert.ok(body, 'a curl with a body');
+		// (FERN.md has other curls too: the admin route's, in step 7.)
+		const body = [...fern.matchAll(/--data '(\{[^']+\})'/g)].find((m) => m[1].includes('"text"'));
+		assert.ok(body, 'a curl with a proof');
 		const { text, discordToken } = JSON.parse(body[1]);
 		assert.equal(text, vectors.bundles[0].bundle);
 		assert.ok(parseBundle(text).ok && core.parseBundle(text).ok);
 		assert.equal(typeof discordToken, 'string');
 		for (const reason of core.PROOF_REASONS) assert.ok(md.includes(`\`${reason}\``), `WORKER.md names the reason ${reason}`);
+	});
+
+	const flat = fern.replace(/\s+/g, ' ');
+
+	test('FERN.md: the draw as link-core.mjs makes it (3 of the M drawn keys, not 3 of 5)', async () => {
+		const m = /M = max\((\d+), (\d+)% of the active player keys\): all of them while there are (\d+) or fewer, (\d+) of (\d+)\./.exec(flat);
+		assert.ok(m, 'FERN.md states the size of the draw');
+		const [floor, pct, few, drawn, pool] = m.slice(1).map(Number);
+		for (const n of [0, 5, 20, 21, 100, 667, 1000, 5000]) assert.equal(core.drawLimit(n), Math.max(floor, Math.ceil((n * pct) / 100)), `n=${n}`);
+		assert.equal(core.drawLimit(pool), drawn);
+		const ids = (n) => Array.from({ length: n }, (_, i) => `pool${String(i).padStart(4, '0')}`);
+		assert.equal(await core.thresholdOf(vectors.draw.R, ids(few)), 'ffffffff', 'every key drawn');
+		assert.notEqual(await core.thresholdOf(vectors.draw.R, ids(few + 1)), 'ffffffff');
+		const { PLAYERS_NEEDED, WINDOW } = core.LINK;
+		assert.ok(flat.includes(`Any ${PLAYERS_NEEDED} of the drawn keys, from ${PLAYERS_NEEDED} Discord accounts, signed within ${WINDOW / 60} minutes of each other, link.`));
+		assert.equal(typeof core.drawLimit, 'function', 'the one line FERN.md names');
+	});
+
+	test('FERN.md: every setting it names is one link-core.mjs reads, LINK_COUNCIL_CHARACTERS among them', () => {
+		const src = readFileSync(join(REPO, 'web', 'worker', 'link-core.mjs'), 'utf8');
+		const names = new Set(fern.match(/\bLINK_[A-Z_]+\b/g));
+		assert.ok(names.has('LINK_COUNCIL_CHARACTERS') && names.has('LINK_ADMIN_TOKEN'));
+		for (const name of names) assert.match(src, new RegExp(`\\benv\\.${name}\\b`), name);
+		// The FAQ on the council authority says what it can do, and what limits it.
+		const faq = /### Can the page, or Daniel, give anyone a role\?([\s\S]*?)\n### /.exec(fern)[1];
+		for (const name of ['LINK_CA_PUBLIC', 'LINK_COUNCIL_CHARACTERS', 'council_keys']) assert.ok(faq.includes(name), name);
+		// The bot key's rotation renews the certificates the old key signed before it leaves the addon.
+		assert.match(/\*\*Your bot's key\*\*[\s\S]*?\n- \*\*/.exec(fern)[0], /"renew": true[\s\S]*\/oly discord cert/);
+	});
+
+	test('FERN.md: the admin route is in the required steps, and step 6\'s Worker revokes a key with it', async () => {
+		const required = fern.slice(fern.indexOf('### 1. '), fern.indexOf('### 8. '));
+		assert.ok(required.includes('### 7. Revoking, from day one'));
+		assert.match(required, /python3 scripts\/link-keys\.py revoke <id> > revoke\.sql/);
+		assert.match(required, /wrangler d1 execute olympus-link --remote --file revoke\.sql/);
+		// Every link-keys.py command FERN.md gives is one the tool has.
+		const usage = readFileSync(join(REPO, 'scripts', 'link-keys.py'), 'utf8').split('"""')[1];
+		for (const [, cmd] of fern.matchAll(/scripts\/link-keys\.py (\w+)/g)) assert.ok(usage.includes(`\n  python3 scripts/link-keys.py ${cmd} `), cmd);
+		// Step 6's fetch, as FERN.md prints it, with the core's handlers.
+		const code = /### 6\.[\s\S]*?```js\n([\s\S]*?)```/.exec(fern)[1].replace('export default', 'return');
+		const worker = new Function('handleProof', 'handleKeys', 'promote', 'demote', code)(core.handleProof, core.handleKeys, async () => {}, async () => {});
+		const DB = await makeD1();
+		if (!DB) return; // node:sqlite missing: the rest is the Worker tests'
+		const ADMIN = 'test-admin-token-0123456789abcdefghijklmnop';
+		const env = { LINK_DB: DB, LINK_ADMIN_TOKEN: ADMIN };
+		const CK = vectors.council_keys[0];
+		const post = (headers) =>
+			worker.fetch(new Request('https://bot.example/api/link/keys', { method: 'POST', headers, body: JSON.stringify({ key_id: CK.key_id, revoke: true }) }), env, {});
+		assert.equal((await post({})).status, 401);
+		const res = await post({ Authorization: `Bearer ${ADMIN}`, 'Content-Type': 'application/json' });
+		assert.deepEqual([res.status, (await res.json()).revoked], [200, true]);
+		assert.ok(await DB.prepare('SELECT 1 AS x FROM revoked_keys WHERE key_id = ?').bind(CK.key_id).first());
+	});
+
+	test('FERN.md: the SQL it gives runs against the schema', async () => {
+		const DB = await makeD1();
+		if (!DB) return;
+		const queries = [...fern.matchAll(/--command "([^"]+)"/g)].map((m) => m[1]);
+		assert.ok(queries.length >= 3);
+		for (const sql of queries) await DB.prepare(sql).all();
 	});
 }

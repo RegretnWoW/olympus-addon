@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, test } from 'node:test';
 import * as core from '../worker/link-core.mjs';
 import { parseToken, linkTag, buildBundle, parseBundle as pageParse, utf8Length } from '../public/core.js';
-import { REPO, makeD1, vectors, verify } from './helpers.mjs';
+import { REPO, b64url, makeD1, publicHexOf, sign, vectors, verify } from './helpers.mjs';
 
 const {
 	LINK,
@@ -33,6 +33,8 @@ const {
 	corsHeaders,
 	verifyCertificate,
 	councilKeyId,
+	councilCharacters,
+	signedMessage,
 } = core;
 
 const probe = await makeD1();
@@ -460,6 +462,57 @@ describe('with D1', { skip: probe ? false : 'node:sqlite is not available in thi
 		const res = await handleKeys(new Request('https://bot.example/keys', { method: 'POST', headers: { Authorization: `Bearer ${ADMIN}` }, body: JSON.stringify({ key_id: CK.key_id, revoke: true }) }), env);
 		assert.deepEqual([res.status, (await res.json()).council], [200, true]);
 		assert.equal((await handleKeys(new Request('https://bot.example/keys', { method: 'POST', body: '{}' }), env)).status, 401);
+	});
+
+	test('the council authority alone links (the trust FERN.md\'s FAQ describes); LINK_COUNCIL_CHARACTERS limits it to the councillors listed', async () => {
+		await setup();
+		// The review's case: a key the council authority certified for a character this Worker never
+		// heard of confirms a character that is nobody's, for the account whose /verify code it holds.
+		const seed = (await import('node:crypto')).randomBytes(32).toString('hex');
+		const pub = publicHexOf(seed);
+		const keyId = await councilKeyId(pub);
+		const minted = 'Nobody Registered-ClassicBetaPvP';
+		const exp = NOW + 365 * 86400;
+		const payload = `OLK2.${keyId}.${b64url(Buffer.from(pub, 'hex'))}.c.${exp}.${minted}`;
+		const b = { requester: 'Random Char-ClassicBetaPvP', guild: 'Olympus II', faction: 'Alliance', nonce: '0123456789abcdef', R: TOKEN_C.R };
+		b.tag = await linkTag(TOKEN_C.signature_b64url, b.requester);
+		const p = { issued: NOW - 60, keyId, confirmer: minted, gv: 'w' };
+		p.sig = b64url(sign(seed, signedMessage(b, p)));
+		b.proofs = [{ ...p, pub: b64url(Buffer.from(pub, 'hex')), tier: 'c', certExp: exp, certSig: b64url(sign(vectors.council_authority.seed_hex, Buffer.from(payload, 'utf8'))) }];
+		const text = buildBundle(b);
+		// No list: whatever character the authority certifies is a councillor here, and one links.
+		assert.equal(councilCharacters(env), null);
+		const trusted = await checkProof(env, text, { discordId: USER_C.id });
+		assert.deepEqual([trusted.ok, trusted.by, trusted.confirmers, trusted.guildCheck], [true, 'councillor', [minted], 'w']);
+		// Your list: a certificate for anyone else counts for nothing. Nothing is claimed, given or recorded.
+		env.LINK_COUNCIL_CHARACTERS = ` ${CK.character} ,Someone Else-ClassicBetaPvP,`;
+		assert.deepEqual([...councilCharacters(env)], [CK.character, 'Someone Else-ClassicBetaPvP']);
+		const refused = await acceptProof(env, text, { discordId: USER_C.id, promote });
+		assert.deepEqual([refused.status, refused.reason], ['rejected', 'not-enough']);
+		assert.match(refused.message, new RegExp(`${keyId}: its character is not on LINK_COUNCIL_CHARACTERS`));
+		assert.deepEqual(roles, []);
+		assert.equal((await row('SELECT used FROM codes WHERE r = ?', TOKEN_C.R)).used, null);
+		assert.equal((await row('SELECT COUNT(*) AS n FROM council_keys')).n, 0);
+		// A councillor on the list still links alone; a councillor key you registered is yours, list or not.
+		assert.equal((await checkProof(env, B5.bundle, { discordId: USER_C.id })).ok, true);
+		env.LINK_COUNCIL_CHARACTERS = 'Someone Else-ClassicBetaPvP';
+		assert.match((await checkProof(env, B5.bundle)).message, /not on LINK_COUNCIL_CHARACTERS/);
+		assert.equal((await checkProof(env, B1.bundle, { discordId: USER_C.id })).ok, true);
+		// Set but empty: no certificate of the authority counts.
+		env.LINK_COUNCIL_CHARACTERS = '';
+		assert.deepEqual([...councilCharacters(env)], []);
+		assert.equal((await checkProof(env, B5.bundle)).reason, 'not-enough');
+		// Revoking a character does not stick without the list: a certificate signed after it counts again.
+		delete env.LINK_COUNCIL_CHARACTERS;
+		await revokeCharacter(env, minted, NOW - 3600);
+		assert.equal((await checkProof(env, text, { discordId: USER_C.id })).ok, true);
+		// Listed, the character links, and its key is recorded for you to see.
+		env.LINK_COUNCIL_CHARACTERS = minted;
+		const linked = await acceptProof(env, text, { discordId: USER_C.id, promote });
+		assert.equal(linked.status, 'linked', linked.message);
+		assert.deepEqual(roles, [['promote', USER_C.id, b.requester]]);
+		assert.deepEqual({ ...(await row('SELECT key_id, character, first_seen FROM council_keys')) }, { key_id: keyId, character: minted, first_seen: NOW });
+		assert.deepEqual({ ...(await row('SELECT key_id FROM used WHERE r = ?', TOKEN_C.R)) }, { key_id: keyId });
 	});
 
 	test('forgetUser: a Discord account\'s characters, codes and log lines gone, its keys revoked', async () => {

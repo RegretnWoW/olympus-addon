@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { handleLink, verifyCertificate, certFrom, councilCertificate, parseCertificate } from '../worker/link-worker.js';
+import { forgetUser } from '../worker/link-core.mjs';
 import { parseToken, utf8Length } from '../public/core.js';
 import { REPO, makeD1, publicHexOf, sign, verify, vectors } from './helpers.mjs';
 
@@ -290,6 +291,10 @@ test('confirmer: bad ids, kinds and options are refused', { skip }, () => {
 		['revoke', 'x'],
 		['revoke', '--character', 'NoRealm'],
 		['revoke', '--character'],
+		['forget'],
+		['forget', 'abc'],
+		['forget', "1234567'; DROP TABLE members; --"],
+		['forget', '123456', '789012'],
 		['ca', 'what'],
 		['nope'],
 		[],
@@ -317,6 +322,53 @@ test('revoke --character: the SQL that revokes every key of a character (its cou
 	await DB.exec('UPDATE revoked_characters SET revoked_at = 1 WHERE 1');
 	await DB.exec(run(['revoke', '--character', character]).stdout);
 	assert.ok((await DB.prepare('SELECT revoked_at FROM revoked_characters WHERE character = ?').bind(character).first()).revoked_at > 1);
+});
+
+test('forget: the SQL that deletes an account\'s data, as forgetUser() does it, which D1 takes', { skip }, async () => {
+	const [viaSql, viaCore] = [await makeD1(), await makeD1()];
+	if (!viaSql) return;
+	const GONE = '300000000000000077';
+	const KEPT = '300000000000000088';
+	for (const DB of [viaSql, viaCore]) {
+		for (const [who, name, r] of [[GONE, 'Gone One', 'AAAAAAAAAA'], [KEPT, 'Kept One', 'BBBBBBBBBB']]) {
+			await DB.prepare('INSERT INTO members (character, discord_id, guild, gv, faction, r, linked) VALUES (?, ?, ?, ?, ?, ?, ?)')
+				.bind(`${name}-ClassicBetaPvP`, who, 'Olympus II', 'w', 'Alliance', r, 1780000000)
+				.run();
+			await DB.prepare('INSERT INTO codes (r, discord_id, username, mode, draw_t, created, exp, token, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+				.bind(r, who, name.toLowerCase().replace(' ', '.'), 'c', '00000000', 1780000000, 1780086400, 'x', 'discord')
+				.run();
+			await DB.prepare('INSERT INTO inbox_uploads (source, r, discord_id, requester, uploaded, status, reason) VALUES (?, ?, ?, ?, ?, ?, ?)')
+				.bind('site', r, who, `${name}-ClassicBetaPvP`, 1780000100, 'linked', 'linked')
+				.run();
+		}
+		for (const [id, seed, who, revokedAt] of [['goneold1', '21', GONE, 1771000000], ['gonenew1', '22', GONE, null], ['keptkey1', '23', KEPT, null]]) {
+			await DB.prepare('INSERT INTO keys (key_id, public_key, owner_discord_id, owner_username, character, kind, bootstrap, created, cert_exp, revoked, revoked_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+				.bind(id, publicHexOf(seed.repeat(32)), who, 'some.one', `${id}-ClassicBetaPvP`, 'p', 0, 1770000000, 1790000000, revokedAt ? 1 : 0, revokedAt)
+				.run();
+		}
+	}
+	const r = run(['forget', GONE]);
+	assert.equal(r.status, 0, r.stderr);
+	await viaSql.exec(r.stdout);
+	const t = nowS();
+	assert.equal((await forgetUser({ DB: viaCore }, GONE, t)).status, 'ok');
+	// "now" is unixepoch() in the SQL and t in forgetUser: the same minute.
+	const dump = async (DB) => {
+		const out = {};
+		for (const table of ['members', 'codes', 'inbox_uploads', 'keys']) {
+			const rows = (await DB.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()).results;
+			out[table] = rows.map((x) => (x.revoked_at && Math.abs(x.revoked_at - t) < 60 ? { ...x, revoked_at: 'now' } : x));
+		}
+		return out;
+	};
+	const [sql, core] = [await dump(viaSql), await dump(viaCore)];
+	assert.deepEqual(sql, core);
+	for (const table of ['members', 'codes', 'inbox_uploads']) assert.deepEqual(sql[table].map((x) => x.discord_id), [KEPT], table);
+	assert.deepEqual(sql.keys.map((k) => [k.key_id, k.revoked, k.revoked_at, k.owner_username]), [
+		['goneold1', 1, 1771000000, null],
+		['gonenew1', 1, 'now', null],
+		['keptkey1', 0, null, 'some.one'],
+	]);
 });
 
 test('public: the public key of a seed on stdin', { skip }, () => {
