@@ -14511,6 +14511,60 @@ test("Olympus Link: the author's client certifies High Councillors of the signed
 	end)
 end)
 
+test("Olympus Link: the author's client certifies a public key for one councillor only (another who sends it, read off its DV, gets nothing), and records what it signed", function()
+	WithLink(function(w)
+		ns.LINK_CA_KEYS, ns.LINK_CA_SEED = { SAMPLE.ca_pub }, SAMPLE.ca_seed
+		ns.rdb.council = { names = { ["test councillor"] = true, ["other councillor"] = true, ["third councillor"] = true } }
+		ns.me = AUTHOR_CHAR
+		local realm = ns.AUTHOR_REALM
+		local victim, asker, third = "Test Councillor-" .. realm, "Other Councillor-" .. realm, "Third Councillor-" .. realm
+		local function PubOf(label) return Ed.ToB64(Ed.PublicKey(ns.Sign.SHA256("olympus-link-test:" .. label))) end
+		local function DE() return Whispers(w, "DE~") end
+		eq(Link.Certified(), nil, "no record before it certified anything")
+		-- The victim's own key, certified and recorded.
+		local pub = PubOf("victim")
+		Link.HandleCertRequest("WHISPER", victim, "DC~1~" .. pub)
+		RunFrames(w)
+		eq(#DE(), 1)
+		local c = Link.ParseCert(DE()[1].msg:sub(4))
+		local rec = Link.Certified()[c.id]
+		eq(rec.name, victim); eq(rec.pub, pub); eq(rec.exp, c.exp); eq(rec.t, w.clock)
+		-- The review's case: another councillor sends the victim's public key (in every DV of it).
+		Link.HandleCertRequest("WHISPER", asker, "DC~1~" .. pub)
+		RunFrames(w)
+		eq(#DE(), 1, "nothing signed for a key certified for another councillor")
+		eq(Link.Certified()[c.id].name, victim)
+		-- That councillor's own key: certified (the refusal did not use up its ten minutes).
+		Link.HandleCertRequest("WHISPER", asker, "DC~1~" .. PubOf("asker"))
+		RunFrames(w)
+		eq(#DE(), 2); eq(DE()[2].to, asker)
+		-- The victim again with the same key (its answer lost, or its certificate ended): certified,
+		-- the record's end moved.
+		w.clock = w.clock + Link.CA_GAP
+		Link.HandleCertRequest("WHISPER", victim, "DC~1~" .. pub)
+		RunFrames(w)
+		eq(#DE(), 3); eq(DE()[3].to, victim)
+		eq(Link.Certified()[c.id].exp, w.clock + Link.CA_DAYS * 86400)
+		-- Two councillors sending one new key at once: the first signed keeps it, the other gets nothing.
+		w.clock = w.clock + Link.CA_GAP
+		local shared = PubOf("shared")
+		Link.HandleCertRequest("WHISPER", third, "DC~1~" .. shared)
+		Link.HandleCertRequest("WHISPER", asker, "DC~1~" .. shared)
+		RunFrames(w)
+		eq(#DE(), 4); eq(DE()[4].to, third)
+		local n = 0
+		for _ in pairs(Link.Certified()) do n = n + 1 end
+		eq(n, 3, "three keys certified: the victim's, the asker's and the shared one (the third's)")
+		-- Records of certificates that ended a year ago go.
+		w.clock = w.clock + 2 * Link.CA_DAYS * 86400 + 1
+		Link.HandleCertRequest("WHISPER", victim, "DC~1~" .. PubOf("victim2"))
+		RunFrames(w)
+		n = 0
+		for _ in pairs(Link.Certified()) do n = n + 1 end
+		eq(n, 1, "only the new one")
+	end)
+end)
+
 test("Olympus Link: a councillor's key rotated (/oly discord key new), asked for again after a refusal only 10 minutes later, off when the list drops it or it is turned off", function()
 	WithLink(function(w)
 		ns.LINK_CA_KEYS = { SAMPLE.ca_pub }

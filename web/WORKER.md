@@ -125,9 +125,13 @@ What the Worker does with them, in plain words:
   link carries its certificate, so the Worker checks it there: signed by the council authority,
   a councillor's (tier `c`), its id the first 12 hex digits of the SHA-256 of the key itself, still
   valid when the confirmation was signed. It then counts like a registered councillor key.
-- The first time a link carries such a key, the Worker writes down whose it is: the key id, its
-  public key and the councillor's character (the `council_keys` table). If the same key id ever
-  shows up for another character, it is refused.
+- The first time a link it confirmed is accepted, the Worker writes down whose it is: the key
+  itself (its public key), its id and the councillor's character (the `council_keys` table). It
+  writes this with the link, after checking the confirmation's signature and everything else, and
+  never for a link it refuses: a certificate for someone else's key, carried with a signature
+  nobody made, leaves no trace. From then on, the same key with a certificate naming another
+  character is refused. (The author's client never certifies one key for two characters either:
+  it keeps a record of every key it certified.)
 - Revoking one (a councillor left, or their computer was compromised): send
   `{"key_id": "<the 12 hex digits>", "revoke": true}` to `/api/link/keys` (or run the SQL of
   `python3 scripts/link-keys.py revoke <id>`). It goes on the revocation list (`revoked_keys`) at
@@ -151,7 +155,7 @@ wrangler d1 execute olympus-link --remote --file web/worker/schema.sql
 Seven tables: `codes` (every code issued, single use, with its draw threshold), `keys`
 (confirmer public keys you registered, one certified per Discord account, each for one
 character, with the end of their certificate), `council_keys` (High Councillors' keys the council
-authority certified, recorded the first time a link carried them), `revoked_keys` (the council
+authority certified, recorded with the first link each one helped accept), `revoked_keys` (the council
 authority's keys you revoked), `used` (the proofs that counted), `members` (linked characters,
 with how their guild was checked) and `inbox_uploads` (every bundle received: the audit trail and
 the page's rate limit). The full schema is in "The D1 schema" below.
@@ -525,7 +529,7 @@ For every bundle, from the page or the inbox:
    proof carries) names its public key, its tier and the confirming character as registered; or
    a High Councillor's key the council authority certified (the certificate checks with
    `LINK_CA_PUBLIC`, tier `c`, the id the key's hash, valid when the proof was signed), not on the
-   revocation list and recorded for that character. Then: its owner is not the code's account;
+   revocation list and not recorded for another character. Then: its owner is not the code's account;
    the Worker rebuilds the exact `OLY4` text and verifies the Ed25519 signature with the key
    (WebCrypto: a non-canonical signature fails); the confirmer is one of the key owner's linked
    characters (except bootstrap and council authority keys: their certificate names the
@@ -540,7 +544,9 @@ For every bundle, from the page or the inbox:
    drawn player's in mode `a`) checked the guild (`r` or `w`), else `guild-unverified`.
 7. Then it claims the code (so two deliveries cannot both count), gives `ROLE_ID` in
    `GUILD_ID`, and records the character in `members`, moving it if it was linked to another
-   account (which loses the role when it has no character left). If Discord refuses or cannot
+   account (which loses the role when it has no character left), with the proofs that counted
+   (`used`) and the council authority's keys whose proofs checked (`council_keys`): nothing is
+   written for a proof before the whole link is accepted. If Discord refuses or cannot
    be reached (the player is not in the server, Discord is down, the network fails), or D1
    cannot record the link, the code is released and nothing is recorded, so the same link
    works on the next try.
@@ -849,17 +855,19 @@ CREATE TABLE IF NOT EXISTS keys (
 CREATE UNIQUE INDEX IF NOT EXISTS keys_one_per_owner ON keys (owner_discord_id) WHERE revoked = 0 AND replaced_at IS NULL AND cert_exp IS NOT NULL;
 
 -- High Councillors' keys made in game and certified by the council authority (the author's
--- client; LINK_CA_PUBLIC), never registered: each recorded for the character its certificate
--- names the first time a link carries it. Their id is the first 12 hex of SHA-256 of the key.
+-- client; LINK_CA_PUBLIC), never registered: each recorded, by the key itself, for the character
+-- its certificate names, in the same write as the first link it confirmed (so only once a
+-- signature of that key has checked). Their id is the first 12 hex of SHA-256 of the key.
 CREATE TABLE IF NOT EXISTS council_keys (
-  key_id     TEXT PRIMARY KEY
-             CHECK (length(key_id) = 12 AND key_id NOT GLOB '*[^0-9a-f]*'),
-  public_key TEXT NOT NULL                         -- 64 lowercase hex (Ed25519)
+  public_key TEXT PRIMARY KEY                      -- 64 lowercase hex (Ed25519): the key itself
              CHECK (length(public_key) = 64 AND public_key NOT GLOB '*[^0-9a-f]*'),
+  key_id     TEXT NOT NULL                         -- its id: the first 12 hex of SHA-256 of it
+             CHECK (length(key_id) = 12 AND key_id NOT GLOB '*[^0-9a-f]*'),
   character  TEXT NOT NULL,                        -- the councillor ("Name-Realm")
   cert_exp   INTEGER NOT NULL,                     -- the latest end of its certificate seen
   first_seen INTEGER NOT NULL
 );
+CREATE INDEX IF NOT EXISTS council_keys_by_id ON council_keys (key_id);
 
 -- The revocation list of the council authority's keys: a key id here counts no more, whether a
 -- link carried it before or not (POST /api/link/keys {"key_id", "revoke": true}).
@@ -1384,6 +1392,8 @@ export async function acceptBundle(env, text, opts = {}) {
 		previous = await env.DB.prepare('SELECT discord_id FROM members WHERE character = ?').bind(b.requester).first();
 		await env.DB.batch([
 			...counted.map((c) => env.DB.prepare('INSERT OR IGNORE INTO used (r, key_id, t) VALUES (?, ?, ?)').bind(b.R, c.proof.keyId, t)),
+			// The council authority's keys whose proofs checked in this link: recorded now, not before.
+			...valid.filter((c) => c.key.council).map((c) => recordCouncilKey(env, c, t)),
 			env.DB.prepare(
 				'INSERT INTO members (character, discord_id, guild, gv, faction, r, linked) VALUES (?, ?, ?, ?, ?, ?, ?) ' +
 					'ON CONFLICT(character) DO UPDATE SET discord_id = excluded.discord_id, guild = excluded.guild, gv = excluded.gv, faction = excluded.faction, r = excluded.r, linked = excluded.linked',
@@ -1407,9 +1417,11 @@ export async function acceptBundle(env, text, opts = {}) {
 	};
 }
 
+// One proof, checked whole (its key, time, signature and who confirms), reading only:
+// { ok, proof, key } or { ok: false, proof, why }.
 async function checkProof(env, b, p, code, t) {
 	const bad = (why) => ({ ok: false, proof: p, why });
-	const found = await proofKey(env, p, t);
+	const found = await proofKey(env, p);
 	if (found.why) return bad(found.why);
 	const key = found.key;
 	if (key.owner_discord_id && key.owner_discord_id === code.discord_id) return bad("the requester's own key");
@@ -1430,14 +1442,17 @@ async function checkProof(env, b, p, code, t) {
 	return { ok: true, proof: p, key };
 }
 
-// The key a proof is checked with: { key } or { why }. A key registered here (keys) is D1's: the
-// certificate the proof carries must name its public key, tier and character, and D1 says
+// The key a proof is checked with: { key } or { why }. It only reads: nothing about a proof is
+// written before the whole link is accepted (acceptBundle). A key registered here (keys) is D1's:
+// the certificate the proof carries must name its public key, tier and character, and D1 says
 // whether it is revoked. A key this Worker never registered counts only as a High Councillor's
 // certified by the council authority (the author's client, LINK_CA_PUBLIC): the certificate the
 // proof carries is then checked here (tier c, the key's id the first 12 hex of SHA-256 of it,
-// valid when the proof was signed), the key is recorded for the character it names the first
-// time it is seen (council_keys), and the revocation list (revoked_keys) can end it.
-async function proofKey(env, p, t) {
+// valid when the proof was signed), the revocation list (revoked_keys) can end it, and a key
+// already recorded for another character (council_keys, by the key itself) is refused. The
+// record is written with the first link it confirmed, once its signature checked: a certificate
+// for someone else's public key, carried with a signature nobody made, records nothing.
+async function proofKey(env, p) {
 	const cert = proofCertificate(p);
 	if (!cert) return { why: 'a certificate that does not read' };
 	const row = await env.DB.prepare('SELECT * FROM keys WHERE key_id = ?').bind(p.keyId).first();
@@ -1452,15 +1467,32 @@ async function proofKey(env, p, t) {
 	if (await env.DB.prepare('SELECT 1 AS x FROM revoked_keys WHERE key_id = ?').bind(p.keyId).first()) return { why: 'revoked key' };
 	if (!(await councilCertificate(env, cert))) return { why: 'unknown key (not certified by the council authority)' };
 	if (p.issued >= cert.exp) return { why: 'signed after its certificate ended' };
-	await env.DB.prepare('INSERT OR IGNORE INTO council_keys (key_id, public_key, character, cert_exp, first_seen) VALUES (?, ?, ?, ?, ?)')
-		.bind(p.keyId, cert.publicHex, cert.character, cert.exp, t)
-		.run();
-	const known = await env.DB.prepare('SELECT * FROM council_keys WHERE key_id = ?').bind(p.keyId).first();
-	if (!known || known.public_key !== cert.publicHex || known.character !== cert.character) return { why: 'a council key recorded for another character' };
-	if (cert.exp > known.cert_exp) await env.DB.prepare('UPDATE council_keys SET cert_exp = ? WHERE key_id = ?').bind(cert.exp, p.keyId).run();
+	const known = await env.DB.prepare('SELECT character FROM council_keys WHERE public_key = ?').bind(cert.publicHex).first();
+	if (known && known.character !== cert.character) return { why: 'a council key recorded for another character' };
 	// Its owner, when the councillor's character is linked: never confirms that account's codes or characters.
 	const owner = await env.DB.prepare('SELECT discord_id FROM members WHERE character = ?').bind(cert.character).first();
-	return { key: { key_id: p.keyId, public_key: cert.publicHex, kind: 'c', bootstrap: 1, council: true, character: cert.character, owner_discord_id: owner ? owner.discord_id : null } };
+	return {
+		key: {
+			key_id: p.keyId,
+			public_key: cert.publicHex,
+			kind: 'c',
+			bootstrap: 1,
+			council: true,
+			character: cert.character,
+			cert_exp: cert.exp,
+			owner_discord_id: owner ? owner.discord_id : null,
+		},
+	};
+}
+
+// The record of a council authority's key whose proof checked, written with the link it helped
+// accept: its character the first time, a later end of its certificate after (never another
+// character's: that stays the first one's).
+function recordCouncilKey(env, c, t) {
+	return env.DB.prepare(
+		'INSERT INTO council_keys (public_key, key_id, character, cert_exp, first_seen) VALUES (?, ?, ?, ?, ?) ' +
+			'ON CONFLICT(public_key) DO UPDATE SET cert_exp = MAX(council_keys.cert_exp, excluded.cert_exp) WHERE council_keys.character = excluded.character',
+	).bind(c.key.public_key, c.key.key_id, c.key.character, c.key.cert_exp, t);
 }
 
 // Mode "a": three drawn players from three owners, signed within 5 minutes of each other. A

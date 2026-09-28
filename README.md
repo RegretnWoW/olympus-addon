@@ -320,8 +320,9 @@ certificate, which names it: another character of the same account confirms noth
 character, your addon makes a key of its own in the game (from the finest timings the client
 has, over several frames; the key never leaves your computer) and asks the author's client for
 its certificate the next time it hears him (a whisper with the key's public half); his client
-checks you are on the signed list and signs one for a year, and your addon checks it before it
-keeps it. `/oly discord key new` makes a new key and asks again (a lost or leaked one; the bot's
+checks you are on the signed list and signs one for a year (for one character per key: it keeps a
+record of every key it certified, and another councillor who sends your key's public half gets
+nothing), and your addon checks it before it keeps it. `/oly discord key new` makes a new key and asks again (a lost or leaked one; the bot's
 keeper can revoke the old one), `/oly discord key off` removes it (your addon makes none by
 itself after that, until `key new`). Other confirmers get a key from the bot's keeper (an id and
 43 letters) and its certificate (a line starting with `OLK2.`, the bot's signature on the key's

@@ -57,6 +57,8 @@ local L = ns.L
 -- the URL <ns.LINK_SITE>#b=<the bundle, URL-encoded>: a fragment, never sent to any server.
 -- A watcher's inbox (SavedVariables): OlympusDB.discord.inbox[R][sender] = { bundle, from, t, keep },
 -- only links whose every proof checks with its certificate and that are enough for the bot.
+-- The author's client records every certificate it signs as the council authority:
+-- OlympusDB.discord.certified[keyId] = { name, pub, exp, t } (a key for one character only).
 -- A confirmer's key never leaves OlympusDB.discord.keys, nor the council authority's seed
 -- ns.LINK_CA_SEED: neither is ever printed, sent, logged, or written in /oly status and the bug report.
 
@@ -121,6 +123,7 @@ Link.MAX_CERT = 240          -- ...and of a certificate (DV and DE carry it in o
 Link.CA_GAP = 600            -- the council authority: one certificate per councillor in this long...
 Link.CA_HOUR = 20            -- ...and this many an hour in all
 Link.CA_DAYS = 365           -- ...each good for this many days
+Link.CA_LOG_MAX = 2000       -- ...and a record of this many kept (the author's SavedVariables)
 Link.CA_WAIT = 60            -- a councillor's addon waits this long for the author's certificate,
 Link.CA_AGAIN = 600          -- ...and asks again after a refusal (or no answer) this long after
 Link.ENTROPY_FRAMES = 8      -- a councillor's new key: the entropy pool is stirred over this many frames
@@ -1669,9 +1672,52 @@ end
 -- The author's client is the council authority: it holds the seed, and it is his character.
 function Link.IsCA() return CASeed() ~= nil and ns.Workshop ~= nil and ns.Workshop.IsAuthor() end
 
+-- The council authority's record of every certificate it signed, in the author's SavedVariables
+-- (OlympusDB.discord.certified[keyId] = { name, pub, exp, t }): which key it certified for which
+-- councillor, until when. A public key is certified for one character only (another councillor
+-- who sends it, read off its owner's DV, gets nothing), and the list says what the bot's keeper
+-- can revoke (/oly discord certified). Nil on every other client.
+function Link.Certified()
+	local d = ns.db and ns.db.discord
+	return type(d) == "table" and type(d.certified) == "table" and d.certified or nil
+end
+
+-- The character a public key (base64url) was certified for, or nil.
+local function CertifiedFor(pubB64)
+	for _, e in pairs(Link.Certified() or {}) do
+		if type(e) == "table" and e.pub == pubB64 then return e.name end
+	end
+	return nil
+end
+
+-- A certificate signed: recorded (the same key again for the same character updates its end).
+-- Records of certificates that ended a year ago go; past CA_LOG_MAX, the ones that end first.
+local function RecordCertified(id, name, pubB64, exp)
+	local d = Store()
+	if type(d.certified) ~= "table" then d.certified = {} end
+	local log, server = d.certified, ServerTime()
+	log[id] = { name = name, pub = pubB64, exp = exp, t = server }
+	local n = 0
+	for k, e in pairs(log) do
+		if type(e) ~= "table" or type(e.name) ~= "string" or (tonumber(e.exp) or 0) + Link.CA_DAYS * 86400 < server then
+			log[k] = nil
+		else
+			n = n + 1
+		end
+	end
+	while n > Link.CA_LOG_MAX do
+		local first
+		for k, e in pairs(log) do
+			if k ~= id and (not first or tonumber(e.exp) < tonumber(log[first].exp)) then first = k end
+		end
+		log[first], n = nil, n - 1
+	end
+end
+
 -- A councillor's ask (DC): answered with its certificate only for a High Councillor of the signed
--- list (the name the server stamped) on our realm group, one per councillor in CA_GAP and CA_HOUR
--- an hour in all, signed in a job. Nothing is said to anyone else. The authority's key must be one
+-- list (the name the server stamped) on our realm group, for a public key this authority never
+-- certified for another character, one per councillor in CA_GAP and CA_HOUR an hour in all,
+-- signed in a job, and recorded. Nothing is said to anyone else. The authority's key must be one
 -- this version knows (ns.LINK_CA_KEYS): else it certifies nothing (a line in the log, once).
 function Link.HandleCertRequest(dist, sender, text)
 	if dist ~= "WHISPER" or type(text) ~= "string" or caPub == false or not Link.IsCA() then return end
@@ -1680,6 +1726,12 @@ function Link.HandleCertRequest(dist, sender, text)
 	local pubB64 = text:match("^DC~1~([%w_%-]+)$")
 	if not pubB64 or not Pub(pubB64) or not Link.ValidName(name) then return end
 	if not ns.IsHighCouncillor(name) or ns.GroupOf(ns.RealmOf(name) or "") ~= ns.GroupOf(ns.RealmOf(ns.me) or "") then return end
+	local holder = CertifiedFor(pubB64)
+	if holder and holder ~= name then
+		-- Another councillor's key (its public half is in every DV of it): never theirs.
+		ns.Log("discord link: a key certified for another High Councillor was sent: refused")
+		return
+	end
 	if ca.given[name] and now - ca.given[name] < Link.CA_GAP then return end
 	while ca.hour[1] and now - ca.hour[1] >= 3600 do table.remove(ca.hour, 1) end
 	if #ca.hour >= Link.CA_HOUR or Ed.Busy() >= Ed.MAX_JOBS then return end
@@ -1693,8 +1745,9 @@ function Link.HandleCertRequest(dist, sender, text)
 		if not listed then return { listed = false } end
 		local pub = Ed.FromB64(pubB64)
 		if not Ed.ValidPublicKey(pub) then return { listed = true, capub = capub } end
-		local signed = ("OLK2.%s.%s.c.%d.%s"):format(KeyIdOf(pub), pubB64, exp, name)
-		return { listed = true, capub = capub, cert = signed .. "." .. Ed.ToB64(Ed.Sign(seed, signed, capub)) }
+		local id = KeyIdOf(pub)
+		local signed = ("OLK2.%s.%s.c.%d.%s"):format(id, pubB64, exp, name)
+		return { listed = true, capub = capub, id = id, cert = signed .. "." .. Ed.ToB64(Ed.Sign(seed, signed, capub)) }
 	end, function(ok, res)
 		if not ok or type(res) ~= "table" then return end
 		if not res.listed then
@@ -1704,6 +1757,10 @@ function Link.HandleCertRequest(dist, sender, text)
 		end
 		caPub = res.capub
 		if not res.cert then return end
+		-- (Two councillors who sent the same key at once: the first one signed keeps it.)
+		local holder2 = CertifiedFor(pubB64)
+		if holder2 and holder2 ~= name then return end
+		RecordCertified(res.id, name, pubB64, exp)
 		stats.certified = stats.certified + 1
 		ns.Comm.Whisper(name, "DE~" .. res.cert, "linkcert:" .. name, true)
 		ns.Log("discord link: certified a High Councillor's key")

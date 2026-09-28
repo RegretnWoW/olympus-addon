@@ -469,6 +469,8 @@ export async function acceptBundle(env, text, opts = {}) {
 		previous = await env.DB.prepare('SELECT discord_id FROM members WHERE character = ?').bind(b.requester).first();
 		await env.DB.batch([
 			...counted.map((c) => env.DB.prepare('INSERT OR IGNORE INTO used (r, key_id, t) VALUES (?, ?, ?)').bind(b.R, c.proof.keyId, t)),
+			// The council authority's keys whose proofs checked in this link: recorded now, not before.
+			...valid.filter((c) => c.key.council).map((c) => recordCouncilKey(env, c, t)),
 			env.DB.prepare(
 				'INSERT INTO members (character, discord_id, guild, gv, faction, r, linked) VALUES (?, ?, ?, ?, ?, ?, ?) ' +
 					'ON CONFLICT(character) DO UPDATE SET discord_id = excluded.discord_id, guild = excluded.guild, gv = excluded.gv, faction = excluded.faction, r = excluded.r, linked = excluded.linked',
@@ -492,9 +494,11 @@ export async function acceptBundle(env, text, opts = {}) {
 	};
 }
 
+// One proof, checked whole (its key, time, signature and who confirms), reading only:
+// { ok, proof, key } or { ok: false, proof, why }.
 async function checkProof(env, b, p, code, t) {
 	const bad = (why) => ({ ok: false, proof: p, why });
-	const found = await proofKey(env, p, t);
+	const found = await proofKey(env, p);
 	if (found.why) return bad(found.why);
 	const key = found.key;
 	if (key.owner_discord_id && key.owner_discord_id === code.discord_id) return bad("the requester's own key");
@@ -515,14 +519,17 @@ async function checkProof(env, b, p, code, t) {
 	return { ok: true, proof: p, key };
 }
 
-// The key a proof is checked with: { key } or { why }. A key registered here (keys) is D1's: the
-// certificate the proof carries must name its public key, tier and character, and D1 says
+// The key a proof is checked with: { key } or { why }. It only reads: nothing about a proof is
+// written before the whole link is accepted (acceptBundle). A key registered here (keys) is D1's:
+// the certificate the proof carries must name its public key, tier and character, and D1 says
 // whether it is revoked. A key this Worker never registered counts only as a High Councillor's
 // certified by the council authority (the author's client, LINK_CA_PUBLIC): the certificate the
 // proof carries is then checked here (tier c, the key's id the first 12 hex of SHA-256 of it,
-// valid when the proof was signed), the key is recorded for the character it names the first
-// time it is seen (council_keys), and the revocation list (revoked_keys) can end it.
-async function proofKey(env, p, t) {
+// valid when the proof was signed), the revocation list (revoked_keys) can end it, and a key
+// already recorded for another character (council_keys, by the key itself) is refused. The
+// record is written with the first link it confirmed, once its signature checked: a certificate
+// for someone else's public key, carried with a signature nobody made, records nothing.
+async function proofKey(env, p) {
 	const cert = proofCertificate(p);
 	if (!cert) return { why: 'a certificate that does not read' };
 	const row = await env.DB.prepare('SELECT * FROM keys WHERE key_id = ?').bind(p.keyId).first();
@@ -537,15 +544,32 @@ async function proofKey(env, p, t) {
 	if (await env.DB.prepare('SELECT 1 AS x FROM revoked_keys WHERE key_id = ?').bind(p.keyId).first()) return { why: 'revoked key' };
 	if (!(await councilCertificate(env, cert))) return { why: 'unknown key (not certified by the council authority)' };
 	if (p.issued >= cert.exp) return { why: 'signed after its certificate ended' };
-	await env.DB.prepare('INSERT OR IGNORE INTO council_keys (key_id, public_key, character, cert_exp, first_seen) VALUES (?, ?, ?, ?, ?)')
-		.bind(p.keyId, cert.publicHex, cert.character, cert.exp, t)
-		.run();
-	const known = await env.DB.prepare('SELECT * FROM council_keys WHERE key_id = ?').bind(p.keyId).first();
-	if (!known || known.public_key !== cert.publicHex || known.character !== cert.character) return { why: 'a council key recorded for another character' };
-	if (cert.exp > known.cert_exp) await env.DB.prepare('UPDATE council_keys SET cert_exp = ? WHERE key_id = ?').bind(cert.exp, p.keyId).run();
+	const known = await env.DB.prepare('SELECT character FROM council_keys WHERE public_key = ?').bind(cert.publicHex).first();
+	if (known && known.character !== cert.character) return { why: 'a council key recorded for another character' };
 	// Its owner, when the councillor's character is linked: never confirms that account's codes or characters.
 	const owner = await env.DB.prepare('SELECT discord_id FROM members WHERE character = ?').bind(cert.character).first();
-	return { key: { key_id: p.keyId, public_key: cert.publicHex, kind: 'c', bootstrap: 1, council: true, character: cert.character, owner_discord_id: owner ? owner.discord_id : null } };
+	return {
+		key: {
+			key_id: p.keyId,
+			public_key: cert.publicHex,
+			kind: 'c',
+			bootstrap: 1,
+			council: true,
+			character: cert.character,
+			cert_exp: cert.exp,
+			owner_discord_id: owner ? owner.discord_id : null,
+		},
+	};
+}
+
+// The record of a council authority's key whose proof checked, written with the link it helped
+// accept: its character the first time, a later end of its certificate after (never another
+// character's: that stays the first one's).
+function recordCouncilKey(env, c, t) {
+	return env.DB.prepare(
+		'INSERT INTO council_keys (public_key, key_id, character, cert_exp, first_seen) VALUES (?, ?, ?, ?, ?) ' +
+			'ON CONFLICT(public_key) DO UPDATE SET cert_exp = MAX(council_keys.cert_exp, excluded.cert_exp) WHERE council_keys.character = excluded.character',
+	).bind(c.key.public_key, c.key.key_id, c.key.character, c.key.cert_exp, t);
 }
 
 // Mode "a": three drawn players from three owners, signed within 5 minutes of each other. A

@@ -409,6 +409,37 @@ describe('Worker', { skip: probe ? false : 'node:sqlite is not available in this
 		assert.match(x.message, /recorded for another character/);
 	});
 
+	test('a council key is recorded only with a link it helped accept: a certificate for another councillor\'s key with a signature nobody made records nothing, and that councillor still links', async () => {
+		// The review's case: a councillor reads CK's public key off its DV announcement and gets the
+		// council authority's certificate for it under his own name; he cannot sign with it, so he
+		// carries 86 characters of junk in a link for his alt, with a code of his own account.
+		await setup();
+		const EVIL = 'Evil Councillor-ClassicBetaPvP';
+		const pub = Buffer.from(CK.public_hex, 'hex').toString('base64url');
+		const exp = NOW + 365 * 86400;
+		const payload = `OLK2.${CK.key_id}.${pub}.c.${exp}.${EVIL}`;
+		const certSig = b64url(sign(CA.seed_hex, Buffer.from(payload, 'utf8')));
+		assert.ok(parseCertificate(`${payload}.${certSig}`));
+		const b = { requester: 'Evil Alt-ClassicBetaPvP', guild: 'Olympus II', faction: 'Alliance', nonce: '0123456789abcdef', R: TOKEN_A.R };
+		b.tag = await linkTag(TOKEN_A.signature_b64url, b.requester);
+		b.proofs = [{ issued: NOW - 60, keyId: CK.key_id, confirmer: EVIL, gv: 'r', sig: b64url(Buffer.alloc(64, 7)), pub, tier: 'c', certExp: exp, certSig }];
+		const squat = await submit(buildBundle(b), USER_A);
+		assert.equal(squat.reason, 'not-enough');
+		assert.match(squat.message, /bad signature/);
+		assert.equal((await row('SELECT COUNT(*) AS n FROM council_keys')).n, 0, 'nothing recorded for a proof that does not check');
+		// A real proof of CK's in a link refused as a whole (no confirmer checked the guild) records nothing either.
+		const claimed = await makeBundle(B1, [[NOW - 60, CK.key_id, CK.character, 'c']]);
+		assert.equal((await submit(claimed, USER_C)).reason, 'guild-unverified');
+		assert.equal((await row('SELECT COUNT(*) AS n FROM council_keys')).n, 0, 'nothing recorded for a link that was not accepted');
+		// The real councillor's link links, and records CK for its own character.
+		const r = await submit(B5.bundle, USER_C);
+		assert.equal(r.status, 'linked', r.message);
+		const rec = await row('SELECT key_id, character FROM council_keys WHERE public_key = ?', CK.public_hex);
+		assert.deepEqual([rec.key_id, rec.character], [CK.key_id, CK.character]);
+		// From then on, the other councillor's certificate for CK's key counts nowhere.
+		assert.match((await submit(buildBundle(b), USER_A)).message, /recorded for another character/);
+	});
+
 	test('the council authority\'s word only: its key, tier c, the key\'s own id, a certificate valid when signed, never its own account', async () => {
 		const alias = '0123456789ab';
 		COUNCIL_KEYS[alias] = { ...COUNCIL_KEYS[CK.key_id], key_id: alias };

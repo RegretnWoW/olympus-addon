@@ -42,17 +42,19 @@ CREATE TABLE IF NOT EXISTS keys (
 CREATE UNIQUE INDEX IF NOT EXISTS keys_one_per_owner ON keys (owner_discord_id) WHERE revoked = 0 AND replaced_at IS NULL AND cert_exp IS NOT NULL;
 
 -- High Councillors' keys made in game and certified by the council authority (the author's
--- client; LINK_CA_PUBLIC), never registered: each recorded for the character its certificate
--- names the first time a link carries it. Their id is the first 12 hex of SHA-256 of the key.
+-- client; LINK_CA_PUBLIC), never registered: each recorded, by the key itself, for the character
+-- its certificate names, in the same write as the first link it confirmed (so only once a
+-- signature of that key has checked). Their id is the first 12 hex of SHA-256 of the key.
 CREATE TABLE IF NOT EXISTS council_keys (
-  key_id     TEXT PRIMARY KEY
-             CHECK (length(key_id) = 12 AND key_id NOT GLOB '*[^0-9a-f]*'),
-  public_key TEXT NOT NULL                         -- 64 lowercase hex (Ed25519)
+  public_key TEXT PRIMARY KEY                      -- 64 lowercase hex (Ed25519): the key itself
              CHECK (length(public_key) = 64 AND public_key NOT GLOB '*[^0-9a-f]*'),
+  key_id     TEXT NOT NULL                         -- its id: the first 12 hex of SHA-256 of it
+             CHECK (length(key_id) = 12 AND key_id NOT GLOB '*[^0-9a-f]*'),
   character  TEXT NOT NULL,                        -- the councillor ("Name-Realm")
   cert_exp   INTEGER NOT NULL,                     -- the latest end of its certificate seen
   first_seen INTEGER NOT NULL
 );
+CREATE INDEX IF NOT EXISTS council_keys_by_id ON council_keys (key_id);
 
 -- The revocation list of the council authority's keys: a key id here counts no more, whether a
 -- link carried it before or not (POST /api/link/keys {"key_id", "revoke": true}).
