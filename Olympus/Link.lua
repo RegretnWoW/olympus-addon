@@ -73,8 +73,10 @@ ns.LINK_BACKEND_KEYS = { "PASTE-THE-BOT-PUBLIC-KEY-HEX-HERE" }
 -- Its seed is only in dist/LinkCA.lua (ns.LINK_CA_SEED), copied to the author's own game and never
 -- published. Until a key is pasted here, councillors' addons make no key and ask for nothing.
 ns.LINK_CA_KEYS = { "a84125fa433276244fda242a28d2e4208a5d6db26dcb529e3e87af61939e10a7" }
--- The Olympus Link page (on the bot's site): the QR code and the copy box open it.
-ns.LINK_SITE = "https://olympus.example/link"
+-- The Olympus Link page, a static page on this repository's GitHub Pages (web/public/, its address
+-- also in web/public/config.js as PAGE_URL): the QR code and the copy box open it with the link in
+-- the #fragment only, which no server ever gets. The page sends the link to the bot's Worker.
+ns.LINK_SITE = "https://dnl-gentile.github.io/olympus-addon/"
 -- Whose watcher the texts name ("<name>'s watcher"); nil: "the bot's watcher".
 ns.LINK_WATCHER_OWNER = nil
 

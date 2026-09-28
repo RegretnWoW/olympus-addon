@@ -217,6 +217,27 @@ p {
 	color: var(--text);
 }
 
+button.user-out {
+	border-top: 0;
+	border-right: 0;
+	border-bottom: 0;
+	background: none;
+	font: inherit;
+	font-size: 13px;
+	cursor: pointer;
+}
+
+.avatar-discord svg {
+	width: 16px;
+	height: 12px;
+}
+
+.inline-code {
+	font-family: var(--mono);
+	font-size: 0.95em;
+	color: #f6e7b8;
+}
+
 /* ------------------------------------------------------------------ stepper */
 
 .steps {

@@ -1,11 +1,10 @@
-// Olympus Link: the page. Sign in with Discord, get a code, type it in the game, then read the
-// signed link the game shows (QR or text) and send it. The formats live in core.js, every
-// call to the backend in backend.js, the QR reading in scanner.js, the words in i18n.js.
+// Olympus Link: the page, static (GitHub Pages). Get a code from the bot in Discord, type it in the
+// game, then read the signed link the game shows (QR, text or Olympus.lua), sign in with Discord
+// and send it to the bot, which checks it and gives the role. The formats live in core.js, the one
+// request and the sign-in in backend.js, the settings in config.js, the QR reading in scanner.js,
+// the words in i18n.js.
 
 import {
-	parseToken,
-	tokenCommand,
-	maskedCommand,
 	bundleFromText,
 	parseFragment,
 	checkBundle,
@@ -20,24 +19,14 @@ import {
 	GAMES,
 	MAX_FILE_BYTES,
 } from './core.js';
-import { me, code as fetchCode, submit as sendLink, loginUrl, logoutUrl, DEMO, DEMO_DATA } from './backend.js';
+import { backend, DEMO, DEMO_DATA, newState, readSignIn, hasSignIn, redirectUri } from './backend.js';
+import { CONFIG } from './config.js';
 import { strings, pickLang, fill } from './i18n.js';
 import { Scanner, readImageFile } from './scanner.js';
 
-const params = new URLSearchParams(location.search);
-const lang = pickLang(params.get('lang'), navigator.language);
-const T = strings[lang];
-document.documentElement.lang = T.htmlLang;
-
-const nav = { userAgent: navigator.userAgent, platform: (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform, maxTouchPoints: navigator.maxTouchPoints };
-const OS = (DEMO && params.get('os')) || detectOS(nav);
-const MOBILE = isMobileOS(OS);
-const CAN_SHARE = DEMO ? !MOBILE : canShareScreen(OS, navigator.mediaDevices);
-const CAN_CAMERA = DEMO || !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
-const STEPS = ['login', 'code', 'wait', 'read', 'done'];
-
 // ---------------------------------------------------------------------------
-// Per-browser conveniences (never needed: the page works without them).
+// Per-tab and per-browser conveniences (the page works without them, but for the sign-in, whose
+// state and token live in this tab's sessionStorage only).
 
 const store = {
 	get(area, key) {
@@ -58,17 +47,31 @@ const store = {
 	},
 };
 
+// Back from Discord's sign-in: the address it came back to has no query, so the language (and the
+// rest of the page's address) comes from what this tab kept when it left.
+const RETURNING = hasSignIn(location) ? store.get('sessionStorage', 'signin') || {} : null;
+const params = new URLSearchParams(RETURNING ? RETURNING.search || '' : location.search);
+const lang = pickLang(params.get('lang'), navigator.language);
+const T = strings[lang];
+document.documentElement.lang = T.htmlLang;
+
+const nav = { userAgent: navigator.userAgent, platform: (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform, maxTouchPoints: navigator.maxTouchPoints };
+const OS = (DEMO && params.get('os')) || detectOS(nav);
+const MOBILE = isMobileOS(OS);
+const CAN_SHARE = DEMO ? !MOBILE : canShareScreen(OS, navigator.mediaDevices);
+const CAN_CAMERA = DEMO || !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+const STEPS = ['code', 'wait', 'read', 'done'];
+
 // ---------------------------------------------------------------------------
 // State
 
 const state = {
 	ready: false,
-	user: null,
-	step: 'login',
-	token: null, // parsed code token of this browser
-	revealed: false, // the player clicked the hidden code to see it
-	gettingCode: false,
-	codeError: null,
+	auth: null, // { token, exp }: the Discord sign-in of this tab
+	username: null, // the Discord username the bot linked (its answer)
+	step: 'code',
+	closed: false, // config.js does not name the bot yet
+	framed: false, // the page is inside another page's frame: it shows nothing to click there
 	tab: null,
 	notice: null, // { kind: 'info' | 'error', text }
 	scan: null, // { kind: 'screen' | 'camera' } while a stream is being read
@@ -116,79 +119,89 @@ function stopScan() {
 // Flow
 
 async function start() {
+	if (window.top !== window.self) {
+		state.ready = true;
+		state.framed = true;
+		return render();
+	}
+	// What the address brings: a link from a phone's camera (#b=), or Discord's sign-in answer.
+	// Either is taken out of the address at once: it stays in this tab only.
+	const answer = RETURNING ? readSignIn(location, RETURNING.state || null) : { kind: 'none' };
 	const frag = parseFragment(location.hash);
-	if (frag.kind !== 'none') {
-		history.replaceState(null, '', location.pathname + location.search); // the link stays in memory only
+	if (RETURNING) {
+		history.replaceState(null, '', location.pathname + (RETURNING.search || ''));
+		store.set('sessionStorage', 'signin', null);
+	} else if (frag.kind !== 'none') {
+		history.replaceState(null, '', location.pathname + location.search);
 		if (frag.kind === 'bundle') {
 			store.set('sessionStorage', 'pending', frag.text);
 			state.scanned = true;
 		}
 	}
+	if (answer.kind === 'token') store.set('sessionStorage', 'auth', { token: answer.token, exp: answer.exp });
+	const failed = answer.kind === 'none' || answer.kind === 'token' ? null : T.signInFailed[answer.kind] || T.signInFailed.error;
+	state.auth = currentAuth();
 	const pending = store.get('sessionStorage', 'pending');
 	const savedTab = store.get('localStorage', 'tab');
 	state.tab = tabs().some((t) => t.id === savedTab) ? savedTab : tabs()[0].id;
-
-	try {
-		state.user = await me();
-	} catch {
-		state.ready = true;
-		state.step = 'read';
-		state.result = { status: 'error', reason: 'server' };
-		render();
-		return;
-	}
 	state.ready = true;
-	if (DEMO) return demo(DEMO, pending);
-	if (!state.user) {
-		state.step = 'login';
-		state.scanned = state.scanned || !!pending;
+	if (DEMO) return demo(DEMO);
+	if (!backend.configured) {
+		state.closed = true;
 		return render();
-	}
-	const saved = store.get('localStorage', 'code');
-	if (saved && saved.username === state.user.username) {
-		const p = parseToken(saved.token);
-		if (p.ok && p.token.exp > Date.now() / 1000) state.token = p.token;
 	}
 	if (pending) {
 		state.step = 'read';
 		render();
 		takeBundle(pending);
+	} else {
+		state.step = 'code';
+	}
+	// A sign-in that did not come back right: said on the step the page opens on.
+	if (failed) note('error', failed);
+	render();
+}
+
+// This tab's Discord sign-in, while it has a minute left.
+function currentAuth() {
+	const a = store.get('sessionStorage', 'auth');
+	if (a && typeof a.token === 'string' && Number(a.exp) > Date.now() + 60000) return a;
+	if (a) store.set('sessionStorage', 'auth', null);
+	return null;
+}
+
+// Off to Discord's sign-in page, which comes back here with a token. The link found so far waits
+// in this tab meanwhile, and the state this tab sends is the one the answer must carry.
+function signIn() {
+	if (DEMO) {
+		state.auth = { token: 'demo', exp: Infinity };
+		if (state.found) send();
+		else render();
 		return;
 	}
-	state.step = 'code';
-	render();
-}
-
-async function getCode() {
-	state.gettingCode = true;
-	state.codeError = null;
-	render();
-	try {
-		const token = await fetchCode();
-		const p = parseToken(token);
-		if (!p.ok) throw Object.assign(new Error('bad token'), { reason: 'server' });
-		state.token = p.token;
-		state.revealed = false;
-		store.set('localStorage', 'code', { token: p.token.raw, username: state.user.username });
-	} catch (err) {
-		state.codeError = err.reason === 'limit' ? T.codeLimit : err.reason === 'username' ? T.codeUsername : err.reason === 'login' ? T.errors.login : T.errors.server;
-		if (err.reason === 'login') {
-			state.user = null; // the sign-in expired: back to "Continue with Discord"
-			state.step = 'login';
-			state.codeError = null;
-		}
+	const s = newState();
+	store.set('sessionStorage', 'signin', { state: s, search: location.search });
+	if ((store.get('sessionStorage', 'signin') || {}).state !== s) {
+		note('error', T.signInFailed.storage);
+		return render();
 	}
-	state.gettingCode = false;
-	render({ focus: state.token ? 'copy' : null });
+	if (state.found) store.set('sessionStorage', 'pending', state.found.text);
+	location.assign(backend.loginUrl(s, redirectUri(location.href)));
 }
 
-function newCode() {
-	state.token = null;
-	store.set('localStorage', 'code', null);
+function signOut() {
+	store.set('sessionStorage', 'auth', null);
+	state.auth = null;
+	state.username = null;
+	render();
+}
+
+// A code problem: back to the step that says how to get a new one in Discord.
+function codeAgain() {
 	state.result = null;
 	state.found = null;
+	store.set('sessionStorage', 'pending', null);
 	go('code');
-	getCode();
 }
 
 // Text from a QR code, the paste box or a pasted clipboard. True when it was an Olympus link.
@@ -205,7 +218,7 @@ function takeText(text, { quiet = false } = {}) {
 }
 
 function takeBundle(text) {
-	const check = checkBundle(text, state.token ? state.token.R : null);
+	const check = checkBundle(text, null);
 	if (!check.ok) {
 		note('error', check.error === 'noProofs' ? T.noProofs : T.badLink);
 		render();
@@ -217,12 +230,8 @@ function takeBundle(text) {
 	state.result = null;
 	state.notice = null;
 	state.step = 'read';
-	if (!state.user) {
+	if (!state.auth) {
 		store.set('sessionStorage', 'pending', text);
-		render({ focus: 'found' });
-		return true;
-	}
-	if (check.matchesCode === false) {
 		render({ focus: 'found' });
 		return true;
 	}
@@ -237,7 +246,7 @@ async function send() {
 	render({ focus: 'found' });
 	let result;
 	try {
-		result = await sendLink(state.found.text);
+		result = await backend.submit(state.found.text, state.auth ? state.auth.token : '');
 	} catch {
 		result = { status: 'error', reason: 'server' };
 	}
@@ -245,11 +254,16 @@ async function send() {
 	state.result = result;
 	if (result.status === 'linked') {
 		store.set('sessionStorage', 'pending', null);
-		if (state.token && state.found.bundle.R === state.token.R) store.set('localStorage', 'code', null);
+		if (typeof result.username === 'string') state.username = result.username;
 		go('done');
 		return;
 	}
-	if (result.reason === 'login') state.user = null;
+	if (result.reason === 'login') {
+		// The sign-in expired (or is not one for this bot): sign in again, the link waits.
+		store.set('sessionStorage', 'auth', null);
+		store.set('sessionStorage', 'pending', state.found.text);
+		state.auth = null;
+	}
 	render({ focus: 'result' });
 }
 
@@ -269,7 +283,7 @@ async function takeFile(file) {
 		note('error', T.fileUnreadable);
 		return render();
 	}
-	const pick = pickBundle(bundlesFromSavedVariables(text), state.token ? state.token.R : null);
+	const pick = pickBundle(bundlesFromSavedVariables(text), null);
 	text = null; // the file's text is dropped here
 	if (pick.kind === 'none') {
 		note('error', T.fileNone);
@@ -321,17 +335,11 @@ async function startScan(kind) {
 // Demo states (?demo=...): the page as it looks at each step, with made-up data.
 
 function demo(which) {
-	const token = parseToken(DEMO_DATA.token).token;
-	if (which !== 'login' && which !== 'scanned' && which !== 'start') state.token = token;
+	state.auth = which === 'scanned' ? null : { token: 'demo', exp: Infinity };
 	switch (which) {
-		case 'login':
-			state.step = 'login';
+		case 'closed':
+			state.closed = true;
 			break;
-		case 'scanned':
-			state.step = 'login';
-			state.scanned = true;
-			break;
-		case 'start': // signed in, no code yet
 		case 'code':
 			state.step = 'code';
 			break;
@@ -355,9 +363,11 @@ function demo(which) {
 			state.tab = 'other';
 			state.choices = DEMO_DATA.bundles;
 			break;
+		case 'scanned': // a link found, and nobody signed in
 		case 'found':
 		case 'done':
 		case 'error':
+			state.scanned = which === 'scanned';
 			state.step = 'read';
 			render();
 			takeBundle(DEMO_DATA.bundles[0]);
@@ -453,21 +463,14 @@ function tabs() {
 }
 
 function userChip() {
-	const u = state.user;
-	if (!u) return null;
-	const name = u.global_name || u.username;
-	let avatar;
-	if (typeof u.avatar === 'string' && /^(a_)?[0-9a-f]{32}$/.test(u.avatar) && /^[0-9]+$/.test(u.id)) {
-		avatar = h('img', { class: 'avatar', src: `https://cdn.discordapp.com/avatars/${u.id}/${u.avatar}.png?size=64`, alt: '', width: 28, height: 28, referrerpolicy: 'no-referrer' });
-	} else {
-		avatar = h('span', { class: 'avatar avatar-letter', 'aria-hidden': 'true', text: (name || '?').trim().charAt(0).toUpperCase() });
-	}
+	if (!state.auth) return null;
+	const name = state.username ? `@${state.username}` : T.signedIn;
 	return h(
 		'div',
 		{ class: 'user' },
-		avatar,
-		h('span', { class: 'user-name' }, h('span', { class: 'sr-only', text: `${T.signedInAs} ` }), name),
-		h('a', { class: 'user-out', href: logoutUrl(), text: T.signOut }),
+		icon('discord', 'avatar avatar-letter avatar-discord'),
+		h('span', { class: 'user-name', text: name }),
+		h('button', { type: 'button', class: 'user-out', onclick: signOut, 'data-key': 'sign-out', text: T.signOut }),
 	);
 }
 
@@ -476,9 +479,8 @@ function stepper() {
 	const items = STEPS.map((id, i) => {
 		const done = i < current;
 		const here = i === current;
-		// Signed in, any step but the first and the last; "In game" once this page gave a code.
-		// "Read it" always: a code from Discord's /link works as well.
-		const canGo = state.user && (id === 'code' || id === 'wait' || id === 'read') && !here && state.step !== 'done' && (id !== 'wait' || state.token);
+		// Any step but the last, until the link is sent.
+		const canGo = (id === 'code' || id === 'wait' || id === 'read') && !here && state.step !== 'done';
 		const finished = done || (here && id === 'done');
 		const dot = h('span', { class: 'step-dot' }, finished ? icon('check', 'icon icon-sm') : String(i + 1));
 		const label = h('span', { class: 'step-label', text: T.steps[i] });
@@ -499,62 +501,27 @@ function noticeView() {
 }
 
 function discordButton(label) {
-	return h('a', { class: 'btn btn-discord btn-lg', href: loginUrl(location.pathname + location.search), 'data-key': 'login' }, icon('discord', 'icon icon-discord'), h('span', { text: label }));
+	return h('button', { type: 'button', class: 'btn btn-discord btn-lg', onclick: signIn, 'data-key': 'login' }, icon('discord', 'icon icon-discord'), h('span', { text: label }));
 }
 
-function viewLogin() {
-	return [
-		h('h2', { class: 'card-title', tabindex: '-1', text: T.loginTitle }),
-		h('p', { class: 'lead', text: state.scanned ? T.loginScanned : T.loginText }),
-		h('div', { class: 'actions' }, discordButton(T.loginButton)),
-		h('p', { class: 'fine' }, icon('lock', 'icon icon-sm'), h('span', { text: T.loginNote })),
-	];
+// A text with {command} in it, the command shown as code.
+function withCommand(text) {
+	const parts = String(text).split('{command}');
+	return parts.flatMap((p, i) => (i ? [h('code', { class: 'inline-code', text: CONFIG.VERIFY_COMMAND }), p] : [p]));
 }
 
 function viewCode() {
-	const out = [h('h2', { class: 'card-title', tabindex: '-1', text: T.codeTitle })];
-	if (!state.token) {
-		out.push(h('p', { class: 'lead', text: T.codeText }));
-		out.push(
-			h(
-				'div',
-				{ class: 'actions' },
-				button(state.gettingCode ? T.codeGetting : T.codeButton, { kind: 'primary btn-lg', onclick: getCode, disabled: state.gettingCode, 'aria-busy': state.gettingCode ? 'true' : null, 'data-key': 'get-code' }),
-			),
-		);
-		if (state.codeError) out.push(h('p', { class: 'notice notice-error', role: 'alert' }, icon('alert'), h('span', { text: state.codeError })));
-		out.push(h('p', { class: 'fine', text: T.codeDiscord }));
-		out.push(h('div', { class: 'actions' }, button(T.codeHaveQr, { kind: 'ghost btn-sm', onclick: () => go('read'), 'data-key': 'have-qr' }, 'qr')));
-		return out;
-	}
-	const command = tokenCommand(state.token.raw);
-	const copied = state.copied === 'copy';
-	const expires = new Intl.DateTimeFormat(T.locale, { weekday: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(state.token.exp * 1000));
-	// The code stays hidden until clicked (a stream or a screenshot never catches it); Copy
-	// copies it either way.
-	const text = state.revealed
-		? h('code', { class: 'command-text', id: 'cmd', 'aria-labelledby': 'cmd-label', tabindex: '0', 'data-key': 'cmd', text: command })
-		: h(
-				'button',
-				{ type: 'button', class: 'command-text command-hidden', id: 'cmd', 'aria-label': T.codeShow, 'data-key': 'reveal', onclick: () => { state.revealed = true; render({ focus: 'cmd' }); } },
-				h('span', { class: 'command-mask', 'aria-hidden': 'true', text: maskedCommand() }),
-				h('span', { class: 'command-reveal', text: T.codeReveal }),
-			);
-	out.push(
-		h('p', { class: 'field-label', id: 'cmd-label', text: T.codeLabel }),
-		h(
-			'div',
-			{ class: 'command' },
-			text,
-			button(copied ? T.copied : T.copy, { kind: copied ? 'ok btn-copy' : 'gold btn-copy', onclick: () => copyText(command, 'copy'), 'data-key': 'copy', 'aria-live': 'polite' }, copied ? 'check' : 'copy'),
-		),
+	return [
+		h('h2', { class: 'card-title', tabindex: '-1', text: T.codeTitle }),
+		h('p', { class: 'lead', text: T.codeText }),
+		h('p', { class: 'field-label', text: T.codeLabel }),
+		h('div', { class: 'command' }, h('code', { class: 'command-text', text: CONFIG.VERIFY_COMMAND })),
+		h('ol', { class: 'howto' }, h('li', {}, withCommand(T.codeStep1)), h('li', { text: T.codeStep2 }), h('li', { text: T.codeStep3 })),
 		h('p', { class: 'notice notice-warn' }, icon('alert'), h('span', { text: T.codeStream })),
-		h('ol', { class: 'howto' }, h('li', { text: T.codeStep1 }), h('li', { text: T.codeStep2 }), h('li', { text: T.codeStep3 })),
-		h('p', { class: 'fine', text: fill(T.codeExpires, { time: expires }) }),
 		noticeView(),
 		h('div', { class: 'actions' }, button(T.codeNext, { kind: 'primary btn-lg', onclick: () => go('wait'), 'data-key': 'next' }, 'arrow')),
-	);
-	return out;
+		h('div', { class: 'actions' }, button(T.codeHaveQr, { kind: 'ghost btn-sm', onclick: () => go('read'), 'data-key': 'have-qr' }, 'qr')),
+	];
 }
 
 function viewWait() {
@@ -846,9 +813,9 @@ function choicesView() {
 		'ul',
 		{ class: 'choices', 'data-key': 'choices', tabindex: '-1' },
 		state.choices.map((text, i) => {
-			const check = checkBundle(text, state.token ? state.token.R : null);
+			const check = checkBundle(text, null);
 			if (!check.ok) return null;
-			const code = h('p', { class: 'choice-code' }, h('span', { text: fill(T.code, { R: check.bundle.R }) }), check.matchesCode ? h('span', { class: 'choice-mine', text: T.codeMine }) : null);
+			const code = h('p', { class: 'choice-code' }, h('span', { text: fill(T.code, { R: check.bundle.R }) }));
 			return h('li', {}, h('button', { type: 'button', class: 'choice', 'data-key': `choice-${i}`, onclick: () => takeBundle(text) }, characterCard(check, code)));
 		}),
 	);
@@ -861,12 +828,12 @@ function foundView() {
 		parts.push(errorView());
 	} else if (state.sending) {
 		parts.push(h('p', { class: 'sending', role: 'status' }, h('span', { class: 'spinner', 'aria-hidden': 'true' }), h('span', { text: T.sending })));
-	} else if (!state.user) {
-		parts.push(h('div', { class: 'actions' }, discordButton(T.signInToSend)), h('p', { class: 'fine' }, icon('lock', 'icon icon-sm'), h('span', { text: T.loginNote })));
-	} else if (f.matchesCode === false) {
+	} else if (!state.auth) {
 		parts.push(
-			h('p', { class: 'notice notice-warn', role: 'alert' }, icon('alert'), h('span', { text: fill(T.foundOtherCode, { R: f.bundle.R }) })),
-			h('div', { class: 'actions' }, button(T.sendAnyway, { kind: 'primary', onclick: send, 'data-key': 'send' }), button(T.readAnother, { kind: 'ghost', onclick: readAnother, 'data-key': 'another' })),
+			h('p', { class: 'lead', text: state.scanned ? T.loginScanned : T.sendSignIn }),
+			h('div', { class: 'actions' }, discordButton(T.signInToSend)),
+			noticeView(),
+			h('p', { class: 'fine' }, icon('lock', 'icon icon-sm'), h('span', { text: T.loginNote })),
 		);
 	}
 	return h('div', { class: 'found', 'data-key': 'found', tabindex: '-1' }, parts);
@@ -886,7 +853,7 @@ function errorView() {
 	let action;
 	const readAgain = ['not-enough', 'format', 'guild-unverified'].includes(reason);
 	if (reason === 'login') action = discordButton(T.loginButton);
-	else if (['unknown-code', 'other-user', 'code-used', 'expired', 'tag'].includes(reason)) action = button(T.newCode, { kind: 'primary', onclick: newCode, 'data-key': 'retry' });
+	else if (['unknown-code', 'other-user', 'code-used', 'expired', 'tag'].includes(reason)) action = button(T.newCode, { kind: 'primary', onclick: codeAgain, 'data-key': 'retry' });
 	else if (readAgain) action = button(T.readAgain, { kind: 'primary', onclick: readAnother, 'data-key': 'retry' });
 	else action = button(T.retry, { kind: 'primary', onclick: () => (state.found ? send() : location.reload()), 'data-key': 'retry' });
 	return h(
@@ -904,11 +871,24 @@ function viewDone() {
 	return [
 		h('div', { class: 'done-mark', 'aria-hidden': 'true' }, icon('check', 'done-check')),
 		h('h2', { class: 'card-title center', tabindex: '-1', text: T.doneTitle }),
-		h('p', { class: 'lead center', text: r.reason === 'already' ? T.doneAlready : fill(T.doneText, { user: state.user ? state.user.username : '' }) }),
+		h('p', { class: 'lead center', text: r.reason === 'already' ? T.doneAlready : state.username ? fill(T.doneText, { user: state.username }) : T.doneTextAnon }),
 		chars.length
 			? h('div', { class: 'linked' }, h('p', { class: 'field-label center', text: T.doneCharacters }), h('ul', { class: 'chips' }, chars.map((c) => h('li', { class: 'chip' }, h('strong', { text: c.name }), h('span', { text: c.realm })))))
 			: null,
 		h('p', { class: 'fine center', text: T.doneNote }),
+	];
+}
+
+// config.js does not name the bot yet: nothing to send to.
+function viewClosed() {
+	return [h('h2', { class: 'card-title', tabindex: '-1', text: T.closedTitle }), h('p', { class: 'lead', text: T.closedText })];
+}
+
+// Inside another page's frame: nothing to click here but the way out, to a tab of its own.
+function viewFramed() {
+	return [
+		h('h2', { class: 'card-title', tabindex: '-1', text: T.framed }),
+		h('div', { class: 'actions' }, h('a', { class: 'btn btn-primary', href: location.href.split('#')[0], target: '_blank', rel: 'noopener noreferrer', text: T.framedOpen })),
 	];
 }
 
@@ -921,11 +901,16 @@ const who = document.getElementById('who');
 function render({ focus = null, focusStep = false } = {}) {
 	if (!state.ready) return;
 	const keep = focus || (document.activeElement && document.activeElement.dataset && document.activeElement.dataset.key) || null;
+	if (state.framed || state.closed) {
+		document.body.dataset.step = 'closed';
+		who.replaceChildren();
+		app.replaceChildren(h('section', { class: 'card card-closed', 'aria-live': 'off' }, state.framed ? viewFramed() : viewClosed()));
+		return;
+	}
 	document.body.dataset.step = state.step;
 	who.replaceChildren(...[userChip()].filter(Boolean));
 	let body;
-	if (state.step === 'login' && !state.found) body = viewLogin();
-	else if (state.step === 'code') body = viewCode();
+	if (state.step === 'code') body = viewCode();
 	else if (state.step === 'wait') body = viewWait();
 	else if (state.step === 'done') body = viewDone();
 	else body = viewRead();

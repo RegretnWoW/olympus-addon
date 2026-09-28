@@ -15314,6 +15314,26 @@ test("Olympus Link: the QR code: level M up to version 15, L past it; modules on
 	end)
 end)
 
+-- The page is a static page on this repository's GitHub Pages (web/public/, published by
+-- .github/workflows/pages.yml); web/public/config.js names the same address (PAGE_URL), and the
+-- bot's Discord application has it as its redirect.
+test("Olympus Link: the QR code opens the page on the repository's GitHub Pages, the link in its fragment only", function()
+	WithUI(function()
+		WithLink(function(w)
+			eq(ns.LINK_SITE, "https://dnl-gentile.github.io/olympus-addon/")
+			assert(ns.LINK_SITE:find("^https://") and ns.LINK_SITE:sub(-1) == "/", "https, the page's folder")
+			assert(not ns.LINK_SITE:find("[?#]"), "no query and no fragment of its own")
+			local url = Link.URL(MyBundle("bundle_players"))
+			eq(url:sub(1, #ns.LINK_SITE + 3), ns.LINK_SITE .. "#b=")
+			eq(DecodeURI(url:match("#b=(.*)$")), MyBundle("bundle_players"), "the page reads the link back")
+			-- The longer address still makes a QR code of a three players' link (level L past 412 bytes).
+			local m, level = Link.Matrix(url)
+			assert(type(m) == "table" and #m > 21, "a QR code")
+			eq(level, #url <= Link.M_MAX_BYTES and 2 or 1)
+		end)
+	end)
+end)
+
 test("Olympus Link: gamepad UI: the code box and the question are Olympus's own dialogs, the window stays off the escape list and the chat keeps the keyboard", function()
 	WithUI(function()
 		WithLink(function(w)

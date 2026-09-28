@@ -1111,5 +1111,39 @@ describe('Worker', { skip: probe ? false : 'node:sqlite is not available in this
 		assert.ok(parsed.ok);
 		assert.equal(parsed.token.username, 'slash.user');
 		assert.ok(verify(vectors.backend.public_hex, parsed.token.payload, Buffer.from(parsed.token.sig, 'base64url')));
+		// /verify (the bot's command) answers the same: the same fresh code for the same member.
+		const verifyReply = await (await send({ type: 2, data: { name: 'verify' }, member: { user: { id: '723456789012345678', username: 'slash.user' } } })).json();
+		assert.equal(parseToken(verifyReply.data.content.split('\n').find((l) => l.startsWith('/oly discord '))).token.raw, parsed.token.raw);
+		assert.equal(verifyReply.data.flags, 64, 'only the member sees it');
+	});
+
+	test('POST /api/link/proof: the static page\'s route (GitHub Pages), with CORS, the player\'s Discord sign-in, and the role', async () => {
+		await setup();
+		env.LINK_ORIGIN = 'https://dnl-gentile.github.io';
+		env.DISCORD_CLIENT_ID = '300000000000000003';
+		const roleStub = globalThis.fetch;
+		globalThis.fetch = async (url, init) => {
+			if (String(url) === 'https://discord.com/api/v10/oauth2/@me') {
+				const ok = init.headers.Authorization === 'Bearer token-of-some-player-0001';
+				if (!ok) return new Response('{"message": "401: Unauthorized"}', { status: 401 });
+				return Response.json({ application: { id: env.DISCORD_CLIENT_ID }, scopes: ['identify'], expires: '2027-06-01T00:00:00+00:00', user: { id: USER_C.id, username: USER_C.username } });
+			}
+			return roleStub(url, init);
+		};
+		const at = (method, init = {}) => handleLink(new Request(`${ORIGIN}/api/link/proof`, { method, ...init }), env, {});
+		const pre = await at('OPTIONS', { headers: { Origin: env.LINK_ORIGIN, 'Access-Control-Request-Method': 'POST' } });
+		assert.equal(pre.status, 204);
+		assert.equal(pre.headers.get('Access-Control-Allow-Origin'), env.LINK_ORIGIN);
+		const post = (token, origin = env.LINK_ORIGIN) =>
+			at('POST', { headers: { Origin: origin, 'Content-Type': 'application/json' }, body: JSON.stringify({ text: B1.url, discordToken: token }) });
+		assert.equal((await post('token-of-some-player-0001', ORIGIN)).status, 403, 'the Worker\'s own origin is not the page\'s');
+		let res = await post('token-of-nobody-at-all-000');
+		assert.deepEqual([res.status, (await res.json()).reason], [401, 'login']);
+		res = await post('token-of-some-player-0001');
+		assert.equal(res.status, 200);
+		assert.equal(res.headers.get('Access-Control-Allow-Origin'), env.LINK_ORIGIN);
+		const r = await res.json();
+		assert.deepEqual([r.status, r.reason, r.character, r.username], ['linked', 'linked', B1.requester, USER_C.username]);
+		assert.deepEqual(discord.calls.map((c) => [c.method, c.url]), [['PUT', `https://discord.com/api/v10/guilds/${env.GUILD_ID}/members/${USER_C.id}/roles/${env.ROLE_ID}`]]);
 	});
 });

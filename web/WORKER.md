@@ -1,13 +1,18 @@
 # Olympus Link: the Worker and D1
 
-A guide for Fernmelder, who runs the Olympus Discord bot and its site. It adds Olympus Link to
-the Cloudflare Worker you already have (Discord login, your pages), with a D1 database. Nothing
-here needs a new server: the addon side (Olympus 0.9.10), the page (`web/public/`), the key tool
-(`scripts/link-keys.py`) and the watcher's inbox tool (`web/tools/read-inbox.mjs`) come ready.
-This guide says what the Worker does, how to set it up, and why each check is there. The
-complete reference Worker, the D1 schema and the test vectors are at the end of this file, and
-`node --test web/test` runs that exact code against the vectors with a local SQLite in place of
-D1.
+The detailed reference for Fernmelder, who runs the Olympus Discord bot on Cloudflare (a Worker
+and D1). **Start with [`FERN.md`](FERN.md)**: what to add to your bot, in an afternoon, in your
+own Worker's terms. This file explains every part and why each check is there.
+
+The split is yours: your bot keeps `/verify`, does every check and gives the role, and adds one
+route, `POST /proof`. The page is ours: a static page on this repository's GitHub Pages
+(`web/public/`, at `https://dnl-gentile.github.io/olympus-addon/`) that signs the player in with
+Discord, reads the link the game made, and posts it to your `/proof`. Every check lives in
+`web/worker/link-core.mjs`, plain functions over D1 that your routes call; `web/worker/link-worker.js`
+is a complete Worker built on it. The addon side, the page, the key tool (`scripts/link-keys.py`)
+and the watcher's inbox tool (`web/tools/read-inbox.mjs`) come ready. Both files, the D1 schema
+and the test vectors are at the end of this one, and `node --test web/test` runs that exact code
+against the vectors with a local SQLite in place of D1.
 
 ## How it works
 
@@ -19,7 +24,7 @@ guild. The finished, signed proof reaches the Worker in one of two ways, and the
 the Discord role.
 
 ```
- Discord /link, or the page after "Continue with Discord"
+ Discord /verify (your bot)
    └─> code  OLC2.<R>.<username>.<exp>.<mode>.<T>.<sig>    (signed with the backend key)
 
  each confirmer's key is one character's, and so is its certificate:
@@ -37,15 +42,18 @@ the Discord role.
    watcher path:  requester ──DB──> your watcher character (a High Councillor, "watcher on"),
                   whose addon checks every confirmation before it keeps it
                   later, read-inbox.mjs uploads the watcher's SavedVariables ──> POST /api/link/inbox
-   can't wait:    the page reads the QR code / the link / Olympus.lua ─────────> POST /api/link/submit
+   can't wait:    the page (GitHub Pages) reads the QR code / the link / Olympus.lua, signs the
+                  player in with Discord, and posts both ─────────────────────> POST /proof
+                  {"text": <the link>, "discordToken": <the player's Discord sign-in>}
 
- the Worker checks everything, then gives ROLE_ID in GUILD_ID
+ the Worker checks everything, then your promote() gives the role
 ```
 
 - The code is the player's alone. Its signature is the secret that ties each link to the
   player who typed it (the tag, below): the QR code and the game's copy box never carry it, so
-  a stream that shows the QR code gives nobody a link of their own. The page hides the code
-  until it is clicked and tells players to keep it, and the Olympus Link window, off stream.
+  a stream that shows the QR code gives nobody a link of their own. `/verify` answers in a
+  reply only the player sees, and both it and the page tell players to keep the code, and the
+  Olympus Link window, off stream.
 - Nothing needs you online: confirmations need only confirmers online. The finished proof
   waits in the player's addon until a watcher is online, then in your watcher's SavedVariables
   until you upload them. One rule for how long, counted from the code's expiry (a code lives a
@@ -61,10 +69,12 @@ the Discord role.
 
 ## What you need
 
-- The Worker you already run, its Discord login, and `wrangler`.
-- The bot's Discord application: its bot token (the bot needs Manage Roles, and its own role
-  above the role it gives), its public key (Developer Portal, General Information) if the
-  `/link` command comes over HTTP, the Olympus server id and the role id.
+- The Worker you already run, and `wrangler`.
+- The bot's Discord application: its client id (Developer Portal, OAuth2), with our page as one
+  of its OAuth2 redirects (`https://dnl-gentile.github.io/olympus-addon/`); what your `promote()`
+  already uses to give the role (the reference Worker's: the bot token, with Manage Roles and its
+  own role above the role it gives, the Olympus server id and the role id); its public key
+  (General Information) if `/verify` comes over HTTP.
 - Python 3 with the `cryptography` package on the computer where you make keys
   (`python3 -m pip install cryptography`), and Node 18 or newer for the inbox tool (Node 22.13
   or newer to run the tests).
@@ -132,6 +142,16 @@ What the Worker does with them, in plain words:
   nobody made, leaves no trace. From then on, the same key with a certificate naming another
   character is refused. (The author's client never certifies one key for two characters either:
   it keeps a record of every key it certified.)
+- What that trusts: whoever holds the authority's seed (the author's game, or anyone who copied
+  `dist/LinkCA.lua` from it) can certify a key for any character, and one councillor's
+  confirmation links. `LINK_COUNCIL_CHARACTERS` (step 5) keeps that with you: the High
+  Councillors' characters you accept (`Name-Realm`, comma-separated). A certificate for any
+  other character then counts for nothing, whatever the authority signs (set but empty: none
+  counts; left out: every character it certifies). The authority can still certify a new key
+  for a character on the list (that is how `/oly discord key new` works), so watch
+  `council_keys` (every such key, with `first_seen`) and `used` (the keys that counted for each
+  code). Keys you register yourself are not affected by the list, and leaving `LINK_CA_PUBLIC`
+  out makes them the only councillor keys.
 - A key the councillor no longer uses keeps counting here until you revoke it: this Worker never
   asks the councillor's game, and a certificate lasts a year. Whoever holds that key (a leaked
   one, or the councillor after leaving) could still make links with it outside the game. So:
@@ -149,9 +169,10 @@ What the Worker does with them, in plain words:
   (keys they rotated away included), and so do the keys you registered for that character. The
   answer lists those keys, and the authority's keys seen for that character. A certificate the
   authority signs for it afterwards counts (a councillor back on the list, whose addon makes a new
-  key with `/oly discord key new` after you revoked). So revoke only the old key's id when a
-  councillor just rotated a leaked key: revoking the character would stop the new one too, until
-  another `key new`.
+  key with `/oly discord key new` after you revoked), unless the character is off
+  `LINK_COUNCIL_CHARACTERS`: that is how you keep one out for good. So revoke only the old key's
+  id when a councillor just rotated a leaked key: revoking the character would stop the new one
+  too, until another `key new`.
 - Taking a councillor off the signed list stops them in game at once: their addon stops
   confirming, and nobody's addon asks them or keeps a link that counts on them. It does not stop
   them here (this Worker never sees the signed list): revoke the character too.
@@ -172,7 +193,9 @@ wrangler d1 create olympus-link
 wrangler d1 execute olympus-link --remote --file web/worker/schema.sql
 ```
 
-Eight tables: `codes` (every code issued, single use, with its draw threshold), `keys`
+A database of its own, bound as `LINK_DB` (step 5): the tables have plain names (`codes`, `keys`,
+`members`...) that could meet yours. `link-core.mjs` reads `LINK_DB`, or `DB` when there is no
+`LINK_DB`. Eight tables: `codes` (every code issued, single use, with its draw threshold), `keys`
 (confirmer public keys you registered, one certified per Discord account, each for one
 character, with the end of their certificate), `council_keys` (High Councillors' keys the council
 authority certified, recorded with the first link each one helped accept), `revoked_keys` (the council
@@ -183,122 +206,144 @@ the page's rate limit). The full schema is in "The D1 schema" below.
 
 ### 3. The code
 
-Copy `web/worker/link-worker.js` next to your Worker's entry file and put it in front of your
-router. It answers `/api/link/*` and `/api/discord/interactions` and returns `null` for
-everything else:
+Copy `web/worker/link-core.mjs` next to your Worker's entry file. It needs nothing but WebCrypto
+(Ed25519 and SHA-256), `fetch` and D1: no npm packages. Your routes call it:
 
 ```js
-import { handleLink } from './link-worker.js';
-import { sessionUser } from './session.js'; // your login's lookup (step 4)
+import { handleProof, handleInbox, handleKeys } from './link-core.mjs';
 
 export default {
 	async fetch(request, env, ctx) {
-		const link = await handleLink(request, env, ctx, { getUser: sessionUser });
-		if (link) return link;
-		return yourSite(request, env, ctx); // everything you already serve
+		const { pathname } = new URL(request.url);
+		const roles = { promote: (id) => promote(env, id), demote: (id) => demote(env, id) }; // yours
+		if (pathname === '/proof') return handleProof(request, env, roles);
+		if (pathname === '/api/link/inbox') return handleInbox(request, env, roles);
+		if (pathname === '/api/link/keys') return handleKeys(request, env);
+		return yourBot(request, env, ctx); // everything you already answer, /verify included (step 7)
 	},
 };
 ```
 
-It needs nothing but WebCrypto (Ed25519 and SHA-256), `fetch` and D1: no npm packages.
+- `promote(discordId, verdict)` is yours: it gives the role. Resolve when it did; throw (or
+  return `false`) when Discord refused, and the code is freed so the same link works on the next
+  try; `{ ok: false, reason: 'not-in-server' }` tells the player to join the server first.
+  `demote(discordId)` (optional) takes the role from an account whose only linked character
+  moved to another account.
+- `acceptProof(env, text, { discordId, promote, demote })` is the whole link, for routes you write
+  yourself: the checks ("What the Worker checks"), then it claims the code, calls `promote`, and
+  records the character. `checkProof(env, text, { discordId })` gives the same verdict, reading
+  only. `handleProof` is `acceptProof` with the page's CORS, the sign-in check, the rate limit and
+  the audit trail around it.
+- `web/worker/link-worker.js` is a complete Worker on the same functions (its `discordRole` is a
+  `promote`), with its routes under `/api/link/`.
 
-### 4. Your login
+### 4. Who is sending
 
-`handleLink` asks `getUser(request, env)` who is signed in. Return the Discord user your login
-already knows, with the fields of Discord's `GET /users/@me`, or `null`:
+The page is on another origin (GitHub Pages) and has no cookie of yours. It sends the player's
+Discord sign-in in the body, and `handleProof` asks Discord who that is (`discordUser`):
 
-```js
-// session.js: an example for a login that sets a "sid" cookie and keeps its sessions in D1.
-export async function sessionUser(request, env) {
-	const sid = (request.headers.get('Cookie') || '').match(/(?:^|;\s*)sid=([^;]+)/)?.[1];
-	if (!sid) return null;
-	return env.DB.prepare('SELECT discord_id AS id, username, global_name, avatar FROM sessions WHERE id = ? AND expires > unixepoch()')
-		.bind(sid)
-		.first();
-}
-```
-
-- `username` must be the Discord username (the unique, lowercase handle), not the display
-  name: it is what the code carries and what the player sees in the game's Accept window.
-- The `identify` scope is all the page needs; the page tells players "We only see your Discord
-  name and avatar".
-- The page calls the Worker on the same origin, with the session cookie. The Worker refuses a
-  `POST` whose `Origin` is not `LINK_ORIGIN`, so another site cannot use a player's session.
-- The page sends players to `LOGIN?next=<the page's path>` and expects to come back there
-  signed in. Your login should follow `next` only when it is a path on your own site (it
-  starts with a single `/`), so nobody can use it to send players elsewhere.
+- The page signs the player in on Discord's own page (OAuth2, the implicit grant, scope
+  `identify`, your application's client id, a random `state` it checks when Discord comes back),
+  keeps the access token in that browser tab only, and sends it as `discordToken`, with the link
+  as `text`.
+- The Worker asks `GET https://discord.com/api/v10/oauth2/@me` with it: the token must be your
+  application's (`application.id` is `DISCORD_CLIENT_ID`), with `identify`, and not expired. A token
+  another site got for its own application counts for nothing. The token goes to Discord only and
+  is stored nowhere. Its user is the account that must own the link's code (`other-user` if not).
+- CORS: only `LINK_ORIGIN` (`https://dnl-gentile.github.io`, exactly: never `*`, and no
+  credentials) gets `Access-Control-Allow-Origin`. `OPTIONS` (the browser's preflight) answers 204
+  for it and 403 for anyone else, and a `POST` from another origin, or with none, is refused
+  (`origin`).
+- `LINK_SITE_TOKEN`, when you set it: the page sends it as `Authorization: Bearer <it>`. It sits in
+  the page's `config.js` for anyone to read: a switch that cuts the page off the moment you change
+  it, not a secret.
+- `username` in a code is the Discord username (the unique, lowercase handle), not the display
+  name: it is what the player sees in the game's Accept window.
+- Same-site variant: a page served from your own site, behind your own login, can use the
+  reference Worker's `/api/link/me`, `/api/link/code` and `/api/link/submit` instead, with
+  `sessionUser` (its `ADAPT` function) connected to that login. The GitHub Pages page never uses
+  them.
 
 ### 5. Settings
 
 ```toml
 # wrangler.toml (your existing file: add these)
 [[d1_databases]]
-binding = "DB"
+binding = "LINK_DB"
 database_name = "olympus-link"
 database_id = "<from wrangler d1 create>"
 
 [vars]
 LINK_MODE = "c"                          # councillors only at launch; "a" when the pool is large enough
 LINK_GUILD_POLICY = "verified"           # or "claimed": see "The guild check" below
-LINK_ORIGIN = "https://your.site"        # the page's origin: no path, no trailing slash
+LINK_ORIGIN = "https://dnl-gentile.github.io"         # the page's origin: no path, no trailing slash
+DISCORD_CLIENT_ID = "<your application's client id>"  # the page's sign-in must be for it
 LINK_BACKEND_PUBLIC = "<64 hex from link-keys.py backend>"
-LINK_CA_PUBLIC = "<64 hex from the author's link-keys.py ca>" # the council authority (step 1b)
-DISCORD_PUBLIC_KEY = "<Developer Portal > General Information > Public Key>"
-GUILD_ID = "<the Olympus server id>"
-ROLE_ID = "<the role linked members get>"
+LINK_CA_PUBLIC = "a84125fa433276244fda242a28d2e4208a5d6db26dcb529e3e87af61939e10a7" # the council authority (step 1b)
+LINK_COUNCIL_CHARACTERS = "<Name-Realm>, <Name-Realm>"  # the High Councillors you accept from it (step 1b)
+DISCORD_PUBLIC_KEY = "<Developer Portal > General Information > Public Key>"      # only for /verify over HTTP
 ```
 
 ```sh
 wrangler secret put LINK_BACKEND_SEED    # from link-keys.py backend
 wrangler secret put LINK_ADMIN_TOKEN     # python3 -c "import secrets; print(secrets.token_urlsafe(32))"
-wrangler secret put DISCORD_BOT_TOKEN    # probably there already
+wrangler secret put LINK_SITE_TOKEN      # optional (step 4)
 ```
 
 `LINK_ADMIN_TOKEN` (at least 32 characters) is for your own tools only: the watcher inbox
-upload, the confirmer keys (`/api/link/keys`) and, if your bot runs on the gateway, its `/link`
-requests.
+upload and the confirmer keys (`/api/link/keys`), and in the reference Worker a gateway bot's
+code requests. The reference Worker's own role also reads `DISCORD_BOT_TOKEN`, `GUILD_ID` and
+`ROLE_ID`.
 
 ### 6. The page
 
-Serve `web/public/` as it is, under a path of your site, for example `https://your.site/link/`
-(Workers static assets, or however your site serves files). It is plain HTML, CSS and ES
-modules: no build step. Every call it makes goes through `web/public/backend.js`; check its
-three constants: `API` (`/api/link`), `LOGIN` (your Discord login, which gets
-`?next=<the page>` to come back to) and `LOGOUT`.
+The page is ours, on this repository's GitHub Pages: `https://dnl-gentile.github.io/olympus-addon/`,
+published from `web/public/` by `.github/workflows/pages.yml`. It is plain HTML, CSS and ES modules,
+no build step, and every address in it is relative. Its settings are one file,
+`web/public/config.js`: your `/proof` address (`PROOF_URL`), your application's client id
+(`DISCORD_CLIENT_ID`), the site token if you gave one (`SITE_TOKEN`), and the command that gives a
+code (`VERIFY_COMMAND`, `/verify`). Until those are filled in, it says Olympus Link is not open yet.
 
-The page's final address is what the addon puts in the QR code (`ns.LINK_SITE`, followed by
-`#b=` and the signed link): tell Daniel the address, and the name of your watcher's owner for
-the game's texts ("Fernmelder's watcher", `ns.LINK_WATCHER_OWNER`). The part after `#` never
-reaches a server: a phone that scans the QR code opens the page, which reads the link from its
-own address, asks the player to sign in if needed, and sends it.
+The page's address is what the addon puts in the QR code (`ns.LINK_SITE`, followed by `#b=` and
+the signed link). The part after `#` never reaches a server: a phone that scans the QR code opens
+the page, which reads the link from its own address, asks the player to sign in with Discord if
+needed, and sends it. Its one request is `POST <PROOF_URL>` with `{"text", "discordToken"}` (no
+cookie, no referrer); it loads nothing but its own files and Google Fonts (its
+Content-Security-Policy says so, and its `connect-src` names your Worker's origin once `PROOF_URL`
+is set), and it shows nothing to click inside another page's frame.
 
-The code step shows the command hidden (Copy works without showing it; a click shows it) and
-tells the player to keep the code and the game's Olympus Link window off stream and out of
-screenshots.
+The code step tells the player to use `/verify` in the Olympus server and to keep the code, and
+the game's Olympus Link window, off stream and out of screenshots. `?demo=code` (and `wait`,
+`screen`, `scanning`, `phone`, `other`, `pick`, `scanned`, `found`, `done`, `error`, `closed`) shows
+each step with made-up data and never calls anything; `&lang=pt` shows the Portuguese page (it is
+chosen from the browser's language otherwise).
 
-The page loads nothing but its own files, Google Fonts and Discord avatars (its
-Content-Security-Policy says so). `?demo=login` (and `scanned`, `start`, `code`, `wait`, `screen`,
-`scanning`, `phone`, `other`, `pick`, `found`, `done`, `error`) shows each step with made-up
-data and never calls the Worker; `&lang=pt` shows the Portuguese page (it is chosen from the
-browser's language otherwise).
+Tell Daniel the name of your watcher's owner for the game's texts ("Fernmelder's watcher",
+`ns.LINK_WATCHER_OWNER`).
 
-### 7. The `/link` command in Discord (the watcher path's code)
+### 7. `/verify` in Discord
 
-A player who never opens the site types `/link` in the Olympus server and gets their code in a
-reply only they see (it also tells them to keep it off stream). Two ways, depending on how
-your bot receives commands:
+A player types `/verify` in the Olympus server and gets their code in a reply only they see (it
+also tells them to keep it off stream):
 
-- **Over HTTP** (the application's Interactions Endpoint URL): set it to
-  `https://your.site/api/discord/interactions`. The Worker checks Discord's signature on every
-  request with `DISCORD_PUBLIC_KEY` and answers `/link` itself. Do not do this if your bot
+```js
+const code = await issueCode(env, { id: user.id, username: user.username }); // the member's Discord user
+// code.reply: the line to paste in the game, or why there is none (3 codes a day; an old-style username)
+```
+
+- **Over HTTP** (the application's Interactions Endpoint URL): answer
+  `{ type: 4, data: { flags: 64, content: code.reply } }` (64: only they see it). The reference
+  Worker's `/api/discord/interactions` checks Discord's signature on every request with
+  `DISCORD_PUBLIC_KEY` and answers `/verify` itself. Do not point the endpoint there if your bot
   receives its commands over the gateway: Discord sends them to one place only.
-- **Over the gateway** (discord.js, discord.py...): the bot asks the Worker and replies:
+- **Over the gateway** (discord.js, discord.py...): the bot asks the Worker and replies (the
+  reference Worker's `/api/link/bot-code` runs `issueCode`):
 
 ```js
 // discord.js v14
 client.on('interactionCreate', async (interaction) => {
-	if (!interaction.isChatInputCommand() || interaction.commandName !== 'link') return;
-	const res = await fetch('https://your.site/api/link/bot-code', {
+	if (!interaction.isChatInputCommand() || interaction.commandName !== 'verify') return;
+	const res = await fetch('https://<your worker>/api/link/bot-code', {
 		method: 'POST',
 		headers: { Authorization: `Bearer ${process.env.LINK_ADMIN_TOKEN}`, 'Content-Type': 'application/json' },
 		body: JSON.stringify({ id: interaction.user.id, username: interaction.user.username }),
@@ -308,12 +353,13 @@ client.on('interactionCreate', async (interaction) => {
 });
 ```
 
-Register the command once (a `POST` adds or updates this one command and leaves your others):
+If `/verify` is new, register it once (a `POST` adds or updates this one command and leaves your
+others):
 
 ```sh
 curl -X POST "https://discord.com/api/v10/applications/$APP_ID/guilds/$GUILD_ID/commands" \
   -H "Authorization: Bot $DISCORD_BOT_TOKEN" -H "Content-Type: application/json" \
-  -d '{"name":"link","description":"Get your Olympus Link code for the game","type":1}'
+  -d '{"name":"verify","description":"Get your Olympus Link code for the game","type":1}'
 ```
 
 ### 8. Confirmer keys
@@ -416,9 +462,9 @@ after its code expired). WoW writes that file on `/reload`, logout or quit. Then
 
 ```sh
 # macOS
-LINK_ADMIN_TOKEN=... node web/tools/read-inbox.mjs "/Applications/World of Warcraft/_classic_beta_/WTF/Account/<ACCOUNT>/SavedVariables/Olympus.lua" --post https://your.site/api/link/inbox
+LINK_ADMIN_TOKEN=... node web/tools/read-inbox.mjs "/Applications/World of Warcraft/_classic_beta_/WTF/Account/<ACCOUNT>/SavedVariables/Olympus.lua" --post https://<your worker>/api/link/inbox
 # Windows (PowerShell)
-$env:LINK_ADMIN_TOKEN="..."; node web/tools/read-inbox.mjs "C:\Program Files (x86)\World of Warcraft\_classic_beta_\WTF\Account\<ACCOUNT>\SavedVariables\Olympus.lua" --post https://your.site/api/link/inbox
+$env:LINK_ADMIN_TOKEN="..."; node web/tools/read-inbox.mjs "C:\Program Files (x86)\World of Warcraft\_classic_beta_\WTF\Account\<ACCOUNT>\SavedVariables\Olympus.lua" --post https://<your worker>/api/link/inbox
 ```
 
 Without `--post` it prints the same JSON (`{"bundles": [...]}`, oldest first) for you to look
@@ -440,6 +486,13 @@ that, may still ask it, and the Worker refuses what it signs, so a link then nee
 drawn players, or a councillor. Codes already issued keep the mode and `T` they were signed
 with. Register the first player keys at least 8 days before you switch: a player key gets its
 certificate only then (step 8), and until some have one, only councillors confirm.
+
+The rule is three of the M keys drawn for each code (M = max(20, 3% of the pool), "The
+formats"), not three of five: the addon asks five at a time, but the Worker takes any three drawn
+keys. While there are 20 player keys or fewer, every key is drawn for every code, so any three
+key holders from three accounts could confirm anyone: give the first player keys only to people
+you trust that far, or wait until the pool is large. `drawLimit` in `link-core.mjs` sets M (the
+addon follows the `T` each code carries).
 
 ## The guild check
 
@@ -470,25 +523,29 @@ the two apart later or switch the policy without losing track.
 
 ## The API
 
-All JSON. The page's calls carry the session cookie; the tools' carry the admin token.
+All JSON. The page's call carries the player's Discord sign-in in its body (and your site token,
+if any, in `Authorization`); the tools' carry the admin token. The paths are the reference
+Worker's: in your own Worker they are wherever your routes put them (the page takes `/proof`'s
+whole address in `config.js`).
 
 | Route | Who | Body | Answer |
 |---|---|---|---|
-| `GET /api/link/me` | page | | `200 {"user": {id, username, global_name, avatar}}`, or `401 {"user": null}` |
-| `POST /api/link/code` | page | `{}` | `200 {"token", "command", "exp", "mode"}`; `401` not signed in, `429 {"reason": "limit"}`, `400 {"reason": "username"}` |
-| `POST /api/link/submit` | page | `{"bundle": "OLB5~..."}` | `200 {"status", "reason", "message", "R", "characters"}`; `429` after 10 an hour |
-| `POST /api/link/inbox` | watcher tool | `{"bundles": [{"R", "bundle", "from", "t"}]}` (500 at most) | `200 {"results": [{"R", "status", "reason", "message"}]}` |
+| `POST /proof` (`handleProof`; the reference Worker's `/api/link/proof`) | the page, from `LINK_ORIGIN` | `{"text": "OLB5~... or its address", "discordToken": "<access token>"}` | `200 {"status", "reason", "message", "R", "username", "character", "guild", "faction", "guildCheck", "guildKnown", "characters"}`; `401 {"reason": "login" \| "site"}`, `403 {"reason": "origin"}`, `400 {"reason": "format"}` (no text or token), `429 {"reason": "limit"}` after 10 an hour; `OPTIONS`: `204` with the CORS headers for `LINK_ORIGIN` only |
+| `POST /api/link/inbox` (`handleInbox`) | watcher tool | `{"bundles": [{"R", "bundle", "from", "t"}]}` (500 at most) | `200 {"results": [{"R", "status", "reason", "message"}]}` |
+| `POST /api/link/keys` (`handleKeys`) | you | `{"key_id", "public_key", "owner_discord_id", "owner_username", "character", "kind", "bootstrap", "days", "replace"}`, or `{"key_id", "renew": true, "days"}`, or `{"key_id", "revoke": true}`, or `{"character", "revoke": true}` | `200 {"status": "ok", "key_id", "kind", "character", "public_key", "cert", "cert_exp", "cert_from", "command", "replaced"}`: a new player key's `cert`, `cert_exp` and `command` are `null` (with a `message`) until `cert_from`, when `renew` gives them (`{"status": "ok", "revoked": true}` for a revoke, with `"council": true` and the councillor's `character`, once seen, for a key of the council authority's; `{"status": "ok", "character", "revoked": true, "keys", "council_keys"}` for a character: the registered keys it revoked, the authority's keys seen for it); `409 {"reason": "key-id-used" \| "public-key-used" \| "owner-has-key" \| "character-not-linked" \| "revoked" \| "replaced" \| "too-early"}` (`too-early` with `cert_from`), `404 {"reason": "unknown-key"}`, `400 {"reason": "format"}` |
 | `POST /api/link/bot-code` | gateway bot | `{"id", "username"}` | `200 {"token", "command", "exp", "mode", "reply"}` |
-| `POST /api/link/keys` | you | `{"key_id", "public_key", "owner_discord_id", "owner_username", "character", "kind", "bootstrap", "days", "replace"}`, or `{"key_id", "renew": true, "days"}`, or `{"key_id", "revoke": true}`, or `{"character", "revoke": true}` | `200 {"status": "ok", "key_id", "kind", "character", "public_key", "cert", "cert_exp", "cert_from", "command", "replaced"}`: a new player key's `cert`, `cert_exp` and `command` are `null` (with a `message`) until `cert_from`, when `renew` gives them (`{"status": "ok", "revoked": true}` for a revoke, with `"council": true` and the councillor's `character`, once seen, for a key of the council authority's; `{"status": "ok", "character", "revoked": true, "keys", "council_keys"}` for a character: the registered keys it revoked, the authority's keys seen for it); `409 {"reason": "key-id-used" \| "public-key-used" \| "owner-has-key" \| "character-not-linked" \| "revoked" \| "replaced" \| "too-early"}` (`too-early` with `cert_from`), `404 {"reason": "unknown-key"}`, `400 {"reason": "format"}` |
-| `POST /api/discord/interactions` | Discord | an interaction | `PING`, or `/link` answered ephemerally |
+| `POST /api/discord/interactions` | Discord | an interaction | `PING`, or `/verify` answered ephemerally |
+| `GET /api/link/me`, `POST /api/link/code`, `POST /api/link/submit` | a same-site page only (step 4) | as `/proof`, with your login's cookie and `{"bundle"}` | the same answers |
 
 `status` is `linked` (reason `linked`, or `already` when that link had already counted),
 `rejected` (reason `format`, `unknown-code`, `other-user`, `tag`, `code-used`, `expired`,
-`not-enough`, `guild-unverified`, `not-in-server`) or `error` (`discord`, `server`: nothing was
-used, try again). The page shows each one in English or Portuguese with what to do next.
+`not-enough`, `guild-unverified`, `not-in-server`: the code stays unused) or `error` (`login`,
+`origin`, `site`, `limit`, `discord`, `server`: nothing was used, try again). `PROOF_REASONS` in
+`link-core.mjs` lists them, and the page shows each one in English or Portuguese with what to do
+next.
 
-The page's four calls live in `web/public/backend.js`: `me()`, `code()`, `submit(bundle)` and
-`loginUrl()`. Change them there if your routes differ.
+The page's request lives in `web/public/backend.js` (`proofRequest`), its settings in
+`web/public/config.js`.
 
 ## The formats
 
@@ -538,10 +595,11 @@ The page's four calls live in `web/public/backend.js`: `me()`, `code()`, `submit
 
 ## What the Worker checks
 
-For every bundle, from the page or the inbox:
+For every bundle, from the page or the inbox (`checkProof` reads, `acceptProof` then links):
 
 1. It is well formed (the rules above; the page and the addon read exactly the same).
-2. The code `R` exists. From the page, it belongs to the signed-in account; from the inbox, the
+2. The code `R` exists. From the page, it belongs to the account the player's Discord sign-in
+   names (checked with Discord, step 4; else `other-user`); from the inbox, the
    account is the code's owner. The tag is the one made from that code's own token and the
    bundle's requester (else `tag`: whoever saw `R` in a QR code cannot use it for another
    character). The code is unused (a link that already counted answers `already`).
@@ -553,9 +611,10 @@ For every bundle, from the page or the inbox:
 4. For each proof, its key: a key registered here, not revoked, whose certificate (the one the
    proof carries) names its public key, its tier and the confirming character as registered; or
    a High Councillor's key the council authority certified (the certificate checks with
-   `LINK_CA_PUBLIC`, tier `c`, the id the key's hash, valid when the proof was signed), not on the
-   revocation list, not signed (its end less a year) at or before a revocation of its character,
-   and not recorded for another character. Then: its owner is not the code's account;
+   `LINK_CA_PUBLIC`, tier `c`, the id the key's hash, valid when the proof was signed), for a
+   character on `LINK_COUNCIL_CHARACTERS` when you set that list, not on the revocation list, not
+   signed (its end less a year) at or before a revocation of its character, and not recorded for
+   another character. Then: its owner is not the code's account;
    the Worker rebuilds the exact `OLY4` text and verifies the Ed25519 signature with the key
    (WebCrypto: a non-canonical signature fails); the confirmer is one of the key owner's linked
    characters (except bootstrap and council authority keys: their certificate names the
@@ -568,13 +627,13 @@ For every bundle, from the page or the inbox:
    owner's Discord account at least 30 days old (read from the Discord id).
 6. With `LINK_GUILD_POLICY = "verified"`, one of the proofs that count (a councillor's, or a
    drawn player's in mode `a`) checked the guild (`r` or `w`), else `guild-unverified`.
-7. Then it claims the code (so two deliveries cannot both count), gives `ROLE_ID` in
-   `GUILD_ID`, and records the character in `members`, moving it if it was linked to another
-   account (which loses the role when it has no character left), with the proofs that counted
-   (`used`) and the council authority's keys whose proofs checked (`council_keys`): nothing is
-   written for a proof before the whole link is accepted. If Discord refuses or cannot
-   be reached (the player is not in the server, Discord is down, the network fails), or D1
-   cannot record the link, the code is released and nothing is recorded, so the same link
+7. Then it claims the code (so two deliveries cannot both count), calls your `promote()` to give
+   the role, and records the character in `members`, moving it if it was linked to another
+   account (your `demote()` takes the role from that account when it has no character left),
+   with the proofs that counted (`used`) and the council authority's keys whose proofs checked
+   (`council_keys`): nothing is written for a proof before the whole link is accepted. If
+   `promote()` fails (the player is not in the server, Discord is down, the network fails), or
+   D1 cannot record the link, the code is released and nothing is recorded, so the same link
    works on the next try.
 
 Why the draw and these limits stop anyone packing the random pool: R comes from the backend's
@@ -587,9 +646,10 @@ least 7 days old, accounts at least 30 days old and signatures within 5 minutes 
 share slow and costly to build and stop a few friends from signing for each other at leisure,
 while councillors-only mode keeps the pool out of play until it is large.
 
-Limits and logs: 3 codes per Discord account a day (a reload gets the same unused code back);
-the page may submit 10 times an hour per account; every bundle received is logged in
-`inbox_uploads`; the admin token is compared in constant time; a Worker whose
+Limits and logs: 3 codes per Discord account a day (`/verify` again gets the same unused code
+back); the page may submit 10 times an hour per account; every bundle received is logged in
+`inbox_uploads` (never the Discord token); the admin and site tokens are compared in constant
+time; a Worker whose
 `LINK_BACKEND_SEED` and `LINK_BACKEND_PUBLIC` do not match refuses to issue codes and
 certificates.
 
@@ -610,8 +670,8 @@ every check must refuse.
 To check your Worker by hand: insert the `codes` (with their `draw_t` and `token`) and `keys`
 below (for the players' bundle, also each confirmer character in `members` under its key's
 owner), set `LINK_CA_PUBLIC` to `council_authority.public_hex` (its key is never inserted), set
-the Worker's clock between the proofs' `issued` and `exp`, and `acceptBundle` answers `linked`
-for each bundle. `tag_of` is the text whose SHA-256 starts with the tag;
+the Worker's clock between the proofs' `issued` and `exp`, and `checkProof` answers `ok` for
+each bundle (`acceptProof` then links it; `web/test/link-core.test.mjs` does exactly this). `tag_of` is the text whose SHA-256 starts with the tag;
 `draw.thresholds` gives `T` for pools of keys `pool0000`, `pool0001`... of several sizes.
 
 <!-- block: vectors -->
@@ -949,37 +1009,48 @@ CREATE TABLE IF NOT EXISTS inbox_uploads (
 CREATE INDEX IF NOT EXISTS uploads_by_user ON inbox_uploads (discord_id, uploaded);
 ```
 
-## The reference Worker
+## The core
 
-`web/worker/link-worker.js`, the whole module. The `ADAPT` comment marks the one function to
-connect to your login (step 4).
+`web/worker/link-core.mjs`, the whole module: every check, and the functions your routes call
+(step 3).
 
-<!-- block: web/worker/link-worker.js -->
+<!-- block: web/worker/link-core.mjs -->
 ```js
-// Olympus Link: the reference Cloudflare Worker (D1 + Discord). web/WORKER.md explains every
-// part; the tests in web/test/worker.test.mjs run this exact file against the shared vectors.
+// Olympus Link: the core, for the Olympus bot's Worker. Everything the bot needs to issue codes,
+// check the proofs the game makes, give the role through your own promote(), and keep the
+// confirmers' keys, as plain functions over a D1 database. No framework, no npm package: WebCrypto
+// (Ed25519, SHA-256) and fetch only, so it runs on Cloudflare Workers and on Node 20 or newer.
+// web/FERN.md says how to wire it in, web/WORKER.md explains every check, web/worker/link-worker.js
+// is a complete Worker built on it, and web/test runs all of it against the shared vectors.
 //
-// Bindings and settings (wrangler.toml / dashboard):
-//   DB                   D1 database with web/worker/schema.sql
-//   LINK_BACKEND_SEED    secret: the backend's Ed25519 seed, base64url (scripts/link-keys.py backend)
-//   LINK_BACKEND_PUBLIC  var: its public key, 64 hex (the same one is in the addon's ns.LINK_BACKEND_KEYS)
-//   LINK_CA_PUBLIC       var: the council authority's public key, 64 hex (scripts/link-keys.py ca; the same
-//                        one is in the addon's ns.LINK_CA_KEYS; two, comma-separated, while it changes):
-//                        the author's client certifies High Councillors' keys with it, and this Worker
-//                        takes those keys without registering them
-//   LINK_MODE            var: "c" councillors only (launch), "a" councillors or three drawn players
-//   LINK_GUILD_POLICY    var: "verified" (the default): a link needs a confirmer who checked the
-//                        guild in game (its roster or a recent /who); "claimed": the guild is taken as named
-//   LINK_ORIGIN          var: the page's origin, e.g. "https://example.org" (checked on the page's POSTs)
-//   LINK_ADMIN_TOKEN     secret: bearer token of your tools: the watcher inbox (/inbox), a gateway
-//                        bot (/bot-code) and the confirmer keys (/keys)
-//   DISCORD_BOT_TOKEN    secret: the bot that gives the role (Manage Roles, above ROLE_ID)
-//   DISCORD_PUBLIC_KEY   var: the application's public key, for the /link slash command over HTTP
-//   GUILD_ID, ROLE_ID    vars: the Olympus server and the role linked members get
+// What it reads from `env` (your Worker's bindings):
+//   LINK_DB              the D1 database with web/worker/schema.sql (DB when there is no LINK_DB)
+//   LINK_BACKEND_SEED    secret: your bot's Ed25519 seed, base64url (scripts/link-keys.py backend)
+//   LINK_BACKEND_PUBLIC  its public key, 64 hex: the addon holds the same one (ns.LINK_BACKEND_KEYS)
+//   LINK_CA_PUBLIC       the council authority's public key, 64 hex (two, comma-separated, while it
+//                        changes): the addon author's client certifies High Councillors' keys with it
+//   LINK_COUNCIL_CHARACTERS  optional: the High Councillors' characters you accept ("Name-Realm",
+//                        comma-separated). Set, a council authority certificate for any other
+//                        character counts for nothing (set but empty: none counts); unset, every
+//                        character the authority certifies is a councillor here
+//   LINK_MODE            "c" councillors only (launch), "a" one councillor or three drawn players
+//   LINK_GUILD_POLICY    "verified" (the default) or "claimed" (web/WORKER.md, "The guild check")
+//   LINK_ORIGIN          the page's origin, "https://dnl-gentile.github.io" (CORS of POST /proof)
+//   DISCORD_CLIENT_ID    your Discord application's id: a sign-in the page sends must be for it
+//   LINK_SITE_TOKEN      optional: the token the page sends with POST /proof (a switch, not a secret)
+//   LINK_ADMIN_TOKEN     secret, 32 characters or more: your own tools' (watcher inbox, keys)
 //
-// Routes: GET /api/link/me, POST /api/link/code, POST /api/link/submit, POST /api/link/inbox,
-// POST /api/link/bot-code, POST /api/link/keys, POST /api/discord/interactions. Anything else
-// returns null from handleLink, so it can sit in front of an existing Worker's router.
+// The functions, by what they are for:
+//   codes      issueCode(env, user) -> { ok, token, command, reply }        (your /verify)
+//   proofs     checkProof(env, text, { discordId })   reads only: the verdict
+//              acceptProof(env, text, { discordId, promote, demote })   checks, claims the code,
+//              calls your promote(discordId), records the link (and frees the code if promote fails)
+//              handleProof(request, env, { promote, demote })   the whole POST /proof, CORS included
+//   watcher    acceptInbox(env, body, { promote }) / handleInbox(request, env, { promote })
+//   keys       manageKeys(env, body) / handleKeys(request, env), registerKey, renewKey, revokeKey,
+//              revokeCharacter, councilCharacters(env)
+//   people     discordUser(accessToken, { clientId }), forgetUser(env, discordId)
+//   answers    httpStatus(answer), respond(answer, headers), corsHeaders(request, env)
 
 export const LINK = {
 	TOKEN_LIFE: 24 * 3600, // a code works for a day...
@@ -1001,6 +1072,27 @@ export const LINK = {
 	// ending at exp was signed at exp - this, which is how a character's revocation finds the older ones
 };
 
+// Every reason POST /proof can answer (web/public/i18n.js has words for each, in both languages).
+export const PROOF_REASONS = [
+	'linked', // status "linked": done
+	'already', // status "linked": that link had counted before, nothing new
+	'format', // "rejected" from here on: the code stays unused
+	'unknown-code',
+	'other-user',
+	'tag',
+	'code-used',
+	'expired',
+	'not-enough',
+	'guild-unverified',
+	'not-in-server',
+	'login', // "error" from here on: nothing was used, the same link works again
+	'origin',
+	'site',
+	'limit',
+	'discord',
+	'server',
+];
+
 const R_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 const R_RE = /^[0-9A-HJKMNP-TV-Z]{10}$/;
 const USERNAME_RE = /^[a-z0-9_.]{2,32}$/;
@@ -1008,188 +1100,94 @@ const DISCORD_ID_RE = /^[0-9]{5,25}$/;
 const KEYID_RE = /^[a-z0-9]{6,16}$/;
 const NONCE_RE = /^[0-9a-f]{16}$/;
 const TAG_RE = /^[0-9a-f]{16}$/;
-const DRAW_RE = /^[0-9a-f]{8}$/;
 const ISSUED_RE = /^[1-9][0-9]{0,11}$/;
 const SIG_RE = /^[A-Za-z0-9_-]{86}$/;
 const PUBLIC_HEX_RE = /^[0-9a-f]{64}$/;
 const PUBLIC_B64_RE = /^[A-Za-z0-9_-]{43}$/;
+const ACCESS_TOKEN_RE = /^[A-Za-z0-9._~+/-]{10,256}={0,2}$/;
 const FORBIDDEN = /[|~;,\u0000-\u001f\u007f]/;
 const GV_RE = /^[rwc]$/; // how a confirmer checked the guild: r its own roster, w a recent /who, c claimed only
 const CHECKED = (gv) => gv === 'r' || gv === 'w';
+const GUILD_KNOWN = { r: 'roster', w: 'who', c: 'claimed' };
 const CA_KEYID_RE = /^[0-9a-f]{12}$/; // a council authority's key: the first 12 hex of SHA-256 of the key
 const MAX_PROOFS = 4;
 const MAX_BUNDLE_BYTES = 2400; // four proofs, each with its certificate (the addon's Link.MAX_BUNDLE)
 const MAX_CERT_BYTES = 240; // a certificate fits one chat line: DV~1~<certificate> (the addon's Link.MAX_CERT)
 const NO_DRAW = '00000000'; // T of a mode "c" code: no player key is drawn
 const ALL_DRAWN = 'ffffffff'; // T when there are M player keys or fewer
+const DISCORD_API = 'https://discord.com/api/v10';
 
 const enc = new TextEncoder();
 const now = () => Math.floor(Date.now() / 1000);
+const database = (env) => env.LINK_DB || env.DB;
 
 // ---------------------------------------------------------------------------
-// Entry points
+// Answers: { ok, status, reason, message, ... }. status "rejected" (the link is refused, the code
+// stays unused) or "error" (nothing happened: try again); a success has ok: true.
 
-export default {
-	async fetch(request, env, ctx) {
-		return (await handleLink(request, env, ctx)) || new Response('Not found', { status: 404 });
-	},
+export function reject(reason, message, R) {
+	return { ok: false, status: 'rejected', reason, message, R: R || null };
+}
+
+export function failure(reason, message, extra = {}) {
+	return { ok: false, status: 'error', reason, message, ...extra };
+}
+
+const HTTP = {
+	format: 400,
+	username: 400,
+	auth: 401,
+	login: 401,
+	site: 401,
+	origin: 403,
+	'unknown-key': 404,
+	method: 405,
+	'key-id-used': 409,
+	'public-key-used': 409,
+	'owner-has-key': 409,
+	'character-not-linked': 409,
+	revoked: 409,
+	replaced: 409,
+	'too-early': 409,
+	limit: 429,
+	server: 500,
 };
 
-// ADAPT: the signed-in Discord user of this request, from YOUR login (the one your site
-// already has), as { id, username, global_name, avatar } - the fields of Discord's
-// GET /users/@me - or null when nobody is signed in. See web/WORKER.md, "Your login".
-export async function sessionUser(request, env) {
-	throw new Error('Olympus Link: connect sessionUser() to your Discord login (web/WORKER.md, "Your login")');
+// The HTTP status of an answer: 200 for anything but an error of the request itself (a refused or
+// failed link is a 200 with its reason, so the page reads it).
+export function httpStatus(answer) {
+	if (!answer || answer.status !== 'error') return 200;
+	return HTTP[answer.reason] || 200;
 }
 
-export async function handleLink(request, env, ctx, { getUser = sessionUser } = {}) {
-	const url = new URL(request.url);
-	const route = `${request.method} ${url.pathname.replace(/\/+$/, '')}`;
-	try {
-		switch (route) {
-			case 'GET /api/link/me':
-				return await routeMe(request, env, getUser);
-			case 'POST /api/link/code':
-				return await routeCode(request, env, getUser);
-			case 'POST /api/link/submit':
-				return await routeSubmit(request, env, getUser);
-			case 'POST /api/link/inbox':
-				return await routeInbox(request, env);
-			case 'POST /api/link/bot-code':
-				return await routeBotCode(request, env);
-			case 'POST /api/link/keys':
-				return await routeKeys(request, env);
-			case 'POST /api/discord/interactions':
-				return await routeInteractions(request, env);
-			default:
-				return null;
-		}
-	} catch (err) {
-		console.error('olympus-link', route, err && err.stack ? err.stack : err);
-		return json({ status: 'error', reason: 'server', message: 'Something went wrong on our side.' }, 500);
-	}
+// An answer as a JSON Response, with its HTTP status and extra headers (CORS, for the page).
+export function respond(answer, headers = {}, status = httpStatus(answer)) {
+	return new Response(JSON.stringify(answer), {
+		status,
+		headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...headers },
+	});
 }
 
 // ---------------------------------------------------------------------------
-// Routes
+// Codes: your /verify. The player pastes "/oly discord <token>" in the game; the addon checks the
+// token with your public key and shows "@username" before the player accepts.
+//   const code = await issueCode(env, { id: user.id, username: user.username });
+//   reply ephemerally with code.reply (it holds the command, or why there is none)
+// { ok: true, token, command, exp, mode, reply } or { ok: false, reason: 'login' | 'username' | 'limit', message, reply }.
 
-async function routeMe(request, env, getUser) {
-	const user = await getUser(request, env);
-	if (!user) return json({ user: null }, 401);
-	const { id, username, global_name = null, avatar = null } = user;
-	return json({ user: { id, username, global_name, avatar } });
-}
-
-async function routeCode(request, env, getUser) {
-	if (!sameOrigin(request, env)) return json({ status: 'error', reason: 'origin', message: 'Wrong origin.' }, 403);
-	const user = await getUser(request, env);
-	if (!user) return json({ status: 'error', reason: 'login', message: 'Sign in with Discord first.' }, 401);
-	const r = await issueCode(env, user, 'site');
-	if (r.error) return json({ status: 'error', reason: r.error, message: codeError(r.error) }, r.error === 'limit' ? 429 : 400);
-	return json({ token: r.token, command: `/oly discord ${r.token}`, exp: r.exp, mode: r.mode });
-}
-
-async function routeSubmit(request, env, getUser) {
-	if (!sameOrigin(request, env)) return json({ status: 'error', reason: 'origin', message: 'Wrong origin.' }, 403);
-	const user = await getUser(request, env);
-	if (!user) return json({ status: 'error', reason: 'login', message: 'Sign in with Discord first.' }, 401);
-	const body = await readJson(request, 8 * 1024);
-	if (!body || typeof body.bundle !== 'string') return json({ status: 'error', reason: 'format', message: 'No link in the request.' }, 400);
-	const t = now();
-	const recent = await env.DB.prepare("SELECT COUNT(*) AS n FROM inbox_uploads WHERE source = 'site' AND discord_id = ? AND uploaded > ?")
-		.bind(String(user.id), t - 3600)
-		.first();
-	if (recent && recent.n >= LINK.SUBMITS_PER_HOUR) {
-		return json({ status: 'error', reason: 'limit', message: 'Too many tries: wait a while and send it again.' }, 429);
-	}
-	const result = await acceptBundle(env, body.bundle.trim(), { userId: String(user.id), t });
-	await logUpload(env, 'site', body.bundle, result, { discordId: String(user.id), uploaded: t });
-	return json(result);
-}
-
-// The watcher tool: many bundles at once, from a High Councillor's inbox. The Discord user
-// comes from each code (codes.discord_id).
-async function routeInbox(request, env) {
-	if (!(await adminAuthorized(request, env))) return json({ status: 'error', reason: 'auth' }, 401);
-	const body = await readJson(request, 2 * 1024 * 1024);
-	const list = body && Array.isArray(body.bundles) ? body.bundles : null;
-	if (!list || list.length > LINK.MAX_BUNDLES) return json({ status: 'error', reason: 'format', message: `Send {"bundles": [...]} with at most ${LINK.MAX_BUNDLES}.` }, 400);
-	const results = [];
-	for (const item of list) {
-		const entry = item && typeof item === 'object' ? item : {};
-		const text = (typeof item === 'string' ? item : typeof entry.bundle === 'string' ? entry.bundle : '').trim();
-		const t = now();
-		const parsed = parseBundle(text);
-		let result;
-		try {
-			result =
-				parsed.ok && typeof entry.R === 'string' && entry.R !== parsed.bundle.R
-					? reject('format', 'The inbox key does not match the link.', parsed.bundle.R)
-					: await acceptBundle(env, text, { t });
-		} catch (err) {
-			// One link that fails on our side does not stop the others: this one is sent again later.
-			console.error('olympus-link: inbox entry', err && err.stack ? err.stack : err);
-			result = { status: 'error', reason: 'server', message: 'Something went wrong on our side: send it again.', R: parsed.ok ? parsed.bundle.R : null };
-		}
-		try {
-			await logUpload(env, 'watcher', text, result, {
-				from: typeof entry.from === 'string' ? entry.from.slice(0, 100) : null,
-				received: Number.isFinite(entry.t) ? Math.floor(entry.t) : null,
-				uploaded: t,
-			});
-		} catch (err) {
-			console.error('olympus-link: inbox log', err && err.stack ? err.stack : err);
-		}
-		results.push({ R: result.R || (typeof entry.R === 'string' ? entry.R : null), status: result.status, reason: result.reason, message: result.message });
-	}
-	return json({ results });
-}
-
-// For a bot that runs on the gateway (discord.js, discord.py...) instead of HTTP interactions:
-// it asks the Worker for the member's code and replies with it, ephemeral.
-async function routeBotCode(request, env) {
-	if (!(await adminAuthorized(request, env))) return json({ status: 'error', reason: 'auth' }, 401);
-	const body = await readJson(request, 4 * 1024);
-	if (!body || typeof body.id !== 'string' || typeof body.username !== 'string') return json({ status: 'error', reason: 'format' }, 400);
-	const r = await issueCode(env, { id: body.id, username: body.username }, 'discord');
-	if (r.error) return json({ status: 'error', reason: r.error, message: codeError(r.error) }, r.error === 'limit' ? 429 : 400);
-	return json({ token: r.token, command: `/oly discord ${r.token}`, exp: r.exp, mode: r.mode, reply: codeReply(r) });
-}
-
-// The /link slash command over HTTP interactions (Discord signs every request).
-async function routeInteractions(request, env) {
-	const sig = request.headers.get('X-Signature-Ed25519') || '';
-	const ts = request.headers.get('X-Signature-Timestamp') || '';
-	const body = await request.text();
-	if (!/^[0-9a-fA-F]{128}$/.test(sig) || !/^[0-9]{1,20}$/.test(ts)) return new Response('Bad request signature', { status: 401 });
-	if (!(await ed25519Verify(env.DISCORD_PUBLIC_KEY, hexToBytes(sig), enc.encode(ts + body)))) {
-		return new Response('Bad request signature', { status: 401 });
-	}
-	const i = JSON.parse(body);
-	if (i.type === 1) return json({ type: 1 }); // PING
-	if (i.type === 2 && i.data && i.data.name === 'link') {
-		const user = (i.member && i.member.user) || i.user;
-		const r = user ? await issueCode(env, user, 'discord') : { error: 'login' };
-		return json({ type: 4, data: { flags: 64, content: r.error ? codeError(r.error) : codeReply(r) } });
-	}
-	return json({ type: 4, data: { flags: 64, content: 'Unknown command.' } });
-}
-
-// ---------------------------------------------------------------------------
-// Codes
-
-export async function issueCode(env, user, source) {
+export async function issueCode(env, user, source = 'discord') {
 	const id = String(user && user.id);
 	const username = String(user && user.username);
-	if (!DISCORD_ID_RE.test(id)) return { error: 'login' };
-	if (!USERNAME_RE.test(username)) return { error: 'username' };
+	if (!DISCORD_ID_RE.test(id)) return codeFailure('login');
+	if (!USERNAME_RE.test(username)) return codeFailure('username');
+	const DB = database(env);
 	const t = now();
-	const open = await env.DB.prepare('SELECT token, exp, mode FROM codes WHERE discord_id = ? AND username = ? AND used IS NULL AND exp > ? ORDER BY created DESC LIMIT 1')
+	const open = await DB.prepare('SELECT token, exp, mode FROM codes WHERE discord_id = ? AND username = ? AND used IS NULL AND exp > ? ORDER BY created DESC LIMIT 1')
 		.bind(id, username, t + LINK.REUSE_LEFT)
 		.first();
-	if (open) return { token: open.token, exp: open.exp, mode: open.mode };
-	const count = await env.DB.prepare('SELECT COUNT(*) AS n FROM codes WHERE discord_id = ? AND created > ?').bind(id, t - 86400).first();
-	if (count && count.n >= LINK.CODES_PER_DAY) return { error: 'limit' };
+	if (open) return codeSuccess({ token: open.token, exp: open.exp, mode: open.mode });
+	const count = await DB.prepare('SELECT COUNT(*) AS n FROM codes WHERE discord_id = ? AND created > ?').bind(id, t - 86400).first();
+	if (count && count.n >= LINK.CODES_PER_DAY) return codeFailure('limit');
 	const mode = env.LINK_MODE === 'a' ? 'a' : 'c';
 	const exp = t + LINK.TOKEN_LIFE;
 	const pool = mode === 'a' ? await drawPool(env, t) : null;
@@ -1199,10 +1197,10 @@ export async function issueCode(env, user, source) {
 		const payload = `OLC2.${R}.${username}.${exp}.${mode}.${T}`;
 		const token = `${payload}.${await backendSign(env, payload)}`;
 		try {
-			await env.DB.prepare('INSERT INTO codes (r, discord_id, username, mode, draw_t, created, exp, token, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+			await DB.prepare('INSERT INTO codes (r, discord_id, username, mode, draw_t, created, exp, token, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
 				.bind(R, id, username, mode, T, t, exp, token, source)
 				.run();
-			return { token, exp, mode, R, T };
+			return codeSuccess({ token, exp, mode, R, T });
 		} catch (err) {
 			if (!/unique|constraint/i.test(String(err && err.message))) throw err; // an R taken: draw again
 		}
@@ -1210,12 +1208,24 @@ export async function issueCode(env, user, source) {
 	throw new Error('could not draw a free code');
 }
 
+function codeSuccess(r) {
+	const out = { ok: true, status: 'ok', ...r, command: `/oly discord ${r.token}` };
+	out.reply = codeReply(out);
+	return out;
+}
+
+function codeFailure(reason) {
+	const message = codeError(reason);
+	return { ok: false, status: 'error', reason, message, reply: message };
+}
+
 function randomR() {
 	const bytes = crypto.getRandomValues(new Uint8Array(10));
 	return Array.from(bytes, (b) => R_ALPHABET[b & 31]).join(''); // 256 = 8 * 32: no bias
 }
 
-function codeReply(r) {
+// The reply to /verify, for the player's eyes only (an ephemeral message).
+export function codeReply(r) {
 	const hours = Math.max(1, Math.round((r.exp - now()) / 3600));
 	return [
 		'Your Olympus Link code. Paste this line in the WoW chat, press Enter, then click Accept:',
@@ -1226,7 +1236,7 @@ function codeReply(r) {
 	].join('\n');
 }
 
-function codeError(reason) {
+export function codeError(reason) {
 	if (reason === 'limit') return 'You already got 3 codes today: use the last one, or try again tomorrow.';
 	if (reason === 'username') return 'Your Discord username cannot be used in a code. Change it to the new style (lowercase, no #1234) and try again.';
 	return 'Sign in with Discord first.';
@@ -1256,7 +1266,8 @@ export function drawLimit(activePlayerKeys) {
 // enough and from an old enough Discord account (the ones that could count for a new code).
 export async function drawPool(env, t) {
 	const rows = (
-		await env.DB.prepare("SELECT key_id, owner_discord_id, created FROM keys WHERE kind = 'p' AND revoked = 0 AND replaced_at IS NULL AND cert_exp > ?")
+		await database(env)
+			.prepare("SELECT key_id, owner_discord_id, created FROM keys WHERE kind = 'p' AND revoked = 0 AND replaced_at IS NULL AND cert_exp > ?")
 			.bind(t)
 			.all()
 	).results || [];
@@ -1297,11 +1308,32 @@ export function certFrom(key) {
 }
 
 // ---------------------------------------------------------------------------
-// Bundles
+// Links (bundles): what the game's QR code, copy box and SavedVariables carry.
+
+// The link in whatever the page read: the bundle itself (OLB5~...), the address of the QR code or
+// of the game's copy box (<page>#b=<bundle, percent-encoded>), or that fragment alone. Null when
+// there is none. (The page reads Olympus.lua itself and sends only the link the player picked.)
+export function proofText(input) {
+	if (typeof input !== 'string') return null;
+	let s = input.trim();
+	const at = s.indexOf('#b=');
+	if (at >= 0) s = s.slice(at + 3);
+	else if (s.startsWith('b=')) s = s.slice(2);
+	s = s.split('&')[0].trim();
+	if (/%[0-9A-Fa-f]{2}/.test(s) || s.includes('+')) {
+		try {
+			s = decodeURIComponent(s.replace(/\+/g, ' '));
+		} catch {
+			return null;
+		}
+	}
+	s = s.trim();
+	return s.startsWith('OLB5~') ? s : null;
+}
 
 // What the addon's Link.Parse reads (Olympus/Link.lua; the page's web/public/core.js reads the
-// same). Whether the proofs count is acceptBundle's call: a key or owner is counted once. Each
-// proof carries its key's certificate for its confirmer: <public key>,<tier>,<cert exp>,<cert sig>.
+// same). Whether the proofs count is the check's call below: a key or owner is counted once.
+// Each proof carries its key's certificate for its confirmer: <public key>,<tier>,<cert exp>,<cert sig>.
 export function parseBundle(text) {
 	if (typeof text !== 'string' || !text.startsWith('OLB5~')) return { ok: false, error: 'prefix' };
 	if (enc.encode(text).length > MAX_BUNDLE_BYTES) return { ok: false, error: 'size' };
@@ -1340,6 +1372,7 @@ function validCharacter(s) {
 	return field(s, 64) && /^[^-].*-[^- ]+$/s.test(s);
 }
 
+// The exact text a confirmer's addon signed for one proof.
 export function signedMessage(b, p) {
 	return ['OLY4', b.requester, b.guild, p.gv, b.faction, b.nonce, b.R, b.tag, p.issued, p.keyId, p.confirmer].join('~');
 }
@@ -1360,28 +1393,48 @@ export function guildPolicy(env) {
 	return env.LINK_GUILD_POLICY === 'claimed' ? 'claimed' : 'verified';
 }
 
-// The whole check. Returns { status: 'linked' | 'rejected' | 'error', reason, message, R, characters }.
-// opts.userId: the signed-in user, who must own the code (the page); absent for the watcher.
-export async function acceptBundle(env, text, opts = {}) {
+// ---------------------------------------------------------------------------
+// The check
+
+// The verdict on a link, reading only: nothing is written, nobody gets a role. opts.discordId: the
+// signed-in Discord account, who must own the code (the page's POST /proof); leave it out for the
+// watcher's inbox (the code's owner is the one linked). The link may come as the bundle, the QR
+// code's address, or its fragment (proofText). Either
+//   { ok: true, already, R, discordId, username, character, guild, faction, guildCheck, guildKnown,
+//     by, confirmers, message }
+// (guildCheck "r" the guild's roster, "w" a /who, "c" claimed; guildKnown the same in words; by
+// "councillor" or "players"; already: this exact link counted before, nothing more to do), or a
+// refusal { ok: false, status: 'rejected', reason, message, R } (PROOF_REASONS).
+export async function checkProof(env, text, opts = {}) {
+	return (await examine(env, text, opts)).verdict;
+}
+
+async function examine(env, input, opts = {}) {
 	const t = opts.t || now();
+	const DB = database(env);
+	const text = proofText(input) || (typeof input === 'string' ? input.trim() : '');
 	const parsed = parseBundle(text);
-	if (!parsed.ok) return reject('format', `This is not a complete Olympus link (${parsed.error}).`);
+	if (!parsed.ok) return { verdict: reject('format', `This is not a complete Olympus link (${parsed.error}).`) };
 	const b = parsed.bundle;
-	const code = await env.DB.prepare('SELECT * FROM codes WHERE r = ?').bind(b.R).first();
-	if (!code) return reject('unknown-code', 'This link was made with a code the bot never issued.', b.R);
-	if (opts.userId && code.discord_id !== opts.userId) return reject('other-user', 'This link was made with a code of another Discord account.', b.R);
+	const code = await DB.prepare('SELECT * FROM codes WHERE r = ?').bind(b.R).first();
+	if (!code) return { verdict: reject('unknown-code', 'This link was made with a code the bot never issued.', b.R) };
+	const userId = opts.discordId === undefined || opts.discordId === null ? null : String(opts.discordId);
+	if (userId && code.discord_id !== userId) return { verdict: reject('other-user', 'This link was made with a code of another Discord account.', b.R) };
 	if (b.tag !== (await linkTag(tokenSig(code.token), b.requester))) {
-		return reject('tag', 'This link was not made by the player who typed this code in the game.', b.R);
+		return { verdict: reject('tag', 'This link was not made by the player who typed this code in the game.', b.R) };
 	}
 	if (code.used !== null && code.used !== undefined) {
-		const same = await env.DB.prepare('SELECT 1 AS x FROM members WHERE character = ? AND discord_id = ? AND r = ?').bind(b.requester, code.discord_id, b.R).first();
-		if (same) return { status: 'linked', reason: 'already', message: `${b.requester} is already linked.`, R: b.R, characters: await charactersOf(env, code.discord_id) };
-		return reject('code-used', 'This code was already used.', b.R);
+		const same = await DB.prepare('SELECT guild, gv, faction FROM members WHERE character = ? AND discord_id = ? AND r = ?').bind(b.requester, code.discord_id, b.R).first();
+		if (same) {
+			const verdict = linkVerdict(code, b, same.gv, [], `${b.requester} is already linked.`);
+			return { verdict: { ...verdict, already: true, guild: same.guild, faction: same.faction, by: null }, b, code };
+		}
+		return { verdict: reject('code-used', 'This code was already used.', b.R) };
 	}
-	if (t > code.exp + LINK.DELIVERY_GRACE) return reject('expired', 'This code expired more than 7 days ago.', b.R);
+	if (t > code.exp + LINK.DELIVERY_GRACE) return { verdict: reject('expired', 'This code expired more than 7 days ago.', b.R) };
 
 	const checks = [];
-	for (const p of b.proofs) checks.push(await checkProof(env, b, p, code, t));
+	for (const p of b.proofs) checks.push(await checkConfirmation(env, b, p, code, t));
 	const valid = checks.filter((c) => c.ok);
 	let why = checks.filter((c) => !c.ok).map((c) => `${c.proof.keyId}: ${c.why}`);
 	// Councillors: one is enough (one that checked the guild is recorded first). Every
@@ -1399,64 +1452,133 @@ export async function acceptBundle(env, text, opts = {}) {
 	}
 	if (!counted) {
 		const need = code.mode === 'a' ? `one councillor or ${LINK.PLAYERS_NEEDED} drawn players` : 'one councillor';
-		return reject('not-enough', `Not enough valid confirmations (needs ${need}).${why.length ? ` ${why.join('; ')}.` : ''}`, b.R);
+		return { verdict: reject('not-enough', `Not enough valid confirmations (needs ${need}).${why.length ? ` ${why.join('; ')}.` : ''}`, b.R) };
 	}
 	const checked = vouching.find((c) => CHECKED(c.proof.gv));
 	const gv = checked ? checked.proof.gv : 'c';
 	if (!checked && guildPolicy(env) === 'verified') {
-		return reject('guild-unverified', `None of the confirmations checked ${b.guild} in game (a confirmer of that guild with its roster, or one who saw the player in it in a /who).`, b.R);
+		return {
+			verdict: reject('guild-unverified', `None of the confirmations checked ${b.guild} in game (a confirmer of that guild with its roster, or one who saw the player in it in a /who).`, b.R),
+		};
+	}
+	const verdict = linkVerdict(code, b, gv, counted, `${b.requester} can be linked to @${code.username}.`);
+	return { verdict, b, code, counted, valid, gv };
+}
+
+function linkVerdict(code, b, gv, counted, message) {
+	return {
+		ok: true,
+		status: 'ok',
+		already: false,
+		R: b.R,
+		discordId: code.discord_id,
+		username: code.username,
+		character: b.requester,
+		guild: b.guild,
+		faction: b.faction,
+		guildCheck: gv,
+		guildKnown: GUILD_KNOWN[gv] || 'claimed',
+		by: counted.length ? (counted[0].key.kind === 'c' ? 'councillor' : 'players') : null,
+		confirmers: counted.map((c) => c.proof.confirmer),
+		message,
+	};
+}
+
+// The check, then the link: claims the code (two deliveries of the same link may race), calls
+// promote(discordId, verdict) to give the role, then records the character. When promote fails,
+// or the record does, the code is freed again, so the same link works on the next try.
+//   promote(discordId, verdict): yours. Resolve (with nothing, true or { ok: true }) when the role is
+//     given; throw, or return false or { ok: false }, when it is not ({ ok: false, reason:
+//     'not-in-server' } when the member is not in the server: the player is told to join first).
+//   demote(discordId): optional. Called when the character was linked to another account that has
+//     no other linked character left: take that account's role away. Its errors are only logged.
+// Answers { ok, status: 'linked' | 'rejected' | 'error', reason, message, R, and for a link:
+// discordId, username, character, guild, faction, guildCheck, guildKnown, characters }.
+export async function acceptProof(env, text, opts = {}) {
+	const { promote, demote } = opts;
+	if (typeof promote !== 'function') throw new TypeError('Olympus Link: acceptProof needs promote(discordId), your function that gives the role');
+	const t = opts.t || now();
+	const DB = database(env);
+	const x = await examine(env, text, { discordId: opts.discordId, t });
+	const v = x.verdict;
+	if (!v.ok) return v;
+	const { b, code } = x;
+	if (v.already) {
+		return { ...linkedAnswer(v, 'already', v.message), characters: await charactersOf(env, code.discord_id) };
 	}
 
 	// Claim the code first (two deliveries of the same link may race), then the role. Anything
 	// that fails after the claim releases it, so the same link works on the next try.
-	const claim = await env.DB.prepare('UPDATE codes SET used = ? WHERE r = ? AND used IS NULL').bind(t, b.R).run();
+	const claim = await DB.prepare('UPDATE codes SET used = ? WHERE r = ? AND used IS NULL').bind(t, b.R).run();
 	if (!claim.meta || claim.meta.changes !== 1) return reject('code-used', 'This code was already used.', b.R);
 	const release = async () => {
 		try {
-			await env.DB.prepare('UPDATE codes SET used = NULL WHERE r = ? AND used = ?').bind(b.R, t).run();
+			await DB.prepare('UPDATE codes SET used = NULL WHERE r = ? AND used = ?').bind(b.R, t).run();
 		} catch (err) {
 			console.error('olympus-link: could not release code', b.R, err && err.stack ? err.stack : err);
 		}
 	};
-	const role = await discordRole(env, 'PUT', code.discord_id);
+	const role = await promoted(promote, code.discord_id, v);
 	if (!role.ok) {
 		await release();
 		if (role.reason === 'not-in-server') return reject('not-in-server', 'Join the Olympus Discord server first, then send the link again.', b.R);
-		return { status: 'error', reason: 'discord', message: 'Discord did not take the role change: try again in a minute.', R: b.R };
+		return failure('discord', 'Discord did not take the role change: try again in a minute.', { R: b.R });
 	}
 	let previous;
 	try {
-		previous = await env.DB.prepare('SELECT discord_id FROM members WHERE character = ?').bind(b.requester).first();
-		await env.DB.batch([
-			...counted.map((c) => env.DB.prepare('INSERT OR IGNORE INTO used (r, key_id, t) VALUES (?, ?, ?)').bind(b.R, c.proof.keyId, t)),
+		previous = await DB.prepare('SELECT discord_id FROM members WHERE character = ?').bind(b.requester).first();
+		await DB.batch([
+			...x.counted.map((c) => DB.prepare('INSERT OR IGNORE INTO used (r, key_id, t) VALUES (?, ?, ?)').bind(b.R, c.proof.keyId, t)),
 			// The council authority's keys whose proofs checked in this link: recorded now, not before.
-			...valid.filter((c) => c.key.council).map((c) => recordCouncilKey(env, c, t)),
-			env.DB.prepare(
+			...x.valid.filter((c) => c.key.council).map((c) => recordCouncilKey(DB, c, t)),
+			DB.prepare(
 				'INSERT INTO members (character, discord_id, guild, gv, faction, r, linked) VALUES (?, ?, ?, ?, ?, ?, ?) ' +
 					'ON CONFLICT(character) DO UPDATE SET discord_id = excluded.discord_id, guild = excluded.guild, gv = excluded.gv, faction = excluded.faction, r = excluded.r, linked = excluded.linked',
-			).bind(b.requester, code.discord_id, b.guild, gv, b.faction, b.R, t),
+			).bind(b.requester, code.discord_id, b.guild, x.gv, b.faction, b.R, t),
 		]);
 	} catch (err) {
 		console.error('olympus-link: could not record the link', b.R, err && err.stack ? err.stack : err);
 		await release();
-		return { status: 'error', reason: 'server', message: 'The link could not be recorded: send it again in a minute.', R: b.R };
+		return failure('server', 'The link could not be recorded: send it again in a minute.', { R: b.R });
 	}
-	if (previous && previous.discord_id !== code.discord_id) {
-		const left = await env.DB.prepare('SELECT COUNT(*) AS n FROM members WHERE discord_id = ?').bind(previous.discord_id).first();
-		if (!left || left.n === 0) await discordRole(env, 'DELETE', previous.discord_id); // the character moved away
+	if (previous && previous.discord_id !== code.discord_id && typeof demote === 'function') {
+		const left = await DB.prepare('SELECT COUNT(*) AS n FROM members WHERE discord_id = ?').bind(previous.discord_id).first();
+		if (!left || left.n === 0) {
+			// The character moved away, and the old account has no other.
+			try {
+				await demote(previous.discord_id);
+			} catch (err) {
+				console.error('olympus-link: demote failed for', previous.discord_id, err && err.stack ? err.stack : err);
+			}
+		}
 	}
-	return {
-		status: 'linked',
-		reason: 'linked',
-		message: `${b.requester} is now linked to @${code.username}.`,
-		R: b.R,
-		characters: await charactersOf(env, code.discord_id),
-	};
+	return { ...linkedAnswer(v, 'linked', `${b.requester} is now linked to @${code.username}.`), characters: await charactersOf(env, code.discord_id) };
+}
+
+function linkedAnswer(v, reason, message) {
+	const { discordId, username, character, guild, faction, guildCheck, guildKnown, R } = v;
+	return { ok: true, status: 'linked', reason, message, R, discordId, username, character, guild, faction, guildCheck, guildKnown };
+}
+
+// promote()'s outcome as { ok } or { ok: false, reason }: it may resolve with nothing, a
+// boolean or { ok, reason }, or throw.
+async function promoted(promote, discordId, verdict) {
+	let r;
+	try {
+		r = await promote(discordId, verdict);
+	} catch (err) {
+		console.error('olympus-link: promote failed for', discordId, err && err.stack ? err.stack : err);
+		return { ok: false, reason: err && err.reason === 'not-in-server' ? 'not-in-server' : 'discord' };
+	}
+	if (r === false) return { ok: false, reason: 'discord' };
+	if (r && typeof r === 'object' && r.ok === false) return { ok: false, reason: r.reason === 'not-in-server' ? 'not-in-server' : 'discord' };
+	return { ok: true };
 }
 
 // One proof, checked whole (its key, time, signature and who confirms), reading only:
 // { ok, proof, key } or { ok: false, proof, why }.
-async function checkProof(env, b, p, code, t) {
+async function checkConfirmation(env, b, p, code, t) {
+	const DB = database(env);
 	const bad = (why) => ({ ok: false, proof: p, why });
 	const found = await proofKey(env, p);
 	if (found.why) return bad(found.why);
@@ -1466,34 +1588,36 @@ async function checkProof(env, b, p, code, t) {
 	if (p.issued > t + LINK.CLOCK_SKEW) return bad('signed in the future');
 	if (!(await ed25519Verify(key.public_key, b64urlDecode(p.sig), enc.encode(signedMessage(b, p))))) return bad('bad signature');
 	if (!key.council && !(key.kind === 'c' && key.bootstrap)) {
-		const mine = await env.DB.prepare('SELECT 1 AS x FROM members WHERE character = ? AND discord_id = ?').bind(p.confirmer, key.owner_discord_id).first();
+		const mine = await DB.prepare('SELECT 1 AS x FROM members WHERE character = ? AND discord_id = ?').bind(p.confirmer, key.owner_discord_id).first();
 		if (!mine) return bad("the confirmer is not a linked character of the key's owner");
 	}
 	if (p.confirmer === b.requester) return bad('the confirmer is the requester');
 	if (key.owner_discord_id) {
-		const own = await env.DB.prepare('SELECT 1 AS x FROM members WHERE character = ? AND discord_id = ?').bind(b.requester, key.owner_discord_id).first();
+		const own = await DB.prepare('SELECT 1 AS x FROM members WHERE character = ? AND discord_id = ?').bind(b.requester, key.owner_discord_id).first();
 		if (own) return bad("the requester is the key owner's own character");
 	}
-	const reused = await env.DB.prepare('SELECT 1 AS x FROM used WHERE r = ? AND key_id = ?').bind(b.R, p.keyId).first();
+	const reused = await DB.prepare('SELECT 1 AS x FROM used WHERE r = ? AND key_id = ?').bind(b.R, p.keyId).first();
 	if (reused) return bad('already counted');
 	return { ok: true, proof: p, key };
 }
 
 // The key a proof is checked with: { key } or { why }. It only reads: nothing about a proof is
-// written before the whole link is accepted (acceptBundle). A key registered here (keys) is D1's:
+// written before the whole link is accepted (acceptProof). A key registered here (keys) is D1's:
 // the certificate the proof carries must name its public key, tier and character, and D1 says
 // whether it is revoked. A key this Worker never registered counts only as a High Councillor's
 // certified by the council authority (the author's client, LINK_CA_PUBLIC): the certificate the
 // proof carries is then checked here (tier c, the key's id the first 12 hex of SHA-256 of it,
-// valid when the proof was signed), the revocation lists can end it (revoked_keys by its id,
-// revoked_characters every certificate of a character signed before its revocation), and a key
-// already recorded for another character (council_keys, by the key itself) is refused. The
-// record is written with the first link it confirmed, once its signature checked: a certificate
-// for someone else's public key, carried with a signature nobody made, records nothing.
+// valid when the proof was signed), its character on LINK_COUNCIL_CHARACTERS when you set that
+// list, the revocation lists can end it (revoked_keys by its id, revoked_characters every
+// certificate of a character signed before its revocation), and a key already recorded for
+// another character (council_keys, by the key itself) is refused. The record is written with the
+// first link it confirmed, once its signature checked: a certificate for someone else's public
+// key, carried with a signature nobody made, records nothing.
 async function proofKey(env, p) {
+	const DB = database(env);
 	const cert = proofCertificate(p);
 	if (!cert) return { why: 'a certificate that does not read' };
-	const row = await env.DB.prepare('SELECT * FROM keys WHERE key_id = ?').bind(p.keyId).first();
+	const row = await DB.prepare('SELECT * FROM keys WHERE key_id = ?').bind(p.keyId).first();
 	if (row) {
 		if (row.revoked) return { why: 'revoked key' };
 		if (row.public_key !== cert.publicHex || row.kind !== cert.tier || row.character !== cert.character) {
@@ -1502,17 +1626,20 @@ async function proofKey(env, p) {
 		return { key: row };
 	}
 	if (!CA_KEYID_RE.test(p.keyId)) return { why: 'unknown key' };
-	if (await env.DB.prepare('SELECT 1 AS x FROM revoked_keys WHERE key_id = ?').bind(p.keyId).first()) return { why: 'revoked key' };
+	if (await DB.prepare('SELECT 1 AS x FROM revoked_keys WHERE key_id = ?').bind(p.keyId).first()) return { why: 'revoked key' };
 	if (!(await councilCertificate(env, cert))) return { why: 'unknown key (not certified by the council authority)' };
 	if (p.issued >= cert.exp) return { why: 'signed after its certificate ended' };
+	// Your say over who is a councillor here: when you list them, the authority certifies no one else.
+	const listed = councilCharacters(env);
+	if (listed && !listed.has(cert.character)) return { why: 'its character is not on LINK_COUNCIL_CHARACTERS' };
 	// Its character revoked (a councillor off the list, or keys of theirs you can't name): every
 	// certificate for it signed before then, whatever key it names.
-	const gone = await env.DB.prepare('SELECT revoked_at FROM revoked_characters WHERE character = ?').bind(cert.character).first();
+	const gone = await DB.prepare('SELECT revoked_at FROM revoked_characters WHERE character = ?').bind(cert.character).first();
 	if (gone && cert.exp - LINK.CA_DAYS * 86400 <= gone.revoked_at) return { why: 'its character was revoked (a certificate from before)' };
-	const known = await env.DB.prepare('SELECT character FROM council_keys WHERE public_key = ?').bind(cert.publicHex).first();
+	const known = await DB.prepare('SELECT character FROM council_keys WHERE public_key = ?').bind(cert.publicHex).first();
 	if (known && known.character !== cert.character) return { why: 'a council key recorded for another character' };
 	// Its owner, when the councillor's character is linked: never confirms that account's codes or characters.
-	const owner = await env.DB.prepare('SELECT discord_id FROM members WHERE character = ?').bind(cert.character).first();
+	const owner = await DB.prepare('SELECT discord_id FROM members WHERE character = ?').bind(cert.character).first();
 	return {
 		key: {
 			key_id: p.keyId,
@@ -1530,8 +1657,8 @@ async function proofKey(env, p) {
 // The record of a council authority's key whose proof checked, written with the link it helped
 // accept: its character the first time, a later end of its certificate after (never another
 // character's: that stays the first one's).
-function recordCouncilKey(env, c, t) {
-	return env.DB.prepare(
+function recordCouncilKey(DB, c, t) {
+	return DB.prepare(
 		'INSERT INTO council_keys (public_key, key_id, character, cert_exp, first_seen) VALUES (?, ?, ?, ?, ?) ' +
 			'ON CONFLICT(public_key) DO UPDATE SET cert_exp = MAX(council_keys.cert_exp, excluded.cert_exp) WHERE council_keys.character = excluded.character',
 	).bind(c.key.public_key, c.key.key_id, c.key.character, c.key.cert_exp, t);
@@ -1565,25 +1692,187 @@ async function drawnPlayers(code, valid) {
 	return { picked: null, eligible, why };
 }
 
-async function charactersOf(env, discordId) {
-	const rows = (await env.DB.prepare('SELECT character FROM members WHERE discord_id = ? ORDER BY linked').bind(discordId).all()).results || [];
+// The characters linked to a Discord account, oldest first.
+export async function charactersOf(env, discordId) {
+	const rows = (await database(env).prepare('SELECT character FROM members WHERE discord_id = ? ORDER BY linked').bind(String(discordId)).all()).results || [];
 	return rows.map((r) => r.character);
 }
 
-function reject(reason, message, R) {
-	return { status: 'rejected', reason, message, R: R || null };
+// The page's limit: SUBMITS_PER_HOUR links an hour per Discord account (counted in inbox_uploads).
+export async function tooManyProofs(env, discordId, t = now()) {
+	const recent = await database(env)
+		.prepare("SELECT COUNT(*) AS n FROM inbox_uploads WHERE source = 'site' AND discord_id = ? AND uploaded > ?")
+		.bind(String(discordId), t - 3600)
+		.first();
+	return !!recent && recent.n >= LINK.SUBMITS_PER_HOUR;
 }
 
-async function logUpload(env, source, text, result, extra) {
-	let b = null;
-	const parsed = parseBundle(typeof text === 'string' ? text.trim() : '');
-	if (parsed.ok) b = parsed.bundle;
-	const code = b ? await env.DB.prepare('SELECT discord_id FROM codes WHERE r = ?').bind(b.R).first() : null;
-	await env.DB.prepare(
+// The audit trail: every link received, from the page ('site') or the watcher's inbox ('watcher'),
+// and what became of it. extra: { discordId, from, received, uploaded }.
+export async function logProof(env, source, text, result, extra = {}) {
+	const DB = database(env);
+	const parsed = parseBundle(typeof text === 'string' ? proofText(text) || text.trim() : '');
+	const b = parsed.ok ? parsed.bundle : null;
+	const code = b ? await DB.prepare('SELECT discord_id FROM codes WHERE r = ?').bind(b.R).first() : null;
+	await DB.prepare(
 		'INSERT INTO inbox_uploads (source, r, discord_id, requester, from_character, received, uploaded, status, reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
 	)
-		.bind(source, b ? b.R : null, extra.discordId || (code && code.discord_id) || null, b ? b.requester : null, extra.from || null, extra.received || null, extra.uploaded, result.status, result.reason || null)
+		.bind(source, b ? b.R : null, extra.discordId || (code && code.discord_id) || null, b ? b.requester : null, extra.from || null, extra.received || null, extra.uploaded || now(), result.status, result.reason || null)
 		.run();
+}
+
+// ---------------------------------------------------------------------------
+// The page: POST /proof, from the static page on GitHub Pages
+//
+// Body {"text": "<the link: OLB5~... or its address>", "discordToken": "<the player's Discord
+// access token>"}; the page sends "Authorization: Bearer <LINK_SITE_TOKEN>" when you gave it one.
+// The token is only shown to Discord (GET /oauth2/@me), never stored: it must be for your
+// application (DISCORD_CLIENT_ID) with the identify scope, and it says who the player is.
+
+// The CORS headers for a request from the page's origin (LINK_ORIGIN, exactly; several may be
+// listed, comma-separated, while a new address comes in), or null for any other origin.
+export function corsHeaders(request, env) {
+	const origin = request.headers.get('Origin');
+	if (!origin || !allowedOrigins(env).includes(origin)) return null;
+	return {
+		'Access-Control-Allow-Origin': origin,
+		'Access-Control-Allow-Methods': 'POST',
+		'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+		Vary: 'Origin',
+	};
+}
+
+export function allowedOrigins(env) {
+	return String((env && env.LINK_ORIGIN) || '')
+		.split(/[\s,]+/)
+		.filter((o) => /^https?:\/\/[^/]+$/.test(o));
+}
+
+// Who a Discord access token belongs to, asked of Discord itself: { ok: true, user: { id,
+// username, global_name, avatar } }, or an error answer (reason "login": sign in again;
+// "discord": Discord did not answer). Only a token made for your application (clientId) with the
+// identify scope counts: a token another site got for its own application does not.
+export async function discordUser(accessToken, { clientId, fetchImpl = globalThis.fetch } = {}) {
+	if (!DISCORD_ID_RE.test(String(clientId || ''))) throw new Error('Olympus Link: set DISCORD_CLIENT_ID to your Discord application\'s id');
+	if (typeof accessToken !== 'string' || !ACCESS_TOKEN_RE.test(accessToken)) return failure('login', 'Sign in with Discord first.');
+	let res;
+	try {
+		res = await fetchImpl(`${DISCORD_API}/oauth2/@me`, { headers: { Authorization: `Bearer ${accessToken}` } });
+	} catch (err) {
+		console.error('olympus-link: Discord oauth2/@me fetch failed:', err && err.message ? err.message : err);
+		return failure('discord', 'Discord did not answer: try again in a minute.');
+	}
+	if (res.status === 401 || res.status === 403) return failure('login', 'Your Discord sign-in expired: sign in again.');
+	if (!res.ok) return failure('discord', 'Discord did not answer: try again in a minute.');
+	let info = null;
+	try {
+		info = await res.json();
+	} catch {
+		info = null;
+	}
+	const app = info && info.application;
+	const u = info && info.user;
+	if (!app || String(app.id) !== String(clientId)) return failure('login', 'This Discord sign-in is not for the Olympus bot: sign in again on the Olympus Link page.');
+	if (!Array.isArray(info.scopes) || !info.scopes.includes('identify') || !u || !DISCORD_ID_RE.test(String(u.id)) || typeof u.username !== 'string') {
+		return failure('login', 'Sign in with Discord again.');
+	}
+	if (info.expires && Date.parse(info.expires) <= Date.now()) return failure('login', 'Your Discord sign-in expired: sign in again.');
+	return { ok: true, user: { id: String(u.id), username: u.username, global_name: u.global_name ?? null, avatar: u.avatar ?? null } };
+}
+
+// The whole POST /proof, CORS preflight included, as a Response: the origin, your site token
+// (when you set LINK_SITE_TOKEN), the body, the link's form, who the player is (discordUser), 10
+// links an hour per account, then acceptProof with your promote, and the audit trail.
+//   if (url.pathname === '/proof') return handleProof(request, env, { promote, demote });
+export async function handleProof(request, env, { promote, demote, fetchImpl } = {}) {
+	const cors = corsHeaders(request, env);
+	const reply = (answer) => respond(answer, cors || { Vary: 'Origin' });
+	try {
+		if (request.method === 'OPTIONS') {
+			return new Response(null, { status: cors ? 204 : 403, headers: cors ? { ...cors, 'Access-Control-Max-Age': '600' } : { Vary: 'Origin' } });
+		}
+		if (request.method !== 'POST') return reply(failure('method', 'POST only.'));
+		if (!cors) return reply(failure('origin', 'Wrong origin.'));
+		if (env.LINK_SITE_TOKEN && !(await sameSecret(bearer(request), env.LINK_SITE_TOKEN))) {
+			return reply(failure('site', 'This page is not allowed to send links right now.'));
+		}
+		const body = await readJson(request, 8 * 1024);
+		if (!body || typeof body.text !== 'string' || typeof body.discordToken !== 'string') {
+			return reply(failure('format', 'Send {"text": "<the link>", "discordToken": "<the Discord sign-in>"}.'));
+		}
+		const text = proofText(body.text);
+		if (!text || !parseBundle(text).ok) {
+			const why = text ? parseBundle(text).error : 'prefix';
+			return reply(reject('format', `This is not a complete Olympus link (${why}).`));
+		}
+		const who = await discordUser(body.discordToken, { clientId: env.DISCORD_CLIENT_ID, fetchImpl });
+		if (!who.ok) return reply(who);
+		const t = now();
+		if (await tooManyProofs(env, who.user.id, t)) return reply(failure('limit', 'Too many tries: wait a while and send it again.'));
+		const result = await acceptProof(env, text, { discordId: who.user.id, promote, demote, t });
+		try {
+			await logProof(env, 'site', text, result, { discordId: who.user.id, uploaded: t });
+		} catch (err) {
+			console.error('olympus-link: could not log', err && err.stack ? err.stack : err);
+		}
+		return reply(pageAnswer(result));
+	} catch (err) {
+		console.error('olympus-link: /proof', err && err.stack ? err.stack : err);
+		return reply(failure('server', 'Something went wrong on our side.'));
+	}
+}
+
+// What the page gets back: the answer without the Discord id.
+function pageAnswer(r) {
+	const { discordId, ...rest } = r;
+	return rest;
+}
+
+// ---------------------------------------------------------------------------
+// The watcher (the whisper path): many links at once, from a High Councillor's inbox, uploaded by
+// web/tools/read-inbox.mjs with your admin token. The Discord account is each code's owner.
+//   body: {"bundles": [{"R", "bundle", "from", "t"}, ...]} (500 at most; a bare string is a bundle)
+// { ok: true, status: 'ok', results: [{ R, status, reason, message }] } or a format error.
+export async function acceptInbox(env, body, { promote, demote } = {}) {
+	if (typeof promote !== 'function') throw new TypeError('Olympus Link: acceptInbox needs promote(discordId), your function that gives the role');
+	const list = body && Array.isArray(body.bundles) ? body.bundles : null;
+	if (!list || list.length > LINK.MAX_BUNDLES) return failure('format', `Send {"bundles": [...]} with at most ${LINK.MAX_BUNDLES}.`);
+	const results = [];
+	for (const item of list) {
+		const entry = item && typeof item === 'object' ? item : {};
+		const text = (typeof item === 'string' ? item : typeof entry.bundle === 'string' ? entry.bundle : '').trim();
+		const t = now();
+		const parsed = parseBundle(text);
+		let result;
+		try {
+			result =
+				parsed.ok && typeof entry.R === 'string' && entry.R !== parsed.bundle.R
+					? reject('format', 'The inbox key does not match the link.', parsed.bundle.R)
+					: await acceptProof(env, text, { t, promote, demote });
+		} catch (err) {
+			// One link that fails on our side does not stop the others: this one is sent again later.
+			console.error('olympus-link: inbox entry', err && err.stack ? err.stack : err);
+			result = failure('server', 'Something went wrong on our side: send it again.', { R: parsed.ok ? parsed.bundle.R : null });
+		}
+		try {
+			await logProof(env, 'watcher', text, result, {
+				from: typeof entry.from === 'string' ? entry.from.slice(0, 100) : null,
+				received: Number.isFinite(entry.t) ? Math.floor(entry.t) : null,
+				uploaded: t,
+			});
+		} catch (err) {
+			console.error('olympus-link: inbox log', err && err.stack ? err.stack : err);
+		}
+		results.push({ R: result.R || (typeof entry.R === 'string' ? entry.R : null), status: result.status, reason: result.reason, message: result.message });
+	}
+	return { ok: true, status: 'ok', results };
+}
+
+// POST <your inbox route> for read-inbox.mjs --post: the admin token, then acceptInbox.
+export async function handleInbox(request, env, { promote, demote } = {}) {
+	if (!(await adminAuthorized(request, env))) return respond(failure('auth', 'Wrong admin token.'));
+	const body = await readJson(request, 2 * 1024 * 1024);
+	return respond(await acceptInbox(env, body, { promote, demote }));
 }
 
 // ---------------------------------------------------------------------------
@@ -1629,6 +1918,21 @@ export function councilAuthorityKeys(env) {
 		.filter((k) => PUBLIC_HEX_RE.test(k));
 }
 
+// The High Councillors' characters you accept from the council authority (LINK_COUNCIL_CHARACTERS:
+// "Name-Realm" as the game writes it, comma-separated), as a Set, or null when the setting is
+// absent: then every character the authority certifies counts. Set but empty, none does. Keys you
+// register yourself (keys) are yours already: the list does not apply to them.
+export function councilCharacters(env) {
+	const list = env ? env.LINK_COUNCIL_CHARACTERS : undefined;
+	if (list === undefined || list === null) return null;
+	return new Set(
+		String(list)
+			.split(/[,\n]/)
+			.map((c) => c.trim())
+			.filter((c) => c !== ''),
+	);
+}
+
 // The id of a key the council authority certifies: the first 12 hex of SHA-256 of its 32 bytes.
 export async function councilKeyId(publicHex) {
 	return bytesToHex(new Uint8Array(await crypto.subtle.digest('SHA-256', hexToBytes(publicHex)))).slice(0, 12);
@@ -1643,23 +1947,22 @@ export async function councilCertificate(env, c) {
 	return null;
 }
 
-// Your key tool (admin token): register a confirmer's public key for one character, get its
-// certificate (a player key's once it counts: certFrom), renew it, or revoke a key (a High
-// Councillor's key the council authority certified too: its id goes on the revocation list,
-// seen here or not), or every key of a character (a councillor off the signed list: every
-// council authority certificate for that character signed until now, and its registered keys).
-// The seed never comes here: it stays with the confirmer.
+// Your key tool: register a confirmer's public key for one character, get its certificate (a
+// player key's once it counts: certFrom), renew it, or revoke a key (a High Councillor's key the
+// council authority certified too: its id goes on the revocation list, seen here or not), or every
+// key of a character (a councillor off the signed list: every council authority certificate for
+// that character signed until now, and its registered keys). The seed never comes here: it stays
+// with the confirmer.
 //   {"key_id", "public_key", "owner_discord_id", "owner_username", "character", "kind", "bootstrap", "days", "replace"}
 //   {"key_id", "renew": true, "days"}
 //   {"key_id", "revoke": true}
 //   {"character", "revoke": true}
-async function routeKeys(request, env) {
-	if (!(await adminAuthorized(request, env))) return json({ status: 'error', reason: 'auth' }, 401);
-	const body = await readJson(request, 4 * 1024);
-	const t = now();
-	const fail = (reason, message, status = 400, extra = {}) => json({ status: 'error', reason, message, ...extra }, status);
+// { ok: true, status: 'ok', ... } or { ok: false, status: 'error', reason, message } (httpStatus).
+export async function manageKeys(env, body, t = now()) {
+	const DB = database(env);
+	const fail = (reason, message, extra = {}) => failure(reason, message, extra);
 	if (body && typeof body === 'object' && body.revoke === true && body.key_id === undefined && body.character !== undefined) {
-		return revokeCharacter(env, body.character, t, fail);
+		return revokeCharacter(env, body.character, t);
 	}
 	if (!body || typeof body !== 'object' || typeof body.key_id !== 'string' || !KEYID_RE.test(body.key_id)) return fail('format', 'key_id: 6 to 16 of a-z and 0-9.');
 	const keyId = body.key_id;
@@ -1667,36 +1970,36 @@ async function routeKeys(request, env) {
 		return fail('format', `days: a whole number from 1 to ${LINK.CERT_DAYS_MAX}.`);
 	}
 	const certExp = (kind) => t + (body.days !== undefined ? body.days : kind === 'p' ? LINK.CERT_DAYS_PLAYER : LINK.CERT_DAYS) * 86400;
-	const existing = await env.DB.prepare('SELECT * FROM keys WHERE key_id = ?').bind(keyId).first();
+	const existing = await DB.prepare('SELECT * FROM keys WHERE key_id = ?').bind(keyId).first();
 
 	if (body.revoke === true) {
 		if (!existing) {
 			// A councillor's key the council authority certified (never registered here): on the
 			// revocation list at once, whether a link has used it yet or not.
-			if (!CA_KEYID_RE.test(keyId)) return fail('unknown-key', 'No such key.', 404);
-			await env.DB.prepare('INSERT OR IGNORE INTO revoked_keys (key_id, revoked_at) VALUES (?, ?)').bind(keyId, t).run();
-			const known = await env.DB.prepare('SELECT character FROM council_keys WHERE key_id = ?').bind(keyId).first();
-			return json({ status: 'ok', key_id: keyId, revoked: true, council: true, character: known ? known.character : null });
+			if (!CA_KEYID_RE.test(keyId)) return fail('unknown-key', 'No such key.');
+			await DB.prepare('INSERT OR IGNORE INTO revoked_keys (key_id, revoked_at) VALUES (?, ?)').bind(keyId, t).run();
+			const known = await DB.prepare('SELECT character FROM council_keys WHERE key_id = ?').bind(keyId).first();
+			return { ok: true, status: 'ok', key_id: keyId, revoked: true, council: true, character: known ? known.character : null };
 		}
-		await env.DB.prepare('UPDATE keys SET revoked = 1, revoked_at = ? WHERE key_id = ? AND revoked = 0').bind(t, keyId).run();
-		return json({ status: 'ok', key_id: keyId, revoked: true });
+		await DB.prepare('UPDATE keys SET revoked = 1, revoked_at = ? WHERE key_id = ? AND revoked = 0').bind(t, keyId).run();
+		return { ok: true, status: 'ok', key_id: keyId, revoked: true };
 	}
 	if (body.renew === true) {
-		if (!existing) return fail('unknown-key', 'No such key.', 404);
-		if (existing.revoked) return fail('revoked', 'This key is revoked: make a new one.', 409);
-		if (existing.replaced_at !== null && existing.replaced_at !== undefined) return fail('replaced', 'This key was replaced by a newer one of the same account: certify that one.', 409);
+		if (!existing) return fail('unknown-key', 'No such key.');
+		if (existing.revoked) return fail('revoked', 'This key is revoked: make a new one.');
+		if (existing.replaced_at !== null && existing.replaced_at !== undefined) return fail('replaced', 'This key was replaced by a newer one of the same account: certify that one.');
 		const from = certFrom(existing);
-		if (t < from) return fail('too-early', `This player key counts from ${when(from)}: ask for its certificate then.`, 409, { cert_from: from });
+		if (t < from) return fail('too-early', `This player key counts from ${when(from)}: ask for its certificate then.`, { cert_from: from });
 		const exp = certExp(existing.kind);
 		const cert = await makeCertificate(env, keyId, existing.public_key, existing.kind, exp, existing.character);
 		const first = existing.cert_exp === null || existing.cert_exp === undefined;
 		// A key's first certificate replaces the older key of its owner (a rotation).
 		const older = first ? await activeKeys(env, existing.owner_discord_id, keyId) : [];
-		await env.DB.batch([
-			...older.map((k) => env.DB.prepare('UPDATE keys SET replaced_at = ? WHERE key_id = ?').bind(t, k.key_id)),
-			env.DB.prepare('UPDATE keys SET cert_exp = ? WHERE key_id = ?').bind(exp, keyId),
+		await DB.batch([
+			...older.map((k) => DB.prepare('UPDATE keys SET replaced_at = ? WHERE key_id = ?').bind(t, k.key_id)),
+			DB.prepare('UPDATE keys SET cert_exp = ? WHERE key_id = ?').bind(exp, keyId),
 		]);
-		return json(keyAnswer(existing, cert, exp, replacedId(older)));
+		return keyAnswer(existing, cert, exp, replacedId(older));
 	}
 
 	const pub = typeof body.public_key === 'string' ? publicKeyHex(body.public_key) : null;
@@ -1712,16 +2015,16 @@ async function routeKeys(request, env) {
 	if (!validCharacter(character)) return fail('format', 'character: the one character that confirms with this key, "Name-Realm" as the game writes it.');
 	if (kind !== 'c' && kind !== 'p') return fail('format', 'kind: "c" (a High Councillor) or "p" (a drawn player).');
 	if (bootstrap && kind !== 'c') return fail('format', 'Only a councillor key can be a bootstrap key.');
-	if (existing) return fail('key-id-used', 'This key id exists already: ids are never reused.', 409);
-	if (await env.DB.prepare('SELECT 1 AS x FROM keys WHERE public_key = ?').bind(pub).first()) return fail('public-key-used', 'This public key is registered already.', 409);
+	if (existing) return fail('key-id-used', 'This key id exists already: ids are never reused.');
+	if (await DB.prepare('SELECT 1 AS x FROM keys WHERE public_key = ?').bind(pub).first()) return fail('public-key-used', 'This public key is registered already.');
 	// The character confirms for its owner: one of the owner's linked characters (a bootstrap
 	// councillor key excepted: at launch nobody has linked one yet).
-	if (!bootstrap && !(await env.DB.prepare('SELECT 1 AS x FROM members WHERE character = ? AND discord_id = ?').bind(character, owner).first())) {
-		return fail('character-not-linked', `${character} is not a linked character of this Discord account: a key confirms from one of its owner's linked characters.`, 409);
+	if (!bootstrap && !(await DB.prepare('SELECT 1 AS x FROM members WHERE character = ? AND discord_id = ?').bind(character, owner).first())) {
+		return fail('character-not-linked', `${character} is not a linked character of this Discord account: a key confirms from one of its owner's linked characters.`);
 	}
 	const mine = await activeKeys(env, owner, keyId);
 	if (mine.length && body.replace !== true) {
-		return fail('owner-has-key', `This account's key is ${replacedId(mine)}: send "replace": true to rotate it.`, 409);
+		return fail('owner-has-key', `This account's key is ${replacedId(mine)}: send "replace": true to rotate it.`);
 	}
 	const key = { key_id: keyId, public_key: pub, owner_discord_id: owner, character, kind, created: t, cert_exp: null };
 	const ready = t >= certFrom(key);
@@ -1733,32 +2036,53 @@ async function routeKeys(request, env) {
 	// you revoke it, once the confirmer typed the new key and certificate in game. A new key that
 	// never got its certificate is replaced at once.
 	const older = ready ? mine : mine.filter((k) => k.cert_exp === null);
-	await env.DB.batch([
-		...older.map((k) => env.DB.prepare('UPDATE keys SET replaced_at = ? WHERE key_id = ?').bind(t, k.key_id)),
-		env.DB.prepare('INSERT INTO keys (key_id, public_key, owner_discord_id, owner_username, character, kind, bootstrap, created, cert_exp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+	await DB.batch([
+		...older.map((k) => DB.prepare('UPDATE keys SET replaced_at = ? WHERE key_id = ?').bind(t, k.key_id)),
+		DB.prepare('INSERT INTO keys (key_id, public_key, owner_discord_id, owner_username, character, kind, bootstrap, created, cert_exp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
 			.bind(keyId, pub, owner, username, character, kind, bootstrap, t, exp),
 	]);
-	return json(keyAnswer(key, cert, exp, ready ? replacedId(older) : null));
+	return keyAnswer(key, cert, exp, ready ? replacedId(older) : null);
+}
+
+// The same, one thing each.
+export function registerKey(env, key, t) {
+	const { renew, revoke, ...body } = key || {};
+	return manageKeys(env, body, t);
+}
+
+export function renewKey(env, keyId, days, t) {
+	return manageKeys(env, days === undefined ? { key_id: keyId, renew: true } : { key_id: keyId, renew: true, days }, t);
+}
+
+export function revokeKey(env, keyId, t) {
+	return manageKeys(env, { key_id: keyId, revoke: true }, t);
 }
 
 // Every key of a character, at once: the council authority's certificates for it signed until now
 // (whatever key they name, seen here or not: the ones a councillor rotated away included) stop
 // counting, and so do the keys registered for it. A certificate the authority signs for it later
 // counts again (a councillor back on the list, after /oly discord key new).
-async function revokeCharacter(env, character, t, fail) {
-	if (typeof character !== 'string' || !validCharacter(character)) return fail('format', 'character: "Name-Realm" as the game writes it.');
-	const registered = (await env.DB.prepare('SELECT key_id FROM keys WHERE character = ? AND revoked = 0').bind(character).all()).results || [];
-	await env.DB.batch([
-		env.DB.prepare('INSERT INTO revoked_characters (character, revoked_at) VALUES (?, ?) ON CONFLICT(character) DO UPDATE SET revoked_at = excluded.revoked_at').bind(character, t),
-		env.DB.prepare('UPDATE keys SET revoked = 1, revoked_at = ? WHERE character = ? AND revoked = 0').bind(t, character),
+export async function revokeCharacter(env, character, t = now()) {
+	const DB = database(env);
+	if (typeof character !== 'string' || !validCharacter(character)) return failure('format', 'character: "Name-Realm" as the game writes it.');
+	const registered = (await DB.prepare('SELECT key_id FROM keys WHERE character = ? AND revoked = 0').bind(character).all()).results || [];
+	await DB.batch([
+		DB.prepare('INSERT INTO revoked_characters (character, revoked_at) VALUES (?, ?) ON CONFLICT(character) DO UPDATE SET revoked_at = excluded.revoked_at').bind(character, t),
+		DB.prepare('UPDATE keys SET revoked = 1, revoked_at = ? WHERE character = ? AND revoked = 0').bind(t, character),
 	]);
-	const council = (await env.DB.prepare('SELECT key_id FROM council_keys WHERE character = ? ORDER BY first_seen').bind(character).all()).results || [];
-	return json({ status: 'ok', character, revoked: true, keys: registered.map((k) => k.key_id), council_keys: council.map((k) => k.key_id) });
+	const council = (await DB.prepare('SELECT key_id FROM council_keys WHERE character = ? ORDER BY first_seen').bind(character).all()).results || [];
+	return { ok: true, status: 'ok', character, revoked: true, keys: registered.map((k) => k.key_id), council_keys: council.map((k) => k.key_id) };
+}
+
+// POST <your keys route>: the admin token, then manageKeys.
+export async function handleKeys(request, env) {
+	if (!(await adminAuthorized(request, env))) return respond(failure('auth', 'Wrong admin token.'));
+	return respond(await manageKeys(env, await readJson(request, 4 * 1024)));
 }
 
 // The owner's keys neither revoked nor replaced, but `except`: the certified one first.
 async function activeKeys(env, owner, except) {
-	const rows = (await env.DB.prepare('SELECT key_id, cert_exp FROM keys WHERE owner_discord_id = ? AND key_id <> ? AND revoked = 0 AND replaced_at IS NULL').bind(owner, except).all()).results || [];
+	const rows = (await database(env).prepare('SELECT key_id, cert_exp FROM keys WHERE owner_discord_id = ? AND key_id <> ? AND revoked = 0 AND replaced_at IS NULL').bind(owner, except).all()).results || [];
 	return rows.sort((a, b) => (a.cert_exp === null) - (b.cert_exp === null));
 }
 
@@ -1769,6 +2093,7 @@ function replacedId(keys) {
 function keyAnswer(key, cert, certExp, replaced) {
 	const from = certFrom(key);
 	const answer = {
+		ok: true,
 		status: 'ok',
 		key_id: key.key_id,
 		kind: key.kind,
@@ -1799,28 +2124,25 @@ function publicKeyHex(s) {
 }
 
 // ---------------------------------------------------------------------------
-// Discord
+// People
 
-// { ok } or { ok: false, reason }: never throws (a network error is Discord being down).
-async function discordRole(env, method, discordId) {
-	let res;
-	try {
-		res = await fetch(`https://discord.com/api/v10/guilds/${env.GUILD_ID}/members/${discordId}/roles/${env.ROLE_ID}`, {
-			method,
-			headers: { Authorization: `Bot ${env.DISCORD_BOT_TOKEN}`, 'X-Audit-Log-Reason': 'Olympus Link' },
-		});
-	} catch (err) {
-		console.error('olympus-link: Discord role', method, 'fetch failed:', err && err.message ? err.message : err);
-		return { ok: false, reason: 'discord' };
-	}
-	if (res.ok) return { ok: true };
-	let code = 0;
-	try {
-		code = (await res.json()).code;
-	} catch {}
-	if (res.status === 404 && code === 10007) return { ok: false, reason: 'not-in-server' }; // Unknown Member
-	console.error('olympus-link: Discord role', method, res.status, code);
-	return { ok: false, reason: 'discord' };
+// Everything kept about one Discord account, gone: its linked characters, its codes and its lines
+// in the audit trail; the confirmer keys it owns are revoked (their rows stay, with no username,
+// so an id is never used twice). Take its role away yourself. { ok, status, discord_id,
+// characters, keys }. `python3 scripts/link-keys.py forget <id>` prints the same as SQL.
+export async function forgetUser(env, discordId, t = now()) {
+	const id = String(discordId);
+	if (!DISCORD_ID_RE.test(id)) return failure('format', 'A Discord id: digits only.');
+	const DB = database(env);
+	const characters = await charactersOf(env, id);
+	const keys = (await DB.prepare('SELECT key_id FROM keys WHERE owner_discord_id = ? AND revoked = 0').bind(id).all()).results || [];
+	await DB.batch([
+		DB.prepare('DELETE FROM members WHERE discord_id = ?').bind(id),
+		DB.prepare('DELETE FROM codes WHERE discord_id = ?').bind(id),
+		DB.prepare('DELETE FROM inbox_uploads WHERE discord_id = ?').bind(id),
+		DB.prepare('UPDATE keys SET revoked = 1, revoked_at = COALESCE(revoked_at, ?), owner_username = NULL WHERE owner_discord_id = ?').bind(t, id),
+	]);
+	return { ok: true, status: 'ok', discord_id: id, characters, keys: keys.map((k) => k.key_id) };
 }
 
 // ---------------------------------------------------------------------------
@@ -1853,21 +2175,37 @@ export async function ed25519Verify(publicHex, sig, message) {
 	}
 }
 
-async function sha256Hex(text) {
+export async function sha256Hex(text) {
 	return bytesToHex(new Uint8Array(await crypto.subtle.digest('SHA-256', enc.encode(text))));
 }
 
 // ---------------------------------------------------------------------------
 // Small helpers
 
-function json(data, status = 200) {
-	return new Response(JSON.stringify(data), {
-		status,
-		headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' },
-	});
+// The token after "Bearer " in the Authorization header ('' when there is none).
+export function bearer(request) {
+	return (request.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '').trim();
 }
 
-async function readJson(request, limit) {
+// Two secrets compared in constant time (their SHA-256).
+export async function sameSecret(given, expected) {
+	if (typeof given !== 'string' || typeof expected !== 'string' || !given || !expected) return false;
+	const [a, b] = await Promise.all([given, expected].map((s) => crypto.subtle.digest('SHA-256', enc.encode(s))));
+	const x = new Uint8Array(a);
+	const y = new Uint8Array(b);
+	let diff = 0;
+	for (let i = 0; i < x.length; i++) diff |= x[i] ^ y[i];
+	return diff === 0;
+}
+
+// Your tools' requests: "Authorization: Bearer <LINK_ADMIN_TOKEN>" (32 characters at least).
+export async function adminAuthorized(request, env) {
+	if (!env.LINK_ADMIN_TOKEN || env.LINK_ADMIN_TOKEN.length < 32) return false;
+	return sameSecret(bearer(request), env.LINK_ADMIN_TOKEN);
+}
+
+// The request's JSON body, or null (too big, or not JSON).
+export async function readJson(request, limit) {
 	const text = await request.text();
 	if (text.length > limit) return null;
 	try {
@@ -1877,36 +2215,19 @@ async function readJson(request, limit) {
 	}
 }
 
-// The page's POSTs carry the session cookie: only the page's own origin may send them.
-function sameOrigin(request, env) {
-	const origin = request.headers.get('Origin');
-	return !!origin && origin === (env.LINK_ORIGIN || new URL(request.url).origin);
-}
-
-async function adminAuthorized(request, env) {
-	const given = (request.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '');
-	if (!env.LINK_ADMIN_TOKEN || env.LINK_ADMIN_TOKEN.length < 32 || !given) return false;
-	const [a, b] = await Promise.all([given, env.LINK_ADMIN_TOKEN].map((s) => crypto.subtle.digest('SHA-256', enc.encode(s))));
-	const x = new Uint8Array(a);
-	const y = new Uint8Array(b);
-	let diff = 0;
-	for (let i = 0; i < x.length; i++) diff |= x[i] ^ y[i];
-	return diff === 0;
-}
-
-function hexToBytes(hex) {
+export function hexToBytes(hex) {
 	const out = new Uint8Array(hex.length / 2);
 	for (let i = 0; i < out.length; i++) out[i] = parseInt(hex.substr(i * 2, 2), 16);
 	return out;
 }
 
-function bytesToHex(bytes) {
+export function bytesToHex(bytes) {
 	return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
 
-function b64urlEncode(bytes) {
+export function b64urlEncode(bytes) {
 	let out = '';
 	for (let i = 0; i < bytes.length; i += 3) {
 		const n = (bytes[i] << 16) | ((bytes[i + 1] ?? 0) << 8) | (bytes[i + 2] ?? 0);
@@ -1916,7 +2237,7 @@ function b64urlEncode(bytes) {
 	return out;
 }
 
-function b64urlDecode(s) {
+export function b64urlDecode(s) {
 	const out = new Uint8Array(Math.floor((s.length * 6) / 8));
 	let bits = 0;
 	let acc = 0;
@@ -1933,14 +2254,249 @@ function b64urlDecode(s) {
 }
 ```
 
+## The reference Worker
+
+`web/worker/link-worker.js`, the whole module: a complete Worker on the core, with the Discord role
+as its `promote()`. The `ADAPT` comment marks the one function a same-site page would connect to
+its login (step 4); the GitHub Pages page never needs it.
+
+<!-- block: web/worker/link-worker.js -->
+```js
+// Olympus Link: the reference Cloudflare Worker (D1 + Discord), complete, built on link-core.mjs
+// (every check lives there). web/FERN.md is the short way into your own bot, web/WORKER.md
+// explains every part; the tests in web/test run this exact file against the shared vectors.
+//
+// Bindings and settings (wrangler.toml / dashboard): link-core.mjs lists what it reads, and
+//   DISCORD_BOT_TOKEN    secret: the bot that gives the role (Manage Roles, above ROLE_ID)
+//   DISCORD_PUBLIC_KEY   var: the application's public key, for the /verify slash command over HTTP
+//   GUILD_ID, ROLE_ID    vars: the Olympus server and the role linked members get
+//
+// Routes:
+//   POST /api/link/proof             the page (static, on GitHub Pages): {"text", "discordToken"}, CORS
+//   POST /api/link/inbox             your watcher's inbox (read-inbox.mjs --post), admin token
+//   POST /api/link/keys              the confirmer keys, admin token
+//   POST /api/link/bot-code          a gateway bot asking for a member's code, admin token
+//   POST /api/discord/interactions   /verify over HTTP interactions (Discord signs every request)
+//   GET /api/link/me, POST /api/link/code, POST /api/link/submit: only for a page served from
+//   this Worker's own site behind your own login (sessionUser); the GitHub Pages page uses /proof.
+// Anything else returns null from handleLink, so it can sit in front of an existing router.
+
+import {
+	acceptProof,
+	codeError,
+	failure,
+	handleInbox,
+	handleKeys,
+	handleProof,
+	issueCode,
+	logProof,
+	readJson,
+	adminAuthorized,
+	allowedOrigins,
+	ed25519Verify,
+	hexToBytes,
+	tooManyProofs,
+	respond,
+} from './link-core.mjs';
+
+export {
+	LINK,
+	PROOF_REASONS,
+	issueCode,
+	checkProof,
+	acceptProof,
+	acceptInbox,
+	parseBundle,
+	proofText,
+	signedMessage,
+	proofCertificate,
+	linkTag,
+	guildPolicy,
+	drawPrefix,
+	drawLimit,
+	drawPool,
+	thresholdOf,
+	drawThreshold,
+	snowflakeTime,
+	certFrom,
+	makeCertificate,
+	parseCertificate,
+	verifyCertificate,
+	councilAuthorityKeys,
+	councilKeyId,
+	councilCertificate,
+	manageKeys,
+	ed25519Verify,
+} from './link-core.mjs';
+
+const enc = new TextEncoder();
+const now = () => Math.floor(Date.now() / 1000);
+
+// ---------------------------------------------------------------------------
+// Entry points
+
+export default {
+	async fetch(request, env, ctx) {
+		return (await handleLink(request, env, ctx)) || new Response('Not found', { status: 404 });
+	},
+};
+
+// ADAPT (only for the same-site routes /me, /code and /submit): the signed-in Discord user of this
+// request, from YOUR login, as { id, username, global_name, avatar } - the fields of Discord's
+// GET /users/@me - or null when nobody is signed in. The GitHub Pages page never needs it: it sends
+// the player's Discord token to /proof, which asks Discord (web/WORKER.md, "Who is sending").
+export async function sessionUser(request, env) {
+	throw new Error('Olympus Link: connect sessionUser() to your Discord login (web/WORKER.md, "Who is sending")');
+}
+
+// The role, given and taken by the bot (your promote() and demote(), in the terms of acceptProof).
+export const giveRole = (env) => (discordId) => discordRole(env, 'PUT', discordId);
+export const takeRole = (env) => (discordId) => discordRole(env, 'DELETE', discordId);
+
+export async function handleLink(request, env, ctx, { getUser = sessionUser } = {}) {
+	const url = new URL(request.url);
+	const route = `${request.method} ${url.pathname.replace(/\/+$/, '')}`;
+	const roles = { promote: giveRole(env), demote: takeRole(env) };
+	try {
+		switch (route) {
+			case 'OPTIONS /api/link/proof':
+			case 'POST /api/link/proof':
+				return await handleProof(request, env, roles);
+			case 'POST /api/link/inbox':
+				return await handleInbox(request, env, roles);
+			case 'POST /api/link/keys':
+				return await handleKeys(request, env);
+			case 'POST /api/link/bot-code':
+				return await routeBotCode(request, env);
+			case 'POST /api/discord/interactions':
+				return await routeInteractions(request, env);
+			case 'GET /api/link/me':
+				return await routeMe(request, env, getUser);
+			case 'POST /api/link/code':
+				return await routeCode(request, env, getUser);
+			case 'POST /api/link/submit':
+				return await routeSubmit(request, env, getUser);
+			default:
+				return null;
+		}
+	} catch (err) {
+		console.error('olympus-link', route, err && err.stack ? err.stack : err);
+		return respond(failure('server', 'Something went wrong on our side.'), {}, 500);
+	}
+}
+
+// acceptProof with this Worker's role: the old name, kept for the tests and tools that use it.
+// opts.userId: the signed-in user, who must own the code (the page); absent for the watcher.
+export function acceptBundle(env, text, opts = {}) {
+	return acceptProof(env, text, { discordId: opts.userId, t: opts.t, promote: giveRole(env), demote: takeRole(env) });
+}
+
+// ---------------------------------------------------------------------------
+// Routes
+
+// For a gateway bot (discord.js, discord.py...) instead of HTTP interactions: it asks the Worker
+// for the member's code and replies with it, ephemeral.
+async function routeBotCode(request, env) {
+	if (!(await adminAuthorized(request, env))) return respond(failure('auth', 'Wrong admin token.'));
+	const body = await readJson(request, 4 * 1024);
+	if (!body || typeof body.id !== 'string' || typeof body.username !== 'string') return respond(failure('format', 'Send {"id", "username"}.'));
+	const r = await issueCode(env, { id: body.id, username: body.username }, 'discord');
+	if (!r.ok) return respond(r, {}, r.reason === 'limit' ? 429 : 400);
+	return respond({ token: r.token, command: r.command, exp: r.exp, mode: r.mode, reply: r.reply });
+}
+
+// /verify over HTTP interactions (Discord signs every request). /link is answered the same way.
+async function routeInteractions(request, env) {
+	const sig = request.headers.get('X-Signature-Ed25519') || '';
+	const ts = request.headers.get('X-Signature-Timestamp') || '';
+	const body = await request.text();
+	if (!/^[0-9a-fA-F]{128}$/.test(sig) || !/^[0-9]{1,20}$/.test(ts)) return new Response('Bad request signature', { status: 401 });
+	if (!(await ed25519Verify(env.DISCORD_PUBLIC_KEY, hexToBytes(sig), enc.encode(ts + body)))) {
+		return new Response('Bad request signature', { status: 401 });
+	}
+	const i = JSON.parse(body);
+	if (i.type === 1) return respond({ type: 1 }); // PING
+	if (i.type === 2 && i.data && (i.data.name === 'verify' || i.data.name === 'link')) {
+		const user = (i.member && i.member.user) || i.user;
+		const r = user ? await issueCode(env, user, 'discord') : { reply: codeError('login') };
+		return respond({ type: 4, data: { flags: 64, content: r.reply } });
+	}
+	return respond({ type: 4, data: { flags: 64, content: 'Unknown command.' } });
+}
+
+// The same-site variant: a page served by this Worker's own site, with your login's cookie.
+async function routeMe(request, env, getUser) {
+	const user = await getUser(request, env);
+	if (!user) return respond({ user: null }, {}, 401);
+	const { id, username, global_name = null, avatar = null } = user;
+	return respond({ user: { id, username, global_name, avatar } });
+}
+
+async function routeCode(request, env, getUser) {
+	if (!sameOrigin(request, env)) return respond(failure('origin', 'Wrong origin.'));
+	const user = await getUser(request, env);
+	if (!user) return respond(failure('login', 'Sign in with Discord first.'));
+	const r = await issueCode(env, user, 'site');
+	if (!r.ok) return respond(r, {}, r.reason === 'limit' ? 429 : 400);
+	return respond({ token: r.token, command: r.command, exp: r.exp, mode: r.mode });
+}
+
+async function routeSubmit(request, env, getUser) {
+	if (!sameOrigin(request, env)) return respond(failure('origin', 'Wrong origin.'));
+	const user = await getUser(request, env);
+	if (!user) return respond(failure('login', 'Sign in with Discord first.'));
+	const body = await readJson(request, 8 * 1024);
+	if (!body || typeof body.bundle !== 'string') return respond(failure('format', 'No link in the request.'));
+	const t = now();
+	if (await tooManyProofs(env, user.id, t)) return respond(failure('limit', 'Too many tries: wait a while and send it again.'));
+	const result = await acceptBundle(env, body.bundle.trim(), { userId: String(user.id), t });
+	await logProof(env, 'site', body.bundle, result, { discordId: String(user.id), uploaded: t });
+	return respond(result, {}, 200);
+}
+
+// The same-site page's POSTs carry the session cookie: only the page's own origin may send them.
+function sameOrigin(request, env) {
+	const origin = request.headers.get('Origin');
+	const allowed = env.LINK_ORIGIN ? allowedOrigins(env) : [new URL(request.url).origin];
+	return !!origin && allowed.includes(origin);
+}
+
+// ---------------------------------------------------------------------------
+// Discord
+
+// { ok } or { ok: false, reason }: never throws (a network error is Discord being down).
+async function discordRole(env, method, discordId) {
+	let res;
+	try {
+		res = await fetch(`https://discord.com/api/v10/guilds/${env.GUILD_ID}/members/${discordId}/roles/${env.ROLE_ID}`, {
+			method,
+			headers: { Authorization: `Bot ${env.DISCORD_BOT_TOKEN}`, 'X-Audit-Log-Reason': 'Olympus Link' },
+		});
+	} catch (err) {
+		console.error('olympus-link: Discord role', method, 'fetch failed:', err && err.message ? err.message : err);
+		return { ok: false, reason: 'discord' };
+	}
+	if (res.ok) return { ok: true };
+	let code = 0;
+	try {
+		code = (await res.json()).code;
+	} catch {}
+	if (res.status === 404 && code === 10007) return { ok: false, reason: 'not-in-server' }; // Unknown Member
+	console.error('olympus-link: Discord role', method, res.status, code);
+	return { ok: false, reason: 'discord' };
+}
+
+```
+
 ## Running the tests
 
 ```sh
 node --test web/test          # from the repository root (Node 22.13 or newer)
 ```
 
-They run the page's logic, this Worker (D1 is `node:sqlite` with the schema above, Discord a
-stub), the key tool, the inbox tool and the QR reading against the shared vectors, and nothing
-touches the network. Where the addon's `tests/fixtures` are in the checkout, they also check
+They run the page's logic and its one request, the core and this Worker (D1 is `node:sqlite`
+with the schema above, Discord a stub, `promote()` a recorder), the key tool, the inbox tool and
+the QR reading against the shared vectors, and nothing touches the network
+(`web/test/link-core.test.mjs` is the core's alone). Where the addon's `tests/fixtures` are in the checkout, they also check
 the addon's sample codes, certificates and links; `OLYMPUS_ADDON_FIXTURES=<folder>` points at
 another copy of them.

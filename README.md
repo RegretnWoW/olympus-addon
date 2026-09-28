@@ -316,8 +316,14 @@ Not open yet: the addon carries it, but `/oly discord` says it is not open until
 is ready and its key is in the addon. High Councillors' addons already make their own keys and
 get them certified in the meantime.
 
-1. **Get a code** from the Olympus bot on Discord (its `/link` command, or the Olympus Link
-   page after "Continue with Discord"). It looks like
+The Olympus bot (Fernmelder's, on Discord) issues the codes, checks every proof and gives the role;
+the Olympus Link page is a static page on this repository's GitHub Pages
+(<https://dnl-gentile.github.io/olympus-addon/>, from `web/public/`) that only reads the proof and
+sends it to the bot. The bot's side is in [`web/FERN.md`](web/FERN.md), every detail in
+[`web/WORKER.md`](web/WORKER.md).
+
+1. **Get a code** from the Olympus bot on Discord (its `/verify` command, in the Olympus
+   server: only you see the reply). It looks like
    `OLC2.7K3M9QX2TB.your.name.1800000000.c.00000000.…` and is good for 24 hours. Keep it to
    yourself, and don't show it (or the Olympus Link window) on a stream.
 2. **Type `/oly discord <code>`** in the game's chat (or `/oly discord` alone and paste it in the
@@ -340,8 +346,9 @@ get them certified in the meantime.
    the code expires and is asked again when one comes online, and at each login.
 4. **The proof reaches the bot** one of two ways:
    - **now**: the **Olympus Link** window shows a QR code and the same link in a copy box. On the
-     Olympus Link page, share the WoW window, point your phone's camera at it, or paste the link.
-     The proof rides after the `#` of the link, which a browser never sends to any server;
+     Olympus Link page, share the WoW window, point your phone's camera at it, or paste the link,
+     then sign in with Discord there and it goes to the bot. The proof rides after the `#` of the
+     link, which a browser never sends to any server;
    - **or later, by itself**: the addon hands it to the bot's watcher (a High Councillor's
      character in watcher mode) the next time you are both online. The bot's keeper uploads what
      the watcher kept. One rule for how long, from your code's expiry: the bot takes the proof

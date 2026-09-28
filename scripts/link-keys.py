@@ -9,6 +9,7 @@
   python3 scripts/link-keys.py public < seed.txt              # the public key of a seed (to compare)
   python3 scripts/link-keys.py revoke <id>                    # the SQL that revokes a key
   python3 scripts/link-keys.py revoke --character <Name-Realm> # ...or every key of a character
+  python3 scripts/link-keys.py forget <discord id>            # the SQL that deletes an account's data
 
 "backend" prints a fresh seed for the Worker secret LINK_BACKEND_SEED and its public key, which
 goes in the Worker var LINK_BACKEND_PUBLIC and in the addon (ns.LINK_BACKEND_KEYS, Link.lua).
@@ -32,6 +33,10 @@ certificate at once when the backend seed is at hand.
 The backend seed for these comes from --backend-seed-file <path> (a file holding the seed),
 or the environment: LINK_BACKEND_SEED_FILE (such a path) or LINK_BACKEND_SEED (the seed). It
 is never printed. web/WORKER.md, "Confirmer keys", says how to rotate and revoke.
+"revoke" and "forget" print SQL only, for "wrangler d1 execute <database> --remote --file <it>":
+"revoke" as POST /api/link/keys {"key_id" | "character", "revoke": true} does it, "forget" as the
+Worker's forgetUser() (an account's linked characters, codes and log lines deleted, the confirmer
+keys it owns revoked: take its role away yourself).
 
 "ca" makes the council authority, once, on the author's computer: a fresh seed written to
 dist/LinkCA.lua (ns.LINK_CA_SEED; OLYMPUS_LINK_CA_OUT gives another path), readable by its owner
@@ -426,6 +431,18 @@ def revoke(args):
     print("UPDATE keys SET revoked = 1, revoked_at = unixepoch() WHERE key_id = %s;" % sql_text(args[0]))
 
 
+def forget(args):
+    # Everything kept about one Discord account, as link-core.mjs forgetUser() does it.
+    if len(args) != 1 or not DISCORD_ID.match(args[0]):
+        sys.exit("usage: link-keys.py forget <discord id> (digits; Discord: Copy User ID)")
+    who = sql_text(args[0])
+    print("DELETE FROM members WHERE discord_id = %s;" % who)
+    print("DELETE FROM codes WHERE discord_id = %s;" % who)
+    print("DELETE FROM inbox_uploads WHERE discord_id = %s;" % who)
+    print("UPDATE keys SET revoked = 1, revoked_at = COALESCE(revoked_at, unixepoch()), owner_username = NULL "
+          "WHERE owner_discord_id = %s;" % who)
+
+
 def main(argv):
     if len(argv) < 2:
         sys.exit(__doc__.strip().split("\n\n")[0])
@@ -442,6 +459,8 @@ def main(argv):
         ca(args)
     elif cmd == "revoke":
         revoke(args)
+    elif cmd == "forget":
+        forget(args)
     else:
         sys.exit(__doc__.strip().split("\n\n")[0])
 
