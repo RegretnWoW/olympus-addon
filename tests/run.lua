@@ -20190,6 +20190,531 @@ do
 			if not ok then error(err, 0) end
 		end)
 	end)
+
+	---------------------------------------------------------------------------
+	-- 1.0.0: the King's Steward. The author marks him in the signed titles list; he sets up for
+	-- the King his Hands, the treasury's keepers and its switches, and sends the Crown's decrees on
+	-- every client; never the King's own. A throwaway key made with scripts/council-sign.py for
+	-- these tests (its private half was not kept), and the councils it signed with "council", each
+	-- naming Test Councillor (Council Speaker) outside any department: STEWARD_A marks Test
+	-- Steward-Realm the Alliance King's Steward; STEWARD_B, newer, is the same without him;
+	-- STEWARD_C, newer still, marks Test Steward-OtherRealm for another realm group; STEWARD_D,
+	-- the newest, marks Horde Steward-Realm the Horde King's. (Their name lists were signed too;
+	-- only the titles are used here.)
+	---------------------------------------------------------------------------
+	local STEWARD_TEST_N = "9e499277d625188e55df666b8776016694bc7f1b1abdfe64d3e36663dd0ab77b272165fb00afbbb98e7db54f227af0f8924e339e121c78bce2cc44f66fe4dd8ee02890ba42bc0e24921caec08a490bb3fe51305075d359425de1aa175a595dafc20ab5345b44de2a6b16ddd07bf66df857fe033ff9bb828d170b99b09d1d5508365ab07deede4c77dcdabb6054985263ed4392243d50391b2fe525b0cddfc52ebebbf6a594b579793b2ee870c00733f4167724ead56b4dc1be31292149fef8fac9a1193691a7cebfe277dd56e569458b418d725969a69af553ec2d29bb795d790e19017b003e506886b16c08472b2a93ffe63d96fe20609d49dd3c2806fd1299"
+	local STEWARD_TEST_MU = "19e081e761192f93efc11c633fe2a9159b14aabe3a5b7061b01b38839451427c4be4a690f9e5333c782d0db50e7446ae84166c0d219ee4b92610f2b4a8b4b70d9fe095052c15b2a589017f346cf21218b3fa09a2cd20ffa7ceb5aee105ace28f20093de9fb96683f85dabc9bef2fd255e9adff8f4a47ebd99a493c0c4d8f053f49a9075ecda0638956035ee11984c2515e37b4afd46ea8a3f252e423c11db31e5d511ed8cce10cf07166b07fc2c97b55c4ed237fa15e5e11c78ae7bee7f4921a412085a936951eb6495ad26df7545586b0ea94fc7c9ddc40426199d93dd152a20908e3e4efd90e335d9c1e80fbfb5882796c9b11a845cfce73d5c6009c8562d8ab5e2b2a6"
+	local STEWARD_A = "HT1~1800000102~Realm~0~^^Test Councillor=Council Speaker;^steward^Alliance^Test Steward-Realm~0b9da6781cc9e3f1a2dac3df6014f28c0ed5d2869ddd41a6cbd56ff249e46911d434b13ee8249537177fca7ea28cd3ce1800a1d0a68ff2f86f0b3678c88f725f1dc31be3893ed21a7e6c9d817ab5d0f34dedce3cfc8d53d749b4e67762e52d78d473cc360762ea07aef5576e603bc3881d2ef3ae86a4f8348e9448fdaf80aa50f74f0f32171de2309039c383fd075b3c353e142b35d08be0b2a58da710ac6890c9eaa7a495931edf26f450c1bca02ecb289910119ede4c20f13cc56386f0557e303e4f19680e6a9e8179942701208b9031d7039fcf5cf9e4e70b467d11b8999d4b50edd5c12d3454f1473666847eccadcf7b73820dd918563eece41dffe8eb17"
+	local STEWARD_B = "HT1~1800000104~Realm~0~^^Test Councillor=Council Speaker~0b26c12d1d7d8938d5b3184282665585b9b34de02082ec6da383430dc61cfd0f71c207758c769fd3a2874fc763a6a6c397f83bf3ce0b98c905cbaf50d402b419e06d46c58e14390ba02e5bb38a0cd9fd4694049d43c22e9d5374102820a6e3ce81d69fa2c45b05cc0213f381930d5f3f9a138e78244d666cdc0eb9296a10ca77d803c887d257672ad7a4127a545636ecd981e5c07e7fd610bf0bdd02f2d8bb89ef453fc6a082748cccebe647106dc7e30327e3ea6ac3951bb72bc5432ee10aae76602642aa033802ce553f51fc1b8fcd4b4c5c7fa049e5f923729f9edb791214bfdc3a68e8fdf62860c87cc2b8a0d750a08e79b34584bc563b78726342227c41"
+	local STEWARD_C = "HT1~1800000106~OtherRealm~0~^^Test Councillor=Council Speaker;^steward^Alliance^Test Steward-OtherRealm~97e88ea35cb0626c2c3270c5db776c3ab52ca2ddd3782717bdee55d6bb69adf651ddb4fbb6afc6d1c5b54ff93f6e45fe78b34f9e03279999f940fee34d68a11d593f53cc6437cf65e6b49594a0528733c4305717c2d47c265aad8313ec7325b4c72263674a18ad2e34eae115c9be3ab3229a0559fd7da682a1054010ff8ee130d9e4a79f090f1872251385793007d0f204bda1f90dad33a80975f99002c035d9f971a0d75fc09094c832a70f973d62be3d209846a9081f734c6e2af9ba96a19dba37d237ec913e0ba4ed48356e68d2e6c5f9cc5a8e8d72ca8cfef2bee667c3ed22b1f75697717a01ec5ae7500171d8b698d849f88e4089d77dce9dbd0fe2a5b8"
+	local STEWARD_D = "HT1~1800000108~Realm~0~^^Test Councillor=Council Speaker;^steward^Horde^Horde Steward-Realm~0673dcd922d3907138962e1f3546cc02ade81037b6c9730e0e1812652be3f87eefcddd50aef9995101c893e753f7eea91473c917fb19e958fc687bccd5e2dd3a71b151e80388fd1c014e9bf5c2b8287d7265c59e4a0691812924894955e7101e7a0687336f5aae1eb082d17415eea28441ced933e5362bbfac8ffb0f9cab9abf0057c0b4313b06c35503b708790904e3c61281f2ac3f0f833c45af2b24f8021634de40ed6169dd728669fa1d783fdee5a722a39de1fd39dd6c779d7d91a290466b00fbda723fb0cfcc9b90e77fa9cd9ac88da32ba6b3f86e95541573277b1851017a46bab1338959df05ab7cf85ccbec1423fc752e6c142992ab15d25d2bf6f8"
+	local STEWARD = "Test Steward-Realm"
+
+	-- The test key in place of the author's while fn runs (a list's signature is checked then).
+	local function Signed(fn) ns.Sign.WithKey(STEWARD_TEST_N, STEWARD_TEST_MU, 86, fn) end
+	-- This client holding `blob` (nil: no titles list), every store it touches put back after.
+	local function WithStewardList(blob, fn)
+		local saved = { titles = ns.rdb.councilTitles, faction = ns.faction, kingRealm = ns.KING_REALM, masked = ns.CouncilNamesShown() }
+		local ok, err = pcall(function()
+			ns.rdb.councilTitles = nil
+			ns.Workshop.ResetVerify()
+			if blob then Signed(function() assert(ns.Workshop.TakeTitles(blob), "the test key's list") end) end
+			fn()
+		end)
+		ns.rdb.councilTitles, ns.faction, ns.KING_REALM = saved.titles, saved.faction, saved.kingRealm
+		ns.SetCouncilNamesShown(saved.masked)
+		ns.Workshop.ResetVerify()
+		if not ok then error(err, 0) end
+	end
+	-- The Steward's own client: in a guild of the army, no officer (his power is the list's alone).
+	local function AsSteward() GetGuildInfo = function() return "Olympus II", "Member", 3 end; ns.me = STEWARD end
+
+	test("1.0.0 the King's Steward: the author's signed titles list names him, for its realm group and his King's faction; nothing else does", function()
+		WithStewardList(nil, function()
+			local W, K = ns.Workshop, ns.King
+			eq(ns.IsSteward(STEWARD), false, "no titles list: nobody")
+			-- Unsigned, or changed after it was signed: refused, and nobody is the Steward.
+			local text, sig = STEWARD_A:match("^(.*)~(%x+)$")
+			Signed(function()
+				eq(W.TakeTitles(text .. "~" .. ("ab"):rep(256), "Relay1-Realm"), false, "unsigned")
+				eq(W.TakeTitles((text:gsub("Test Steward", "Faker Guy")) .. "~" .. sig, "Relay2-Realm"), false, "forged")
+				eq(W.TakeTitles((text:gsub("~0~", "~1~", 1)) .. "~" .. sig, "Relay3-Realm"), false, "changed anywhere else")
+			end)
+			eq(ns.rdb.councilTitles, nil)
+			eq(ns.IsSteward("Faker Guy-Realm"), false); eq(ns.IsSteward(STEWARD), false)
+			-- Signed with the author's key (the test key here): the Steward, on the list's realm group.
+			Signed(function() eq(W.TakeTitles(STEWARD_A, "Relay4-Realm"), true) end)
+			eq(ns.IsSteward(STEWARD), true)
+			eq(ns.IsSteward("test steward-Realm"), true, "whatever the case of the name")
+			eq(ns.IsSteward("Test Steward"), true, "a name without a realm is of ours")
+			eq(ns.IsSteward("Test Steward-OtherRealm"), false, "a namesake on another realm group")
+			eq(ns.IsSteward("Test Councillor-Realm"), false, "a councillor is not the Steward")
+			eq(K.IsStewardName(ns.KingCharacter() .. "-Realm"), false, "nor the King")
+			-- The council the census shows is the same: no department for the Steward's entry.
+			local t = ns.rdb.councilTitles
+			eq(#t.depts, 1); eq(t.depts[1].name, ""); eq(t.depts[1].members[1].name, "Test Councillor")
+			-- The Horde's King: nobody, the list names nobody for him.
+			ns.faction = "Horde"
+			eq(ns.IsSteward(STEWARD), false, "the Alliance King's Steward only")
+			ns.faction = "Alliance"
+			-- Where no King is named (a realm group other than the King's), nobody acts for him.
+			ns.KING_REALM = "Elsewhere"
+			eq(ns.KingCharacter(), nil); eq(ns.IsSteward(STEWARD), false)
+			ns.KING_REALM = "Realm"
+			-- A list a version before 1.0.0 took (kept without its Stewards): read again from its signed text.
+			t.stewards = nil
+			eq(ns.IsSteward(STEWARD), true)
+			eq(K.StewardStatusLine():find(STEWARD:gsub("%-Realm$", ""), 1, true) ~= nil, true, K.StewardStatusLine())
+			-- A census vote, or the King's own list of Hands naming someone, makes no Steward.
+			K.Reset()
+			K.HandleCommand("CHANNEL", ns.KingCharacter() .. "-Realm", "T1~H~8~Olympus~Faker Guy-Realm")
+			eq(K.IsHandName("Faker Guy-Realm"), true); eq(ns.IsSteward("Faker Guy-Realm"), false)
+			K.Reset()
+			-- Removed in a newer signed list: no longer the Steward, at once.
+			Signed(function() eq(W.TakeTitles(STEWARD_B, "Relay5-Realm"), true) end)
+			eq(ns.IsSteward(STEWARD), false, "a newer list without him ends it")
+			eq(K.StewardStatusLine():find("none named", 1, true) ~= nil, true, K.StewardStatusLine())
+			-- A list for another realm group (newer still): nobody on ours, not even its own Steward.
+			Signed(function() eq(W.TakeTitles(STEWARD_C, "Relay6-Realm"), true) end)
+			eq(ns.CouncilTitles(), nil); eq(ns.IsSteward("Test Steward-OtherRealm"), false); eq(ns.IsSteward(STEWARD), false)
+			-- The Horde's own Steward: the Horde King's alone.
+			ns.rdb.councilTitles = nil
+			Signed(function() eq(W.TakeTitles(STEWARD_D), true) end)
+			eq(ns.IsSteward("Horde Steward-Realm"), false, "not the Alliance King's")
+			ns.faction = "Horde"
+			eq(ns.IsSteward("Horde Steward-Realm"), true, "the Horde King's, where the list names one for him")
+			eq(ns.IsSteward(STEWARD), false)
+		end)
+	end)
+
+	test("1.0.0 the King's Steward: acting for the King, he names the Hands and the treasury's keepers and sets its switches; every other client takes them from him alone", function()
+		WithThrone(function(w, K)
+			WithStewardList(STEWARD_A, function()
+				local T, L = ns.Treasury, ns.L
+				local savedSplit = ns.splitNames
+				local ok, err = pcall(function()
+					ns.splitNames = true -- (Forever: a Treasurer's name can be there, the Treasury tab with it)
+					AsSteward()
+					eq(K.IsSteward(), true); eq(K.IsKing(), false); eq(K.IsHand(), false)
+					eq(K.Visible(), true, "the Throne tab"); eq(K.CanCommand(), true)
+					local lines, _, detail = K.Build()
+					eq(lines[1].text, "|T" .. ns.CROWN_ICON .. ":0|t " .. L.STEWARD_ACTING, "acting for the King, on top")
+					eq(detail, L.THRONE_YOU_ARE_STEWARD:format("Asmon"))
+					assert(Texts(lines):find(L.THRONE_ROOM, 1, true) and Texts(lines):find(L.TREASURY_TITLE, 1, true), Texts(lines))
+					assert(Texts(lines):find(L.THRONE_STEWARD_HINT:sub(1, 20), 1, true), "what is his to do")
+					eq(K.StewardStatusLine():find("you, acting for the King", 1, true) ~= nil, true, K.StewardStatusLine())
+					assert(ns.StatusText():find("steward: you, acting for the King", 1, true), "in /oly status")
+					-- The Hands' page, as the King has it.
+					K.Show("hands")
+					lines = K.Build()
+					eq(lines[1].text:find(L.STEWARD_ACTING, 1, true) ~= nil, true, "on every page")
+					local add
+					for _, l in ipairs(lines) do if tostring(l.text):find(L.HANDS_ADD, 1, true) then add = l end end
+					assert(add and add.onClick, "his button to name one")
+					assert(Texts(lines):find(L.HANDS_HINT_STEWARD:sub(1, 30), 1, true), Texts(lines))
+					K.AddHand("Helper")
+					eq(K.Hands()[1], "Helper-Realm"); eq(ns.rdb.kingHands[1], "Helper-Realm", "kept for his next session")
+					K.SendHands(true)
+					local hands = LastSent(w)
+					local date = tonumber(hands:match("^T1~H~(%d+)~Olympus II~Helper%-Realm$"))
+					assert(date and date >= K.DATED, "dated: " .. hands)
+					-- The treasury: its tab, what the King sees of it, its keepers and switches; no book of his own.
+					eq(T.Visible(), true, "the Treasury tab"); eq(T.Role(), "king"); eq(T.IsKeeper(), false)
+					eq(select(3, T.Build()), L.TREASURY_DETAIL_STEWARD)
+					T.AddKeeper("Test Keeper")
+					local keepers = LastSent(w)
+					assert(keepers:find("^T1~K~%d+~Olympus II~%d+~Test Keeper%-Realm$"), keepers)
+					T.SetFlag("balance", true)
+					local flags = LastSent(w)
+					assert(flags:find("^T1~T~%d+~Olympus II~100~%d+$"), flags)
+					-- Another client (a soldier's, fresh): taken from the Steward alone.
+					local function Fresh() K.Reset(); ns.rdb.treasuryKeepers, ns.rdb.treasuryFlags, ns.rdb.kingHands = nil, nil, nil end
+					AsSoldier("Other"); Fresh()
+					for _, sender in ipairs({ "Faker Guy-Realm", "Test Steward-OtherRealm", "Test Councillor-Realm" }) do
+						for _, msg in ipairs({ hands, keepers, flags }) do K.HandleCommand("CHANNEL", sender, msg) end
+						eq(K.IsHandName("Helper-Realm"), false, sender); eq(T.KeeperByName("Test Keeper"), false, sender)
+						eq(T.Shows("balance"), false, sender)
+					end
+					for _, msg in ipairs({ hands, keepers, flags }) do K.HandleCommand("CHANNEL", STEWARD, msg) end
+					eq(K.IsHandName("Helper-Realm"), true, "his Hands"); eq(T.KeeperByName("Test Keeper"), true, "his keepers")
+					eq(T.Shows("balance"), true, "his switch")
+					eq(K.Authorized("A", "Helper-Realm", "Olympus II"), true, "the Hand he named uses the Throne's tools")
+					-- A Hand he named names nobody and sets nothing.
+					K.HandleCommand("CHANNEL", "Helper-Realm", ("T1~H~%d~Olympus II~Other-Realm"):format(date + 5))
+					eq(K.IsHandName("Other-Realm"), false)
+					K.HandleCommand("CHANNEL", "Helper-Realm", ("T1~K~9~Olympus II~%d~Faker Guy-Realm"):format(w.clock + 5))
+					K.HandleCommand("CHANNEL", "Helper-Realm", ("T1~T~9~Olympus II~111~%d"):format(w.clock + 5))
+					eq(T.KeeperByName("Faker Guy"), false); eq(T.Shows("book"), false)
+					-- The Steward taken off in a newer signed list: his word counts for nothing, at once.
+					Signed(function() ns.Workshop.TakeTitles(STEWARD_B) end)
+					K.HandleCommand("CHANNEL", STEWARD, ("T1~K~9~Olympus II~%d~Faker Guy-Realm"):format(w.clock + 10))
+					K.HandleCommand("CHANNEL", STEWARD, ("T1~H~%d~Olympus II~Faker Guy-Realm"):format(date + 10))
+					eq(T.KeeperByName("Faker Guy"), false); eq(K.IsHandName("Faker Guy-Realm"), false)
+					AsSteward()
+					eq(K.IsSteward(), false); eq(K.Visible(), false, "his Throne closes")
+					local n = #w.sent
+					K.AddHand("Other"); T.AddKeeper("Other Keeper"); T.SetFlag("book", true)
+					eq(#w.sent, n, "and his client sends nothing")
+				end)
+				ns.splitNames = savedSplit
+				if not ok then error(err, 0) end
+			end)
+		end)
+	end)
+
+	test("1.0.0 the King's Steward: never the King's own: his crown on the map and his layer, the court, writs, pardons, the untabarded list, his book or his yes", function()
+		WithThrone(function(w, K)
+			WithStewardList(STEWARD_A, function()
+				local T = ns.Treasury
+				AsSteward()
+				for _, kind in ipairs({ "P", "Q", "C", "Z", "W", "F", "U" }) do eq(K.Authorized(kind, STEWARD, "Olympus"), false, kind) end
+				for _, kind in ipairs({ "S", "I", "A", "X", "V", "E", "G", "H", "T", "K" }) do eq(K.Authorized(kind, STEWARD, "Olympus II"), true, kind) end
+				-- His client sends none of them.
+				K.ToggleLocation(); ns.Court.Toggle(); K.ToggleUntabarded()
+				ns.Acts.SendWrit("L", "A writ in the King's name"); ns.Acts.Pardon("Somebody")
+				eq(#w.sent, 0, "no crown, layer, court, untabarded list, writ or pardon")
+				eq(ns.db.throneLocation, nil); eq(ns.Court.Holding(), nil)
+				assert(Printed(w, ns.L.THRONE_ONLY_KING), "told they are the King's")
+				-- The King's book and his yes to share it stay on the King's client: the Steward keeps no book.
+				eq(T.IsKeeper(), false)
+				T.SetConsent(true)
+				eq(T.Consent(), nil, "no yes of his to give")
+				T.SetOpening("100")
+				assert(Printed(w, ns.L.TREASURY_ONLY), "no opening balance to set")
+				-- What he would send of them counts nowhere: another client ignores it.
+				AsSoldier("Other")
+				K.HandleCommand("CHANNEL", STEWARD, "T1~P~1~Olympus~1453~500~500")
+				K.HandleCommand("CHANNEL", STEWARD, "T1~C~5~Olympus~1453~Stormwind City")
+				K.HandleCommand("CHANNEL", STEWARD, "T1~F~6~Olympus~Somebody")
+				eq(K.Location(), nil, "no crown on the map"); eq(ns.Court.Current(), nil, "no court")
+				eq(ns.Acts.Pardoned("Somebody"), false, "no pardon")
+			end)
+		end)
+	end)
+
+	test("1.0.0 the King's Steward: the newest list wins, the King's own on the same date; the King's client takes his Steward's newer list and repeats it; the Hands last while either is online", function()
+		WithThrone(function(w, K)
+			WithStewardList(STEWARD_A, function()
+				local T, L = ns.Treasury, ns.L
+				local savedAfter = ns.After
+				local ok, err = pcall(function()
+					ns.After = function(_, _, fn) fn() end -- (the few seconds before a changed list goes out: at once here)
+					local KING = ns.KingCharacter() .. "-Realm"
+					local d = w.clock
+					local function Hands(date, names) return ("T1~H~%d~Olympus~%s"):format(date, names) end
+					-- A soldier's client.
+					AsSoldier("Other")
+					K.HandleCommand("CHANNEL", STEWARD, Hands(d, "Helper-Realm"))
+					eq(K.IsHandName("Helper-Realm"), true, "the Steward's list")
+					K.HandleCommand("CHANNEL", KING, Hands(d - 60, "Kingsman-Realm"))
+					eq(K.IsHandName("Kingsman-Realm"), false, "an older list of the King's (his client not caught up yet) loses")
+					K.HandleCommand("CHANNEL", KING, Hands(d + 60, "Kingsman-Realm"))
+					eq(K.IsHandName("Kingsman-Realm"), true, "his newer word wins"); eq(K.IsHandName("Helper-Realm"), false)
+					K.HandleCommand("CHANNEL", STEWARD, Hands(d, "Helper-Realm"))
+					eq(K.IsHandName("Helper-Realm"), false, "the Steward's older list, repeated: not again")
+					-- The same date: the King's, whichever came first.
+					K.HandleCommand("CHANNEL", STEWARD, Hands(d + 120, "Helper-Realm"))
+					eq(K.IsHandName("Helper-Realm"), true)
+					K.HandleCommand("CHANNEL", KING, Hands(d + 120, "Kingsman-Realm"))
+					eq(K.IsHandName("Kingsman-Realm"), true, "on the same second, the King's"); eq(K.IsHandName("Helper-Realm"), false)
+					K.HandleCommand("CHANNEL", STEWARD, Hands(d + 120, "Helper-Realm"))
+					eq(K.IsHandName("Kingsman-Realm"), true, "and it stays his")
+					-- Dated far ahead of the server's clock: not taken (nobody dates a list past the King's next word).
+					K.HandleCommand("CHANNEL", STEWARD, Hands(w.clock + K.DATE_AHEAD + 60, "Helper-Realm"))
+					eq(K.IsHandName("Helper-Realm"), false)
+					-- A King's client before 1.0.0 (an id, no date): his word as it reaches us.
+					K.HandleCommand("CHANNEL", KING, "T1~H~42~Olympus~Oldtimer-Realm")
+					eq(K.IsHandName("Oldtimer-Realm"), true); eq(K.IsHandName("Kingsman-Realm"), false)
+					-- The treasury's keepers and switches: the same rule.
+					K.HandleCommand("CHANNEL", STEWARD, ("T1~K~1~Olympus II~%d~Steward Keeper-Realm"):format(d + 10))
+					K.HandleCommand("CHANNEL", KING, ("T1~K~2~Olympus~%d~King Keeper-Realm"):format(d + 5))
+					eq(T.KeeperByName("Steward Keeper"), true, "the King's older word loses"); eq(T.KeeperByName("King Keeper"), false)
+					K.HandleCommand("CHANNEL", KING, ("T1~K~3~Olympus~%d~King Keeper-Realm"):format(d + 10))
+					eq(T.KeeperByName("King Keeper"), true, "the King's, on the same second"); eq(T.KeeperByName("Steward Keeper"), false)
+					K.HandleCommand("CHANNEL", STEWARD, ("T1~K~4~Olympus II~%d~Steward Keeper-Realm"):format(d + 10))
+					eq(T.KeeperByName("King Keeper"), true, "and it stays his")
+					K.HandleCommand("CHANNEL", STEWARD, ("T1~T~5~Olympus II~111~%d"):format(d + 20))
+					K.HandleCommand("CHANNEL", KING, ("T1~T~6~Olympus~000~%d"):format(d + 15))
+					eq(T.Shows("book"), true, "the Steward's newer switches")
+					K.HandleCommand("CHANNEL", KING, ("T1~T~7~Olympus~000~%d"):format(d + 20))
+					eq(T.Shows("book"), false, "the King's, on the same second")
+					-- The King's client: his Steward's newer list becomes his (he is told, the name cut
+					-- short on his stream), and he repeats it with its date.
+					K.Reset(); ns.rdb.treasuryKeepers, ns.rdb.treasuryFlags = nil, nil
+					AsKing()
+					K.AddHand("Kingsman")
+					local kd = tonumber(LastSent(w):match("^T1~H~(%d+)~Olympus~Kingsman%-Realm$"))
+					assert(kd, LastSent(w))
+					K.HandleCommand("CHANNEL", STEWARD, ("T1~H~%d~Olympus II~Helper-Realm"):format(kd + 30))
+					eq(K.Hands()[1], "Helper-Realm"); eq(#K.Hands(), 1)
+					assert(Printed(w, L.STEWARD_SET_HANDS:format(ns.MaskName("Test Steward"))), "the King is told, the name hidden on his stream")
+					K.SendHands(true)
+					eq(LastSent(w), ("T1~H~%d~Olympus~Helper-Realm"):format(kd + 30), "his client repeats it, with its date")
+					-- An older list heard (a Steward's client back after a while): his client answers with the newer one.
+					local n = #w.sent
+					K.HandleCommand("CHANNEL", STEWARD, ("T1~H~%d~Olympus II~Stale-Realm"):format(kd - 30))
+					eq(K.Hands()[1], "Helper-Realm", "not taken")
+					eq(#w.sent, n + 1, "answered at once"); eq(LastSent(w), ("T1~H~%d~Olympus~Helper-Realm"):format(kd + 30))
+					K.HandleCommand("CHANNEL", STEWARD, ("T1~H~%d~Olympus II~Stale-Realm"):format(kd - 30))
+					eq(#w.sent, n + 1, "once in HANDS_ANSWER")
+					-- His next change is newer than his Steward's, whatever the clock says.
+					K.AddHand("Kingsman")
+					local again = tonumber(LastSent(w):match("^T1~H~(%d+)~"))
+					assert(again and again > kd + 30, LastSent(w))
+					-- The same for his switches: the Steward's newer word is his client's, repeated; an older
+					-- one heard is answered.
+					K.HandleCommand("CHANNEL", STEWARD, ("T1~T~8~Olympus II~010~%d"):format(w.clock))
+					assert(Printed(w, L.STEWARD_SET_FLAGS:format(ns.MaskName("Test Steward"))), "told")
+					n = #w.sent
+					T.SendFlags(true)
+					eq(LastSent(w), ("T1~T~%d~Olympus~010~%d"):format(tonumber(LastSent(w):match("^T1~T~(%d+)~")), w.clock))
+					K.HandleCommand("CHANNEL", STEWARD, ("T1~T~9~Olympus II~111~%d"):format(w.clock - 100))
+					eq(T.Shows("ranking"), true); eq(T.Shows("book"), false, "the older word not taken")
+					eq(#w.sent, n + 2, "answered with the newer one"); assert(LastSent(w):find("~010~" .. w.clock .. "$"), LastSent(w))
+					-- The Hands last while the King or his Steward repeats them; a list nobody repeats ends.
+					AsSoldier("Other"); K.Reset()
+					local sd = w.clock
+					K.HandleCommand("CHANNEL", STEWARD, ("T1~H~%d~Olympus II~Helper-Realm"):format(sd))
+					w.clock = w.clock + K.HANDS_FRESH - 60
+					K.HandleCommand("CHANNEL", STEWARD, ("T1~H~%d~Olympus II~Helper-Realm"):format(sd)) -- his client's repeat
+					w.clock = w.clock + K.HANDS_FRESH - 60
+					eq(K.IsHandName("Helper-Realm"), true, "repeated by the Steward: it lasts")
+					w.clock = w.clock + 120
+					eq(K.IsHandName("Helper-Realm"), false, "nobody repeating it: it ends")
+					-- On the Steward's own client it never lapses, and his client repeats it, the treasury's words too.
+					AsSteward()
+					eq(K.IsHandName("Helper-Realm"), true, "his list, on his client")
+					ns.rdb.treasuryFlags = { balance = true, at = w.clock }
+					ns.rdb.treasuryKeepers = { at = w.clock, names = { "Test Keeper-Realm" } }
+					n = #w.sent
+					K.SendHands(); T.SendFlags(); T.SendKeepers()
+					eq(#w.sent, n + 3)
+					assert(w.sent[n + 1].msg:find("^T1~H~%d+~Olympus II~Helper%-Realm$"), w.sent[n + 1].msg)
+					assert(w.sent[n + 2].msg:find("^T1~T~") and w.sent[n + 3].msg:find("^T1~K~"), "his switches and keepers")
+					K.SendHands(); T.SendFlags(); T.SendKeepers()
+					eq(#w.sent, n + 3, "once in their 5 minutes")
+					AsSoldier("Other")
+					K.SendHands(true); T.SendFlags(true); T.SendKeepers(true)
+					eq(#w.sent, n + 3, "nobody else repeats them")
+				end)
+				ns.After = savedAfter
+				if not ok then error(err, 0) end
+			end)
+		end)
+	end)
+
+	test("1.0.0 the King's Steward: his decrees are the Crown's on every client, <Olympus>'s own too, past the flood guard like the King's", function()
+		WithStewardList(STEWARD_A, function()
+			Scene(0, function(s)
+				local cns, Decree, Logged = DecreeClient(s)
+				Flood(s, Decree, "Stew")
+				eq(#cns.Decree.Active(), 6, "the flood guard is full")
+				s.clock = s.clock + 1
+				Logged(STEWARD, "ROYAL", "Olympus", "the Steward's royal decree")
+				eq(#cns.Decree.Active(), 7, "past six census Captains, no census of him needed")
+				eq(cns.Decree.Active()[1].sender, "Test Steward"); eq(cns.Decree.Active()[1].kind, "ROYAL")
+				eq(cns.Decree.Active()[1].text, "the Steward's royal decree")
+				eq(Line(STEWARD, "L", "Olympus"), "shown", "his [Lords] line for <Olympus>")
+				-- Only for the King's guild: for another, the census rules as for anyone.
+				s.clock = s.clock + 61
+				Logged(STEWARD, "ROYAL", "Olympus Zeus")
+				eq(#cns.Decree.Active(), 7)
+				-- Nobody else: a namesake on another realm group, a councillor.
+				Logged("Test Steward-OtherRealm", "ROYAL", "Olympus")
+				Logged("Test Councillor-Realm", "ROYAL", "Olympus")
+				eq(#cns.Decree.Active(), 7)
+			end)
+			-- <Olympus>'s own members' clients: the King's Steward too, as the King (not in its roster).
+			Scene(1, function(s)
+				GetGuildInfo = function() return "Olympus", "Knight", 1 end
+				ns.Roster.Scan()
+				local cns, _, Logged = DecreeClient(s)
+				Logged(STEWARD, "ROYAL", "Olympus", "for the King")
+				eq(cns.Decree.Active()[1] and cns.Decree.Active()[1].sender, "Test Steward")
+				Logged("Helper-Realm", "ROYAL", "Olympus")
+				eq(#cns.Decree.Active(), 1, "not anyone outside the roster")
+			end)
+		end)
+	end)
+
+	test("1.0.0 the King's Steward: his client sends the Crown's decrees for the King's guild, whatever his own rank", function()
+		WithStewardList(STEWARD_A, function()
+			local saved = { send = ns.Comm.Send, guild = GetGuildInfo, me = ns.me, map = C_Map.GetBestMapForUnit, pos = C_Map.GetPlayerMapPosition,
+				print = ns.Print, alert = ns.PlayAlert, notice = RaidNotice_AddMessage }
+			local ok, err = pcall(function()
+				local sent = {}
+				ns.Comm.Send = function(dist, msg, key, urgent, logged) sent[#sent + 1] = { dist = dist, msg = msg, logged = logged } end
+				C_Map.GetBestMapForUnit = function() return 1453 end
+				C_Map.GetPlayerMapPosition = function() return { GetXY = function() return 0.42, 0.51 end } end
+				ns.Print, ns.PlayAlert, RaidNotice_AddMessage = function() end, function() end, nil
+				AsSteward()
+				eq(ns.Roster.IsOfficer(), false, "no officer of his guild")
+				eq(ns.Decree.CanSend("ROYAL"), true); eq(ns.Decree.CanSend("ARMS"), true)
+				ns.Decree.Send("ROYAL", "in the King's name")
+				local d = sent[1] and Codec.DecodeDecree(sent[1].msg)
+				assert(d, "sent")
+				eq(d.kind, "ROYAL"); eq(d.guild, "Olympus", "for the King's guild"); eq(d.text, "in the King's name")
+				eq(sent[1].logged, true, "logged, as every decree")
+				-- A soldier of the same guild: the preview only.
+				ns.me = "Soldier-Realm"
+				eq(ns.Decree.CanSend("ROYAL"), false)
+			end)
+			ns.Comm.Send, GetGuildInfo, ns.me, C_Map.GetBestMapForUnit, C_Map.GetPlayerMapPosition = saved.send, saved.guild, saved.me, saved.map, saved.pos
+			ns.Print, ns.PlayAlert, RaidNotice_AddMessage = saved.print, saved.alert, saved.notice
+			if not ok then error(err, 0) end
+		end)
+	end)
+
+	test("1.0.0 the King's Steward: 0.9.8 and 0.9.9 clients take the new titles list without errors, show the same council, pass it on whole, and follow the King's dated Hands, never a Steward's", function()
+		WithThrone(function(w, K)
+			WithStewardList(nil, function()
+				local dialogs, ci, savedChannel = {}, C_ChatInfo, GetChannelName
+				for k, v in pairs(StaticPopupDialogs) do dialogs[k] = v end
+				local ok, err = pcall(function()
+					GetChannelName = function() return 5 end
+					local pieces = Codec.Chunk("HT~" .. STEWARD_A, "77")
+					assert(#pieces > 1, "in pieces, as a relay sends it")
+					-- 0.9.8: its Comm (tests/fixtures), no handler for the titles (0.9.9's): put together from
+					-- its pieces, counted as a message it can't read and dropped, without an error, exactly
+					-- as the titles list 0.9.9 and 1.0.0 have been relaying without a Steward.
+					local function OldHears(blob)
+						local old, Deliver = FreshComm(true)
+						local logs = {}
+						old.Log = function(fmt, ...) logs[#logs + 1] = fmt:format(...) end
+						for _, p in ipairs(Codec.Chunk("HT~" .. blob, "78")) do Deliver("CHANNEL", "Relay-Realm", p) end
+						local st = old.Comm.Stats()
+						return st, logs
+					end
+					local st, logs = OldHears(STEWARD_A)
+					local was, wasLogs = OldHears(STEWARD_B)
+					eq(st.recv, #pieces, "heard"); eq(st.partial, 0, "every piece put together"); eq(st.reports, 0, "no census report made of it")
+					eq(st.bad, was.bad, "the same as a list without a Steward"); eq(#logs, #wasLogs)
+					eq(st.byType["ch:chunk"], #pieces)
+					-- 0.9.9: the same Comm and its Workshop's titles (tests/fixtures/titles-0.9.9.lua).
+					local old2, Deliver2 = FreshComm(true)
+					old2.rdb = {}
+					local W99 = assert(loadfile(ROOT .. "tests/fixtures/titles-0.9.9.lua"))(old2, ns.Workshop)
+					Signed(function() for _, p in ipairs(pieces) do Deliver2("CHANNEL", "Relay-Realm", p) end end)
+					local t = old2.rdb.councilTitles
+					assert(t, "taken: its signature holds")
+					eq(t.blob, STEWARD_A, "kept whole, so its relays pass it on as signed (and the Steward with it)")
+					eq(#t.depts, 1, "one part, the council's own: no department for the Steward's entry")
+					eq(t.depts[1].name, ""); eq(t.depts[1].members[1].name, "Test Councillor"); eq(t.depts[1].members[1].title, "Council Speaker")
+					eq(W99.TakeTitles(STEWARD_A), false, "(held already)")
+					-- This version takes the list a 0.9.9 client passes on: the Steward.
+					Signed(function() eq(ns.Workshop.TakeTitles(t.blob, "Relay99-Realm"), true) end)
+					eq(ns.IsSteward(STEWARD), true)
+					-- The King's list of Hands, dated (1.0.0), on a 0.9.8 or 0.9.9 client (their King.lua,
+					-- tests/fixtures/king-0.9.8.lua): the same Hands, the date never read as a name.
+					AsKing(); K.AddHand("Helper"); K.AddHand("Other Hand"); K.SendHands(true)
+					local list = LastSent(w)
+					assert(tonumber(list:match("^T1~H~(%d+)~")) >= K.DATED, list)
+					local kns = setmetatable({ On = function() end, Comm = { Handle = function() end }, rdb = {} }, { __index = ns })
+					assert(loadfile(ROOT .. "tests/fixtures/king-0.9.8.lua"))("Olympus", kns)
+					local OK = kns.King
+					GetGuildInfo = function() return "Olympus II", "Member", 3 end
+					kns.me = "Helper-Realm"
+					OK.HandleCommand("CHANNEL", ns.KingCharacter() .. "-Realm", list)
+					eq(OK.IsHand(), true, "the King's Hand there too")
+					eq(OK.Authorized("A", "Other Hand-Realm", "Olympus II"), true); eq(OK.Authorized("A", "Stranger-Realm", "Olympus II"), false)
+					-- A Steward's list: not the King's, so a client before 1.0.0 never takes it.
+					OK.HandleCommand("CHANNEL", STEWARD, ("T1~H~%d~Olympus II~Stranger-Realm"):format(w.clock))
+					eq(OK.Authorized("A", "Stranger-Realm", "Olympus II"), false, "a Steward's list: not taken before 1.0.0")
+					eq(OK.IsHand(), true, "and the King's stays")
+				end)
+				wipe(StaticPopupDialogs)
+				for k, v in pairs(dialogs) do StaticPopupDialogs[k] = v end
+				C_ChatInfo, GetChannelName = ci, savedChannel
+				if not ok then error(err, 0) end
+			end)
+		end)
+	end)
+
+	test("1.0.0 the King's Steward: his Throne's buttons (the Hands, the treasury's switches; never the crown or the court), in Olympus's own dialogs with the gamepad UI", function()
+		WithUI(function()
+			WithStewardList(STEWARD_A, function()
+				local saved = { guild = GetGuildInfo, send = ns.Comm.Send, split = ns.splitNames, me = ns.me }
+				local ok, err = pcall(function()
+					AsSteward()
+					ns.splitNames = true
+					ns.Comm.Send = function() end
+					local w, UI = ForeverWorld(true)
+					CommunitiesFrame:Show(); w.buttons[1]:Click()
+					local main = OlympusFrameHD
+					local function Shown()
+						local out = {}
+						for _, d in ipairs(main.detailButtons) do if d:IsShown() then out[#out + 1] = d:GetText() end end
+						return table.concat(out, " | ")
+					end
+					UI.SelectTab("throne")
+					local throne = Shown()
+					assert(throne:find(ns.L.HANDS_BTN, 1, true), "his Hands: " .. throne)
+					eq(throne:find(ns.L.THRONE_LOCATION_ON, 1, true), nil, "never the King's crown: " .. throne)
+					for _, b in ipairs(main.buttons or {}) do
+						if b:IsShown() then eq(b:GetText() == ns.L.COURT_BTN_OPEN, false, "never the court") end
+					end
+					UI.SelectTab("treasury")
+					local treasury = Shown()
+					assert(treasury:find(ns.L.TREASURY_FLAG_BALANCE_HIDDEN, 1, true) and treasury:find(ns.L.TREASURY_FLAG_BOOK_HIDDEN, 1, true),
+						"the three switches: " .. treasury)
+				end)
+				GetGuildInfo, ns.Comm.Send, ns.splitNames, ns.me = saved.guild, saved.send, saved.split, saved.me
+				ns.King.Reset(); ns.Treasury.Reset()
+				if not ok then error(err, 0) end
+			end)
+		end)
+		-- The gamepad UI: naming a Hand and a keeper in Olympus's own dialogs, never the game's popup.
+		WithUI(function()
+			LoadUI()
+			WithGamepadUI(true, function(game)
+				WithThrone(function(w, K)
+					WithStewardList(STEWARD_A, function()
+						local T = ns.Treasury
+						local savedSplit = ns.splitNames
+						local ok, err = pcall(function()
+							ns.splitNames = true
+							AsSteward()
+							K.Show("hands")
+							for _, l in ipairs(K.Build()) do if tostring(l.text):find(ns.L.HANDS_ADD, 1, true) then l.onClick() end end
+							eq(#game.shown, 0, "never the game's popup"); eq(#w.popups, 0)
+							local f = ns.Dialog.Find("OLYMPUS_KING_HAND")
+							assert(f and f:IsShown() and f.editBox:IsShown(), "our dialog, with its box")
+							f.editBox:SetText("Helper")
+							f.buttons[1]:Click()
+							eq(K.Hands()[1], "Helper-Realm"); eq(f:IsShown(), false)
+							T.Show("keepers")
+							for _, l in ipairs(T.Build()) do if tostring(l.text):find(ns.L.TREASURY_KEEPER_ADD, 1, true) then l.onClick() end end
+							f = ns.Dialog.Find("OLYMPUS_TREASURY_KEEPER")
+							assert(f and f:IsShown(), "our dialog")
+							f.editBox:SetText("Test Keeper")
+							f.buttons[1]:Click()
+							eq(T.Keepers()[1], "Test Keeper-Realm")
+							eq(#game.shown, 0, "still never the game's popup")
+						end)
+						ns.splitNames = savedSplit
+						if not ok then error(err, 0) end
+					end)
+				end)
+			end)
+		end)
+	end)
+
+	test("1.0.0 the King's Steward: his lines in both languages", function()
+		local keys = { "STEWARD_ACTING", "THRONE_YOU_ARE_STEWARD", "THRONE_STEWARD_HINT", "HANDS_HINT_STEWARD", "HANDS_NOTE_STEWARD",
+			"HANDS_YOU_STEWARD", "STEWARD_SET_HANDS", "STEWARD_SET_FLAGS", "STEWARD_SET_KEEPERS", "STEWARD_YOU", "STEWARD_NO_LONGER",
+			"TREASURY_DETAIL_STEWARD" }
+		local pt = { L = setmetatable({}, { __index = ns.L }) }
+		local savedLocale = GetLocale
+		GetLocale = function() return "ptBR" end
+		local ok, err = pcall(function() assert(loadfile(ADDON_DIR .. "Locales.lua"))("Olympus", pt) end)
+		GetLocale = savedLocale
+		if not ok then error(err, 0) end
+		for _, k in ipairs(keys) do
+			assert(rawget(ns.L, k) and rawget(ns.L, k) ~= k, "English: " .. k)
+			assert(rawget(pt.L, k) and rawget(pt.L, k) ~= rawget(ns.L, k), "pt-BR: " .. k)
+		end
+		eq(ns.L.STEWARD_ACTING, "Acting for the King"); eq(rawget(pt.L, "STEWARD_ACTING"), "Agindo pelo Rei")
+	end)
 end
 
 test("1.0.0 the Hands' hint says they speak with the King's Crown to the other guilds (both languages)", function()

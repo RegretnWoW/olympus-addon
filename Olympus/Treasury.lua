@@ -43,6 +43,7 @@ local L = ns.L
 --     that book last changed; a keeper's own TB always counts over it.
 --   T1~T~<id>~<guild>~<balance 0|1><ranking 0|1><book 0|1>~<time>        the King's switches (King.lua)
 --   T1~K~<id>~<guild>~<time>~<Name-Realm,...>                              the King's keepers
+--     (1.0.0: his Steward's too, in his name; the newest word wins, the King's on the same second)
 --   TX~<guild>                                                            a keeper withdraws his book
 --   TX~<guild>~<Name-Realm>              the Treasurer withdraws his mail character's (kept private)
 --   TE~<guild>~<time>~<piece>~<pieces>~<Name,...>   the early supporters (0.9's donors), in pieces
@@ -221,7 +222,10 @@ function Treasury.SetDevView(on)
 	ns.Fire("DATA_CHANGED")
 end
 
-local function IsKingView() return ns.King.IsKing() or ns.King.Preview() end
+-- The King's view of the treasury: the King, his Steward (1.0.0: the switches and the keepers
+-- are his to set in the King's name, never the King's own book or his yes to share it, which
+-- are the King's client's alone), and the author's Asmon's view.
+local function IsKingView() return ns.King.IsKing() or ns.King.IsSteward() or ns.King.Preview() end
 
 -- The King's list of keepers as this client last heard it (never expires: a keeper's book must
 -- not leave the treasury while the King is offline). { at, names = { "Name-Realm", ... } }
@@ -321,11 +325,11 @@ function Treasury.AnyShown()
 	return false
 end
 
--- Who has the tab: the keepers, the King (where a Treasurer can be, or once a book came; the
--- author's view always), and every member once the King shows the army something.
+-- Who has the tab: the keepers, the King and his Steward (where a Treasurer can be, or once a
+-- book came; the author's view always), and every member once the King shows the army something.
 function Treasury.Visible()
 	if Treasury.IsKeeper() or ns.King.Preview() then return true end
-	if ns.King.IsKing() then return (ns.splitNames and ns.faction ~= "Horde") or Treasury.Report() ~= nil end
+	if ns.King.SetsLists() then return (ns.splitNames and ns.faction ~= "Horde") or Treasury.Report() ~= nil end
 	return ns.IsMember() and Treasury.AnyShown() and Treasury.Report() ~= nil
 end
 
@@ -1475,20 +1479,42 @@ end
 
 ---------------------------------------------------------------------------
 -- The King's switches (what the army sees) and his keepers
+-- 1.0.0: his Steward sets them too, in his name (King.STEWARD_MAY: T, K). A word carries the
+-- time it was given; the newest wins everywhere, and on the same second the King's own over his
+-- Steward's: the King's newer word always wins. The King's client and his Steward's take the
+-- newest word as theirs and repeat it, and answer an older one they hear with theirs (at most
+-- once in WORD_ANSWER); the Treasurer's book repeats it too.
 ---------------------------------------------------------------------------
 
--- The King's client repeats his word, with the time he gave it (a client that never heard it
--- from him sends nothing: it takes his word as the Treasurer repeats it).
+Treasury.WORD_ANSWER = 30
+
+-- A word dated `at` from `sender` replaces the one kept: newer, or the King's own of the same
+-- second over anyone else's.
+local function Replaces(kept, at, sender)
+	local was = type(kept) == "table" and tonumber(kept.at) or nil
+	if not was or at ~= was then return was == nil or at > was end
+	return ns.IsKingCharacter(sender) and not ns.IsKingCharacter(kept.from)
+end
+
+-- Told on the King's screen: his Steward changed one of his words (the name cut short while the
+-- council's names are hidden there, his stream).
+local function TellKing(sender, text)
+	if ns.King.IsKing() and ns.King.IsStewardName(sender) then ns.Print(text:format(ns.King.StewardLabel(sender))) end
+end
+
+-- The King's client and his Steward's repeat the word, with the time it was given (a client that
+-- never heard it sends nothing: it takes the word as the Treasurer repeats it).
 function Treasury.SendFlags(force)
 	local f = ns.rdb and ns.rdb.treasuryFlags
-	if not ns.King.IsKing() or type(f) ~= "table" or not tonumber(f.at) then return end
+	if not ns.King.SetsLists() or type(f) ~= "table" or not tonumber(f.at) then return end
 	local now = ns.Now()
 	if not force and now - lastFlagsSent < Treasury.FLAGS_EVERY then return end
 	lastFlagsSent = now
 	ns.Comm.Send("CHANNEL", ("T1~T~%d~%s~%s~%d"):format(ns.King.NewId(), GetGuildInfo("player") or "", FlagDigits(f), math.floor(f.at)), "treasuryflags")
 end
 
--- The King's switch (the author's Asmon's view: its own switches, on his screen only).
+-- The King's switch, or his Steward's in his name (the author's Asmon's view: its own switches,
+-- on his screen only).
 function Treasury.SetFlag(what, on)
 	if not IsKingView() then return ns.Print(L.THRONE_ONLY_KING) end
 	local f = {}
@@ -1496,7 +1522,7 @@ function Treasury.SetFlag(what, on)
 	f[what] = on and true or false
 	-- Each word newer than the last, two clicks in one second too (the army takes the newest).
 	local prev = ns.King.Preview() and ns.db.previewTreasuryFlags or ns.rdb.treasuryFlags
-	f.t, f.at = ns.Now(), math.max(Clock(), (type(prev) == "table" and tonumber(prev.at) or 0) + 1)
+	f.t, f.at, f.from = ns.Now(), math.max(Clock(), (type(prev) == "table" and tonumber(prev.at) or 0) + 1), ns.me
 	ns.Print(L["TREASURY_FLAG_" .. what:upper() .. (on and "_ON" or "_OFF")])
 	if ns.King.Preview() then
 		ns.db.previewTreasuryFlags = f
@@ -1509,18 +1535,31 @@ function Treasury.SetFlag(what, on)
 	ns.Fire("DATA_CHANGED")
 end
 
--- The King's word ("101" and the time he gave it), from him or repeated by the Treasurer:
--- taken when newer than the one kept (a time a little ahead of ours at most).
+-- An older word heard (the King's client or a Steward's after a while away, the Treasurer's
+-- book not caught up yet): the King's client and his Steward's answer with the newer one.
+local lastWordAnswer = -math.huge
+local function AnswerOlder(send)
+	if not ns.King.SetsLists() or ns.Now() - lastWordAnswer < Treasury.WORD_ANSWER then return end
+	lastWordAnswer = ns.Now()
+	send(true)
+end
+
+-- The King's word ("101" and the time it was given), from him or his Steward, or repeated by
+-- the Treasurer: taken when newer than the one kept (a time a little ahead of ours at most).
 function Treasury.TakeFlags(digits, at, sender)
 	local b, r, k = tostring(digits or ""):match("^([01])([01])([01])$")
 	at = tonumber(at)
 	if not b or not at or at > Clock() + 600 then return end
 	local kept = ns.rdb.treasuryFlags
-	if type(kept) == "table" and (tonumber(kept.at) or 0) >= at then return end
+	if not Replaces(kept, at, sender) then
+		if type(kept) == "table" and at < (tonumber(kept.at) or 0) then AnswerOlder(Treasury.SendFlags) end
+		return
+	end
 	local was = type(kept) == "table" and FlagDigits(kept) or "000"
 	local f = { balance = b == "1", ranking = r == "1", book = k == "1", at = at, t = ns.Now(), from = ns.FullName(sender) }
 	ns.rdb.treasuryFlags = f
 	if FlagDigits(f) ~= was then
+		TellKing(sender, L.STEWARD_SET_FLAGS)
 		-- A keeper is told who sees the treasury now.
 		if CanSend() then ns.Print(Treasury.WhoSees()) end
 		ns.Fire("TREASURY_CHANGED")
@@ -1532,8 +1571,8 @@ ns.King.Register("T", function(sender, id, rest)
 	Treasury.TakeFlags(digits, at, sender)
 end)
 
--- A name the King typed or targeted (typed: his target when he typed none), as the server
--- writes it; nil if it can't be a character.
+-- A name the King (or his Steward) typed or targeted (typed: his target when he typed none), as
+-- the server writes it; nil if it can't be a character.
 local function KeeperName(input, typed)
 	local name = tostring(input or ""):gsub("^%s+", ""):gsub("%s+$", "")
 	if name == "" and typed then
@@ -1546,10 +1585,11 @@ local function KeeperName(input, typed)
 	return ns.FullName(short, realm)
 end
 
--- The King's list as it goes out (T1~K): dated, the newest word wins everywhere.
+-- The King's list as it goes out (T1~K), from his client or his Steward's: dated, the newest
+-- word wins everywhere.
 function Treasury.SendKeepers(force)
 	local k = KeeperStore()
-	if not ns.King.IsKing() or not (k and tonumber(k.at)) then return end
+	if not ns.King.SetsLists() or not (k and tonumber(k.at)) then return end
 	local now = ns.Now()
 	if not force and now - lastKeepersSent < Treasury.FLAGS_EVERY then return end
 	lastKeepersSent = now
@@ -1558,11 +1598,11 @@ function Treasury.SendKeepers(force)
 	ns.Comm.Send("CHANNEL", ("T1~K~%d~%s~%d~%s"):format(ns.King.NewId(), GetGuildInfo("player") or "", math.floor(k.at), table.concat(names, ",")), "treasurykeepers")
 end
 
--- The King's list changed on his screen (his own, or the author's view's): kept, sent.
+-- The King's list changed on his screen (his own, his Steward's, or the author's view's): kept, sent.
 local function SetKeepers(names)
 	local preview = ns.King.Preview()
 	local prev = preview and ns.db.previewTreasuryKeepers or KeeperStore()
-	local k = { names = names, t = ns.Now(), at = math.max(Clock(), (type(prev) == "table" and tonumber(prev.at) or 0) + 1) }
+	local k = { names = names, t = ns.Now(), at = math.max(Clock(), (type(prev) == "table" and tonumber(prev.at) or 0) + 1), from = ns.me }
 	if preview then
 		ns.db.previewTreasuryKeepers = k
 		ns.Print(L.THRONE_PREVIEW_NOTE)
@@ -1604,14 +1644,19 @@ function Treasury.RemoveKeeper(name)
 	SetKeepers(names)
 end
 
--- The King's list (from him, or repeated by the Treasurer): taken when newer than the one kept.
--- A character named sees its book open at its gold now and is asked to share it; the books of
--- characters no longer on it leave the treasury.
+-- The King's list (from him or his Steward, or repeated by the Treasurer): taken when newer than
+-- the one kept. A character named sees its book open at its gold now and is asked to share it;
+-- the books of characters no longer on it leave the treasury.
 function Treasury.TakeKeepers(at, text, sender)
 	at = tonumber(at)
 	if not at or at > Clock() + 600 then return end
 	local kept = KeeperStore()
-	if kept and (tonumber(kept.at) or 0) >= at then return end
+	if not Replaces(kept, at, sender) then
+		if kept and at < (tonumber(kept.at) or 0) then AnswerOlder(Treasury.SendKeepers) end
+		return
+	end
+	local before = {}
+	for i, n in ipairs(kept and kept.names or {}) do before[i] = n end
 	local names = {}
 	for entry in tostring(text or ""):gmatch("[^,]+") do
 		local name = KeeperName(entry)
@@ -1619,6 +1664,7 @@ function Treasury.TakeKeepers(at, text, sender)
 	end
 	local was = RealKeeper()
 	ns.rdb.treasuryKeepers = { at = at, names = names, t = ns.Now(), from = ns.FullName(sender) }
+	if table.concat(names, ",") ~= table.concat(before, ",") then TellKing(sender, L.STEWARD_SET_KEEPERS) end
 	-- Books of characters no longer keepers: no longer kept.
 	local reports, gone = Reports(), {}
 	for from, r in pairs(reports) do
@@ -2324,7 +2370,8 @@ function Treasury.Build(q)
 	if Treasury.mode == "book" then lines = BookLines(role, q)
 	elseif Treasury.mode == "keepers" then lines = KeeperLines()
 	else lines = SummaryLines(role, q) end
-	local detail = role == "king" and L.TREASURY_DETAIL_KING or role == "keeper" and L.TREASURY_DETAIL_TREASURER or L.TREASURY_DETAIL_MEMBER
+	local detail = role == "king" and (ns.King.IsSteward() and L.TREASURY_DETAIL_STEWARD or L.TREASURY_DETAIL_KING)
+		or role == "keeper" and L.TREASURY_DETAIL_TREASURER or L.TREASURY_DETAIL_MEMBER
 	return lines, L.TAB_TREASURY, detail
 end
 
@@ -2416,7 +2463,7 @@ StaticPopupDialogs["OLYMPUS_TREASURY_OPENING"] = {
 -- Tests start from a clean state.
 function Treasury.Reset()
 	trade, mailOut, lastShare, sharePending, lastFlagsSent, lastKeepersSent = nil, nil, -math.huge, false, -math.huge, -math.huge
-	asked = false
+	asked, lastWordAnswer = false, -math.huge
 	wipe(pending)
 	wipe(itemPending)
 	lastMoney, lastRelay = nil, -math.huge

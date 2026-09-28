@@ -376,6 +376,8 @@ function ns.StatusText()
 	add("hop: %s", ns.Hop and ns.Hop.StatusLine and ns.Hop.StatusLine() or "not loaded")
 	-- (1.0.0) The King as this client knows him: why his layer can or can't be asked for.
 	add("king: %s", ns.Hop and ns.Hop.KingStatusLine and ns.Hop.KingStatusLine() or "not loaded")
+	-- (1.0.0) The King's Steward as the signed titles list names him here, and the Hands held.
+	add("steward: %s", ns.King and ns.King.StewardStatusLine and ns.King.StewardStatusLine() or "not loaded")
 	add("borders: %s", ns.Borders and ns.Borders.StatusLine and ns.Borders.StatusLine() or "not loaded")
 	-- The gamepad UI and what the game refused us this session; what its code reads, as now.
 	local refused = type(ns.db.actionsBlocked) == "table" and ns.db.actionsBlocked or {}

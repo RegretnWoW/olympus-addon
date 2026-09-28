@@ -1065,6 +1065,10 @@ end
 -- A department's name may be empty (councillors outside any department: the council's own);
 -- its icon is what ns.CouncilIconValue takes, or nothing. "public" says whether the army sees
 -- the council in the census yet (ns.CouncilVisible).
+-- The King's Steward (1.0.0, Core.lua: ns.ReadStewards, ns.IsSteward) rides the same list, in an
+-- entry of its own among the departments with three "^" (a department has two, so 0.9.9 and
+-- ReadDepartments leave it out, and 0.9.9 still takes, shows and passes on the whole list):
+--   ^steward^<Alliance|Horde>^<First Surname-Realm>,...
 -- A client that lacks the lists asks for them (0.9.9, a moderator's report: a councillor's
 -- client that never got the list had no "My council icon", and relays alone can take hours):
 --   HQ~<time of the name list it holds, or 0>~<time of the titles list it holds, or 0>
@@ -1363,8 +1367,22 @@ function Workshop.TakeTitles(blob, sender)
 		return false
 	end
 	local depts, n = ReadDepartments(list)
-	ns.rdb.councilTitles = { at = at, public = public == "1", realm = realm ~= "" and realm or nil, depts = depts, blob = blob }
-	ns.Log("High Council: a signed titles list of %d names in %d parts (%s)", n, #depts, tostring(at))
+	-- The King's Steward (1.0.0, ns.ReadStewards): an entry of its own among the departments,
+	-- which ReadDepartments (and 0.9.9) leave out. This client is told when it becomes his or ends.
+	local function Steward() return type(ns.King) == "table" and type(ns.King.IsSteward) == "function" and ns.King.IsSteward() end
+	local was = Steward()
+	local stewards = ns.ReadStewards(list)
+	ns.rdb.councilTitles = { at = at, public = public == "1", realm = realm ~= "" and realm or nil, depts = depts, blob = blob, stewards = stewards }
+	local named = 0
+	for _, names in pairs(stewards) do named = named + #names end
+	ns.Log("High Council: a signed titles list of %d names in %d parts, %d Steward(s) (%s)", n, #depts, named, tostring(at))
+	local now = Steward()
+	if now and not was then
+		ns.Print(L.STEWARD_YOU:format(ns.KingName(ns.KingCharacter())))
+		ns.PlayAlert("soft")
+	elseif was and not now then
+		ns.Print(L.STEWARD_NO_LONGER)
+	end
 	ns.Fire("DATA_CHANGED")
 	return true
 end

@@ -148,7 +148,9 @@ the officers of `<Olympus>` are of the Crown for `<Olympus>`'s own members, whos
 server's word) names them: on every other client, where only the census could, they count as
 Captains, and the Crown of `<Olympus>` there is the King himself (by his character's name) and
 the Hands he names, on his word alone: while his list names them, a Hand who is one of its
-officers has its Royal decrees, Tabard inspections and [Lords] lines on every client.
+officers has its Royal decrees, Tabard inspections and [Lords] lines on every client. The
+King's Steward (1.0.0, [below](#the-kings-steward-100)) sends the Crown's decrees for
+`<Olympus>` on every client, whatever his rank, like the King.
 
 ### Channels
 Chat for the whole federation, carried by the addon over its hidden Olympus channel (no
@@ -229,6 +231,8 @@ tools lives where it belongs:
   writs, pardons or his crown on the map. Their addons learn the list from his, and it ends
   when he stops sending it. A Hand who is an officer of `<Olympus>` keeps its Crown (Royal
   decrees, Tabard inspections, [Lords]) on every client, not only on its members' (1.0.0).
+  His Steward names and removes them too, and the list lasts while either of them is online
+  (1.0.0, [below](#the-kings-steward-100)).
 - **Show me on the map** (his own button, with the crown): while he turns it on, everyone with
   the addon sees a crown where he is, on the world map and the minimap. Off by default (his
   position is on stream); the same button hides it, its tooltip says whether it is on now, and
@@ -237,11 +241,49 @@ tools lives where it belongs:
   it is withdrawn with the crown.
 
 Every command is checked on each client: it only counts if the sender is the King by name
-(the server stamps every sender's name, so nobody else can carry his), or one of the Hands he
-named, for what he lends them. No census vote can make anyone else King or silence him. On the
+(the server stamps every sender's name, so nobody else can carry his), his Steward for what is
+his to do in the King's name (1.0.0), or one of the King's Hands, for what is lent to them. No
+census vote can make anyone else King or silence him. On the
 Horde the King is Duskmonkey Boneback, guild master of `<Mudhutters>` (0.9.4): his guild counts
 as an Olympus guild there, whatever its name. Answers go to the King alone. Nothing another player sends can put free text on his screen: only names and
 Olympus guild names.
+
+### The King's Steward (1.0.0)
+The King's right hand, so that he needn't set everything up himself: a character the author
+marks as **Steward** in the High Council's signed titles list. On the Steward's client the
+Throne opens as the King's, with **Acting for the King** on top of every page, and in the
+King's name he:
+- names and removes the **Hands of the King** (the Hands button on the Throne);
+- names and removes the **treasury's keepers**, and sets **what the army sees** of the
+  treasury (its three switches), on the Treasury tab;
+- uses every tool of a Hand: the Agenda, Summon the Lords, the Royal Inspection, Vox Populi and
+  the gates;
+- sends the **Crown's decrees** for `<Olympus>` (Royal decrees, Tabard inspections, Calls to Arms,
+  Musters), whatever his own rank: every client takes them by his name, `<Olympus>`'s own
+  members' too, and they never wait behind the flood guard, like the King's. For the other
+  guilds his [Lords] lines are the Crown's, as the Hands' are.
+
+Never the King's own: his crown on the map and his layer, holding court, Royal Writs, Royal
+Pardons, the untabarded list, and the King's own book of the treasury or his yes to share it
+(the Steward keeps no book unless named a keeper).
+
+**Whose word counts.** A list the Steward sets carries nothing but his name, which the server
+stamps on every message: each client takes the Hands, the keepers and the switches only from
+the King's character or from a Steward its signed titles list names, each list dated by the
+server's clock. The newest wins, and on the same second the King's: **the King's newer word
+always wins** (his screen tells him when his Steward changed one of them; the name is cut short
+there while the council's names are hidden on his stream). The King's client and the Steward's
+take the newest list as theirs and repeat it, so the Hands no longer lapse while either of them
+is online (they end 20 minutes after both stopped repeating them, as before), and each answers
+an older list it hears with the newer one. Clients before 1.0.0 follow the King's own list
+alone, as they always did.
+
+**Who he is.** Only the author names a Steward, with the same key that signs the council (see
+[The High Council's signed lists](#the-high-councils-signed-lists-the-author)): no name is
+written in the addon, no census vote counts, and nobody else can make one. A Steward acts for
+the Alliance's King (the Horde's only when the list names one for the Horde), on the list's
+realm group, where a King is named. A newer signed list without him ends it on every client at
+once. `/oly status` says whom your addon knows as the Steward and whose list of Hands it holds.
 
 ### The Treasury (its keepers, the King, and the army when the King says so)
 A tab with a coin for the treasury's keepers, for the King, and for every member once the King
@@ -591,6 +633,14 @@ few characters working together can still reach is said plainly further down
     Since 1.0.0 the King's decrees and [Lords] lines count by his name too, with no census.
     Their names count on their realm group only (Forever's PvP realms): a namesake anywhere
     else is someone else, and there is no King there.
+  - **The King's Steward** (1.0.0) is named by the author's signature, like the High Council:
+    a character the signed titles list marks, for his realm group and his King's faction, and
+    nobody else (no name in the code, no vote). His word counts by his name, which the server
+    stamps: the King's Hands, the treasury's keepers and its switches, dated, the newest kept
+    and the King's newer word always over his; and the Crown's decrees for `<Olympus>` on every
+    client. Never the King's crown on the map, his court, writs, pardons, untabarded list, book
+    or yes. This adds trust in the author's key: whoever holds it can make a character act for
+    the King in these, as it can name the council. A newer signed list without him ends it.
   - A decree counts only if its sender is the Lord or a Captain of that guild as the census
     pictures it (below), or as our own roster says for our own guild; the King's by his name.
     The rank written inside the message is ignored. Since 1.0.0 a sender speaks for one guild
@@ -788,7 +838,7 @@ Other limits:
 | `/oly map` | zone markers on the world map |
 | `/oly sound` | alert sounds on or off |
 | `/oly bug` | copyable bug report (also: the help button left of the window's X, then **Report a bug**) |
-| `/oly status` | diagnostics in chat |
+| `/oly status` | diagnostics in chat (1.0.0: whom your addon knows as the King's Steward, and whose list of Hands it holds) |
 
 ## Reporting a bug
 
@@ -821,6 +871,8 @@ python3 tests/fixtures/make-link-vectors.py --check  # Olympus Link's shared vec
 python3 scripts/link-keys.py ca           # the author, once: Olympus Link's council authority (see below)
 python3 scripts/council-sign.py sign "First Surname,..." [realm group]  # the author: sign the High Council list
 python3 scripts/council-sign.py council [council.json]  # the author: sign the names, departments and titles (see the script)
+python3 scripts/council-sign.py steward "<Name-Realm>"  # the author: mark the King's Steward, sign the council (below)
+python3 scripts/council-sign.py check     # the author: read dist/CouncilList.lua back, check its signatures with the key
 scripts/package.sh                        # dist/Olympus-<version>.zip
 WOW_HOST=user@pc scripts/deploy.sh        # copy to a Windows PC over SSH
 WOW_HOST=user@pc scripts/logs.sh          # read the log and captured errors from that PC
@@ -834,6 +886,39 @@ The author copies the file to his own game only (`Interface/AddOns/Olympus/LinkC
 own keys by itself and records each one in his SavedVariables (`/oly discord certified` lists
 them). When he takes a councillor off the signed list, the bot's keeper revokes that character at
 the bot too. `web/WORKER.md` (step 1b) says the rest, rotation included.
+
+### The High Council's signed lists (the author)
+
+The council's names, its departments and titles, and since 1.0.0 the King's Steward are signed
+on the author's own computer with his key (`~/.olympus/council-key.json`), from his council
+file (`~/.olympus/council.json`, the format at the top of `scripts/council-sign.py`). The
+script writes `dist/CouncilList.lua`, local only like `LinkCA.lua`; he copies it to his own game
+(`Interface/AddOns/Olympus/CouncilList.lua`, listed at the end of `Olympus.toc` there) and
+`/reload`s: his client takes the lists and sends them within seconds, and every client checks
+the signature and passes them on.
+
+To make a character the King's Steward (the Alliance King's; add `Horde` after the name for the
+Horde's):
+
+```bash
+python3 scripts/council-sign.py steward "<Name-Realm>"
+python3 scripts/council-sign.py check
+```
+
+The first adds him to the council file's `"stewards"` (the rest of the file kept) and signs the
+council at once, both lists newer than the last; the second reads `dist/CouncilList.lua` back,
+checks both signatures with the key and prints the names, departments and Stewards it holds.
+He stays in the file, so a later `council` signing keeps him. To end it, sign a newer council
+without him (every client takes the newer list and he is no longer the Steward, at once):
+
+```bash
+python3 scripts/council-sign.py steward --remove "<Name-Realm>"
+```
+
+`<Name-Realm>` is his character as the server writes it (first name and surname, then his
+realm), on a realm of the list's group. The script refuses anything the addon would not take,
+before anything is signed. Whoever holds this key can name a Steward, as it names the council:
+see [Security and trust](#security-and-trust).
 
 Bundled libraries: LibStub (public domain), CallbackHandler-1.0 (Ace3, BSD),
 HereBeDragons by Nevcairiel (BSD), the map library Questie uses, and luaqrcode by Patrick

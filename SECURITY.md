@@ -41,6 +41,16 @@ until you turn it on.
 - **The King and the Treasurer are fixed characters.** Their commands count only when they
   come from those exact characters, so nobody else can issue them, whatever the census says.
   Since 1.0.0 the King's decrees and [Lords] lines count by his name too, with no census.
+- **The King's Steward (1.0.0) is the author's signature.** The High Council's titles list,
+  signed by the author's key like the council, can mark a character the Steward of his
+  faction's King (on the list's realm group). Every client takes from him, by his name, what the
+  King alone set before: the King's Hands, the treasury's keepers and what the army sees of it
+  (dated; the newest wins and the King's newer word always wins), and the Crown's decrees for
+  `<Olympus>` on every client. Never the King's crown on the map, his court, writs, pardons, the
+  untabarded list, or his own book of the treasury and his yes to share it. No name is written in
+  the code and no census vote makes one; a newer signed list without him ends it at once. The
+  trust this adds is in the author's key: whoever holds it can make a character act for the King
+  in these, as it can name the High Council.
 - **Ranks of other guilds come from the census**, the picture most senders agree on, and a
   census report is its sender's word: nothing the server tells an addon proves which guild a
   sender belongs to. So a few characters working together can, today (1.0.0):

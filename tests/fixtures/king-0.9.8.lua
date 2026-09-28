@@ -1,3 +1,9 @@
+-- Olympus/King.lua as 0.9.8 ships it, for tests/run.lua: copied unchanged from
+-- `git show v0.9.8:Olympus/King.lua`. 0.9.9's differs only in how the crown is drawn on the map
+-- (the gamepad UI): its Hands of the King (Authorized, OnHands, HandleCommand) are these. A client
+-- of those versions takes the list of Hands from the King's pinned character alone, reads the
+-- names after the guild and never reads the number before it. Loaded on a namespace of its own:
+--   loadfile("tests/fixtures/king-0.9.8.lua")("Olympus", kns)   -- kns.King
 local ADDON, ns = ...
 local L = ns.L
 
@@ -12,17 +18,11 @@ local L = ns.L
 --   T1~I~<id>~<guild>                      Royal Inspection: every addon patrols 2 minutes
 --   T1~A~<id>~<guild>~<minutes>~<zone>~<title>   The King's Agenda (resent every 5 min)
 --   T1~X~<id>~<guild>                      Agenda cancelled
---   T1~H~<date>~<guild>~<Name-Realm,...>   the Hands of the King (his and his Steward's; resent every 5 min)
+--   T1~H~<id>~<guild>~<Name-Realm,...>     the Hands of the King (his alone; resent every 5 min)
 --   T2~<id>~<P|B>~<guild>                  a Lord's answer to the roll call
 --   T3~<id>~<guild>~<ok>~<none>~<other>~<name:guild,...>   an inspection report
 -- Other modules add their own kinds (King.Register): Vox Populi (V, E), writs (W), the court
--- (C, Z), the gates (G), pardons (F), the treasury's switches and keepers (T, K: his and his
--- Steward's).
--- The King's Steward (1.0.0, ns.IsSteward: the character the author marks in the signed titles
--- list) has the Throne as the King has it, "acting for the King": he names and removes the
--- Hands, the treasury's keepers and its switches, and uses every tool of a Hand (STEWARD_MAY).
--- Never the King's crown on the map and his layer, the court, writs, pardons, the untabarded
--- list, or the King's own book of the treasury and his yes to share it.
+-- (C, Z), the gates (G), pardons (F).
 
 local King = {}
 ns.King = King
@@ -51,7 +51,8 @@ King.MAX_HANDS = 40          -- Hands of the King (the list goes out in pieces w
 King.HANDS_EVERY = 300       -- the King's client repeats the list for late logins
 King.HANDS_FRESH = 20 * 60   -- a list the King stopped repeating (he left) ends
 
-King.mode = nil              -- what the tab shows: home or hands (nil: home, the Throne Room)
+King.mode = nil              -- what the tab shows: home, hands or letter (nil: the letter until
+                             -- the King has read it, then home)
 local summon, inspect        -- the King's own roll call / inspection in progress
 local agenda                 -- the agenda everyone sees: { id, title, at, zone, by }
 local lastSummonSeen, lastInspectSeen, inspecting = -math.huge, -math.huge, nil
@@ -103,17 +104,7 @@ function King.Preview()
 	if type(dev) == "table" then dev = dev[UnitName and UnitName("player") or ""] == true or dev[ns.ShortName(ns.me or "")] == true end
 	return dev == true and not King.IsKing()
 end
-function King.Visible() return King.IsKing() or King.IsSteward() or King.IsHand() or King.Preview() end
-
--- The King's Steward (1.0.0): this character, where the signed titles list marks it for our
--- King (ns.IsSteward), and not the King himself.
-function King.IsSteward() return not King.IsKing() and ns.IsSteward(ns.me) end
--- A sender the list marks (the server sets the name): his word counts for what STEWARD_MAY lends.
-function King.IsStewardName(name) return type(name) == "string" and not ns.IsKingCharacter(name) and ns.IsSteward(name) end
-
--- The King himself, or his Steward: the lists of the Throne (the Hands, the treasury's keepers
--- and switches) are theirs to set, and their clients repeat them.
-function King.SetsLists() return King.IsKing() or King.IsSteward() end
+function King.Visible() return King.IsKing() or King.IsHand() or King.Preview() end
 
 -- Where the King is pinned by name (ns.KING_CHARACTER): that character alone, speaking for
 -- the King's guild. No census vote can crown anyone else, nor silence him. Where he is not
@@ -153,97 +144,50 @@ local function NewId() return math.random(1, 99999) end
 ---------------------------------------------------------------------------
 -- The Hands of the King: the players he names use the Throne's tools in his name (HAND_MAY:
 -- the roll call, the inspection, the agenda, Vox Populi, the gates), never what is his alone
--- (the Hands, writs, the court, pardons, his position). Each client keeps the list it took
--- last; a list nobody repeats any more ends (HANDS_FRESH).
--- 1.0.0: the King's Steward names and removes them too (STEWARD_MAY), and the list carries its
--- date (the server's clock) where the message had its id. The newest list wins everywhere, and
--- on the same date the King's own: his newer word always wins. A date further ahead of the
--- server's clock than DATE_AHEAD is not taken. The King's client and his Steward's take the
--- newest list as theirs and repeat it (the Hands last while either is online), and answer an
--- older one they hear with theirs (HANDS_ANSWER apart at most). A list without a date (a King's
--- client before 1.0.0) is his word as it reaches us. Clients before 1.0.0 take the King's list
--- alone (the date is the id they never read), never a Steward's.
+-- (the Hands, writs, the court, pardons, his position). Each client keeps the list of the
+-- King it trusts, as he last sent it; a list he stopped repeating ends (HANDS_FRESH).
 ---------------------------------------------------------------------------
 
 King.HAND_MAY = { S = true, I = true, A = true, X = true, V = true, E = true, G = true }
--- The Steward's: everything a Hand may, and the lists the King keeps (his Hands; the treasury's
--- switches and keepers, Treasury.lua). Never his crown on the map (P, Q), the court (C, Z),
--- writs (W), pardons (F) or the untabarded list (U).
-King.STEWARD_MAY = { S = true, I = true, A = true, X = true, V = true, E = true, G = true, H = true, T = true, K = true }
-King.DATED = 1000000000      -- an id this high is a list's date (1.0.0 on); lower, an id (before)
-King.DATE_AHEAD = 600        -- a list dated further ahead of the server's clock is not taken
-King.HANDS_ANSWER = 30       -- the King's or a Steward's client answers an older list this often at most
-
-local myHands = {}       -- the list this client holds, in order: { "Name-Realm", ... } (the King's and a Steward's: saved, rdb.kingHands)
-local hands = {}         -- the same list: [Name-Realm] = true
-local handsDate = 0      -- its date (the server's clock; 0: none yet)
-local handsByKing = false -- the King himself sent it (a list of the same date from a Steward loses)
-local handsAt = -math.huge -- when this client last heard it (our clock)
-local handsKing          -- the King who sent it last (whose Hand, on a Hand's Throne Room)
-local previewHands = {}  -- the author's Asmon's view: its own list, on his screen only
-local lastHandsSent, lastHandsAnswer = -math.huge, -math.huge
+local hands = {}         -- [Name-Realm] = true, as the King last sent it
+local handsAt = -math.huge
+local handsKing          -- who sent that list (the King's name on a Hand's Throne Room)
+local myHands = {}       -- the King's own list, in order: { "Name-Realm", ... } (saved: rdb.kingHands)
+local lastHandsSent = -math.huge
 local handsSendPending = false
 
--- The clock a list is dated by: the server's, the same on every client.
-local function Clock() return GetServerTime and GetServerTime() or ns.Now() end
-
--- The King's client and his Steward's hold the list they repeat (it never lapses there); everyone
--- else trusts the list while the King or a Steward keeps repeating it.
+-- On the King's own client his list is the one he keeps (his broadcast never comes back to
+-- him); everyone else trusts the list he last sent, while he keeps sending it.
 local function Hand(name)
 	local full = ns.FullName(name)
-	if not King.SetsLists() and ns.Now() - handsAt > King.HANDS_FRESH then return false end
-	return hands[full] == true
+	if King.IsKing() then
+		for _, n in ipairs(myHands) do if n == full then return true end end
+		return false
+	end
+	return ns.Now() - handsAt <= King.HANDS_FRESH and hands[full] == true
 end
 
-function King.IsHand() return not King.SetsLists() and ns.IsMember() and Hand(ns.me) end
--- Whether the list names this sender (1.0.0): the King's word or his Steward's, never a census
--- vote. His Hands speak with his Crown for his guild on every client outside it (Decree.lua,
--- Channels.VerifiedLevel); on its own members' clients its roster says who speaks for it.
-function King.IsHandName(name) return type(name) == "string" and Hand(name) end
-function King.Hands()
-	if King.Preview() and not King.SetsLists() then return previewHands end
-	return myHands
-end
+function King.IsHand() return not King.IsKing() and ns.IsMember() and Hand(ns.me) end
+function King.Hands() return myHands end
 
--- The King may send it; his Steward what STEWARD_MAY lends him; one of his Hands what is theirs
--- to use too (soft: his position).
+-- The King may send it, or one of his Hands if it is theirs to use too (soft: his position).
 function King.Authorized(kind, sender, guild)
 	if KingSender(sender, guild, kind == "P" or kind == "Q") then return true end
-	if King.STEWARD_MAY[kind] == true and King.IsStewardName(sender) then return true end
 	return King.HAND_MAY[kind] == true and Hand(sender)
 end
 
--- The King, his Steward, or a Hand: the tools of the Throne.
-function King.CanCommand() return King.IsKing() or King.IsSteward() or King.IsHand() end
+-- The King, or a Hand: the tools of the Throne.
+function King.CanCommand() return King.IsKing() or King.IsHand() end
 
 -- The King himself sent it (not a Hand): for how it is shown.
 function King.FromKing(sender, guild) return KingSender(sender, guild, true) end
 
--- A Steward's name as the King's screen shows it: cut short while the council's names are hidden
--- there (his stream, ns.CouncilMasked), like every councillor's.
-local function StewardLabel(name)
-	local shown = ns.DisplayName(name) or "?"
-	return ns.CouncilMasked() and ns.MaskName(shown) or shown
-end
-King.StewardLabel = StewardLabel
-
--- The list held, kept across sessions with its date (a /reload must not drop the Hands).
+-- The King's list, kept across sessions (a /reload must not drop his Hands).
 local function SaveHands()
 	if not ns.rdb then return end
 	local copy = {}
 	for i, n in ipairs(myHands) do copy[i] = n end
-	ns.rdb.kingHands, ns.rdb.kingHandsAt, ns.rdb.kingHandsByKing = copy, handsDate, handsByKing or nil
-end
-
--- The list becomes `names` (in order), dated `at`.
-local function SetHands(names, at, byKing)
-	wipe(myHands)
-	wipe(hands)
-	for i, n in ipairs(names) do
-		myHands[i] = n
-		hands[n] = true
-	end
-	handsDate, handsByKing = at, byKing == true
+	ns.rdb.kingHands = copy
 end
 
 -- Several changes in a row go out as one list, a few seconds after the last one.
@@ -256,15 +200,14 @@ local function SendHandsSoon()
 	end)
 end
 
--- The list goes out whole, with its date: short in one message, long in pieces (Comm.SendChunked).
--- From the King's client and his Steward's alone, once someone named a Hand.
+-- The King's list goes out whole: short in one message, long in pieces (Comm.SendChunked).
 function King.SendHands(force)
-	if not King.SetsLists() then return end
+	if not King.IsKing() then return end
 	local now = ns.Now()
 	if not force and now - lastHandsSent < King.HANDS_EVERY then return end
-	if handsDate == 0 then return end -- nobody named yet
+	if #myHands == 0 and lastHandsSent == -math.huge then return end -- nobody named yet
 	lastHandsSent = now
-	local msg = ("T1~H~%d~%s~%s"):format(math.max(math.floor(handsDate), King.DATED), GetGuildInfo("player") or "", table.concat(myHands, ","))
+	local msg = ("T1~H~%d~%s~%s"):format(NewId(), GetGuildInfo("player") or "", table.concat(myHands, ","))
 	if #msg <= 250 then ns.Comm.Send("CHANNEL", msg, "hands") else ns.Comm.SendChunked(msg) end
 end
 
@@ -280,121 +223,53 @@ local function HandName(input)
 	return ns.FullName(short, ns.RealmOf(name))
 end
 
--- The King or his Steward changed the list on his screen: dated newer than the list held (two
--- changes in one second too), kept, sent. The author's Asmon's view: its own list, sent nowhere.
-local function ChangeHands(names)
-	if not King.SetsLists() then
-		wipe(previewHands)
-		for i, n in ipairs(names) do previewHands[i] = n end
-		return
-	end
-	SetHands(names, math.max(Clock(), handsDate + 1), King.IsKing())
-	SaveHands()
-	SendHandsSoon()
-end
-
 function King.AddHand(input)
-	if not King.SetsLists() and not King.Preview() then return ns.Print(L.THRONE_ONLY_KING) end
+	if not King.IsKing() and not King.Preview() then return ns.Print(L.THRONE_ONLY_KING) end
 	local name = HandName(input)
 	if not name then return ns.Print(L.HANDS_WHO) end
 	if name == ns.me then return end
-	local names = {}
-	for i, n in ipairs(King.Hands()) do
-		if n == name then return end
-		names[i] = n
-	end
-	if #names >= King.MAX_HANDS then return ns.Print(L.HANDS_FULL:format(King.MAX_HANDS)) end
-	names[#names + 1] = name
-	ChangeHands(names)
+	for _, n in ipairs(myHands) do if n == name then return end end
+	if #myHands >= King.MAX_HANDS then return ns.Print(L.HANDS_FULL:format(King.MAX_HANDS)) end
+	myHands[#myHands + 1] = name
+	SaveHands()
 	ns.Print(L.HANDS_ADDED:format(ns.DisplayName(name)))
+	if King.IsKing() then SendHandsSoon() end
 	King.mode = "hands"
 	Changed()
 end
 
 function King.RemoveHand(name)
-	if not King.SetsLists() and not King.Preview() then return end
-	local names, found = {}, false
-	for _, n in ipairs(King.Hands()) do
-		if n == name then found = true else names[#names + 1] = n end
+	for i, n in ipairs(myHands) do
+		if n == name then
+			table.remove(myHands, i)
+			SaveHands()
+			ns.Print(L.HANDS_REMOVED:format(ns.DisplayName(name)))
+			if King.IsKing() then SendHandsSoon() end
+			return Changed()
+		end
 	end
-	if not found then return end
-	ChangeHands(names)
-	ns.Print(L.HANDS_REMOVED:format(ns.DisplayName(name)))
-	return Changed()
 end
 
--- A list from the King or his Steward (King.Authorized agreed). `id`: its date, or (a King's
--- client before 1.0.0) an id, when the list is the King's word as it reaches us.
-local function OnHands(sender, id, rest, guild)
-	local byKing = KingSender(sender, guild)
-	local clock = Clock()
-	local at = tonumber(id) or 0
-	local undated = at < King.DATED
-	if undated then
-		if not byKing then return end -- (a Steward's client always dates its list)
-		at = math.max(clock, handsDate)
-	elseif at > clock + King.DATE_AHEAD then
-		ns.Log("hands from %s ignored: dated ahead of the server's clock", tostring(sender))
-		return
-	end
-	local list, seen = {}, {}
+local function OnHands(king, rest)
+	local list, n = {}, 0
 	for name in tostring(rest or ""):gmatch("[^,]+") do
 		local short = CleanName(name)
-		local full = short and ns.FullName(short, ns.RealmOf(name))
-		if full and not seen[full] and #list < King.MAX_HANDS then
-			seen[full] = true
-			list[#list + 1] = full
+		if short and n < King.MAX_HANDS then
+			list[ns.FullName(short, ns.RealmOf(name))] = true
+			n = n + 1
 		end
-	end
-	local text, held = table.concat(list, ","), table.concat(myHands, ",")
-	-- The list we hold, repeated (an undated one: whatever its date here).
-	local same = text == held and (undated or at == handsDate)
-	-- Newer: an undated King's list (his word now), a later date; on the same date the King's
-	-- over a Steward's (and between two lists of the same weight, the same one on every client).
-	local newer = undated or at > handsDate
-		or (at == handsDate and ((byKing and not handsByKing) or (byKing == handsByKing and text > held)))
-	if not same and not newer then
-		-- Older than ours: the King's client and a Steward's answer with the list they hold.
-		if King.SetsLists() and ns.Now() - lastHandsAnswer >= King.HANDS_ANSWER then
-			lastHandsAnswer = ns.Now()
-			SendHandsSoon()
-		end
-		return
 	end
 	local was = King.IsHand()
-	if same then
-		-- The list we hold, repeated: it lasts.
-		handsByKing = handsByKing or byKing
-	else
-		-- His Steward changed the King's list: the King is told (the name cut short on his stream).
-		if King.IsKing() and not byKing and text ~= held then ns.Print(L.STEWARD_SET_HANDS:format(StewardLabel(sender))) end
-		SetHands(list, at, byKing)
-	end
-	handsAt = ns.Now()
-	if byKing then handsKing = ns.FullName(sender) end
-	if King.SetsLists() then SaveHands() end
+	hands, handsAt, handsKing = list, ns.Now(), ns.FullName(king)
 	local now = King.IsHand()
 	if now and not was then
-		ns.Print(byKing and L.HANDS_YOU:format(ns.KingName(sender)) or L.HANDS_YOU_STEWARD:format(ns.DisplayName(sender) or "?"))
+		ns.Print(L.HANDS_YOU:format(ns.KingName(king)))
 		ns.PlayAlert("soft")
 		ns.Fire("DATA_CHANGED") -- the Throne's tab appears
 	elseif was and not now then
 		ns.Fire("DATA_CHANGED")
 	end
 	Changed()
-end
-
--- The list saved by the King's client or his Steward's (SaveHands), at login: theirs to repeat.
--- It lasts on nobody else's client until the King or a Steward is heard (handsAt).
-function King.LoadHands()
-	local saved, names = ns.rdb and ns.rdb.kingHands, {}
-	for _, n in ipairs(type(saved) == "table" and saved or {}) do
-		if type(n) == "string" and #names < King.MAX_HANDS then names[#names + 1] = n end
-	end
-	-- (Saved without a date, before 1.0.0: the King's own list, the oldest date there is.)
-	local at = tonumber(ns.rdb and ns.rdb.kingHandsAt)
-	local byKing = (at == nil and #names > 0) or (ns.rdb ~= nil and ns.rdb.kingHandsByKing == true)
-	SetHands(names, at or (#names > 0 and King.DATED or 0), byKing)
 end
 
 StaticPopupDialogs["OLYMPUS_KING_HAND"] = {
@@ -881,10 +756,8 @@ function King.ToggleLocation()
 	if King.SharingLocation() then
 		ns.Print(L.THRONE_LOCATION_SHOWN)
 		-- His crown is his yes for his layer too (Layers.lua): the army asks to join him there.
-		-- Both go out now (1.0.0: his layer waited for its next announcement, up to ten minutes).
 		ns.Print(L.THRONE_LOCATION_LAYER)
 		SendLocation(true)
-		ns.Layers.AnnounceNow()
 	else
 		ns.Print(L.THRONE_LOCATION_HIDDEN)
 		lastLocation = { t = -math.huge }
@@ -896,42 +769,29 @@ function King.ToggleLocation()
 	Changed()
 end
 
-local function CrownTip(self)
-	GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-	GameTooltip:AddLine(L.THRONE_LOCATION_PIN:format(kingAt and kingAt.name or "?"), 1, 0.82, 0)
-	GameTooltip:Show()
-end
 local function Crown(size)
 	local f = CreateFrame("Frame", nil, UIParent)
-	f.olympus = true -- (ours: photo mode leaves it shown, UI.TogglePhoto)
 	f:SetSize(size, size)
 	f.icon = f:CreateTexture(nil, "OVERLAY")
 	f.icon:SetTexture(ns.CROWN_ICON)
 	f.icon:SetAllPoints()
 	f:EnableMouse(true)
-	f:SetScript("OnEnter", CrownTip)
+	f:SetScript("OnEnter", function(self)
+		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+		GameTooltip:AddLine(L.THRONE_LOCATION_PIN:format(kingAt and kingAt.name or "?"), 1, 0.82, 0)
+		GameTooltip:Show()
+	end)
 	f:SetScript("OnLeave", function() GameTooltip:Hide() end)
 	return f
 end
--- The world map's crown sits beside the zone circles, never over their numbers (1.0.0,
--- Map.Badge); the minimap's is a plain crown (no circles there).
-local function WorldCrown()
-	local f = ns.Map.Badge(20, false)
-	ns.Map.SetBadge(f, ns.CROWN_ICON)
-	f.badge:SetScript("OnEnter", CrownTip)
-	f.badge:SetScript("OnLeave", function() GameTooltip:Hide() end)
-	return f
-end
 
--- Draws (or removes) the crown on the world map and the minimap. The world map's only with
--- mouse and keyboard (ns.WorldMapIcons); drawn again when that changes, even where he stands still.
+-- Draws (or removes) the crown on the world map and the minimap.
 function King.RefreshCrown()
 	if not Pins then return end
-	local world = ns.WorldMapIcons(Pins, King)
 	if kingAt and ns.Now() - kingAt.t > King.LOCATION_EXPIRE then kingAt = nil end
 	if not kingAt then
 		if crowns and crownAt then
-			if world then Pins:RemoveWorldMapIcon(King, crowns.world) end
+			Pins:RemoveWorldMapIcon(King, crowns.world)
 			Pins:RemoveMinimapIcon(King, crowns.mini)
 			crowns.world:Hide()
 			crowns.mini:Hide()
@@ -939,15 +799,15 @@ function King.RefreshCrown()
 		crownAt = nil
 		return
 	end
-	if crownAt and crownAt.mapID == kingAt.mapID and crownAt.x == kingAt.x and crownAt.y == kingAt.y and crownAt.world == world then return end
-	crowns = crowns or { world = WorldCrown(), mini = Crown(16) }
+	if crownAt and crownAt.mapID == kingAt.mapID and crownAt.x == kingAt.x and crownAt.y == kingAt.y then return end
+	crowns = crowns or { world = Crown(20), mini = Crown(16) }
 	-- Taken off before it is put back: the map library makes a new map pin on every add.
 	if crownAt then
-		if world then Pins:RemoveWorldMapIcon(King, crowns.world) end
+		Pins:RemoveWorldMapIcon(King, crowns.world)
 		Pins:RemoveMinimapIcon(King, crowns.mini)
 	end
-	crownAt = { mapID = kingAt.mapID, x = kingAt.x, y = kingAt.y, world = world }
-	if world then Pins:AddWorldMapIconMap(King, crowns.world, kingAt.mapID, kingAt.x, kingAt.y, SHOW_FLAG) end
+	crownAt = { mapID = kingAt.mapID, x = kingAt.x, y = kingAt.y }
+	Pins:AddWorldMapIconMap(King, crowns.world, kingAt.mapID, kingAt.x, kingAt.y, SHOW_FLAG)
 	Pins:AddMinimapIconMap(King, crowns.mini, kingAt.mapID, kingAt.x, kingAt.y, true, true)
 end
 
@@ -983,7 +843,7 @@ function King.HandleCommand(dist, sender, text)
 	-- their calls to the army: no roll call popup, patrol or poll window for him.
 	if King.IsKing() and (kind == "S" or kind == "I" or kind == "V") and not KingSender(sender, guild) then return end
 	if kind == "S" then OnSummon(sender, id, guild)
-	elseif kind == "H" then OnHands(sender, id, rest, guild)
+	elseif kind == "H" then OnHands(sender, rest)
 	elseif kinds[kind] then kinds[kind](sender, id, rest, guild)
 	elseif kind == "I" then OnInspect(sender, id)
 	elseif kind == "U" then OnUntabarded(sender, rest)
@@ -1008,9 +868,11 @@ ns.On("LOGIN", function()
 		SendLocation()
 		King.RefreshCrown()
 	end)
-	-- The Hands from the last session, with their date; the King and his Steward repeat them for
-	-- late logins (HANDS_EVERY). A list saved before 1.0.0 had no date: the oldest one (DATED).
-	King.LoadHands()
+	-- His Hands from the last session; he repeats them for late logins (HANDS_EVERY).
+	wipe(myHands)
+	for _, n in ipairs(ns.rdb and ns.rdb.kingHands or {}) do
+		if type(n) == "string" and #myHands < King.MAX_HANDS then myHands[#myHands + 1] = n end
+	end
 	ns.Every(60, "king hands", function()
 		King.SendHands()
 		King.SendUntabarded()
@@ -1102,6 +964,15 @@ local function Para(lines, text, font, extra)
 	return lines
 end
 King.Para = Para
+
+function King.LetterLines()
+	local lines = {}
+	for part in (L.THRONE_LETTER .. "\n"):gmatch("(.-)\n") do
+		lines[#lines + 1] = Line(part, part:find("^%*") and TITLE or INK)
+		if part:find("^%*") then lines[#lines].text = part:sub(2) end
+	end
+	return lines
+end
 
 ---------------------------------------------------------------------------
 -- Where the King's calls show: the roll call in the Realm tab (next to the Lords it calls),
@@ -1247,19 +1118,17 @@ function King.InspectionLines()
 end
 
 local function HandsLines()
-	local steward = King.IsSteward()
-	local lines = Para({ Line(L.HANDS_TITLE, TITLE) }, steward and L.HANDS_HINT_STEWARD or L.HANDS_HINT, INK, { gapAfter = true })
-	if King.SetsLists() or King.Preview() then
-		local list = King.Hands()
+	local lines = Para({ Line(L.HANDS_TITLE, TITLE) }, L.HANDS_HINT, INK, { gapAfter = true })
+	if King.IsKing() or King.Preview() then
 		lines[#lines + 1] = Line("+ " .. L.HANDS_ADD, TITLE, { onClick = function() ns.ShowDialog("OLYMPUS_KING_HAND") end })
-		for _, name in ipairs(list) do
+		for _, name in ipairs(myHands) do
 			lines[#lines + 1] = Line(ns.DisplayName(name), INK, { indent = 1, key = name,
 				onClick = function() ns.ShowDialog("OLYMPUS_KING_UNHAND", ns.DisplayName(name), nil, name) end,
 				tooltip = function(tt) tt:AddLine(ns.DisplayName(name), 1, 0.82, 0); tt:AddLine(L.HANDS_CLICK_REMOVE, 1, 1, 1, true) end })
 		end
-		if #list == 0 then lines[#lines + 1] = Line(L.HANDS_NONE, INK, { indent = 1 }) end
+		if #myHands == 0 then lines[#lines + 1] = Line(L.HANDS_NONE, INK, { indent = 1 }) end
 		lines[#lines].gapAfter = true
-		Para(lines, steward and L.HANDS_NOTE_STEWARD or L.HANDS_NOTE, INK)
+		Para(lines, L.HANDS_NOTE, INK)
 	end
 	return lines
 end
@@ -1271,52 +1140,49 @@ local function Go(mode) return function() King.Show(mode) end end
 -- The Throne Room: what is the King's alone. Each tool lives where it belongs (the agenda and
 -- the court on the buttons below, the roll call in the Realm, the inspection in the Tabards,
 -- Vox Populi and the treasury on their own tabs): here, the court's queue while it is open and
--- the treasury. A Hand's: where their tools are. His Steward's (1.0.0): the King's, with what is
--- his to do in the King's name (he holds no court: no queue).
+-- the treasury. A Hand's: where their tools are.
 local function HomeLines()
 	local mine = King.IsKing() or King.Preview()
-	local steward = not mine and King.IsSteward()
-	local title = (mine or steward) and L.THRONE_ROOM or L.THRONE_ROOM_HAND:format(ns.KingName(handsKing or ns.KingCharacter()))
-	local lines = { Line(title, TITLE, { gapAfter = true }) }
-	if steward then
-		Para(lines, L.THRONE_STEWARD_HINT, INK, { gapAfter = true })
-	elseif not mine then
-		return Para(lines, L.THRONE_HAND_HINT, INK)
-	end
+	local lines = { Line(mine and L.THRONE_ROOM or L.THRONE_ROOM_HAND:format(ns.KingName(handsKing)), TITLE, { gapAfter = true }) }
+	if not mine then return Para(lines, L.THRONE_HAND_HINT, INK) end
 	for _, l in ipairs(ns.Court and ns.Court.HomeLines and ns.Court.HomeLines() or {}) do lines[#lines + 1] = l end
 	if #lines > 1 then lines[#lines].gapAfter = true end
 	for _, l in ipairs(ns.Treasury and ns.Treasury.ThroneLines and ns.Treasury.ThroneLines() or {}) do lines[#lines + 1] = l end
 	return lines
 end
 
--- The King's own pages (and his Steward's): a Hand's Throne Room has no link to them.
+-- The King's own pages: a Hand's Throne Room has no link to them.
 King.KING_PAGES = { hands = true }
 
 -- For Views.Build("throne"): lines, detail title, detail text.
--- The Throne opens on the Throne Room (the King's: his court's queue while it is open, the
--- treasury; a Hand's: where their tools are), and holding court takes him there. (1.0.0: no
--- letter before it any more.) His Steward's says on top, on every page, that he acts for the King.
+-- The King's Throne opens on the author's letter, its cover: the Throne Room (his court's
+-- queue while it is open, the treasury) is a click away, and holding court takes him there.
+-- A Hand's opens on the Throne Room.
 function King.Build(s)
 	local lines, home
-	if not King.mode then King.mode = "home" end
+	local mine = King.IsKing() or King.Preview()
+	if not King.mode then King.mode = mine and "letter" or "home" end
 	local mode = King.mode
-	if King.KING_PAGES[mode] and not (King.SetsLists() or King.Preview()) then mode = "home" end
+	if King.KING_PAGES[mode] and not (King.IsKing() or King.Preview()) then mode = "home" end
 	if mode == "hands" then lines = HandsLines()
+	elseif mode == "letter" then lines = King.LetterLines()
 	else lines, home = HomeLines(), true end
-	-- Every other page leads back to the Throne Room.
+	-- Every other page leads back to the Throne Room (the letter also at its end).
 	if not home then table.insert(lines, 1, Line("< " .. L.THRONE_ROOM, INK, { onClick = Go("home"), gapAfter = true })) end
+	if mode == "letter" then
+		lines[#lines].gapAfter = true
+		lines[#lines + 1] = Line(L.THRONE_ENTER .. " >", TITLE, { onClick = Go("home") })
+	end
 	-- While the army sees him on the map, the page says so on top, whatever it shows.
 	if King.SharingLocation() and King.IsKing() then
 		table.insert(lines, 1, Line("|T" .. ns.CROWN_ICON .. ":0|t " .. L.THRONE_LOCATION_LIVE, TITLE, { gapAfter = true }))
 	end
-	local steward = King.IsSteward()
-	if steward then table.insert(lines, 1, Line("|T" .. ns.CROWN_ICON .. ":0|t " .. L.STEWARD_ACTING, TITLE, { gapAfter = true })) end
-	local detail = steward and L.THRONE_YOU_ARE_STEWARD:format(ns.KingName(ns.KingCharacter()))
-		or King.IsHand() and L.THRONE_YOU_ARE_HAND:format(ns.KingName(handsKing or ns.KingCharacter())) or L.THRONE_YOU_ARE_KING
-	return lines, L.TAB_THRONE, detail
+	return lines, L.TAB_THRONE, King.IsHand() and L.THRONE_YOU_ARE_HAND:format(ns.KingName(handsKing)) or L.THRONE_YOU_ARE_KING
 end
 
 function King.Show(mode)
+	-- Leaving the letter for another page: read.
+	if King.mode == "letter" and mode ~= "letter" and (King.IsKing() or King.Preview()) then ns.db.throneLetterRead = true end
 	King.mode = mode
 	Changed()
 end
@@ -1330,45 +1196,20 @@ end
 
 function King.State() return { summon = summon, inspect = inspect, agenda = agenda, inspecting = inspecting } end
 
--- /oly status (1.0.0): the King's Steward as this client knows him (the signed titles list), and
--- the list of Hands it holds: whose word it was and whether it still lasts here.
-function King.StewardStatusLine()
-	local who
-	if King.IsSteward() then
-		who = "you, acting for the King"
-	elseif not ns.KingCharacter() then
-		who = "none (no King named on this side)"
-	elseif not ns.CouncilTitles() then
-		who = "none known (no signed titles list here yet)"
-	else
-		local shown = {}
-		for i, n in ipairs(ns.Stewards()) do shown[i] = StewardLabel(n) end
-		who = #shown > 0 and table.concat(shown, ", ") or "none named"
-	end
-	local held
-	if handsDate == 0 then held = "none"
-	else
-		held = ("%d, set by %s, %s"):format(#myHands, handsByKing and "the King" or "a Steward",
-			King.SetsLists() and "repeated by this client" or (ns.Now() - handsAt <= King.HANDS_FRESH and ("heard " .. ns.Ago(handsAt)) or "lapsed here"))
-	end
-	return ("%s  |  Hands: %s"):format(who, held)
-end
-
 -- The author's Workshop: Asmon's view on or off (the Throne, Vox Populi, the King's calls in
 -- the Realm and the Tabards), to see and try them. Nothing the view does reaches anyone.
 function King.SetDevView(on)
 	ns.db.devKingView = on and true or false
-	-- The preview's treasury switches and keepers were its own: gone with it.
-	if not on then ns.db.previewTreasuryFlags, ns.db.previewTreasuryKeepers = nil, nil end
+	-- The preview's treasury switches were its own: gone with it.
+	if not on then ns.db.previewTreasuryFlags = nil end
 	ns.Print(on and L.DEV_KING_VIEW_NOW_ON or L.DEV_KING_VIEW_NOW_OFF)
 	ns.Fire("DATA_CHANGED")
 	Changed()
 end
 function King.Reset()
 	summon, inspect, agenda, inspecting, kingAt, crownAt = nil, nil, nil, nil, nil, nil
-	wipe(myHands); wipe(hands); wipe(previewHands)
-	handsDate, handsByKing, handsAt, handsKing = 0, false, -math.huge, nil
-	lastHandsSent, lastHandsAnswer, handsSendPending = -math.huge, -math.huge, false
+	hands, handsAt, lastHandsSent, handsKing, handsSendPending = {}, -math.huge, -math.huge, nil, false
+	wipe(myHands)
 	lastLocation = { t = -math.huge }
 	lastSummonSeen, lastInspectSeen, lastSummonSent, lastInspectSent = -math.huge, -math.huge, -math.huge, -math.huge
 	lastUntabardedSent = -math.huge
