@@ -20401,7 +20401,8 @@ do
 				local ok, err = pcall(function()
 					ns.After = function(_, _, fn) fn() end -- (the few seconds before a changed list goes out: at once here)
 					local KING = ns.KingCharacter() .. "-Realm"
-					local d = w.clock
+					-- (Dates in the past: a list dated more than DATE_AHEAD, a minute, ahead is not taken.)
+					local d = w.clock - 600
 					local function Hands(date, names) return ("T1~H~%d~Olympus~%s"):format(date, names) end
 					-- A soldier's client.
 					AsSoldier("Other")
@@ -20445,7 +20446,8 @@ do
 					K.HandleCommand("CHANNEL", KING, ("T1~T~7~Olympus~000~%d"):format(d + 20))
 					eq(T.Shows("book"), false, "the King's, on the same second")
 					-- The King's client: his Steward's newer list becomes his (he is told, the name cut
-					-- short on his stream), and he repeats it with its date.
+					-- short on his stream), and he repeats it with its date, and whose it is (1.0.0, a
+					-- second review: so that it stays his Steward's, counting no longer than he does).
 					K.Reset(); ns.rdb.treasuryKeepers, ns.rdb.treasuryFlags = nil, nil
 					AsKing()
 					K.AddHand("Kingsman")
@@ -20455,12 +20457,12 @@ do
 					eq(K.Hands()[1], "Helper-Realm"); eq(#K.Hands(), 1)
 					assert(Printed(w, L.STEWARD_SET_HANDS:format(ns.MaskName("Test Steward"))), "the King is told, the name hidden on his stream")
 					K.SendHands(true)
-					eq(LastSent(w), ("T1~H~%d~Olympus~Helper-Realm"):format(kd + 30), "his client repeats it, with its date")
+					eq(LastSent(w), ("T1~H~%d~Olympus~@Test Steward-Realm,Helper-Realm"):format(kd + 30), "his client repeats it, with its date and its Steward")
 					-- An older list heard (a Steward's client back after a while): his client answers with the newer one.
 					local n = #w.sent
 					K.HandleCommand("CHANNEL", STEWARD, ("T1~H~%d~Olympus II~Stale-Realm"):format(kd - 30))
 					eq(K.Hands()[1], "Helper-Realm", "not taken")
-					eq(#w.sent, n + 1, "answered at once"); eq(LastSent(w), ("T1~H~%d~Olympus~Helper-Realm"):format(kd + 30))
+					eq(#w.sent, n + 1, "answered at once"); eq(LastSent(w), ("T1~H~%d~Olympus~@Test Steward-Realm,Helper-Realm"):format(kd + 30))
 					K.HandleCommand("CHANNEL", STEWARD, ("T1~H~%d~Olympus II~Stale-Realm"):format(kd - 30))
 					eq(#w.sent, n + 1, "once in HANDS_ANSWER")
 					-- His next change is newer than his Steward's, whatever the clock says.
@@ -20708,7 +20710,8 @@ do
 	test("1.0.0 the King's Steward: his lines in both languages", function()
 		local keys = { "STEWARD_ACTING", "THRONE_YOU_ARE_STEWARD", "THRONE_STEWARD_HINT", "HANDS_HINT_STEWARD", "HANDS_NOTE_STEWARD",
 			"HANDS_YOU_STEWARD", "STEWARD_SET_HANDS", "STEWARD_SET_FLAGS", "STEWARD_SET_KEEPERS", "STEWARD_YOU", "STEWARD_NO_LONGER",
-			"TREASURY_DETAIL_STEWARD", "HANDS_NEWER_HELD", "HANDS_HELD_BACK", "HANDS_BY_KING", "HANDS_BY_STEWARD", "STEWARD_KING_HANDS" }
+			"TREASURY_DETAIL_STEWARD", "HANDS_NEWER_HELD", "HANDS_HELD_BACK", "HANDS_BY_KING", "HANDS_BY_STEWARD", "STEWARD_KING_HANDS",
+			"HANDS_STEWARD_ENDED" }
 		local pt = { L = setmetatable({}, { __index = ns.L }) }
 		local savedLocale = GetLocale
 		GetLocale = function() return "ptBR" end
@@ -20978,7 +20981,7 @@ do
 					assert(Printed(w, L.STEWARD_SET_HANDS:format(ns.MaskName("Test Steward"))), "told")
 					eq(K.HandsHeldBack() == "newer", false)
 					for _ = 1, 6 do Run(60); K.SendHands() end
-					eq(LastSent(w), ("T1~H~%d~Olympus~Loyal-Realm"):format(DateOf(s2)), "then his client repeats it as the newest")
+					eq(LastSent(w), ("T1~H~%d~Olympus~@Test Steward-Realm,Loyal-Realm"):format(DateOf(s2)), "then his client repeats it as the newest (the Steward's)")
 					-- A client that never heard the Steward's list takes nothing from the King's older one.
 					AsSoldier("Fresh"); Session(nil)
 					for _, s in ipairs(his) do K.HandleCommand("CHANNEL", KING, s.msg) end
@@ -21001,7 +21004,7 @@ do
 		end)
 	end)
 
-	test("1.0.0 the King's Steward: the King online repeating an older list as the newest (nobody said otherwise in time): a client holding his Steward's newer list keeps its Hands as long as he is online, and says so now and then", function()
+	test("1.0.0 the King's Steward: the King online repeating an older list as the newest (nobody said otherwise in time): a client holding his Steward's newer list keeps its Hands as long as he is online, and answers each of his lists", function()
 		WithThrone(function(w, K)
 			WithStewardList(STEWARD_A, function()
 				WithHandsTimers(w, K, function(Run)
@@ -21036,11 +21039,14 @@ do
 						last = s.t
 					end
 					Run(K.HANDS_HINT_MIN + K.HANDS_HINT_SPREAD)
+					-- Each list heard is answered once, within the wait (the King's client, played apart
+					-- here, never heard the answers: in the game the first one holds his list back, "!",
+					-- and a list held back as older is not answered).
 					local said = SentSince(w, n)
-					assert(#said >= 2, "said, now and then: " .. #said)
+					eq(#said, #his, "one answer to each list heard")
 					for i, s in ipairs(said) do
 						eq(s.msg, ("TH~%d~S"):format(DateOf(stew)))
-						if i > 1 then assert(s.t - said[i - 1].t >= K.HANDS_HINT_GAP, "at most once in HANDS_HINT_GAP") end
+						assert(s.t >= his[i].t and s.t - his[i].t <= K.HANDS_HINT_MIN + K.HANDS_HINT_SPREAD, "said within the wait")
 					end
 					-- The King logged off: 20 minutes later, nobody's Hand.
 					w.clock = last + K.HANDS_FRESH + 1
@@ -21089,7 +21095,7 @@ do
 		end)
 	end)
 
-	test("1.0.0 the King's Steward: the army's word that a newer list is held is anybody's: it holds back only the King's or a Steward's saved list, never one he set this session, and names or removes nobody; a few clients say it, now and then", function()
+	test("1.0.0 the King's Steward: the army's word that a newer list is held is anybody's: it holds back only the King's or a Steward's saved list, never one he set this session, and names or removes nobody; every client holding the newer list says it, within the spread, unless someone said as much", function()
 		WithThrone(function(w, K)
 			WithStewardList(STEWARD_A, function()
 				WithHandsTimers(w, K, function(Run)
@@ -21121,36 +21127,46 @@ do
 					eq(LastSent(w), ("T1~H~%d~Olympus~!,Kingsman-Realm"):format(at), "still said (clients before 1.0.0 read the names), held back")
 					K.AddHand("Second"); Run(5)
 					eq(LastSent(w), ("T1~H~%d~Olympus~Kingsman-Realm,Second-Realm"):format(ns.rdb.kingHandsAt), "named again: as the newest")
-					-- A few say it: none while the census counts nobody but us; one draw in HANDS_HINT_GAP,
-					-- about HANDS_HINTS of the census's addons winning it; left out when someone said as much.
+					-- Every client holding the newer list says it (1.0.0, a second review: a draw sized to
+					-- the census, once in 5 minutes, left most stale lists unanswered), after a wait drawn
+					-- from the census's count of addons (HintWait); left out when someone said as much.
 					AsSoldier("Other"); Session(nil)
 					local d = w.clock
 					K.HandleCommand("CHANNEL", STEWARD, ("T1~H~%d~Olympus II~Helper-Realm"):format(d))
 					local old = ("T1~H~%d~Olympus~Kingsman-Realm"):format(d - 600)
 					local n = #w.sent
+					local spread = K.HANDS_HINT_MIN + K.HANDS_HINT_SPREAD
+					assert(spread < K.HANDS_CONFIRM, "said before a list held back goes out as the newest")
+					-- The census counting nobody but us yet: said all the same.
 					K.AddonsOnline = function() return 1 end
-					K.HandleCommand("CHANNEL", KING, old); Run(20)
-					eq(#w.sent, n, "the census counts nobody but us")
-					K.AddonsOnline, K.random = function() return 3000 end, function() return 0.5 end
-					K.HandleCommand("CHANNEL", KING, old); Run(20)
-					eq(#w.sent, n, "a draw lost (HANDS_HINTS in 3000)")
+					K.HandleCommand("CHANNEL", KING, old); Run(spread)
+					eq(#w.sent, n + 1, "the census counts nobody but us yet: said all the same"); eq(LastSent(w), ("TH~%d~S"):format(d))
+					-- 3,000 addons and the longest wait: said all the same, within the spread.
+					K.AddonsOnline, K.random = function() return 3000 end, function() return 0.999999 end
+					local t = w.clock
+					K.HandleCommand("CHANNEL", KING, old); Run(spread)
+					eq(#w.sent, n + 2, "the longest wait")
+					assert(w.sent[#w.sent].t - t > spread - 1, "late in the spread: " .. (w.sent[#w.sent].t - t))
+					-- Every list heard is answered, even one heard a moment ago (no gap of its own).
 					K.random = function() return 0 end
-					K.HandleCommand("CHANNEL", KING, old); Run(20)
-					eq(#w.sent, n, "one draw in HANDS_HINT_GAP")
-					Run(K.HANDS_HINT_GAP)
+					K.HandleCommand("CHANNEL", KING, old); Run(spread)
+					eq(#w.sent, n + 3, "answered again")
+					-- Someone said as much meanwhile: ours is left out. An older claim holds ours back not.
+					K.random = function() return 0.5 end
+					K.HandleCommand("CHANNEL", KING, old)
+					K.HandleHint("CHANNEL", "Another-Realm", ("TH~%d~S"):format(d - 1))
+					Run(spread)
+					eq(#w.sent, n + 4, "a claim older than our list does not hold ours back")
 					K.HandleCommand("CHANNEL", KING, old)
 					K.HandleHint("CHANNEL", "Another-Realm", ("TH~%d~S"):format(d))
-					Run(20)
-					eq(#w.sent, n, "someone said as much meanwhile")
-					Run(K.HANDS_HINT_GAP)
-					K.HandleCommand("CHANNEL", KING, old); Run(20)
-					eq(#w.sent, n + 1); eq(LastSent(w), ("TH~%d~S"):format(d))
+					Run(spread)
+					eq(#w.sent, n + 4, "someone said as much meanwhile")
 					-- Never to a list its sender already holds back as older, nor to a King's client before 1.0.0.
-					Run(K.HANDS_HINT_GAP)
+					K.random = function() return 0 end
 					K.HandleCommand("CHANNEL", KING, ("T1~H~%d~Olympus~!,Kingsman-Realm"):format(d - 600))
 					K.HandleCommand("CHANNEL", KING, "T1~H~7~Olympus~Kingsman-Realm")
 					Run(20)
-					eq(#w.sent, n + 1)
+					eq(#w.sent, n + 4)
 					eq(K.IsHandName("Helper-Realm"), true); eq(K.IsHandName("Kingsman-Realm"), false)
 				end)
 			end)
@@ -21238,6 +21254,556 @@ do
 				end)
 			end)
 		end)
+	end)
+
+	---------------------------------------------------------------------------
+	-- 1.0.0, a second review of the lists of Hands (each test below fails on 582bce3). The same
+	-- days as above: the Steward names Rogue and Loyal and the King's client keeps that list; the
+	-- next day, the King offline, the Steward removes Rogue.
+	---------------------------------------------------------------------------
+	local function StaleKing(w, K, Run)
+		AsSteward(); Session(nil)
+		K.AddHand("Rogue"); K.AddHand("Loyal"); Run(5)
+		local s1, stewardSaved = SentLast(w, "T1~H~"), SavedHands()
+		AsKing(); Session(nil)
+		K.HandleCommand("CHANNEL", STEWARD, s1)
+		local kingSaved = SavedHands()
+		eq(table.concat(kingSaved.kingHands, ","), "Rogue-Realm,Loyal-Realm")
+		Run(86400)
+		AsSteward(); Session(stewardSaved)
+		K.RemoveHand("Rogue-Realm"); Run(5)
+		local s2 = SentLast(w, "T1~H~")
+		assert(s2:find("~Olympus II~Loyal%-Realm$"), s2)
+		return kingSaved, s2, w.clock
+	end
+	-- What a client that never heard the Steward's removal makes of what the King's client said.
+	local function FreshTakesRogue(K, msgs)
+		local KING = ns.KingCharacter() .. "-Realm"
+		AsSoldier("Fresh"); Session(nil)
+		for _, s in ipairs(msgs) do K.HandleCommand("CHANNEL", KING, s.msg) end
+		return K.IsHandName("Rogue-Realm")
+	end
+	-- The King's client from its login at t0 (what it saved), hearing `claims` at their time, until
+	-- `till`: what it said.
+	local function KingSession(w, K, Run, saved, t0, claims, till)
+		w.clock = t0
+		AsKing(); Session(saved)
+		local n = #w.sent
+		K.SendHands()
+		for _, h in ipairs(claims) do
+			Run(h.t - w.clock)
+			K.HandleHint("CHANNEL", "Other-Realm", h.msg)
+		end
+		Run(till - w.clock)
+		return SentSince(w, n)
+	end
+
+	test("1.0.0 the King's Steward: a claim heard before the King logs in keeps nobody silent: a soldier holding the Steward's newer list answers the King's stale saved list, which stays held back, and Rogue is a Hand on no client that missed the removal", function()
+		WithThrone(function(w, K)
+			WithStewardList(STEWARD_A, function()
+				WithHandsTimers(w, K, function(Run)
+					local KING = ns.KingCharacter() .. "-Realm"
+					local kingSaved, s2, ts = StaleKing(w, K, Run)
+					local t0 = ts + 86400
+					-- The King's client at t0: its saved list, held back.
+					w.clock = t0
+					AsKing(); Session(kingSaved)
+					K.SendHands()
+					local said = LastSent(w)
+					assert(said:find("~Olympus~%?,") and said:find(",Rogue%-Realm,Loyal%-Realm$"), said)
+					-- Soldier Other, online since day 2 with the Steward's list. A minute before the King
+					-- logs in, somebody says once that a newer list is held (anybody's word).
+					w.clock = ts
+					AsSoldier("Other"); Session(nil)
+					K.HandleCommand("CHANNEL", STEWARD, s2)
+					w.clock = t0 - 60
+					K.HandleHint("CHANNEL", "Rogue-Realm", ("TH~%d~S"):format(w.clock + K.DATE_AHEAD))
+					w.clock = t0
+					local n = #w.sent
+					K.HandleCommand("CHANNEL", KING, said)
+					Run(K.HANDS_HINT_MIN + K.HANDS_HINT_SPREAD)
+					local answers = SentSince(w, n)
+					eq(#answers, 1, "the holder answers all the same")
+					eq(answers[1].msg, ("TH~%d~S"):format(DateOf(s2)))
+					-- The King's client (it was offline for the claim) hears the answer in time.
+					local out = KingSession(w, K, Run, kingSaved, t0, answers, t0 + K.HANDS_CONFIRM + 5)
+					eq(K.HandsHeldBack(), "newer")
+					for _, s in ipairs(out) do assert(s.msg:find("~Olympus~[%?!],"), "held back: " .. s.msg) end
+					eq(FreshTakesRogue(K, out), false, "Rogue, removed by the Steward, is no Hand on a client that missed it")
+				end)
+			end)
+		end)
+	end)
+
+	test("1.0.0 the King's Steward: the King's client /reloads soon after the army held his stale list back: a soldier online throughout answers the list it says held back again, and it stays held back", function()
+		WithThrone(function(w, K)
+			WithStewardList(STEWARD_A, function()
+				WithHandsTimers(w, K, function(Run)
+					local KING = ns.KingCharacter() .. "-Realm"
+					local kingSaved, s2, ts = StaleKing(w, K, Run)
+					local t0 = ts + 86400
+					w.clock = t0
+					AsKing(); Session(kingSaved)
+					K.SendHands()
+					local said = LastSent(w)
+					-- Soldier Other, online throughout with the Steward's list: answers at login, then, the
+					-- King's client /reloaded two minutes later, the list it says held back again.
+					local tReload = t0 + 120
+					w.clock = ts
+					AsSoldier("Other"); Session(nil)
+					K.HandleCommand("CHANNEL", STEWARD, s2)
+					Run(t0 - w.clock)
+					local n = #w.sent
+					K.HandleCommand("CHANNEL", KING, said)
+					Run(K.HANDS_HINT_MIN + K.HANDS_HINT_SPREAD)
+					local first = SentSince(w, n)
+					eq(#first, 1, "answered at login")
+					Run(tReload - w.clock)
+					n = #w.sent
+					K.HandleCommand("CHANNEL", KING, said)
+					Run(K.HANDS_HINT_MIN + K.HANDS_HINT_SPREAD)
+					local again = SentSince(w, n)
+					eq(#again, 1, "answered again after his /reload")
+					-- The King's first session: held back by the army's word.
+					KingSession(w, K, Run, kingSaved, t0, first, t0 + 60)
+					eq(K.HandsHeldBack(), "newer")
+					-- His /reload: a new session from what his client saved; the answer reaches it in time.
+					local out = KingSession(w, K, Run, SavedHands(), tReload, again, tReload + K.HANDS_CONFIRM + 5)
+					eq(K.HandsHeldBack(), "newer", "held back again")
+					for _, s in ipairs(out) do assert(s.msg:find("~Olympus~[%?!],"), "held back: " .. s.msg) end
+					eq(FreshTakesRogue(K, out), false)
+				end)
+			end)
+		end)
+	end)
+
+	test("1.0.0 the King's Steward: 5,000 addons, one, 20 or 500 of them holding the Steward's newer list: on every login of the King's stale list one says so before it goes out as the newest, and only a few say it", function()
+		WithThrone(function(w, K)
+			WithStewardList(STEWARD_A, function()
+				WithHandsTimers(w, K, function(Run)
+					local KING = ns.KingCharacter() .. "-Realm"
+					local kingSaved, s2, ts = StaleKing(w, K, Run)
+					AsSoldier("Holder"); Session(nil)
+					K.HandleCommand("CHANNEL", STEWARD, s2)
+					local holderSaved = SavedHands()
+					local t0 = ts + 86400
+					w.clock = t0
+					AsKing(); Session(kingSaved)
+					K.SendHands()
+					local back = LastSent(w)
+					local claim = ("TH~%d~S"):format(DateOf(s2))
+					K.AddonsOnline = function() return 5000 end
+					local seed = 20260928
+					local function Rand()
+						seed = (seed * 1103515245 + 12345) % 2147483648
+						return seed / 2147483648
+					end
+					local DELAY = 1 -- (a claim said reaches the other clients a second later)
+					-- One holder hearing the King's list held back: when (if at all) it says so, and how
+					-- many claims it said, the first claim heard at `heard` (nil: none).
+					local function Holder(r, heard)
+						w.clock = t0
+						AsSoldier("Holder"); Session(holderSaved)
+						K.random = function() return r end
+						local n = #w.sent
+						K.HandleCommand("CHANNEL", KING, back)
+						if heard then
+							Run(heard - w.clock)
+							K.HandleHint("CHANNEL", "First-Realm", claim)
+						end
+						Run(K.HANDS_HINT_MIN + K.HANDS_HINT_SPREAD)
+						local out = SentSince(w, n)
+						return out[1] and out[1].t, #out
+					end
+					local worst, total, logins = 0, 0, 0
+					for _, holders in ipairs({ 1, 20, 500 }) do
+						for _ = 1, holders == 500 and 12 or 25 do
+							local r, first = {}, nil
+							for i = 1, holders do
+								r[i] = Rand()
+								local at = Holder(r[i])
+								assert(at, "every holder says it, alone")
+								first = math.min(first or at, at)
+							end
+							assert(first - t0 <= K.HANDS_HINT_MIN + K.HANDS_HINT_SPREAD, "the first within the spread")
+							assert(first - t0 + DELAY < K.HANDS_CONFIRM, "heard before the list is confirmed")
+							-- Everyone hears the first a second after it was said: how many said it by then.
+							local said = 0
+							for i = 1, holders do said = said + select(2, Holder(r[i], first + DELAY)) end
+							assert(said >= 1)
+							worst, total, logins = math.max(worst, said), total + said, logins + 1
+						end
+					end
+					print(("       [%d logins: %.2f claims a login on average, %d at most]"):format(logins, total / logins, worst))
+					assert(total / logins <= 4, "a few on average: " .. total / logins)
+					assert(worst <= 12, "never many: " .. worst)
+					-- The longest wait of a lone holder still reaches the King's client in time: his stale
+					-- list stays held back, and a fresh client takes nothing from it.
+					local at = Holder(0.999999)
+					local out = KingSession(w, K, Run, kingSaved, t0, { { t = at + DELAY, msg = claim } }, t0 + K.HANDS_CONFIRM + 60)
+					eq(K.HandsHeldBack(), "newer")
+					eq(FreshTakesRogue(K, out), false)
+				end)
+			end)
+		end)
+	end)
+
+	test("1.0.0 the King's Steward: a soldier that kept the King's list from an earlier session gets no Hand back from it while the King's client holds it back (\"?\" to be confirmed, \"!\" older than one the army holds); once it goes out as the newest, it does", function()
+		WithThrone(function(w, K)
+			WithStewardList(STEWARD_A, function()
+				WithHandsTimers(w, K, function(Run)
+					local KING = ns.KingCharacter() .. "-Realm"
+					-- Day 1: the King names Rogue and Loyal; Keeper, online then, takes the list and keeps it.
+					AsKing(); Session(nil)
+					K.AddHand("Rogue"); K.AddHand("Loyal"); Run(5)
+					local k1, kingSaved = SentLast(w, "T1~H~"), SavedHands()
+					AsSoldier("Keeper"); Session(nil)
+					K.HandleCommand("CHANNEL", KING, k1)
+					local keeperSaved = SavedHands()
+					-- Day 2, the King offline: the Steward (holding the King's list) removes Rogue.
+					Run(86400)
+					AsSteward(); Session(nil)
+					K.HandleCommand("CHANNEL", KING, k1)
+					K.RemoveHand("Rogue-Realm"); Run(5)
+					local s2 = SentLast(w, "T1~H~")
+					-- Day 3: the King's client says its saved list held back; the army's word reaches it.
+					Run(86400)
+					local t0 = w.clock
+					AsKing(); Session(kingSaved)
+					K.SendHands()
+					local back = LastSent(w)
+					K.HandleHint("CHANNEL", "Other-Realm", ("TH~%d~S"):format(DateOf(s2)))
+					K.SendHands(true)
+					local paused = LastSent(w)
+					assert(paused:find("~!,Rogue%-Realm,Loyal%-Realm$"), paused)
+					-- Keeper logs in with the King's day-1 list: neither brings it back, an hour long.
+					AsSoldier("Keeper"); Session(keeperSaved)
+					K.HandleCommand("CHANNEL", KING, back)
+					eq(K.IsHandName("Rogue-Realm"), false, "held back until confirmed")
+					for _ = 1, 12 do Run(K.HANDS_EVERY); K.HandleCommand("CHANNEL", KING, paused) end
+					eq(K.IsHandName("Rogue-Realm"), false, "held back as older: Rogue, removed by the Steward, is no Hand here")
+					assert((ns.Channels.VerifiedLevel("Rogue-Realm", "Olympus")) < ns.Channels.LevelOf("Olympus", 0), "no Crown for him")
+					-- The Steward's list, when heard: Loyal a Hand, Rogue not.
+					K.HandleCommand("CHANNEL", STEWARD, s2)
+					eq(K.IsHandName("Loyal-Realm"), true); eq(K.IsHandName("Rogue-Realm"), false)
+					-- Where nobody holds a newer list, the King's saved list goes out as the newest 30
+					-- seconds later: Keeper's kept list is alive again, and stays alive while his client
+					-- repeats it, "!" or not.
+					w.clock = t0
+					AsKing(); Session(kingSaved)
+					local n = #w.sent
+					K.SendHands(); Run(K.HANDS_CONFIRM)
+					local his = SentSince(w, n)
+					eq(#his, 2); assert(not his[2].msg:find("~[%?!],"), his[2].msg)
+					AsSoldier("Keeper"); Session(keeperSaved)
+					K.HandleCommand("CHANNEL", KING, his[1].msg)
+					eq(K.IsHandName("Loyal-Realm"), false)
+					K.HandleCommand("CHANNEL", KING, his[2].msg)
+					eq(K.IsHandName("Loyal-Realm"), true, "his newest: taken")
+					for _ = 1, 6 do Run(K.HANDS_EVERY); K.HandleCommand("CHANNEL", KING, paused) end
+					eq(K.IsHandName("Loyal-Realm"), true, "alive here already: kept alive while he is online")
+				end)
+			end)
+		end)
+	end)
+
+	test("1.0.0 the King's Steward: dropped by the author, the Hands he named end at once on every client; the King's client names nobody from his list and no longer says it (he is told, his page says so), and a list it repeated for him stays the Steward's, never the King's", function()
+		WithThrone(function(w, K)
+			WithStewardList(STEWARD_A, function()
+				WithHandsTimers(w, K, function(Run)
+					local L, KING = ns.L, ns.KingCharacter() .. "-Realm"
+					AsSteward(); Session(nil)
+					K.AddHand("Crony"); Run(5)
+					local s1 = SentLast(w, "T1~H~")
+					-- The King's client, online with him, takes it and repeats it (saying whose it is).
+					AsKing(); Session(nil)
+					K.HandleCommand("CHANNEL", STEWARD, s1)
+					K.SendHands(true)
+					local repeated = LastSent(w)
+					-- Soldiers take it as the Steward's word, from him or from the King's client.
+					AsSoldier("Other"); Session(nil)
+					K.HandleCommand("CHANNEL", STEWARD, s1)
+					K.HandleCommand("CHANNEL", KING, repeated)
+					eq(K.IsHandName("Crony-Realm"), true)
+					eq(ns.rdb.kingHandsByKing, nil, "never the King's word"); eq(ns.rdb.kingHandsFrom, STEWARD)
+					local otherSaved = SavedHands()
+					AsSoldier("Fresh"); Session(nil)
+					K.HandleCommand("CHANNEL", KING, repeated)
+					eq(K.IsHandName("Crony-Realm"), true); eq(ns.rdb.kingHandsByKing, nil); eq(ns.rdb.kingHandsFrom, STEWARD)
+					-- 0.9.8 and 0.9.9 clients: the King's names, as always ("@..." is no name to them).
+					local kns = setmetatable({ On = function() end, Comm = { Handle = function() end }, rdb = {} }, { __index = ns })
+					assert(loadfile(ROOT .. "tests/fixtures/king-0.9.8.lua"))("Olympus", kns)
+					kns.me = "Crony-Realm"
+					kns.King.HandleCommand("CHANNEL", KING, repeated)
+					eq(kns.King.IsHand(), true)
+					eq(kns.King.Authorized("A", "Test Steward-Realm", "Olympus II"), false, "the mark names nobody there")
+					-- The author drops him (a newer signed list without him): nobody's Hand at once.
+					Signed(function() ns.Workshop.TakeTitles(STEWARD_B) end)
+					eq(ns.IsSteward(STEWARD), false)
+					eq(K.IsHandName("Crony-Realm"), false, "at once")
+					K.HandleCommand("CHANNEL", KING, repeated) -- (a King's client whose titles list is older)
+					eq(K.IsHandName("Crony-Realm"), false, "a list naming a Steward who is none here counts for nothing")
+					AsSoldier("Other"); Session(otherSaved)
+					K.HandleCommand("CHANNEL", KING, ("T1~H~%d~Olympus~Kingsman-Realm"):format(DateOf(s1) - 60))
+					eq(K.IsHandName("Crony-Realm"), false); eq(K.IsHandName("Kingsman-Realm"), true, "an older list of the King's replaces his")
+					-- The King's client, one session: takes the Steward's list, then the author drops him.
+					ns.rdb.councilTitles = nil; ns.Workshop.ResetVerify()
+					Signed(function() ns.Workshop.TakeTitles(STEWARD_A) end)
+					AsKing(); Session(nil)
+					K.HandleCommand("CHANNEL", STEWARD, s1)
+					eq(K.IsHandName("Crony-Realm"), true)
+					Signed(function() ns.Workshop.TakeTitles(STEWARD_B) end)
+					eq(K.IsHandName("Crony-Realm"), false, "on the King's client too")
+					eq(#K.Hands(), 0, "his Hands page shows none")
+					local printed, n = #w.printed, #w.sent
+					for _ = 1, 3 do Run(K.HANDS_EVERY); K.SendHands() end
+					K.SendHands(true)
+					eq(#w.sent, n, "never said again")
+					local told = 0
+					for i = printed + 1, #w.printed do if w.printed[i]:find(L.HANDS_STEWARD_ENDED, 1, true) then told = told + 1 end end
+					eq(told, 1, "he is told, once")
+					K.Show("hands")
+					local shown = false
+					for _, l in ipairs(K.Build()) do
+						if tostring(l.text):find(L.HANDS_STEWARD_ENDED:sub(1, 30), 1, true) then
+							shown = true
+							eq(l.onClick, nil, "a line to read, no button (the gamepad UI's rules unchanged)")
+						end
+					end
+					assert(shown, "his Hands page says so")
+					assert(K.StewardStatusLine():find("ended", 1, true), K.StewardStatusLine())
+					-- The next session the same; he names the Hands again: his own word, Crony not in it.
+					Session(SavedHands())
+					K.SendHands(); eq(#w.sent, n)
+					K.AddHand("Kingsman"); Run(5)
+					eq(LastSent(w):match("~Olympus~(.*)$"), "Kingsman-Realm", "his own word, as the newest")
+					eq(K.IsHandName("Kingsman-Realm"), true); eq(K.IsHandName("Crony-Realm"), false)
+					-- What his client said for the Steward: whose list it was, before the names.
+					eq(repeated, ("T1~H~%d~Olympus~@Test Steward-Realm,Crony-Realm"):format(DateOf(s1)))
+				end)
+			end)
+		end)
+	end)
+
+	test("1.0.0 the King's Steward: the King's first 1.0.0 session after 0.9.x: his own list, unchanged, is not held back as older than itself; it goes out as the newest, a fresh client takes it, and a client holding an older list of his takes it too", function()
+		WithThrone(function(w, K)
+			WithStewardList(STEWARD_A, function()
+				WithHandsTimers(w, K, function(Run)
+					local L, KING = ns.L, ns.KingCharacter() .. "-Realm"
+					-- 1.0.0 soldiers hear the King's 0.9.9 client change his list twice; Early hears the
+					-- first change only, Other both.
+					AsSoldier("Early"); Session(nil)
+					K.HandleCommand("CHANNEL", KING, "T1~H~41~Olympus~Oldtimer-Realm")
+					Run(600)
+					K.HandleCommand("CHANNEL", KING, "T1~H~42~Olympus~Oldtimer-Realm,Rogue-Realm")
+					eq(K.IsHandName("Rogue-Realm"), true)
+					local earlySaved = SavedHands()
+					AsSoldier("Other"); Session(nil)
+					K.HandleCommand("CHANNEL", KING, "T1~H~41~Olympus~Oldtimer-Realm")
+					K.HandleCommand("CHANNEL", KING, "T1~H~42~Olympus~Oldtimer-Realm,Rogue-Realm")
+					Run(600)
+					K.HandleCommand("CHANNEL", KING, "T1~H~43~Olympus~Oldtimer-Realm,Newguy-Realm")
+					eq(K.IsHandName("Newguy-Realm"), true)
+					local otherSaved = SavedHands()
+					-- The King updates to 1.0.0: what 0.9.9 saved is his list alone, without a date.
+					Run(86400)
+					local t0 = w.clock
+					local kingSaved = { kingHands = { "Oldtimer-Realm", "Newguy-Realm" } }
+					AsKing(); Session(kingSaved)
+					K.SendHands()
+					local said = LastSent(w)
+					eq(said, "T1~H~1000000000~Olympus~?,Oldtimer-Realm,Newguy-Realm", "his list before 1.0.0, held back")
+					-- Neither soldier says a newer list is held: his changed list is newer than Early's,
+					-- and Other's is his.
+					local n = #w.sent
+					for _, c in ipairs({ { "Other", otherSaved }, { "Early", earlySaved } }) do
+						AsSoldier(c[1]); Session(c[2])
+						K.HandleCommand("CHANNEL", KING, said)
+						Run(K.HANDS_HINT_MIN + K.HANDS_HINT_SPREAD)
+					end
+					eq(#SentSince(w, n), 0, "nobody says a newer list of his is held")
+					-- So his client says it as the newest 30 seconds later, and is never held back.
+					local out = KingSession(w, K, Run, kingSaved, t0, {}, t0 + 600)
+					eq(K.HandsHeldBack(), nil)
+					assert(not Printed(w, L.HANDS_NEWER_HELD:format(L.HANDS_BY_KING)), "he is told nothing")
+					local last = out[#out].msg
+					eq(last, "T1~H~1000000000~Olympus~Oldtimer-Realm,Newguy-Realm")
+					AsSoldier("Fresh"); Session(nil)
+					K.HandleCommand("CHANNEL", KING, last)
+					eq(K.IsHandName("Newguy-Realm"), true, "a fresh client takes it")
+					AsSoldier("Early"); Session(earlySaved)
+					K.HandleCommand("CHANNEL", KING, said)
+					eq(K.IsHandName("Rogue-Realm"), false, "held back: not yet")
+					K.HandleCommand("CHANNEL", KING, last)
+					eq(K.IsHandName("Newguy-Realm"), true, "his changed word"); eq(K.IsHandName("Rogue-Realm"), false)
+					AsSoldier("Other"); Session(otherSaved)
+					K.HandleCommand("CHANNEL", KING, last)
+					eq(K.IsHandName("Newguy-Realm"), true, "his, repeated")
+					-- 0.9.8 and 0.9.9 clients: his names.
+					local kns = setmetatable({ On = function() end, Comm = { Handle = function() end }, rdb = {} }, { __index = ns })
+					assert(loadfile(ROOT .. "tests/fixtures/king-0.9.8.lua"))("Olympus", kns)
+					kns.me = "Newguy-Realm"
+					kns.King.HandleCommand("CHANNEL", KING, said)
+					eq(kns.King.IsHand(), true)
+				end)
+			end)
+		end)
+	end)
+
+	test("1.0.0 the King's Steward: a King's client before 1.0.0 changes his list: a 1.0.0 client that heard only his Steward's list takes the change (the Steward's list says which list of the King's it was built on); the King's 1.0.0 client keeps his changed list over it", function()
+		WithThrone(function(w, K)
+			WithStewardList(STEWARD_A, function()
+				WithHandsTimers(w, K, function(Run)
+					local L, KING = ns.L, ns.KingCharacter() .. "-Realm"
+					-- The Steward's client takes the 0.9.9 King's list (Rogue) and adds Helper.
+					AsSteward(); Session(nil)
+					K.HandleCommand("CHANNEL", KING, "T1~H~42~Olympus~Rogue-Realm")
+					K.AddHand("Helper"); Run(5)
+					local stew = SentLast(w, "T1~H~")
+					local stewardSaved = SavedHands()
+					-- Soldier Y hears the Steward's list only.
+					AsSoldier("Y"); Session(nil)
+					K.HandleCommand("CHANNEL", STEWARD, stew)
+					eq(K.IsHandName("Helper-Realm"), true)
+					local ySaved = SavedHands()
+					-- The next day, the Steward offline: the King's 0.9.9 client removes Rogue and names
+					-- Kingsman, repeated for half an hour.
+					Run(86400)
+					AsSoldier("Y"); Session(ySaved)
+					for i = 1, 7 do
+						K.HandleCommand("CHANNEL", KING, ("T1~H~%d~Olympus~Kingsman-Realm"):format(76 + i))
+						Run(K.HANDS_EVERY)
+					end
+					eq(K.IsHandName("Rogue-Realm"), false, "the King removed him"); eq(K.IsHandName("Kingsman-Realm"), true)
+					eq(K.IsHandName("Helper-Realm"), false, "his changed list replaces his Steward's")
+					-- His unchanged list (the one the Steward built on) never replaces the Steward's.
+					AsSoldier("Y2"); Session(nil)
+					K.HandleCommand("CHANNEL", STEWARD, stew)
+					for i = 1, 6 do Run(K.HANDS_EVERY); K.HandleCommand("CHANNEL", KING, ("T1~H~%d~Olympus~Rogue-Realm"):format(200 + i)) end
+					eq(K.IsHandName("Helper-Realm"), true, "his unchanged list: the Steward's newer list stands")
+					-- The King updates to 1.0.0 with that changed list saved: his client hears the
+					-- Steward's list built on his older one, keeps his own and answers with it; the
+					-- Steward's client takes it as the King's changed word, and the Steward is told.
+					AsKing(); Session({ kingHands = { "Kingsman-Realm" } })
+					K.HandleCommand("CHANNEL", STEWARD, stew)
+					eq(table.concat(K.Hands(), ","), "Kingsman-Realm", "his own changed word stands")
+					Run(5)
+					local answer = LastSent(w)
+					eq(answer, "T1~H~1000000000~Olympus~?,Kingsman-Realm")
+					AsSteward(); Session(stewardSaved)
+					K.HandleCommand("CHANNEL", KING, answer)
+					eq(table.concat(K.Hands(), ","), "Kingsman-Realm")
+					assert(Printed(w, L.STEWARD_KING_HANDS), "the Steward is told")
+					-- The Steward's client repeats it, dated by its clock: on the King's client still
+					-- his own word (never the Steward's, to end with him), repeated as his.
+					local n = #w.sent
+					K.SendHands(); Run(K.HANDS_CONFIRM)
+					local stewRepeat = SentLast(w, "T1~H~")
+					eq(#w.sent, n + 2); assert(stewRepeat:find("~Olympus II~[^%?!]*Kingsman%-Realm$"), stewRepeat)
+					AsKing(); Session({ kingHands = { "Kingsman-Realm" } })
+					K.HandleCommand("CHANNEL", STEWARD, stewRepeat)
+					eq(table.concat(K.Hands(), ","), "Kingsman-Realm"); eq(ns.rdb.kingHandsByKing, true)
+					K.SendHands(true)
+					eq(LastSent(w), ("T1~H~%d~Olympus~Kingsman-Realm"):format(DateOf(stewRepeat)), "his own word, at that date")
+					-- A Steward's list built on his list as it is: the newer one, taken by his client.
+					AsKing(); Session({ kingHands = { "Rogue-Realm" } })
+					K.HandleCommand("CHANNEL", STEWARD, stew)
+					eq(table.concat(K.Hands(), ","), "Rogue-Realm,Helper-Realm")
+					-- What the Steward's client said: the King's list it was built on, before the names.
+					eq(stew, ("T1~H~%d~Olympus II~=%s,Rogue-Realm,Helper-Realm"):format(DateOf(stew), ns.Comm.Hash36("Rogue-Realm")))
+				end)
+			end)
+		end)
+	end)
+
+	test("1.0.0 the King's Steward: a list, a claim or a word of the treasury dated more than a minute ahead of the server's clock is not taken, so a modified client never keeps its word over the King's newer one for long", function()
+		WithThrone(function(w, K)
+			WithStewardList(STEWARD_A, function()
+				WithHandsTimers(w, K, function(Run)
+					local T, KING = ns.Treasury, ns.KingCharacter() .. "-Realm"
+					AsSoldier("Other"); Session(nil)
+					local now = w.clock
+					K.HandleCommand("CHANNEL", STEWARD, ("T1~H~%d~Olympus II~Helper-Realm"):format(now + 61))
+					eq(K.IsHandName("Helper-Realm"), false, "61 seconds ahead: not taken")
+					K.HandleCommand("CHANNEL", STEWARD, ("T1~H~%d~Olympus II~Helper-Realm"):format(now + 60))
+					eq(K.IsHandName("Helper-Realm"), true, "a minute ahead at most")
+					-- The King's next word, a minute and a second later, is newer: it wins.
+					w.clock = now + 61
+					K.HandleCommand("CHANNEL", KING, ("T1~H~%d~Olympus~Kingsman-Realm"):format(w.clock))
+					eq(K.IsHandName("Kingsman-Realm"), true); eq(K.IsHandName("Helper-Realm"), false)
+					-- The treasury's switches and keepers: the same.
+					K.HandleCommand("CHANNEL", STEWARD, ("T1~T~5~Olympus II~111~%d"):format(w.clock + 61))
+					eq(T.Shows("book"), false, "switches 61 seconds ahead: not taken")
+					K.HandleCommand("CHANNEL", STEWARD, ("T1~T~6~Olympus II~111~%d"):format(w.clock + 60))
+					eq(T.Shows("book"), true)
+					K.HandleCommand("CHANNEL", STEWARD, ("T1~K~7~Olympus II~%d~Steward Keeper-Realm"):format(w.clock + 61))
+					eq(T.KeeperByName("Steward Keeper"), false, "keepers 61 seconds ahead: not taken")
+					K.HandleCommand("CHANNEL", STEWARD, ("T1~K~8~Olympus II~%d~Steward Keeper-Realm"):format(w.clock + 60))
+					eq(T.KeeperByName("Steward Keeper"), true)
+					w.clock = w.clock + 61
+					K.HandleCommand("CHANNEL", KING, ("T1~T~9~Olympus~000~%d"):format(w.clock))
+					eq(T.Shows("book"), false, "the King's word a minute later wins")
+					-- A claim that a newer list is held: the same.
+					AsKing(); Session(nil); K.AddHand("Kingsman"); Run(5)
+					Session(SavedHands())
+					K.HandleHint("CHANNEL", "Faker-Realm", ("TH~%d~S"):format(w.clock + 61))
+					eq(K.HandsHeldBack(), "confirming", "a claim 61 seconds ahead: nothing")
+					K.HandleHint("CHANNEL", "Faker-Realm", ("TH~%d~S"):format(w.clock + 60))
+					eq(K.HandsHeldBack(), "newer")
+					eq(K.DATE_AHEAD, 60)
+				end)
+			end)
+		end)
+	end)
+
+	test("1.0.0 the King's Steward: a keeper is told, before and while sharing, that the King's Steward sees his book and the bank too, as the King does, whatever the switches (both languages); the King's Hands note says his Steward keeps the list alive", function()
+		local L, T = ns.L, ns.Treasury
+		local function Says(text, what) assert(tostring(text):find(what, 1, true), what .. " missing: " .. tostring(text)) end
+		-- The Steward's client: the treasury as the King sees it, every switch off.
+		WithThrone(function(w, K)
+			WithStewardList(STEWARD_A, function()
+				local savedSplit = ns.splitNames
+				local ok, err = pcall(function()
+					ns.splitNames = true
+					AsSteward()
+					eq(T.Role(), "king")
+					for _, k in ipairs({ "balance", "ranking", "book" }) do
+						eq(T.Shows(k), false); eq(T.MaySee(k), true, k)
+					end
+					-- A keeper's own tab: who sees it.
+					AsKing(); T.AddKeeper("Test Keeper")
+					AsSoldier("Test Keeper")
+					eq(T.IsKeeper(), true)
+					local _, _, detail = T.Build()
+					Says(detail, "the King and his Steward see it")
+					Says(T.WhoSees(), "the King and his Steward")
+					-- The King shows the army the balance: the rest, still his and his Steward's.
+					ns.rdb.treasuryFlags = { balance = true, at = w.clock }
+					Says(T.WhoSees(), "the King and his Steward")
+					-- The King's Hands page: his Steward keeps the list alive too.
+					AsKing(); K.Show("hands")
+					local page = Texts(K.Build())
+					Says(page, L.HANDS_NOTE:sub(1, 30)); Says(page, "Steward")
+				end)
+				ns.splitNames = savedSplit
+				if not ok then error(err, 0) end
+			end)
+		end)
+		for _, key in ipairs({ "TREASURER_SHARE_ASK", "TREASURER_SHARE_ON", "TREASURY_YOU_AND_KING", "TREASURY_YOU_AND_KING_BUT", "TREASURY_DETAIL_TREASURER", "TREASURY_HOW" }) do
+			Says(L[key], "Steward")
+		end
+		eq(StaticPopupDialogs.OLYMPUS_TREASURER_SHARE.text, L.TREASURER_SHARE_ASK, "the question asked")
+		Says(L.HANDS_NOTE, "Steward")
+		local pt = { L = setmetatable({}, { __index = ns.L }) }
+		local savedLocale = GetLocale
+		GetLocale = function() return "ptBR" end
+		local ok, err = pcall(function() assert(loadfile(ADDON_DIR .. "Locales.lua"))("Olympus", pt) end)
+		GetLocale = savedLocale
+		if not ok then error(err, 0) end
+		for _, key in ipairs({ "TREASURER_SHARE_ASK", "TREASURER_SHARE_ON", "TREASURY_YOU_AND_KING", "TREASURY_YOU_AND_KING_BUT", "TREASURY_DETAIL_TREASURER", "TREASURY_HOW", "HANDS_NOTE" }) do
+			Says(rawget(pt.L, key), "Senescal")
+		end
+		assert(rawget(pt.L, "HANDS_STEWARD_ENDED") and rawget(pt.L, "HANDS_STEWARD_ENDED") ~= L.HANDS_STEWARD_ENDED, "pt-BR: HANDS_STEWARD_ENDED")
 	end)
 end
 

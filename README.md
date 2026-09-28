@@ -255,7 +255,9 @@ Throne opens as the King's, with **Acting for the King** on top of every page, a
 King's name he:
 - names and removes the **Hands of the King** (the Hands button on the Throne);
 - names and removes the **treasury's keepers**, and sets **what the army sees** of the
-  treasury (its three switches), on the Treasury tab;
+  treasury (its three switches), on the Treasury tab, and **sees the whole treasury as the King
+  does**: the balance, the ranking, every keeper's shared book and the guild bank, whatever the
+  switches (every keeper is told so before he shares his book);
 - uses every tool of a Hand: the Agenda, Summon the Lords, the Royal Inspection, Vox Populi and
   the gates;
 - sends the **Crown's decrees** for `<Olympus>` (Royal decrees, Tabard inspections, Calls to Arms,
@@ -280,19 +282,33 @@ newest list as theirs and repeat it, and each answers an older list it hears wit
 Hands it took, across sessions, and never goes back to an older one. The Hands last while the
 King's client or a Steward's is online, whatever list it repeats, and end 20 minutes after both
 logged off, as before. A list the King's or the Steward's client saved in an earlier session
-goes out *held back* for 30 seconds: no client takes it, and a few of the clients that hold a
-newer list say so. That client then keeps its list held back and tells its player (the Hands
-page says so too) until he hears the newer list from whoever set it, or names the Hands again,
-which makes his own word the newest. That claim is anybody's word, so it does nothing else: it never names or
-removes a Hand. A client that never heard the newer list still takes a saved list nobody
-answered within those 30 seconds, until a client that holds the newer one is online. A list a
-Steward set counts no longer than he does: once a newer signed list drops him, the King's list
-replaces it, whatever its date.
+goes out *held back* for 30 seconds: no client takes it (nor brings back the same list it kept
+from an earlier session), and every client that holds a newer list says so, each after a short
+wait of its own, drawn so that one of them says it within 16 seconds however few hold it, and
+only a few say it before the first is heard however many do. That client then keeps its list
+held back and tells its player (the Hands page says so too) until he hears the newer list from
+whoever set it, or names the Hands again, which makes his own word the newest. That claim is
+anybody's word, so it does nothing else: it never names or removes a Hand, and a claim heard
+earlier never keeps anyone from saying it later. A client that never heard the newer list still
+takes a saved list nobody answered within those 30 seconds, when no client that holds the newer
+one is online. A list a Steward set counts no longer than he does: once a newer signed list
+drops him, it names nobody on any client, the King's or a Steward's client that held it stops
+saying it and tells its player, who names the Hands again, and any list of the King's replaces
+it, whatever its date. The King's client repeating a list his Steward set says whose it is, so
+it stays the Steward's word everywhere and never becomes the King's. A list of the Throne (the
+Hands, the keepers, the switches), or such a claim, dated more than a minute ahead of the
+server's clock is not taken.
 
-Clients before 1.0.0 follow the King's own list alone, as they always did (the held-back mark is
-no name to them). A King's client before 1.0.0 sends his list without a date: a 1.0.0 client
-takes it where it holds nothing newer, and over the Steward's list only when the King changes
-his, so a King still on 0.9.x replaces his Steward's Hands each time he changes his own list.
+Clients before 1.0.0 follow the King's own list alone, as they always did (the held-back mark,
+and the Steward's name before a list the King's client repeats for him, are no names to them). A
+King's client before 1.0.0 sends his list without a date: a 1.0.0 client takes it where it holds
+nothing newer, and over the Steward's list only when the King changes his, so a King still on
+0.9.x replaces his Steward's Hands each time he changes his own list. A client knows he changed
+it when it heard his list before, or took a Steward's list, which says which list of the King's
+it was built on (when the Steward's client had heard one); a client that knows neither takes his
+change as his oldest word. The list the King's client saved before 1.0.0 is weighed the same way
+when he first logs in with 1.0.0 (held back first, as any saved list), so it is never held back
+as older than itself.
 
 **Who he is.** Only the author names a Steward, with the same key that signs the council (see
 [The High Council's signed lists](#the-high-councils-signed-lists-the-author)): no name is
@@ -307,8 +323,9 @@ shows the army something of it.
 - **Its keepers (1.0)**: the Treasurer of Olympus (that exact character, in the guild OLYMPUS),
   the King, and up to 5 characters the King adds on the Treasury tab (**The treasury's
   keepers**, then **Add a treasury character**, by name or target; a click on one takes it off).
-  The list is the King's word alone: every client checks it comes from his character, keeps it
-  (it never runs out while he is away), and the Treasurer's addon repeats it.
+  The list is the King's word (or his Steward's, in his name): every client checks it comes from
+  his character or a Steward's, keeps it (it never runs out while he is away), and the
+  Treasurer's addon repeats it.
 - **The Treasurer's mail**: Pyralis Andarai, his hunter where the treasury's mail goes, keeps a book of its own like him (pinned by name on his realm group, in any guild or none; gold between the two is a transfer, and outside an Olympus guild its book reaches the others through the Treasurer's addon).
 - **Each keeper's book**: gold and items a keeper receives by trade or mail are a donation, gold
   and items he gives a payment, each written down by itself in his own character's book, by his
@@ -351,14 +368,16 @@ shows the army something of it.
 - **Sent by each keeper's addon by itself** (every 5 minutes and after a change), once he said
   yes: his book's balance, totals, ranking, items donated and latest lines, on the Olympus
   channel. Every client checks it comes from a keeper himself.
-- **The King chooses what the army sees**, with three buttons: the balance, the ranking, the
-  book. Until he does, only the keepers and the King see them (a keeper's tab says so).
+- **The King chooses what the army sees** (his Steward too, in his name), with three buttons:
+  the balance, the ranking, the book. Until he does, only the keepers, the King and his Steward
+  see them (a keeper's tab says so, and so does the question each keeper answers before sharing).
   With any of them on, the Treasury tab appears for every member with the addon, showing only
   what he turned on (the book behind its own button), and the balance shows under the Treasurer
   in the Realm. The Treasurer's addon repeats the King's latest word, so members who never meet
-  the King online get it too. The King always sees all of it, and the balance next to the
-  soldiers on top of his window. (The channel can be read by anyone on it: the buttons choose
-  what the addon shows, they don't make the numbers secret.)
+  the King online get it too. The King and his Steward always see all of it, whatever the
+  switches, and the King the balance next to the soldiers on top of his window. (The channel
+  can be read by anyone on it: the buttons choose what the addon shows, they don't make the
+  numbers secret.)
 
 ### Tabards: tabard inspection and the untabarded list
 - **Patrol**: walk through the crowd and the addon inspects nearby Olympus members level 15
@@ -580,7 +599,7 @@ tracking. Your name is on every message (the game adds it). What goes where:
 | [Olympus], [Captains] and [Lords] lines | everyone on the Olympus channel, all three | when you write one |
 | Hello: addon version, realm, public or sealed channel, whether you share your zone | your guild | every minute or so |
 | Your position as a dot on the map | your guild | only with `/oly share` (off by default) |
-| A treasury keeper's book (balance, gold and items given and who gave them, the ranking) and the guild bank of `<Olympus>` (its gold and items) | everyone on the Olympus channel receives the bytes; the addon shows them to the King, and to the army only with his switches | only after that keeper says yes (each keeper, the King too, is asked once; `/oly treasurer on\|off`), withdrawn at once when he turns it off |
+| A treasury keeper's book (balance, gold and items given and who gave them, the ranking) and the guild bank of `<Olympus>` (its gold and items) | everyone on the Olympus channel receives the bytes; the addon shows them to the King and his Steward, and to the army only with the King's switches | only after that keeper says yes (each keeper, the King too, is asked once; `/oly treasurer on\|off`), withdrawn at once when he turns it off |
 | The King's crown on the map, and with it his zone and layer | everyone on the Olympus channel | only while the King turns it on (Throne tab), whatever he answered to the question |
 | Olympus Link (1.0.0): a request (your guild, faction, a random number, your code's id and a tag made from your code's signature and your name) | the confirmers asked (a whisper each): a High Councillor, or verified players drawn for your code | only after you press **Accept** on `/oly discord <code>` |
 | Olympus Link: the finished proof (your character name, realm, guild, faction, the tag, and the confirmers' names, how each knew your guild, their signatures and their keys' certificates) | the Olympus bot, through the page you scan it with, or a watcher (a High Councillor, by whisper) who hands it to the bot | when it is ready, until it is delivered (5 days after your code expired at most) |
@@ -654,13 +673,15 @@ few characters working together can still reach is said plainly further down
     nobody else (no name in the code, no vote). His word counts by his name, which the server
     stamps: the King's Hands, the treasury's keepers and its switches, dated, the newest kept
     and the King's newer word always over his; and the Crown's decrees for `<Olympus>` on every
-    client. Never the King's crown on the map, his court, writs, pardons, untabarded list, book
-    or yes. This adds trust in the author's key: whoever holds it can make a character act for
-    the King in these, as it can name the council. A newer signed list without him ends it,
-    and a list of Hands he set counts no longer than he does. Every client keeps the newest
+    client; and he sees the whole treasury as the King does, whatever the switches (every keeper
+    is told so before sharing). Never the King's crown on the map, his court, writs, pardons,
+    untabarded list, book or yes. This adds trust in the author's key: whoever holds it can
+    make a character act for the King in these, as it can name the council. A newer signed list
+    without him ends it, and a list of Hands he set counts no longer than he does. Every client keeps the newest
     list of Hands it took and never goes back to an older one; a player's word that a newer
     list is held only holds back the King's or the Steward's own saved list on his client: it
-    never names or removes a Hand.
+    never names or removes a Hand. A list, a switch or such a claim dated more than a minute
+    ahead of the server's clock is not taken.
   - A decree counts only if its sender is the Lord or a Captain of that guild as the census
     pictures it (below), or as our own roster says for our own guild; the King's by his name.
     The rank written inside the message is ignored. Since 1.0.0 a sender speaks for one guild

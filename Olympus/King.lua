@@ -172,21 +172,35 @@ local function NewId() return math.random(1, 99999) end
 --  * A list the King's client or a Steward's saved in an earlier session goes out held back
 --    ("?" before the names) until HANDS_CONFIRM has passed with nobody saying a newer one is
 --    held; then as the newest. A list its sender holds back is never taken on a soldier's
---    client (clients before 1.0.0 take its names as they always did: "?" is no name to them).
---  * A client holding a newer list than one it hears says so, dated and whose (TH~, drawn like
---    the council's list answers: about HANDS_HINTS clients, HANDS_HINT_GAP apart at most). The
---    King's or a Steward's client that did not set or take its list this session then keeps it
---    held back ("!": said, and not the newest), and he is told, until he hears the newer one
---    from whoever set it or names the Hands again. The claim is anybody's word, so that is all it
---    does: it never names or removes a Hand anywhere.
+--    client, nor brings back the same list kept from an earlier session (or lapsed): that one
+--    waits for its sender's word that it is the newest, as the army may hold a newer one this
+--    client never heard (a second review's finding). Clients before 1.0.0 take its names as they
+--    always did: "?" is no name to them.
+--  * Every client holding a newer list than one it hears says so, dated and whose (TH~), each
+--    after a wait of its own (HintWait): the first says it within HANDS_HINT_MIN +
+--    HANDS_HINT_SPREAD however few hold that list, and only a few say it before the first is
+--    heard however many do, the others holding theirs back. Every list heard is answered, a list
+--    said held back again after a /reload too. (The second review found that a draw sized to the
+--    whole census, once in 5 minutes a client, left most stale lists unanswered in a large army
+--    and none answered after a /reload, and that anybody's claim heard before the King logged in
+--    kept every holder silent.) The King's or a Steward's client that did not set or take its
+--    list this session then keeps it held back ("!": said, and not the newest), and he is told,
+--    until he hears the newer one from whoever set it or names the Hands again. The claim is
+--    anybody's word, so that is all it does: it never names or removes a Hand anywhere.
 --  * Hearing the King's or a Steward's client, whatever the date of its list, keeps the newest
 --    list a client holds (the Crown is online): the Hands never lapse while either is online.
 --  * A list a Steward set counts no longer than he does: once the signed titles list no longer
---    names him, any list of the King's (or of another Steward) replaces it, whatever its date.
---  * A list without a date (a King's client before 1.0.0) is dated as his oldest word while it
---    is the one last heard from him (saved: rdb.kingHandsUndated), so his unchanged repeats never
---    replace his Steward's newer list; a changed one is his newer word, and a Steward whose list
---    it replaces is told.
+--    names him, it names nobody on any client (on the King's and a Steward's too, which no
+--    longer say it: the player is told, and names the Hands again), and any list of the King's
+--    (or of another Steward) replaces it, whatever its date. The King's client repeating a list
+--    his Steward set says so ("@Name-Realm" before the names), so that it stays the Steward's
+--    word everywhere and never becomes the King's.
+--  * A King's list from before 1.0.0 (without a date: his client before 1.0.0; dated DATED: the
+--    list his 1.0.0 client saved before 1.0.0, unchanged since) is weighed against his list
+--    before 1.0.0 as last heard here (saved: rdb.kingHandsUndated, its Hash36), or, where none
+--    was, the one a Steward's list says it was built on ("=<hash>" before the names): the same
+--    list is his oldest word, so his unchanged repeats never replace his Steward's newer list; a
+--    changed one is his newer word, and a Steward whose list it replaces is told.
 ---------------------------------------------------------------------------
 
 King.HAND_MAY = { S = true, I = true, A = true, X = true, V = true, E = true, G = true }
@@ -195,46 +209,65 @@ King.HAND_MAY = { S = true, I = true, A = true, X = true, V = true, E = true, G 
 -- writs (W), pardons (F) or the untabarded list (U).
 King.STEWARD_MAY = { S = true, I = true, A = true, X = true, V = true, E = true, G = true, H = true, T = true, K = true }
 King.DATED = 1000000000      -- an id this high is a list's date (1.0.0 on); lower, an id (before)
-King.DATE_AHEAD = 600        -- a list dated further ahead of the server's clock is not taken
+-- A list or a claim dated further ahead of the server's clock is not taken (the treasury's
+-- switches and keepers neither, Treasury.lua). A minute: every client reads the same server clock,
+-- so a word dated further ahead comes from a modified client, which would otherwise keep its word
+-- over the King's newer one for as long (a review asked for a minute, not ten).
+King.DATE_AHEAD = 60
 King.HANDS_ANSWER = 30       -- the King's or a Steward's client answers an older list this often at most
 King.HANDS_CONFIRM = 30      -- a saved list goes out held back this long before it goes out as the newest
 King.HELD_BACK, King.HELD_PAUSED = "?", "!" -- before the names: held back (to be confirmed; older than one the army holds)
--- Saying a newer list is held: about HANDS_HINTS clients draw it, whatever the army's size (only
--- those holding that list take part, so more than the council's answers; the first one heard
--- holds the others back), each at most once in HANDS_HINT_GAP.
-King.HANDS_HINTS = 10
-King.HANDS_HINT_GAP = 300
-King.HANDS_HINT_MIN, King.HANDS_HINT_SPREAD = 2, 8 -- said 2 to 10 seconds after the draw
+-- Saying a newer list is held: every client holding it says it, HANDS_HINT_MIN to HANDS_HINT_MIN +
+-- HANDS_HINT_SPREAD seconds after hearing the older one (well within HANDS_CONFIRM), unless someone
+-- said as much meanwhile. The wait is drawn from the census's count of addons, HANDS_HINT_BOUND at
+-- least (HintWait).
+King.HANDS_HINT_MIN, King.HANDS_HINT_SPREAD = 1, 15
+King.HANDS_HINT_BOUND = 1000
 
 local myHands = {}       -- the list this client holds, in order: { "Name-Realm", ... } (saved, rdb.kingHands)
 local hands = {}         -- the same list: [Name-Realm] = true
 local handsDate = 0      -- its date (the server's clock; 0: none yet)
-local handsByKing = false -- the King himself sent it (a list of the same date from a Steward loses)
+local handsByKing = false -- the King himself set it (a list of the same date from a Steward loses)
 local handsFrom          -- the Steward who set it, when not the King (it counts while he is one)
 local handsAt = -math.huge -- when this client last heard the King's client or a Steward's (our clock)
 local handsKing          -- the King who sent it last (whose Hand, on a Hand's Throne Room)
-local undatedText        -- the list last heard from a King's client before 1.0.0 (saved)
+-- The King's list before 1.0.0 as last heard here, or as a Steward's list we took says it was
+-- built on: its Hash36 (saved).
+local undatedKey
 local previewHands = {}  -- the author's Asmon's view: its own list, on his screen only
+local NONE = {}          -- (the list shown where the one held ended with its Steward)
 local lastHandsSent, lastHandsAnswer = -math.huge, -math.huge
 local handsSendPending = false
 -- The King's client and a Steward's: whether it goes out as the newest (set or taken this
 -- session, or said held back HANDS_CONFIRM ago with nobody saying a newer one is held), whether
 -- this client set it itself this session (then nobody's word holds it back), the newest date the
--- army said is held (and whose), and when it first went out held back.
+-- army said is held (and whose), when it first went out held back, and whether its player was
+-- told that the list it holds ended with its Steward.
 local handsSure, handsSet, heardNewer, heardNewerByKing = false, false, 0, false
-local heldBackAt, confirmPending = -math.huge, false
--- Saying a newer list is held: our last draw, our answer waiting, and the latest said by anyone.
-local lastHintDrawn, hintPending, hintHeard = -math.huge, nil, nil
+local heldBackAt, confirmPending, endedTold = -math.huge, false, false
+-- Saying a newer list is held: our answer waiting ({ at = the date we hold }).
+local hintPending
 
 -- The clock a list is dated by: the server's, the same on every client.
 local function Clock() return GetServerTime and GetServerTime() or ns.Now() end
 
+-- A King's list before 1.0.0 as it is compared: its names, in order, in a short hash.
+local function Key(text) return ns.Comm.Hash36(text or "") end
+
+-- The list held still counts: the King's word, or a Steward's while the signed list names him.
+local function HeldValid()
+	if handsDate == 0 then return false end
+	return handsByKing or King.IsStewardName(handsFrom)
+end
+
 -- The King's client and his Steward's hold the list they repeat (it never lapses there); everyone
--- else trusts the list while the King or a Steward keeps repeating it.
+-- else trusts the list while the King or a Steward keeps repeating it. A list a Steward set names
+-- nobody once he is no longer one, on every client (a review's finding: it lasted 20 more
+-- minutes, and on the King's client for good).
 local function Hand(name)
-	local full = ns.FullName(name)
+	if not HeldValid() then return false end
 	if not King.SetsLists() and ns.Now() - handsAt > King.HANDS_FRESH then return false end
-	return hands[full] == true
+	return hands[ns.FullName(name)] == true
 end
 
 function King.IsHand() return not King.SetsLists() and ns.IsMember() and Hand(ns.me) end
@@ -242,10 +275,14 @@ function King.IsHand() return not King.SetsLists() and ns.IsMember() and Hand(ns
 -- vote. His Hands speak with his Crown for his guild on every client outside it (Decree.lua,
 -- Channels.VerifiedLevel); on its own members' clients its roster says who speaks for it.
 function King.IsHandName(name) return type(name) == "string" and Hand(name) end
+-- The list on the Throne's Hands page: none while the one held ended with its Steward.
 function King.Hands()
 	if King.Preview() and not King.SetsLists() then return previewHands end
+	if handsDate ~= 0 and not HeldValid() then return NONE end
 	return myHands
 end
+-- The list this client holds was a Steward's, and the signed titles list no longer names him.
+function King.HandsEnded() return handsDate ~= 0 and not HeldValid() end
 
 -- The King may send it; his Steward what STEWARD_MAY lends him; one of his Hands what is theirs
 -- to use too (soft: his position).
@@ -269,12 +306,6 @@ local function StewardLabel(name)
 end
 King.StewardLabel = StewardLabel
 
--- The list held still counts: the King's word, or a Steward's while the signed list names him.
-local function HeldValid()
-	if handsDate == 0 then return false end
-	return handsByKing or King.IsStewardName(handsFrom)
-end
-
 -- A newer list is held elsewhere, the army says, and this client did not set its own this
 -- session: it goes out held back ("!").
 local function Paused() return not handsSet and heardNewer > handsDate end
@@ -286,7 +317,7 @@ local function SaveHands()
 	local copy = {}
 	for i, n in ipairs(myHands) do copy[i] = n end
 	ns.rdb.kingHands, ns.rdb.kingHandsAt, ns.rdb.kingHandsByKing = copy, handsDate, handsByKing or nil
-	ns.rdb.kingHandsFrom, ns.rdb.kingHandsUndated = not handsByKing and handsFrom or nil, undatedText
+	ns.rdb.kingHandsFrom, ns.rdb.kingHandsUndated = not handsByKing and handsFrom or nil, undatedKey
 end
 
 -- The list becomes `names` (in order), dated `at`, the King's word or `from`'s (a Steward).
@@ -299,6 +330,7 @@ local function SetHands(names, at, byKing, from)
 	end
 	handsDate, handsByKing = at, byKing == true
 	handsFrom = not handsByKing and from or nil
+	endedTold = false
 end
 
 -- Several changes in a row go out as one list, a few seconds after the last one.
@@ -318,12 +350,25 @@ end
 
 -- The list goes out whole, with its date: short in one message, long in pieces (Comm.SendChunked).
 -- From the King's client and his Steward's alone, once someone named a Hand; held back while it
--- is not known to be the newest (see above).
+-- is not known to be the newest (see above). Before the names, what the list says of itself (no
+-- name to a client before 1.0.0): held back ("?" or "!"); the Steward who set it, when the King's
+-- client repeats his list ("@Name-Realm"); the King's list before 1.0.0 it was built on, from a
+-- Steward's client ("=<hash>").
 function King.SendHands(force)
 	if not King.SetsLists() then return end
 	local now = ns.Now()
 	if not force and now - lastHandsSent < King.HANDS_EVERY and not ConfirmDue(now) then return end
 	if handsDate == 0 then return end -- nobody named yet
+	-- A list a Steward set ended with him (a newer signed list no longer names him): never said
+	-- again. The player is told once (his Hands page says so too), and names the Hands again.
+	if not HeldValid() then
+		if not endedTold then
+			endedTold = true
+			ns.Print(L.HANDS_STEWARD_ENDED)
+			Changed()
+		end
+		return
+	end
 	if ConfirmDue(now) then handsSure = true end
 	local mark
 	if Paused() then mark = King.HELD_PAUSED
@@ -341,8 +386,15 @@ function King.SendHands(force)
 		end
 	end
 	lastHandsSent = now
-	local names = table.concat(myHands, ",")
-	if mark then names = mark .. (names ~= "" and "," .. names or "") end
+	local head = {}
+	if mark then head[#head + 1] = mark end
+	if King.IsKing() then
+		if not handsByKing and handsFrom then head[#head + 1] = "@" .. handsFrom end
+	elseif undatedKey then
+		head[#head + 1] = "=" .. undatedKey
+	end
+	for _, n in ipairs(myHands) do head[#head + 1] = n end
+	local names = table.concat(head, ",")
 	local msg = ("T1~H~%d~%s~%s"):format(math.max(math.floor(handsDate), King.DATED), GetGuildInfo("player") or "", names)
 	if #msg <= 250 then ns.Comm.Send("CHANNEL", msg, "hands") else ns.Comm.SendChunked(msg) end
 end
@@ -405,41 +457,52 @@ function King.RemoveHand(name)
 	return Changed()
 end
 
--- A soldier's client holding a newer list than one the King's or a Steward's client said: a few
--- clients of the army say so (TH~<its date>~<K: the King's | S: a Steward's>), drawn like the
--- council's list answers (Workshop.AnswerAsk): about HANDS_HINTS of the addons the census counts
--- draw it (those that hold the newer list), none while it counts nobody but us, a draw at most
--- once in HANDS_HINT_GAP, said a few seconds later, and left out when someone said as much
--- meanwhile.
+-- A soldier's client holding a newer list than one the King's or a Steward's client said says so
+-- (TH~<its date>~<K: the King's | S: a Steward's>): every client that holds it, each after a wait
+-- of its own (HintWait), left out when someone said as much meanwhile. One answer waiting at a
+-- time; every list heard is answered (the King's client said held back again after a /reload
+-- too: a review found a draw once in 5 minutes left it unanswered).
+--
+-- The wait: HANDS_HINT_MIN, plus up to HANDS_HINT_SPREAD seconds drawn so that short waits are as
+-- rare as the census counts addons (HANDS_HINT_BOUND at least: an upper bound on how many hold the
+-- list), timers spread exponentially as in Nonnenmacher and Biersack's "Scalable feedback for
+-- large groups": however few hold the newer list, the first says it within the spread (well within
+-- HANDS_CONFIRM); however many do, only a few say it before the first is heard (about M^(d/S) for M
+-- addons, the channel's delay d and the spread S: 2 or 3 with a second's delay and 5,000 addons),
+-- and about one in M says it at once. (A draw sized to the whole census left most stale lists
+-- unanswered where few held the newer one, a review found.)
+function King.HintWait()
+	local m = math.max(King.AddonsOnline(), King.HANDS_HINT_BOUND)
+	local x = math.max(tonumber(King.random()) or 0, 1e-9)
+	local share = math.min(1, math.max(0, 1 + math.log(x) / math.log(m)))
+	return King.HANDS_HINT_MIN + King.HANDS_HINT_SPREAD * share
+end
+
 local function HintSoon()
 	if King.SetsLists() or handsDate < King.DATED then return end
-	local now = ns.Now()
-	if hintPending or now - lastHintDrawn < King.HANDS_HINT_GAP then return end
-	if hintHeard and hintHeard.at >= handsDate and now - hintHeard.t < King.HANDS_HINT_GAP then return end
-	local users = King.AddonsOnline()
-	if users <= 1 then return end
-	lastHintDrawn = now
-	if King.random() > math.min(1, King.HANDS_HINTS / users) then return end
+	if hintPending and hintPending.at == handsDate then return end
 	local pending = { at = handsDate }
 	hintPending = pending
-	ns.After(King.HANDS_HINT_MIN + King.random() * King.HANDS_HINT_SPREAD, "king hands hint", function()
+	ns.After(King.HintWait(), "king hands hint", function()
 		if hintPending ~= pending then return end
 		hintPending = nil
-		if handsDate ~= pending.at or King.SetsLists() then return end
+		if handsDate ~= pending.at or King.SetsLists() or not HeldValid() then return end
 		ns.Comm.Send("CHANNEL", ("TH~%d~%s"):format(math.floor(handsDate), handsByKing and "K" or "S"), "handshint")
 	end)
 end
 
 -- Someone says a newer list is held than the King's or a Steward's client said. Anybody's word:
 -- it holds this client's own list back (the King's or a Steward's, not set by him this
--- session; he is told once), and holds back our own saying it. Never a Hand named or removed.
+-- session; he is told once), and holds back our own answer waiting (a claim heard then, after
+-- the list it answers: the client that said that list hears it too). Never a Hand named or
+-- removed, and never a claim heard earlier keeping a client silent later (a review's finding:
+-- one claim before the King logged in kept every holder silent for 5 minutes, and his stale
+-- list went out as the newest).
 function King.HandleHint(dist, sender, text)
 	if dist ~= "CHANNEL" or type(text) ~= "string" or #text > 20 then return end
 	local at, by = text:match("^TH~(%d+)~([KS])$")
 	at = tonumber(at)
 	if not at or at < King.DATED or at > Clock() + King.DATE_AHEAD then return end
-	local now = ns.Now()
-	if not hintHeard or at >= hintHeard.at or now - hintHeard.t >= King.HANDS_HINT_GAP then hintHeard = { at = at, t = now } end
 	if hintPending and at >= hintPending.at then hintPending = nil end
 	if not King.SetsLists() or handsDate == 0 or at <= handsDate or at <= heardNewer then return end
 	local was = Paused()
@@ -452,20 +515,48 @@ function King.HandleHint(dist, sender, text)
 end
 ns.Comm.Handle("TH", function(...) King.HandleHint(...) end)
 
+-- What a list says of itself before its names (SendHands): held back ("?" or "!"), the Steward
+-- who set it ("@Name-Realm"), the King's list before 1.0.0 it was built on ("=<hash>"); the names.
+local function ReadHead(rest)
+	local s, mark, from, base = tostring(rest or ""), nil, nil, nil
+	local m, tail = s:match("^([%?!]),?(.*)$")
+	if m then mark, s = m, tail end
+	local f, tail2 = s:match("^@([^,]*),?(.*)$")
+	if f then from, s = f, tail2 end
+	local b, tail3 = s:match("^=([^,]*),?(.*)$")
+	if b then base, s = b, tail3 end
+	return mark, from, base, s
+end
+
 -- A list from the King or his Steward (King.Authorized agreed). `id`: its date, or (a King's
 -- client before 1.0.0) an id. "?" or "!" before the names: its sender holds it back.
 local function OnHands(sender, id, rest, guild)
-	local byKing = KingSender(sender, guild)
+	local fromKing = KingSender(sender, guild)
 	local clock = Clock()
 	local at = tonumber(id) or 0
 	local undated = at < King.DATED
-	local mark, names = tostring(rest or ""):match("^([%?!]),?(.*)$")
-	if not mark then names = tostring(rest or "") end
-	if undated and (mark or not byKing) then return end -- (a 1.0.0 client, a Steward's too, always dates its list)
+	local mark, from, base, names = ReadHead(rest)
+	if undated and (mark or from or base or not fromKing) then return end -- (a 1.0.0 client, a Steward's too, always dates its list)
 	if not undated and at > clock + King.DATE_AHEAD then
 		ns.Log("hands from %s ignored: dated ahead of the server's clock", tostring(sender))
 		return
 	end
+	-- Whose word: the King's own; a Steward's (his client's, or the King's client repeating a list
+	-- he set: it counts while he is one, as his own); nobody's where the Steward it names is not
+	-- one here. A Steward's client speaks for itself, and says which list of the King's before
+	-- 1.0.0 it built on (the King's client never does).
+	if fromKing and from then
+		local short = CleanName(from)
+		from = short and ns.FullName(short, ns.RealmOf(from)) or nil
+		if not (from and King.IsStewardName(from)) then
+			ns.Log("hands from %s ignored: set by %s, no Steward here", tostring(sender), tostring(from))
+			return
+		end
+	else
+		from = nil
+	end
+	if fromKing or not (base and base:match("^[0-9a-z]+$") and #base <= 16) then base = nil end
+	local byKing = fromKing and not from
 	local list, seen = {}, {}
 	for name in names:gmatch("[^,]+") do
 		local short = CleanName(name)
@@ -476,14 +567,19 @@ local function OnHands(sender, id, rest, guild)
 		end
 	end
 	local text, held = table.concat(list, ","), table.concat(myHands, ",")
-	if undated then
-		-- A King's client before 1.0.0: his changed list is his newer word; the list we hold, his,
-		-- repeated; otherwise (first heard, or unchanged) his oldest word.
-		if undatedText ~= nil and text ~= undatedText then at = math.max(clock, handsDate + 1)
+	-- A King's list from before 1.0.0 (undated; or DATED, the list his 1.0.0 client saved before
+	-- 1.0.0): his changed list is his newer word; the list we hold, his, repeated; otherwise
+	-- (first heard, or unchanged) his oldest word. It is compared with his list before 1.0.0 as
+	-- last heard here unmarked (one held back may not be his newest), or as a Steward's list we
+	-- took says it was built on (a review's finding: a client that heard only the Steward's list
+	-- took the King's change as his oldest word, and kept a Hand he removed).
+	if byKing and at <= King.DATED then
+		local key = Key(text)
+		if undatedKey ~= nil and key ~= undatedKey then at = math.max(clock, handsDate + 1)
 		elseif text == held and handsByKing then at = handsDate
 		else at = King.DATED end
-		if undatedText ~= text then
-			undatedText = text
+		if not mark and undatedKey ~= key then
+			undatedKey = key
 			SaveHands()
 		end
 	end
@@ -492,15 +588,34 @@ local function OnHands(sender, id, rest, guild)
 	local sets = King.SetsLists()
 	-- The list we hold, repeated.
 	local same = valid and text == held and at == handsDate
+	-- The King's own list, said by a Steward's client with a later date (it dated his list before
+	-- 1.0.0 by its own clock): the same list, still his word, at that date (never the Steward's,
+	-- to end with him).
+	if not same and not mark and valid and handsByKing and not byKing and text == held and at > handsDate then
+		handsDate, same = at, true
+		SaveHands()
+	end
 	-- Newer: a later date; on the same date the King's over a Steward's (and between two lists of
 	-- the same weight, the same one on every client).
 	local newer = not same and (at > heldAt
 		or (at == heldAt and ((byKing and not handsByKing) or (byKing == handsByKing and text > held))))
+	-- The King's client, his list still the one it saved before 1.0.0: a Steward's list built on
+	-- another list of his is older than his changed one (he answers it; the Steward's client then
+	-- weighs his as his changed word, and takes it).
+	if newer and King.IsKing() and handsByKing and handsDate == King.DATED and base and base ~= Key(held) then newer = false end
 	local was = King.IsHand()
 	if same then
-		handsAt = ns.Now()
+		-- Held back by its sender: alive again only where it was alive already. One kept from an
+		-- earlier session (or lapsed) waits for its sender's word that it is the newest: the army
+		-- may hold a newer one this client never heard (a review's finding: the King's list, held
+		-- back as older than the Steward's, gave a Hand the Steward removed his powers back here).
+		if not mark or sets or ns.Now() - handsAt <= King.HANDS_FRESH then handsAt = ns.Now() end
 		if byKing and not handsByKing then
 			handsByKing, handsFrom = true, nil
+			SaveHands()
+		end
+		if base and undatedKey ~= base then
+			undatedKey = base
 			SaveHands()
 		end
 		-- Another client of the King's or a Steward's vouches for the list we hold: the newest.
@@ -508,13 +623,16 @@ local function OnHands(sender, id, rest, guild)
 	elseif newer then
 		-- Held back by its sender: never taken on a soldier's client (not known to be the newest).
 		if mark and not sets then return end
+		local setter = from or ns.FullName(sender)
 		if text ~= held then
 			-- His Steward changed the King's list: the King is told (the name cut short on his stream).
-			if King.IsKing() and not byKing then ns.Print(L.STEWARD_SET_HANDS:format(StewardLabel(sender))) end
+			if King.IsKing() and not byKing then ns.Print(L.STEWARD_SET_HANDS:format(StewardLabel(setter))) end
 			-- The King's own word replaced a Steward's list on a Steward's client: he is told.
 			if King.IsSteward() and byKing and handsDate > 0 and not handsByKing then ns.Print(L.STEWARD_KING_HANDS) end
 		end
-		SetHands(list, at, byKing, ns.FullName(sender))
+		SetHands(list, at, byKing, setter)
+		-- A Steward's list: the King's list before 1.0.0 it was built on is the one compared now.
+		if base then undatedKey = base end
 		handsAt = ns.Now()
 		-- Taken as said: the newest, or held back here too until confirmed; someone else's word
 		-- now (the army's word that a newer one is held can hold it back again).
@@ -536,7 +654,7 @@ local function OnHands(sender, id, rest, guild)
 			end
 		end
 	end
-	if byKing then handsKing = ns.FullName(sender) end
+	if fromKing then handsKing = ns.FullName(sender) end
 	local now = King.IsHand()
 	if now and not was then
 		ns.Print(handsByKing and L.HANDS_YOU:format(ns.KingName(handsKing or ns.KingCharacter()))
@@ -552,7 +670,8 @@ end
 -- The list this client kept (SaveHands), at login: the King's client and his Steward's hold it
 -- back until confirmed (SendHands); on anyone else's it names nobody until the King or a
 -- Steward is heard (handsAt). A list saved before 1.0.0 (the King's, without a date) is his
--- oldest word (DATED).
+-- oldest word (DATED), and goes out with that date: every 1.0.0 client weighs it as his list
+-- before 1.0.0 (OnHands).
 function King.LoadHands()
 	local r = ns.rdb
 	local saved, names = r and r.kingHands, {}
@@ -563,14 +682,16 @@ function King.LoadHands()
 	local byKing = (at == nil and #names > 0) or (r ~= nil and r.kingHandsByKing == true)
 	local from = r and type(r.kingHandsFrom) == "string" and r.kingHandsFrom or nil
 	SetHands(names, at or (#names > 0 and King.DATED or 0), byKing, from)
-	undatedText = r and type(r.kingHandsUndated) == "string" and r.kingHandsUndated or nil
+	-- (A test build of 1.0.0 kept the list itself: its hash now.)
+	local u = r and r.kingHandsUndated
+	undatedKey = type(u) == "string" and (u:match("^[0-9a-z]+$") and #u <= 16 and u or Key(u)) or nil
 	handsAt, handsSure, handsSet, heardNewer, heardNewerByKing = -math.huge, false, false, 0, false
-	heldBackAt = -math.huge
+	heldBackAt, hintPending = -math.huge, nil
 end
 
 -- Whether this client's own list goes out held back, and why (the Throne's Hands page, /oly status).
 function King.HandsHeldBack()
-	if not King.SetsLists() or handsDate == 0 then return nil end
+	if not King.SetsLists() or handsDate == 0 or not HeldValid() then return nil end
 	if Paused() then return "newer", heardNewerByKing end
 	if not handsSure then return "confirming" end
 	return nil
@@ -1444,6 +1565,8 @@ local function HandsLines()
 		if back == "newer" then
 			Para(lines, L.HANDS_HELD_BACK:format(byKing and L.HANDS_BY_KING or L.HANDS_BY_STEWARD), TITLE, { gapAfter = true })
 		end
+		-- The list held was a Steward's, and the signed titles list no longer names him: it ended.
+		if King.HandsEnded() then Para(lines, L.HANDS_STEWARD_ENDED, TITLE, { gapAfter = true }) end
 		Para(lines, steward and L.HANDS_NOTE_STEWARD or L.HANDS_NOTE, INK)
 	end
 	return lines
@@ -1534,7 +1657,8 @@ function King.StewardStatusLine()
 	if handsDate == 0 then held = "none"
 	else
 		local state
-		if King.SetsLists() then
+		if King.HandsEnded() then state = "ended: its Steward is no longer one"
+		elseif King.SetsLists() then
 			local back = King.HandsHeldBack()
 			state = back == "newer" and "held back by this client: the army holds a newer list"
 				or back == "confirming" and "held back until confirmed the newest"
@@ -1561,10 +1685,10 @@ end
 function King.Reset()
 	summon, inspect, agenda, inspecting, kingAt, crownAt = nil, nil, nil, nil, nil, nil
 	wipe(myHands); wipe(hands); wipe(previewHands)
-	handsDate, handsByKing, handsFrom, handsAt, handsKing, undatedText = 0, false, nil, -math.huge, nil, nil
+	handsDate, handsByKing, handsFrom, handsAt, handsKing, undatedKey = 0, false, nil, -math.huge, nil, nil
 	lastHandsSent, lastHandsAnswer, handsSendPending = -math.huge, -math.huge, false
 	handsSure, handsSet, heardNewer, heardNewerByKing, heldBackAt, confirmPending = false, false, 0, false, -math.huge, false
-	lastHintDrawn, hintPending, hintHeard = -math.huge, nil, nil
+	endedTold, hintPending = false, nil
 	lastLocation = { t = -math.huge }
 	lastSummonSeen, lastInspectSeen, lastSummonSent, lastInspectSent = -math.huge, -math.huge, -math.huge, -math.huge
 	lastUntabardedSent = -math.huge

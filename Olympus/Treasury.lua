@@ -1545,11 +1545,13 @@ local function AnswerOlder(send)
 end
 
 -- The King's word ("101" and the time it was given), from him or his Steward, or repeated by
--- the Treasurer: taken when newer than the one kept (a time a little ahead of ours at most).
+-- the Treasurer: taken when newer than the one kept (a time ahead of the server's clock by
+-- King.DATE_AHEAD at most: a minute, so a modified client never keeps a word over the King's
+-- newer one for longer).
 function Treasury.TakeFlags(digits, at, sender)
 	local b, r, k = tostring(digits or ""):match("^([01])([01])([01])$")
 	at = tonumber(at)
-	if not b or not at or at > Clock() + 600 then return end
+	if not b or not at or at > Clock() + ns.King.DATE_AHEAD then return end
 	local kept = ns.rdb.treasuryFlags
 	if not Replaces(kept, at, sender) then
 		if type(kept) == "table" and at < (tonumber(kept.at) or 0) then AnswerOlder(Treasury.SendFlags) end
@@ -1645,11 +1647,12 @@ function Treasury.RemoveKeeper(name)
 end
 
 -- The King's list (from him or his Steward, or repeated by the Treasurer): taken when newer than
--- the one kept. A character named sees its book open at its gold now and is asked to share it;
--- the books of characters no longer on it leave the treasury.
+-- the one kept (dated King.DATE_AHEAD ahead of the server's clock at most). A character named sees
+-- its book open at its gold now and is asked to share it; the books of characters no longer on it
+-- leave the treasury.
 function Treasury.TakeKeepers(at, text, sender)
 	at = tonumber(at)
-	if not at or at > Clock() + 600 then return end
+	if not at or at > Clock() + ns.King.DATE_AHEAD then return end
 	local kept = KeeperStore()
 	if not Replaces(kept, at, sender) then
 		if kept and at < (tonumber(kept.at) or 0) then AnswerOlder(Treasury.SendKeepers) end
