@@ -13417,5 +13417,446 @@ test("1.0 the treasury's new lines are in both languages, with the same format a
 	for _, key in ipairs({ "TREASURY_FROM", "TREASURY_TO", "TREASURY_AS_OF" }) do eq(rawget(ns.L, key), nil, "no longer used: " .. key) end
 end)
 
+---------------------------------------------------------------------------
+-- 1.0: the Treasurer's mail character (Pyralis Andarai, his hunter: "all the mail goes to
+-- that; I want the gold mailed to count as well") and the early supporters (0.9's donors).
+---------------------------------------------------------------------------
+
+local ANDARAI, ANDARAI_KEY = "Pyralis Andarai-Realm", "pyralis andarai-realm"
+-- His mail character's client: no guild (guild nil), or the guild given.
+local function AsAndarai(guild)
+	IsInGuild = function() return guild ~= nil end
+	GetGuildInfo = function() if guild then return guild, "Member", 3 end return nil end
+	ns.me = ANDARAI
+end
+
+test("1.0 the Treasurer's mail character: a keeper in any guild or none, pinned by name on his realm group, never on the King's list", function()
+	WithThrone(function(w, K)
+		local T = ns.Treasury
+		local mail = MailWorld()
+		local saved = { split = ns.splitNames, inGuild = IsInGuild, combat = InCombatLockdown, faction = ns.faction }
+		local ok, err = pcall(function()
+			ns.splitNames = true
+			InCombatLockdown = function() return false end
+			-- By its name on his realm group, whatever its guild or none; a namesake elsewhere is not it.
+			eq(ns.IsTreasurerMail(ANDARAI), true)
+			eq(ns.IsTreasurerMail("Pyralis Andarai"), true, "a name of our realm")
+			eq(ns.IsTreasurerMail("Pyralis Andarai-Other"), false, "the same name on another realm group")
+			eq(ns.IsTreasurerMail("Pyralis Ashandar-Realm"), false, "the Treasurer himself keeps his guild rule")
+			eq(ns.IsTreasurer(ANDARAI, "Olympus"), false, "not the Treasurer: his title and coin stay his")
+			for _, guild in ipairs({ "Olympus", "Olympus II", "LXIX", "" }) do
+				eq(T.IsKeeperName(ANDARAI, guild), true, "in <" .. guild .. ">")
+			end
+			eq(T.IsKeeperName(ANDARAI, nil), true, "in none")
+			eq(T.IsKeeperName("Pyralis Andarai-Other", "Olympus"), false)
+			eq(T.IsKeeperName("Pyralis Ashandar-Realm", "LXIX"), false, "the Treasurer only in Olympus, as before")
+			eq(T.IsKeeperName("Pyralis Ashandar-Realm", "Olympus"), true)
+			eq(T.KeeperByName("pyralis andarai"), true, "as typed on a mail, any case")
+			eq(T.KeeperByName("Pyralis Andarai-Other"), false)
+			-- Its own client with no guild (outside an Olympus guild the addon shows nothing else):
+			-- a keeper, its book opens at its own gold, its own yes.
+			AsAndarai(nil)
+			eq(ns.IsMember(), false)
+			eq(T.RealKeeper(), true); eq(T.IsKeeper(), true); eq(T.Role(), "keeper")
+			mail.gold = 3000000
+			eq(T.OpenBook(), true); eq(T.Opening(), 3000000)
+			eq(T.AskConsent(), true); eq(w.popups[#w.popups].name, "OLYMPUS_TREASURER_SHARE")
+			StaticPopupDialogs.OLYMPUS_TREASURER_SHARE.OnAccept()
+			eq(ns.db.keeperShares[ANDARAI_KEY], true, "its own yes, by its character")
+			eq(T.CanSend(), true)
+			local book = T.Message()
+			assert(book:find("^TB~1%.0~~3000000~3000000~0~0~0~0~~%-~%-~"), book)
+			-- In another guild, or in one of Olympus's: a keeper all the same.
+			AsAndarai("LXIX"); eq(T.IsKeeper(), true)
+			AsAndarai("Olympus II"); eq(T.IsKeeper(), true)
+			-- The same name on another realm group: nobody's keeper. The Horde: no treasury.
+			ns.me = "Pyralis Andarai-Other"; eq(T.IsKeeper(), false)
+			ns.me = ANDARAI; ns.faction = "Horde"
+			eq(T.IsKeeper(), false); eq(T.IsKeeperName(ANDARAI, ""), false)
+			ns.faction = saved.faction
+			-- Its book from the channel, whatever guild it names; the namesake's refused.
+			AsSoldier()
+			IsInGuild = saved.inGuild
+			T.HandleReport("CHANNEL", "Pyralis Andarai-Other", book)
+			eq(T.Report(), nil, "a namesake's book")
+			T.HandleReport("CHANNEL", ANDARAI, book)
+			eq(T.Report().balance, 3000000, "its book, from no guild")
+			T.HandleReport("CHANNEL", ANDARAI, (book:gsub("^TB~1%.0~~", "TB~1.0~LXIX~")))
+			eq(#T.Report().keepers, 1, "from another guild: the same book, once")
+			-- The King's page: the Treasurer's mail right under the Treasurer, pinned; the King can
+			-- neither add it to his list nor take it off.
+			AsKing()
+			T.AddKeeper("Pyralis Andarai"); eq(#T.Keepers(), 0, "pinned: never on the King's list")
+			T.TakeKeepers(w.clock + 1, "Pyralis Andarai-Realm,Test Keeper-Realm", "Asmongold Asmongler-Realm")
+			eq(#T.Keepers(), 1); eq(T.Keepers()[1], "Test Keeper-Realm", "a pinned name is dropped from the King's word")
+			T.Show("keepers")
+			local lines = T.Build()
+			local row, treasurerAt, mailAt
+			for i, l in ipairs(lines) do
+				if tostring(l.text):find(ns.L.TREASURY_KEEPER_TREASURER_MAIL:format("Pyralis Andarai"), 1, true) then row, mailAt = l, i end
+				if tostring(l.text):find(ns.L.TREASURY_KEEPER_TREASURER:format("Pyralis Ashandar"), 1, true) then treasurerAt = i end
+			end
+			assert(row and treasurerAt, Texts(lines))
+			eq(mailAt, treasurerAt + 1, "right under the Treasurer")
+			eq(row.onClick, nil, "not the King's to take off"); eq(row.key, nil)
+			local tip = { lines = {} }
+			function tip:AddLine(s) self.lines[#self.lines + 1] = s end
+			row.tooltip(tip)
+			eq(tip.lines[1], ns.L.TREASURY_KEEPER_PINNED)
+			eq(row.right, T.GoldText(3000000), "its book's balance as it came")
+			T.Show("summary")
+			local page = Texts((T.Build()))
+			assert(page:find(ns.L.TREASURY_KEEPERS_LINK:format(4), 1, true), "the Treasurer, his mail, the King and one named: " .. page)
+		end)
+		mail.Restore()
+		ns.splitNames, IsInGuild, InCombatLockdown, ns.faction = saved.split, saved.inGuild, saved.combat, saved.faction
+		if not ok then error(err, 0) end
+	end)
+end)
+
+test("1.0 the Treasurer's mail taken on his mail character: in its own book once (never in his too); between them, a transfer", function()
+	WithThrone(function(w, K)
+		local T = ns.Treasury
+		local mail = MailWorld()
+		local saved = { split = ns.splitNames, inGuild = IsInGuild }
+		local ok, err = pcall(function()
+			ns.splitNames = true
+			-- One account: the Treasurer, his mail character, two other alts.
+			ns.db.myCharacters = { [TREASURER_KEY] = true, [ANDARAI_KEY] = true, ["pyralis hunter-realm"] = true, ["pyralis crafter-realm"] = true }
+			AsTreasurer()
+			mail.gold = 1000000
+			eq(T.OpenBook(), true)
+			local his = T.BookOf("Pyralis Ashandar-Realm")
+			-- His mail character (no guild): a donor's gold and items go in its own book, opened at
+			-- its own gold.
+			AsAndarai(nil)
+			mail.gold = 400000
+			eq(T.IsTreasurerAccount(), true)
+			mail.inbox = { { sender = "Generous Donor", money = 50000, items = { { id = 2589, name = "Linen Cloth", n = 20 } } } }
+			T.MailTaking(1); T.MailItemTaking(1)
+			mail.Arrive(50000); mail.Bag(2589, 20)
+			local own = T.BookOf(ANDARAI)
+			assert(own, "its own book")
+			eq(own.opening, 400000, "its own gold")
+			local t = T.Totals(own)
+			eq(t.allIn, 50000); eq(t.ranking[1].name, "Generous Donor"); eq(t.items[1].id, 2589); eq(t.items[1].n, 20)
+			eq(#his.lines, 0, "never in the Treasurer's book too (0.9.8 wrote it there)")
+			eq(T.Totals(his).allIn, 0)
+			-- The treasury on its screen: its book and his (both kept on the account), the gift once;
+			-- its opening is in the balance.
+			local r = T.Report()
+			eq(#r.keepers, 2); eq(r.balance, 1000000 + 400000 + 50000); eq(r.allIn, 50000); eq(#r.rank, 1); eq(r.rank[1].money, 50000)
+			-- On his screen: the same treasury, his mail character right after him.
+			AsTreasurer(); IsInGuild = saved.inGuild
+			r = T.Report()
+			eq(r.balance, 1450000); eq(r.rank[1].money, 50000, "the gift once")
+			eq(r.keepers[1].name, "Pyralis Ashandar-Realm"); eq(r.keepers[2].name, ANDARAI)
+			-- Gold and items between him and his mail character: a transfer, never a donation.
+			mail.gold = 1000000
+			mail.Send("Pyralis Andarai", 100000)
+			mail.Send("pyralis andarai", 0, { { id = 2770, name = "Copper Ore", n = 5 } })
+			eq(his.lines[1].kind, "transfer"); eq(his.lines[1].out, true); eq(his.lines[2].kind, "transfer"); eq(his.lines[2].item, 2770)
+			eq(T.Totals(his).allOut, 0, "not a payment"); eq(T.Totals(his).transOut, 100000)
+			AsAndarai(nil)
+			mail.gold = 450000
+			mail.inbox = { { sender = "Pyralis Ashandar", money = 100000, items = { { id = 2770, name = "Copper Ore", n = 5 } } } }
+			T.MailTaking(1); T.MailItemTaking(1)
+			mail.Arrive(100000); mail.Bag(2770, 5)
+			eq(own.lines[#own.lines - 1].kind, "transfer"); eq(own.lines[#own.lines].kind, "transfer"); eq(own.lines[#own.lines].item, 2770)
+			t = T.Totals(own)
+			eq(t.allIn, 50000, "not a donation"); eq(t.transIn, 100000); eq(#t.ranking, 1, "the Treasurer is no donor")
+			eq(#t.items, 1, "the ore is no item donated")
+			r = T.Report()
+			eq(r.balance, 1450000, "the gold moved inside the treasury"); eq(r.allIn, 50000); eq(r.allOut, 0); eq(#r.rank, 1)
+			-- Another alt of his account: a player's gift is still written in his book (0.9.8), once...
+			AsSoldier("Pyralis Hunter")
+			eq(T.IsKeeper(), false); eq(T.IsTreasurerAccount(), true)
+			mail.gold = 10
+			mail.inbox = { { sender = "Fan", money = 7000 }, { sender = "Pyralis Andarai", money = 30000 }, { sender = "Asmongold Asmongler", money = 20000 },
+				{ sender = "Pyralis Ashandar", money = 1000 }, { sender = "Pyralis Crafter", money = 500, items = { { id = 118, name = "Minor Healing Potion", n = 2 } } } }
+			T.MailTaking(1); mail.Arrive(7000)
+			eq(#his.lines, 3); eq(his.lines[3].name, "Fan"); eq(T.Totals(his).allIn, 7000)
+			-- ...but what a keeper (his mail character, the King, himself) or one of his own
+			-- characters sends there is not: the sender's book already says what it was.
+			for i = 2, 5 do T.MailTaking(i); T.MailItemTaking(i) end
+			mail.Arrive(30000); mail.Arrive(20000); mail.Arrive(1000); mail.Arrive(500); mail.Bag(118, 2)
+			eq(#his.lines, 3, "nothing counted a second time"); eq(T.BookOf("Pyralis Hunter-Realm"), nil, "the alt keeps no book")
+			eq(#own.lines, 4, "nothing in the mail character's book either")
+			-- (Gold its mail character sends that alt is its own, not counted: the treasury stays whole.)
+			AsAndarai(nil)
+			mail.Send("Pyralis Hunter", 30000)
+			eq(own.lines[#own.lines].kind, "own"); eq(own.lines[#own.lines].excluded, true)
+			eq(T.Report().balance, 1450000 + 7000)
+		end)
+		mail.Restore()
+		ns.splitNames, IsInGuild = saved.split, saved.inGuild
+		if not ok then error(err, 0) end
+	end)
+end)
+
+test("1.0 the Treasurer's client passes on his mail character's book (it never reaches the channel outside Olympus): its yes, the newest copy kept", function()
+	WithThrone(function(w, K)
+		local T = ns.Treasury
+		local mail = MailWorld()
+		local saved = { split = ns.splitNames, inGuild = IsInGuild, chunked = ns.Comm.SendChunked }
+		local ok, err = pcall(function()
+			ns.splitNames = true
+			ns.Comm.SendChunked = function(msg) w.sent[#w.sent + 1] = { dist = "CHANNEL", msg = msg } end
+			local function Sent(prefix)
+				local out = {}
+				for _, s in ipairs(w.sent) do if s.msg:sub(1, #prefix) == prefix then out[#out + 1] = s.msg end end
+				return out
+			end
+			ns.db.myCharacters = { [TREASURER_KEY] = true, [ANDARAI_KEY] = true }
+			ns.db.keeperShares = { [TREASURER_KEY] = true, [ANDARAI_KEY] = true }
+			-- Its book, on the account (no guild: its own client sends nothing).
+			AsAndarai(nil)
+			mail.gold = 400000
+			T.OpenBook()
+			w.clock = w.clock + 10
+			T.Record("Generous Donor", 50000, "mail", nil, { quiet = true })
+			local changed = w.clock
+			-- The Treasurer logs in: his book, then its book, passed on.
+			w.clock = w.clock + 600
+			AsTreasurer(); IsInGuild = saved.inGuild
+			mail.gold = 1000000
+			w.sent = {}
+			T.Share(true)
+			local tr = Sent("TR~")
+			eq(#tr, 1, "passed on once")
+			assert(tr[1]:find("^TR~Pyralis Andarai%-Realm~" .. changed .. "~TB~1%.0~Olympus~400000~450000~50000~0~50000~1~Generous Donor~%-~%-~"), tr[1])
+			eq(#Sent("TB~"), 1, "and his own book")
+			eq(Sent("T8~")[1]:match("^T8~Olympus~(%-?%d+)~"), "1450000", "0.9's short copy: the two books")
+			w.clock = w.clock + 120
+			T.Share(true)
+			eq(#Sent("TR~"), 1, "not again before RELAY_EVERY")
+			-- A soldier (another account: the books kept on the Treasurer's are not his): takes it;
+			-- the treasury counts its opening.
+			local mine = T.Message()
+			ns.db.myCharacters = {}
+			AsSoldier()
+			eq(T.Report(), nil)
+			T.HandleReport("CHANNEL", "Pyralis Ashandar-Realm", mine)
+			T.HandleRelay("CHANNEL", "Pyralis Ashandar-Realm", tr[1])
+			local r = T.Report()
+			eq(#r.keepers, 2); eq(r.keepers[2].name, ANDARAI)
+			eq(r.balance, 1000000 + 450000, "its opening and its gift in the treasury"); eq(r.rank[1].name, "Generous Donor")
+			eq(r.keepers[2].t, changed, "as of when its book changed")
+			-- Only from the Treasurer himself (in Olympus), only about his mail character.
+			ns.rdb.treasuryReports = nil
+			T.HandleRelay("CHANNEL", "Faker Guy-Realm", tr[1])
+			T.HandleRelay("CHANNEL", ANDARAI, tr[1])
+			T.HandleRelay("CHANNEL", "Pyralis Ashandar-Realm", (tr[1]:gsub("~TB~1%.0~Olympus~", "~TB~1.0~LXIX~")))
+			ns.rdb.treasuryKeepers = { at = w.clock, names = { "Test Keeper-Realm" } }
+			T.HandleRelay("CHANNEL", "Pyralis Ashandar-Realm", (tr[1]:gsub("^TR~Pyralis Andarai%-Realm~", "TR~Test Keeper-Realm~")))
+			T.HandleRelay("CHANNEL", "Pyralis Ashandar-Realm", (tr[1]:gsub("^TR~Pyralis Andarai%-Realm~", "TR~Pyralis Andarai-Other~")))
+			eq(T.Report(), nil, "a stranger, itself, the Treasurer outside Olympus, another keeper's book, a namesake's")
+			-- Its own book, when it comes, counts over a copy; an older copy never replaces it.
+			T.HandleRelay("CHANNEL", "Pyralis Ashandar-Realm", tr[1])
+			eq(T.Report().balance, 450000)
+			T.HandleReport("CHANNEL", ANDARAI, (tr[1]:gsub("^TR~[^~]*~%d+~", ""):gsub("~450000~50000~0~50000~", "~470000~70000~0~70000~")))
+			eq(T.Report().balance, 470000); eq(#T.Report().keepers, 1)
+			T.HandleRelay("CHANNEL", "Pyralis Ashandar-Realm", tr[1])
+			eq(T.Report().balance, 470000, "an older copy passed on late")
+			-- A newer copy (its book changed since) replaces it.
+			w.clock = w.clock + 60
+			T.HandleRelay("CHANNEL", "Pyralis Ashandar-Realm", (tr[1]:gsub("^(TR~[^~]*~)%d+", "%1" .. w.clock):gsub("~450000~", "~480000~")))
+			eq(T.Report().balance, 480000)
+			-- Kept private: no longer passed on, withdrawn from every screen.
+			ns.db.keeperShares[ANDARAI_KEY] = false
+			local soldiers = ns.db.myCharacters
+			ns.db.myCharacters = { [TREASURER_KEY] = true, [ANDARAI_KEY] = true }
+			AsTreasurer()
+			w.sent = {}
+			w.clock = w.clock + T.RELAY_EVERY
+			T.Share(true)
+			eq(#Sent("TR~"), 0, "its no: not passed on")
+			local tx = Sent("TX~")
+			eq(tx[1], "TX~Olympus~Pyralis Andarai-Realm")
+			eq(Sent("T8~")[1]:match("^T8~Olympus~(%-?%d+)~"), "1000000", "0.9's short copy leaves its private book out")
+			eq(T.Report().balance, 1450000, "on his own screen, his account's books all the same")
+			ns.db.myCharacters = soldiers
+			AsSoldier()
+			T.HandleWithdraw("CHANNEL", "Faker Guy-Realm", tx[1])
+			T.HandleWithdraw("CHANNEL", "Test Keeper-Realm", tx[1])
+			eq(T.Report().balance, 480000, "the Treasurer's word alone")
+			T.HandleWithdraw("CHANNEL", "Pyralis Ashandar-Realm", tx[1])
+			eq(T.Report(), nil, "withdrawn")
+			-- Its own withdrawal (from any guild or none) works as any keeper's.
+			T.HandleReport("CHANNEL", ANDARAI, (tr[1]:gsub("^TR~[^~]*~%d+~", "")))
+			T.HandleWithdraw("CHANNEL", ANDARAI, "TX~")
+			eq(T.Report(), nil)
+			-- The author's client, the King's and a keeper named never pass anything on.
+			ns.db.keeperShares = { [KING_KEY] = true, [ANDARAI_KEY] = true }
+			AsKing(); w.sent = {}; w.clock = w.clock + T.RELAY_EVERY
+			T.Share(true)
+			eq(#Sent("TR~"), 0)
+		end)
+		mail.Restore()
+		ns.splitNames, IsInGuild, ns.Comm.SendChunked = saved.split, saved.inGuild, saved.chunked
+		if not ok then error(err, 0) end
+	end)
+end)
+
+test("1.0 the early supporters: everyone who gave before 1.0, names only, alphabetical, with the ranking's switch, from the Treasurer alone", function()
+	WithThrone(function(w, K)
+		local T = ns.Treasury
+		local saved = { split = ns.splitNames, after = ns.After, inGuild = IsInGuild }
+		local ok, err = pcall(function()
+			ns.splitNames = true
+			local timers = {}
+			ns.After = function(_, _, fn) timers[#timers + 1] = fn end
+			local function RunTimers() while #timers > 0 do table.remove(timers, 1)() end end
+			local function Sent(prefix)
+				local out = {}
+				for _, s in ipairs(w.sent) do if s.msg:sub(1, #prefix) == prefix then out[#out + 1] = s.msg end end
+				return out
+			end
+			local function Early() local l = T.EarlySupporters() return l and table.concat(l.names, ",") end
+			-- 0.9's book as 0.9.9 left it: gifts (one donor twice, one written with his realm), a
+			-- payment, a sale not counted; a donor whose lines are gone (500 kept) still in its sums.
+			ns.rdb.treasuryEpoch = nil
+			ns.rdb.treasury = {
+				{ name = "Zed Donor", money = 900000, how = "trade", t = w.clock - 86400 },
+				{ name = "alice Early", money = 100, how = "mail", t = w.clock - 80000 },
+				{ name = "Paid Crafter", money = 5000, how = "mail", t = w.clock - 70000, out = true },
+				{ name = "Buyer Guy", money = 3000, how = "trade", t = w.clock - 60000, excluded = true, kind = "sale" },
+				{ name = "Zed Donor", money = 1, how = "mail", t = w.clock - 50000 },
+				{ name = "Carl Early-Other", money = 70, how = "mail", t = w.clock - 40000 },
+			}
+			ns.rdb.treasurySums = { version = 2, allIn = 1200171, allOut = 5000, days = {},
+				byDonor = { ["Zed Donor"] = 900001, ["alice Early"] = 100, ["Bob Early"] = 200000, ["Carl Early-Other"] = 70 } }
+			ns.rdb.treasuryOpening = 5000
+			AsTreasurer()
+			T.Migrate()
+			local closed = ns.rdb.treasuryArchive["0.9"].closed
+			-- On his screen: their names alone, in alphabetical order (whatever the case), each once.
+			eq(Early(), "alice Early,Bob Early,Carl Early,Zed Donor")
+			T.Show("summary")
+			local page = Texts((T.Build()))
+			assert(page:find(ns.L.TREASURY_EARLY, 1, true), page)
+			assert(page:find(ns.L.TREASURY_EARLY_HINT:format(4):sub(1, 30), 1, true), page)
+			assert(page:find("alice Early, Bob Early, Carl Early, Zed Donor", 1, true), page)
+			assert(not page:find("Paid Crafter", 1, true) and not page:find("Buyer Guy", 1, true), "a payment, a sale: no gift")
+			assert(not page:find(T.Coins(900001), 1, true) and not page:find(T.Coins(200000), 1, true), "no amount of 0.9's")
+			-- Sent with his yes alone, in pieces of one message each, names only.
+			ns.db.keeperShares = { [TREASURER_KEY] = false }
+			eq(T.SendEarly(true), false); eq(#Sent("TE~"), 0, "his no: nothing sent")
+			ns.db.keeperShares = { [TREASURER_KEY] = true }
+			eq(T.SendEarly(true), true); RunTimers()
+			local te = Sent("TE~")
+			eq(#te, 1); eq(te[1], ("TE~Olympus~%d~1~1~alice Early,Bob Early,Carl Early,Zed Donor"):format(closed))
+			eq(T.SendEarly(), false, "not again before EARLY_GAP")
+			-- A soldier: taken from the Treasurer's characters alone.
+			local his = T.Message()
+			assert(not his:find("Zed Donor", 1, true), "0.9's book is still never in his book's message")
+			AsSoldier()
+			T.HandleReport("CHANNEL", "Pyralis Ashandar-Realm", his)
+			T.HandleEarly("CHANNEL", "Faker Guy-Realm", te[1])
+			T.HandleEarly("CHANNEL", "Pyralis Ashandar-Realm", (te[1]:gsub("^TE~Olympus~", "TE~LXIX~")))
+			T.HandleEarly("CHANNEL", "Pyralis Andarai-Other", te[1])
+			T.HandleEarly("CHANNEL", "Asmongold Asmongler-Realm", te[1])
+			T.HandleEarly("WHISPER", "Pyralis Ashandar-Realm", te[1])
+			eq(Early(), nil, "a stranger, the Treasurer outside Olympus, a namesake, the King, a whisper")
+			T.HandleEarly("CHANNEL", "Pyralis Ashandar-Realm", te[1])
+			eq(Early(), "alice Early,Bob Early,Carl Early,Zed Donor")
+			-- The ranking's switch: the army sees the list only with the ranking.
+			ns.rdb.treasuryFlags = { balance = true, ranking = true, at = w.clock }
+			page = Texts((T.Build()))
+			assert(page:find(ns.L.TREASURY_EARLY, 1, true) and page:find("alice Early, Bob Early", 1, true), page)
+			ns.rdb.treasuryFlags = { balance = true, book = true, at = w.clock + 1 }
+			page = Texts((T.Build()))
+			assert(not page:find(ns.L.TREASURY_EARLY, 1, true) and not page:find("alice Early", 1, true), page)
+			-- The King and the keepers always see it.
+			AsKing()
+			page = Texts((T.Build()))
+			assert(page:find(ns.L.TREASURY_EARLY, 1, true), page)
+			ns.rdb.treasuryKeepers = { at = w.clock, names = { "Test Keeper-Realm" } }
+			AsSoldier("Test Keeper")
+			eq(T.Role(), "keeper")
+			assert(Texts((T.Build())):find("alice Early, Bob Early", 1, true))
+			-- A newer list (his mail character's, from no guild) replaces it once every piece is in;
+			-- an older one never does.
+			AsSoldier()
+			local newer = closed + 100
+			T.HandleEarly("CHANNEL", ANDARAI, ("TE~~%d~2~2~Newer Two"):format(newer))
+			eq(Early(), "alice Early,Bob Early,Carl Early,Zed Donor", "not before all its pieces")
+			T.HandleEarly("CHANNEL", "Pyralis Ashandar-Realm", te[1])
+			T.HandleEarly("CHANNEL", ANDARAI, ("TE~~%d~1~2~newer One,Bad|Name"):format(newer))
+			eq(Early(), "newer One,Newer Two", "complete: what can't be a name dropped")
+			T.HandleEarly("CHANNEL", "Pyralis Ashandar-Realm", te[1])
+			eq(Early(), "newer One,Newer Two", "an older list")
+			T.HandleEarly("CHANNEL", ANDARAI, ("TE~~%d~1~1~Too Far"):format(w.clock + 3600))
+			eq(Early(), "newer One,Newer Two", "a time far ahead")
+			-- A client without the list asks once armed (and not again soon); the holder answers,
+			-- EARLY_GAP apart at the soonest, when its list is newer than the asker's.
+			ns.rdb.treasuryEarly = nil
+			ns.rdb.treasuryFlags = { balance = true, ranking = true, at = w.clock + 2 }
+			w.sent = {}
+			eq(T.AskEarly(), false, "not before its time after login")
+			eq(T.ArmEarly(), true); eq(LastSent(w), "TQ~0")
+			eq(T.AskEarly(), false, "not again at once")
+			w.clock = w.clock + T.EARLY_ASK_AGAIN
+			T.HandleEarlyAsk("CHANNEL", "Other Soldier-Realm", "TQ~0")
+			eq(T.AskEarly(), false, "someone else's ask is fresh: its answer is ours")
+			AsTreasurer()
+			w.sent = {}
+			T.HandleEarlyAsk("CHANNEL", "Soldier-Realm", "TQ~" .. closed)
+			T.HandleEarlyAsk("CHANNEL", "Soldier-Realm", "TQ~0")
+			RunTimers()
+			eq(#Sent("TE~"), 1, "the ask answered once, the one that had ours not")
+			T.HandleEarlyAsk("CHANNEL", "Other-Realm", "TQ~0")
+			eq(#Sent("TE~"), 1, "EARLY_GAP apart")
+			-- Many names: pieces of one message each, one every EARLY_PACE, all of them.
+			local names, lines = {}, {}
+			for i = 0, 149 do names[#names + 1] = "Supporter " .. string.char(97 + math.floor(i / 26)) .. string.char(97 + i % 26) .. "longname" end
+			for i, n in ipairs(names) do lines[i] = { name = n, money = 10, how = "mail", t = w.clock } end
+			ns.rdb.treasuryArchive["0.9"] = { lines = lines, closed = closed + 200 }
+			w.sent, timers = {}, {}
+			eq(T.SendEarly(true), true)
+			eq(#Sent("TE~"), 1, "the first piece now"); eq(#timers, 1, "the next one later")
+			RunTimers()
+			te = Sent("TE~")
+			assert(#te > 5, #te)
+			for _, m in ipairs(te) do assert(#m <= 250, "one message each: " .. #m) end
+			AsSoldier()
+			for i = #te, 1, -1 do T.HandleEarly("CHANNEL", "Pyralis Ashandar-Realm", te[i]) end
+			eq(Early(), table.concat(names, ","), "every name, in order, whatever order the pieces came in")
+			T.Show("summary")
+			page = Texts((T.Build()))
+			assert(page:find(ns.L.SHOW_MORE:format(T.EARLY_SHOWN, T.EARLY_SHOWN, 150), 1, true), "60 at first, then 60 more a click")
+			-- A 0.9 client drops a piece and an ask unread (types it has no handler for, in one
+			-- message each): nothing counted broken, nothing logged.
+			local ci = C_ChatInfo
+			local okOld, errOld = pcall(function()
+				local old, Deliver = FreshComm()
+				local logs = {}
+				old.Log = function(fmt, ...) logs[#logs + 1] = fmt:format(...) end
+				Deliver("CHANNEL", "Pyralis Ashandar-Realm", te[1])
+				Deliver("CHANNEL", "Other Soldier-Realm", "TQ~0")
+				local st = old.Comm.Stats()
+				eq(st.recv, 2); eq(st.bad, 0); eq(st.partial, 0); eq(#logs, 0)
+			end)
+			C_ChatInfo = ci
+			if not okOld then error(errOld, 0) end
+		end)
+		ns.splitNames, ns.After, IsInGuild = saved.split, saved.after, saved.inGuild
+		if not ok then error(err, 0) end
+	end)
+end)
+
+test("1.0 the Treasurer's mail and the early supporters: their lines in both languages, with the same format arguments", function()
+	local savedLocale, pt = GetLocale, {}
+	GetLocale = function() return "ptBR" end
+	local ok, err = pcall(function() assert(loadfile(ADDON_DIR .. "Locales.lua"))("Olympus", pt) end)
+	GetLocale = savedLocale
+	if not ok then error(err, 0) end
+	for _, key in ipairs({ "TREASURY_KEEPER_TREASURER_MAIL", "TREASURY_EARLY", "TREASURY_EARLY_HINT", "TREASURY_EARLY_TIP", "TREASURY_KEEPERS_HINT" }) do
+		assert(type(ns.L[key]) == "string" and ns.L[key] ~= key, "English " .. key)
+		assert(type(pt.L[key]) == "string" and pt.L[key] ~= ns.L[key], "Portuguese " .. key)
+		eq(select(2, pt.L[key]:gsub("%%[ds]", "")), select(2, ns.L[key]:gsub("%%[ds]", "")), key)
+	end
+end)
+
 print(("\n%d passed, %d failed"):format(passed, failed))
 os.exit(failed == 0 and 0 or 1)

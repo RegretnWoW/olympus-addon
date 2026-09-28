@@ -2,7 +2,8 @@ local ADDON, ns = ...
 local L = ns.L
 
 -- The Treasury of Olympus (1.0): one treasury kept in several books. Its keepers are the
--- Treasurer (ns.TREASURER of the guild OLYMPUS), the King (his character, ns.KING_CHARACTER)
+-- Treasurer (ns.TREASURER of the guild OLYMPUS) and his mail character (the other name of
+-- ns.TREASURER_CHARACTERS, in any guild or none), the King (his character, ns.KING_CHARACTER)
 -- and the characters the King adds on the Treasury tab (his word, T1~K, like his switches).
 -- Each keeper's own client keeps his character's book: gold and items he receives by trade or
 -- mail are a donation, gold and items he gives a payment. What he earns playing is his: a book
@@ -35,9 +36,17 @@ local L = ns.L
 --   T8~<guild>~<balance>~<all in>~<all out>~<week in>~<donors this week>~<switches@time|->~<Name:copper,...>~<i|o:copper:Name:m|t:time,...>
 --     0.9's treasury: the Treasurer's client still sends it, the treasury of 1.0 in short, for
 --     0.9 clients; 1.0 clients never read it.
+--   TR~<Name-Realm>~<time>~<TB~...>
+--     the Treasurer's client passes on his mail character's book, kept on his account (an
+--     account plays one character at a time, and outside an Olympus guild the addon sends
+--     nothing: a mail character in another guild or none never sends its own), with the time
+--     that book last changed; a keeper's own TB always counts over it.
 --   T1~T~<id>~<guild>~<balance 0|1><ranking 0|1><book 0|1>~<time>        the King's switches (King.lua)
 --   T1~K~<id>~<guild>~<time>~<Name-Realm,...>                              the King's keepers
 --   TX~<guild>                                                            a keeper withdraws his book
+--   TX~<guild>~<Name-Realm>              the Treasurer withdraws his mail character's (kept private)
+--   TE~<guild>~<time>~<piece>~<pieces>~<Name,...>   the early supporters (0.9's donors), in pieces
+--   TQ~<time of the early supporters held, or 0>    a client asks for them
 -- (T7 was 0.8.3's treasury: its clients would read T8 as theirs, and show it to all.)
 
 local Treasury = {}
@@ -63,6 +72,16 @@ Treasury.MAX_KEEPERS = 5     -- characters the King adds (each one sends his boo
 Treasury.PENDING_FOR = 30    -- seconds a mail's gold or item may take to arrive once asked for
 Treasury.MAX_COPPER = 2147483647
 Treasury.MAX_COUNT = 999999
+Treasury.RELAY_EVERY = 900   -- the Treasurer's client passes on his mail character's book this often
+Treasury.EARLY_MAX = 1000    -- early supporters sent at most (names only)
+Treasury.EARLY_PIECES = 100  -- pieces of their list at most, each one message of the channel's size
+Treasury.EARLY_PACE = 2      -- seconds between two pieces (the channel sends one message in 1.2 s)
+Treasury.EARLY_GAP = 300     -- the list goes out at most this often (after login, then when asked)
+Treasury.EARLY_ASK_AFTER = 90   -- a client without the list asks this long after login...
+Treasury.EARLY_ASK_AGAIN = 600  -- ...again this much later while still without it...
+Treasury.EARLY_ASKS = 2         -- ...this many times a session at most...
+Treasury.EARLY_ASK_HOLD = 120   -- ...and not while someone else's ask is this fresh (its answer is ours)
+Treasury.EARLY_SHOWN = 60    -- early supporters shown, 60 more a click
 
 Treasury.mode = "summary"    -- what the tab shows: summary, book or keepers
 
@@ -70,6 +89,11 @@ local trade                  -- the trade window open: { name, got, gave, gotIte
 local mailOut                -- a mail on its way: { to, money, items, cod, book }
 local lastShare, sharePending = -math.huge, false
 local lastFlagsSent, lastKeepersSent = -math.huge, -math.huge
+local lastRelay = -math.huge
+local lastEarlySent, earlySending = -math.huge, nil
+local earlyPending           -- a list of early supporters coming in pieces: { at, pieces, got, count, from }
+local earlyAsks, lastEarlyAsk, earlyArmed, heardEarlyAsk = 0, -math.huge, false, -math.huge
+local earlyShown = Treasury.EARLY_SHOWN
 local pending = {}           -- mail gold asked for, until it arrives: { key, sender, money, returned, t, book }
 local itemPending = {}       -- mail items asked for, until the bags hold them: { key, sender, id, n, have, returned, cod, t, book }
 local lastMoney              -- the character's gold as last seen while takes wait
@@ -217,13 +241,26 @@ function Treasury.Keepers()
 	return type(k) == "table" and type(k.names) == "table" and k.names or {}
 end
 
--- One of the two keepers pinned by name (the other side of a trade or a mail: its guild is not
--- known): the Treasurer, or the King's character. (The treasury is <Olympus>'s, the Alliance's.)
+-- One of the Treasurer's pinned characters (a name as typed, whatever its case): its place in
+-- ns.TREASURER_CHARACTERS (1: the Treasurer himself, 2: his mail's), or nil.
+local function TreasurerPin(name)
+	if type(name) ~= "string" or name == "" then return nil end
+	name = ns.FullName(ns.Normal(name))
+	local short = ns.ShortName(name):lower()
+	for i, pin in ipairs(ns.TREASURER_CHARACTERS or { ns.TREASURER }) do
+		if short == pin:lower() then return SameGroup(name, ns.TREASURER_REALM) and i or nil end
+	end
+	return nil
+end
+
+-- One of the keepers pinned by name (the other side of a trade or a mail: its guild is not
+-- known): the Treasurer's characters (his own and his mail's), or the King's character. (The
+-- treasury is <Olympus>'s, the Alliance's.)
 local function PinnedName(name)
 	if ns.faction == "Horde" or type(name) ~= "string" or name == "" then return false end
 	name = ns.FullName(ns.Normal(name))
 	local short = ns.ShortName(name):lower()
-	if ns.TREASURER and short == ns.TREASURER:lower() and SameGroup(name, ns.TREASURER_REALM) then return true end
+	if TreasurerPin(name) then return true end
 	local king = ns.KingCharacter and ns.KingCharacter()
 	if king and short == king:lower() then
 		local realm = ns.KingRealm and ns.KingRealm()
@@ -237,17 +274,31 @@ function Treasury.KeeperByName(name)
 end
 
 -- A keeper speaking (a message's sender, whose name the server sets): the Treasurer of
--- <Olympus>, the King's character of his guild, or a character on the King's list, of an
--- Olympus guild.
+-- <Olympus>, his mail character in any guild or none (Core.lua: its pinned name on his realm
+-- group is the check), the King's character of his guild, or a character on the King's list,
+-- of an Olympus guild.
 function Treasury.IsKeeperName(name, guild)
-	if type(name) ~= "string" or type(guild) ~= "string" or ns.faction == "Horde" then return false end
+	if type(name) ~= "string" or ns.faction == "Horde" then return false end
+	if ns.IsTreasurerMail(name) then return true end
+	if type(guild) ~= "string" then return false end
 	if ns.IsTreasurer(name, guild) then return true end
 	if ns.IsKingGuild(guild) and ns.IsKingCharacter(name) then return true end
 	return ns.IsFederation(guild) and Listed(name)
 end
 
--- This character keeps a book of the treasury (the author's view: on his screen only).
-local function RealKeeper() return ns.IsMember() and Treasury.IsKeeperName(ns.me, GetGuildInfo("player")) or false end
+-- One of the Treasurer's pinned characters speaking: the Treasurer of <Olympus>, or his mail
+-- character in any guild or none (the early supporters come from them alone).
+local function TreasurerSpeaking(name, guild)
+	if ns.faction == "Horde" then return false end
+	return ns.IsTreasurer(name, guild) or ns.IsTreasurerMail(name)
+end
+
+-- This character keeps a book of the treasury (the author's view: on his screen only). The
+-- Treasurer's mail character keeps one outside an Olympus guild too.
+local function RealKeeper()
+	if not (ns.IsMember() or ns.IsTreasurerMail(ns.me)) then return false end
+	return Treasury.IsKeeperName(ns.me, GetGuildInfo("player"))
+end
 Treasury.RealKeeper = RealKeeper
 function Treasury.IsKeeper() return RealKeeper() or Treasury.DevView() end
 
@@ -324,6 +375,13 @@ local function BookOf(name, create)
 	return b
 end
 Treasury.BookOf = BookOf
+-- A book changed (a line, a click, its opening): when, for a copy of it passed on (TR).
+local function Touch(b) if b then b.changed = ns.Now() end end
+-- When a book last changed (books of 1.0 before Touch: their latest line, or their opening).
+local function BookTime(b)
+	local last = b.lines and b.lines[#b.lines]
+	return math.floor(tonumber(b.changed) or math.max(tonumber(last and last.t) or 0, tonumber(b.openedAt or b.opened) or 0))
+end
 -- This character's book, and its lines.
 function Treasury.Book() return BookOf(ns.me, true) end
 function Treasury.Lines(name) local b = BookOf(name or ns.me, true) return b and b.lines or {} end
@@ -413,8 +471,11 @@ local function TreasurerCharacter()
 end
 
 -- One of the Treasurer's own characters (his account): the game's mail sometimes brings gold
--- sent to him to one of his alts instead (0.9.8). Taken there, it is written in his book all
--- the same (his character's, kept on his account); only his own character sends it.
+-- sent to him to one of his alts instead (0.9.8). Since 1.0 his mail character keeps a book of
+-- its own (a keeper: what it takes goes there alone, never in his too). On any other character
+-- of his account, a player's gift taken there is still written in his book (his character's,
+-- kept on his account; only his own character sends it), once; gold or items from a keeper or
+-- from one of the account's own characters is not (TakeBook).
 function Treasury.IsTreasurerAccount()
 	return Treasury.IsTreasurer() or TreasurerCharacter() ~= nil
 end
@@ -443,6 +504,7 @@ function Treasury.OpenBook()
 	if b.opening ~= nil then return false end
 	b.opening = math.max(0, math.min(math.floor(tonumber(GetMoney()) or 0), Treasury.MAX_COPPER))
 	b.openedAt = ns.Now()
+	Touch(b)
 	ns.Print(L.TREASURY_BOOK_OPENED:format(Treasury.Coins(b.opening)))
 	Treasury.Share()
 	ns.Fire("TREASURY_CHANGED")
@@ -478,6 +540,7 @@ function Treasury.Record(name, copper, how, out, o)
 	b.lines[#b.lines + 1] = e
 	while #b.lines > Treasury.MAX do table.remove(b.lines, 1) end
 	if not e.excluded then Count(b, e, 1) end
+	Touch(b)
 	-- The King (and the army) see it soon (once a minute at most).
 	Treasury.Share()
 	if not o.quiet then
@@ -507,6 +570,7 @@ end
 local function Flip(b, e)
 	e.excluded = not e.excluded or nil
 	Count(b, e, e.excluded and -1 or 1)
+	Touch(b)
 	Treasury.Share()
 	ns.Fire("TREASURY_CHANGED")
 end
@@ -549,6 +613,7 @@ function Treasury.SetOpening(input)
 	if not copper then return ns.Print(L.TREASURY_OPENING_USAGE) end
 	local b = BookOf(ns.me, true)
 	b.opening = copper
+	Touch(b)
 	ns.Print(L.TREASURY_OPENING_SET:format(Treasury.Coins(copper)))
 	Treasury.Share()
 	ns.Fire("TREASURY_CHANGED")
@@ -702,15 +767,20 @@ local function PlayerMail(i)
 	return { sender = sender, subject = subject, money = tonumber(money) or 0, returned = wasReturned or nil, cod = tonumber(cod) or 0 }
 end
 
--- The book a mail taken here goes in: the keeper's own; on an alt of the Treasurer's account,
--- his (0.9.8: the game's mail sometimes brings his gold there).
-local function TakeBook()
+-- The book a mail from `sender` taken here goes in: the keeper's own (the Treasurer's mail
+-- character's too: its own book, never his); on another alt of the Treasurer's account, his
+-- (0.9.8: the game's mail sometimes brings his gold there), for a player's gift alone. Gold or
+-- items a keeper or one of the account's own characters sends that alt is the treasury's, or
+-- his own, leaving a book: the sender's book already says what it was (a payment, his own),
+-- and written in his too it would count twice.
+local function TakeBook(sender)
 	if Treasury.IsKeeper() then
 		Treasury.OpenBook()
 		return BookOf(ns.me, true)
 	end
 	local key = TreasurerCharacter()
 	if not key then return nil end
+	if Treasury.KeeperByName(sender) or Treasury.IsOwnCharacter(sender) then return nil end
 	local b = BookOf(key, true)
 	-- (Named as his character is, until his own login names it itself.)
 	if b and b.name == key then
@@ -761,7 +831,7 @@ function Treasury.MailTaking(i)
 	if not Treasury.IsTreasurerAccount() and not Treasury.IsKeeper() then return end
 	local m = PlayerMail(i)
 	if not m or m.money <= 0 then return end
-	local book = TakeBook()
+	local book = TakeBook(m.sender)
 	if not book then return end
 	if not GetMoney then return Settle({ sender = m.sender, money = m.money, returned = m.returned, book = book }) end
 	local now = MailClock()
@@ -815,7 +885,7 @@ function Treasury.MailItemTaking(i, a)
 	if not Treasury.IsTreasurerAccount() and not Treasury.IsKeeper() then return end
 	local m = PlayerMail(i)
 	if not m then return end
-	local book = TakeBook()
+	local book = TakeBook(m.sender)
 	if not book then return end
 	local now = MailClock()
 	DropStale(itemPending, now)
@@ -975,11 +1045,19 @@ local function Reports()
 	return ns.rdb.treasuryReports
 end
 
--- A keeper withdrew his book (and his copy of the bank): gone from our screen (his word, his name).
+-- A keeper withdrew his book (and his copy of the bank): gone from our screen (his word, his
+-- name). The Treasurer withdraws his mail character's too, when it keeps it private and he has
+-- passed it on (TR): that character may never reach the channel itself.
 function Treasury.HandleWithdraw(dist, sender, text)
-	if dist ~= "CHANNEL" then return end
-	local guild = text:match("^TX~(.*)$")
-	if not guild or not Treasury.IsKeeperName(sender, guild) then return end
+	if dist ~= "CHANNEL" or type(text) ~= "string" then return end
+	local guild, whose = text:match("^TX~([^~]*)~([^~]+)$")
+	if whose then
+		if not (ns.faction ~= "Horde" and ns.IsTreasurer(sender, guild) and ns.IsTreasurerMail(whose)) then return end
+		sender = whose
+	else
+		guild = text:match("^TX~(.*)$")
+		if not guild or not Treasury.IsKeeperName(sender, guild) then return end
+	end
 	Treasury.Migrate()
 	local reports = Reports()
 	local gone = {}
@@ -1043,8 +1121,9 @@ end
 function Treasury.Message(b)
 	b = b or BookOf(ns.me, true)
 	local t = Treasury.Totals(b)
-	-- The King's word and his keepers ride the Treasurer's book alone (only his is read).
-	local mine = ns.IsTreasurer(ns.me, GetGuildInfo("player") or "")
+	-- The King's word and his keepers ride the Treasurer's book alone (only his is read; not a
+	-- book of his mail character's he passes on).
+	local mine = ns.IsTreasurer(ns.me, GetGuildInfo("player") or "") and SameChar(b.name or ns.me, ns.me)
 	local flags, keepers = mine and FlagsWord() or "-", mine and KeepersWord() or "-"
 	local caps = { rank = Treasury.RANK_SENT, week = Treasury.WEEK_SENT, book = Treasury.BOOK_SENT, items = Treasury.ITEMS_SENT }
 	local function Build()
@@ -1089,7 +1168,7 @@ end
 -- 0.9's treasury (T8), for 0.9 clients (they read it from the Treasurer alone): the treasury
 -- of 1.0 as his client puts it together, short. 1.0 clients never read it.
 function Treasury.LegacyMessage()
-	local r = Treasury.Report()
+	local r = Treasury.Report(true)
 	if not r then return nil end
 	local rank, lines = {}, {}
 	for i = 1, math.min(Treasury.LEGACY_RANK, #r.rank) do rank[i] = ("%s:%d"):format(Clean(r.rank[i].name), U(r.rank[i].money)) end
@@ -1127,6 +1206,31 @@ function Treasury.Share(force)
 	Treasury.OpenBook()
 	if ns.IsTreasurer(ns.me, GetGuildInfo("player")) then Send(Treasury.LegacyMessage(), "treasury8") end
 	Send(Treasury.Message(), "treasury")
+	Treasury.Relay()
+end
+
+-- The Treasurer's client passes on the book of his mail character kept on his account (TR),
+-- once after login and every RELAY_EVERY (it changes only while that character plays): an
+-- account plays one character at a time, and outside an Olympus guild the addon sends nothing,
+-- so a mail character in another guild or none never sends its own. That character's own yes
+-- counts: kept private, its book is withdrawn instead (TX with its name). The time is when that
+-- book last changed: a copy as new (its own TB, heard when it came) stays.
+function Treasury.Relay(force)
+	if not CanSend() or not ns.IsTreasurer(ns.me, GetGuildInfo("player")) then return end
+	local now = ns.Now()
+	if not force and now - lastRelay < Treasury.RELAY_EVERY then return end
+	lastRelay = now
+	local shares = type(ns.db.keeperShares) == "table" and ns.db.keeperShares or {}
+	for key, b in pairs(Books()) do
+		if type(b) == "table" and b.epoch == Treasury.EPOCH and b.opening ~= nil and type(b.lines) == "table"
+			and ns.IsTreasurerMail(b.name) and Treasury.IsOwnCharacter(b.name) then
+			if shares[key] == true then
+				Send(("TR~%s~%d~"):format(Clean(b.name), BookTime(b)) .. Treasury.Message(b))
+			elseif shares[key] == false then
+				ns.Comm.Send("CHANNEL", ("TX~%s~%s"):format(Clean(GetGuildInfo("player")), Clean(b.name)), "treasuryx " .. key)
+			end
+		end
+	end
 end
 
 local function Num(s)
@@ -1134,24 +1238,17 @@ local function Num(s)
 	return math.max(-Treasury.MAX_COPPER, math.min(n, Treasury.MAX_COPPER))
 end
 
--- A keeper's book (TB): from a keeper himself (his name, which the server sets), of this era.
--- The King's word and his keepers only from the Treasurer (as 0.9's T8 carried the word).
-function Treasury.HandleReport(dist, sender, text)
-	if dist ~= "CHANNEL" or type(text) ~= "string" then return end
+-- A book (TB) as it came, of this era: its fields read, every name and item checked (only what
+-- can be a name or an item is kept), as of `t`; and its fields. nil for another era's.
+local function ReadBook(text, from, t)
 	local f = {}
 	for field in (text .. "~"):gmatch("([^~]*)~") do f[#f + 1] = field end
-	if f[1] ~= "TB" or #f < 15 then return end
+	if f[1] ~= "TB" or #f < 15 then return nil end
 	-- Another era's book (0.9's, a later reset's) is never merged with ours.
-	if f[2] ~= Treasury.EPOCH then return end
-	local guild = f[3]
-	if not Treasury.IsKeeperName(sender, guild) then
-		ns.Log("treasury book from %s (%s) ignored: not a keeper", tostring(sender), tostring(guild))
-		return
-	end
-	Treasury.Migrate()
+	if f[2] ~= Treasury.EPOCH then return nil end
 	local now = ns.Now()
 	local function Time(s) return math.min(tonumber(s) or 0, now) end
-	local r = { epoch = f[2], guild = guild, from = ns.FullName(sender), t = now, opening = U(f[4]), balance = Num(f[5]), allIn = U(f[6]),
+	local r = { epoch = f[2], guild = f[3], from = from, t = t, opening = U(f[4]), balance = Num(f[5]), allIn = U(f[6]),
 		allOut = U(f[7]), week = U(f[8]), donors = math.min(tonumber(f[9]) or 0, 9999), weekNames = {}, rank = {}, book = {}, items = {} }
 	for name in f[10]:gmatch("[^,]+") do
 		local clean = ns.King.CleanName(name)
@@ -1181,7 +1278,31 @@ function Treasury.HandleReport(dist, sender, text)
 			r.items[#r.items + 1] = { id = id, n = math.min(n, Treasury.MAX_COUNT), t = Time(when), donors = clean and { { name = clean, t = Time(when) } } or {} }
 		end
 	end
-	Reports()[r.from] = r
+	return r, f
+end
+
+-- Our copy of a keeper's book, in place of the one we had of that character (however its name
+-- was written).
+local function Keep(r)
+	local reports, gone = Reports(), {}
+	for from in pairs(reports) do if from ~= r.from and SameChar(from, r.from) then gone[#gone + 1] = from end end
+	for _, from in ipairs(gone) do reports[from] = nil end
+	reports[r.from] = r
+end
+
+-- A keeper's book (TB): from a keeper himself (his name, which the server sets), of this era.
+-- The King's word and his keepers only from the Treasurer (as 0.9's T8 carried the word).
+function Treasury.HandleReport(dist, sender, text)
+	if dist ~= "CHANNEL" or type(text) ~= "string" then return end
+	local r, f = ReadBook(text, ns.FullName(sender), ns.Now())
+	if not r then return end
+	local guild = r.guild
+	if not Treasury.IsKeeperName(sender, guild) then
+		ns.Log("treasury book from %s (%s) ignored: not a keeper", tostring(sender), tostring(guild))
+		return
+	end
+	Treasury.Migrate()
+	Keep(r)
 	-- The Treasurer repeats the King's word and his keepers, if newer than ours.
 	if ns.IsTreasurer(sender, guild) then
 		local b, k, o, at = f[11]:match("^([01])([01])([01])@(%d+)$")
@@ -1193,6 +1314,27 @@ function Treasury.HandleReport(dist, sender, text)
 	ns.Fire("DATA_CHANGED") -- the tab may appear
 end
 ns.Comm.Handle("TB", function(...) Treasury.HandleReport(...) end)
+
+-- His mail character's book as the Treasurer's client passes it on (TR): from the Treasurer
+-- himself (his name, set by the server, in <Olympus>), about his mail character alone, of this
+-- era; taken unless our copy of that book is as new (its own TB, dated when it came, always is).
+function Treasury.HandleRelay(dist, sender, text)
+	if dist ~= "CHANNEL" or type(text) ~= "string" or ns.faction == "Horde" then return end
+	local whose, at, book = text:match("^TR~([^~]+)~(%d+)~(TB~.*)$")
+	if not whose then return end
+	whose = ns.FullName(whose)
+	local r = ReadBook(book, whose, math.min(tonumber(at) or 0, ns.Now()))
+	if not r or not ns.IsTreasurer(sender, r.guild) or not ns.IsTreasurerMail(whose) then return end
+	Treasury.Migrate()
+	for from, old in pairs(Reports()) do
+		if SameChar(from, whose) and type(old) == "table" and (tonumber(old.t) or 0) >= r.t then return end
+	end
+	r.relayed = true
+	Keep(r)
+	ns.Fire("TREASURY_CHANGED")
+	ns.Fire("DATA_CHANGED")
+end
+ns.Comm.Handle("TR", function(...) Treasury.HandleRelay(...) end)
 -- 0.9's treasury (a 0.9 Treasurer's old book): heard, never read (1.0 starts afresh).
 ns.Comm.Handle("T8", function() end)
 
@@ -1209,13 +1351,21 @@ local function LivePart(b, own)
 		local e = b.lines[i]
 		if own or not e.excluded then lines[#lines + 1] = e end
 	end
-	-- (Ours is as of now; another character's of this account, as of its latest line.)
-	local last = b.lines[#b.lines]
-	local when = own and ns.Now() or math.max(tonumber(last and last.t) or 0, tonumber(b.openedAt or b.opened) or 0)
+	-- (Ours is as of now; another character's of this account, as of its latest change.)
+	local when = own and ns.Now() or BookTime(b)
 	return { name = b.name, opening = Treasury.Opening(b), balance = Treasury.Balance(b), allIn = t.allIn, allOut = t.allOut, week = t.weekIn,
 		donors = #t.givers, weekNames = names, rank = t.ranking, book = lines, items = t.items, t = when, own = own, b = b }
 end
-local function Parts()
+-- Another character of this account said yes to sharing its book (the Treasurer's 0.9.3 yes is his).
+local function SharesBook(key, name)
+	local shares = ns.db and ns.db.keeperShares
+	local yes = type(shares) == "table" and shares[key] or nil
+	if yes ~= nil then return yes == true end
+	return TreasurerPin(name) == 1 and ns.db.treasurerShares == true
+end
+-- shared: the treasury as it may go out (0.9's T8): a book of another character of this account
+-- only with that character's yes.
+local function Parts(shared)
 	local parts, seen = {}, {}
 	if not ns.rdb then return parts end
 	if Treasury.IsKeeper() then
@@ -1225,7 +1375,9 @@ local function Parts()
 	for key, b in pairs(Books()) do
 		if not seen[key] and type(b) == "table" and b.epoch == Treasury.EPOCH and type(b.lines) == "table" and Treasury.IsOwnCharacter(b.name)
 			and Treasury.KeeperByName(b.name) then
-			parts[#parts + 1], seen[key] = LivePart(b, false), true
+			-- (Kept private: left out, and no copy of it either.)
+			if not shared or SharesBook(key, b.name) then parts[#parts + 1] = LivePart(b, false) end
+			seen[key] = true
 		end
 	end
 	for from, r in pairs(Reports()) do
@@ -1237,11 +1389,10 @@ local function Parts()
 				items = r.items or {}, t = r.t or 0 }
 		end
 	end
-	-- The Treasurer first, then the King, then the others by name.
+	-- The Treasurer first, his mail character next, then the King, then the others by name.
 	local function Rank(p)
-		if PinnedName(p.name) and ns.TREASURER and ns.ShortName(p.name):lower() == ns.TREASURER:lower() then return 1 end
-		if PinnedName(p.name) then return 2 end
-		return 3
+		if not PinnedName(p.name) then return #ns.TREASURER_CHARACTERS + 2 end
+		return TreasurerPin(p.name) or #ns.TREASURER_CHARACTERS + 1
 	end
 	table.sort(parts, function(x, y)
 		local a, b = Rank(x), Rank(y)
@@ -1254,8 +1405,9 @@ end
 -- The treasury, all its keepers' books together, or nil while none reached us: the balance and
 -- the totals summed, the week's donors counted once, the donors and the items one list each,
 -- the book every keeper's lines by time ({ e = line, keeper = name, own = this keeper's, b }).
-function Treasury.Report()
-	local parts = Parts()
+-- shared: as it may go out (Parts).
+function Treasury.Report(shared)
+	local parts = Parts(shared)
 	if #parts == 0 then return nil end
 	local m = { balance = 0, opening = 0, allIn = 0, allOut = 0, week = 0, donors = 0, rank = {}, book = {}, items = {}, keepers = {}, t = 0, parts = parts }
 	local weekSeen, extra, byName, byItem = {}, 0, {}, {}
@@ -1529,6 +1681,188 @@ StaticPopupDialogs["OLYMPUS_TREASURY_UNKEEP"] = {
 	preferredIndex = 3,
 }
 
+---------------------------------------------------------------------------
+-- The early supporters: everyone who gave before 1.0
+---------------------------------------------------------------------------
+
+-- 0.9's book (the Treasurer's, archived at 1.0's fresh start, never shown or sent) keeps the
+-- names of everyone who gave to the treasury before 1.0. The Treasurer's character holding it
+-- (his account kept it) sends their names alone, in alphabetical order, never an amount (1.0's
+-- ranking starts afresh): in pieces of one message each (TE), once after login and when a
+-- client that has none asks (TQ), EARLY_GAP apart at the soonest. The list carries the time
+-- 0.9's book was closed: a newer list replaces an older one, taken once every piece is in.
+-- Taken from the Treasurer's pinned characters alone. Shown under the ranking, to whoever may
+-- see the ranking (the King's switch; the keepers and the King always). 0.9 clients drop TE and
+-- TQ unread (messages of one piece, of types they have no handler for).
+
+-- Names in alphabetical order (whatever their case), each once.
+local function Alphabetical(names)
+	local out, seen = {}, {}
+	for _, n in ipairs(names) do
+		local key = n:lower()
+		if not seen[key] then
+			seen[key] = true
+			out[#out + 1] = n
+		end
+	end
+	table.sort(out, function(a, b)
+		local x, y = a:lower(), b:lower()
+		if x ~= y then return x < y end
+		return a < b
+	end)
+	return out
+end
+
+-- The names in 0.9's archived book: every donor its sums count, and every gift still in its
+-- lines (a payment, or a line not counted, is none), each a character's name alone (no realm,
+-- only what can be a name). { at = when that book was closed, names }, or nil.
+local earlyCache
+local function ArchivedSupporters()
+	local a = ns.rdb and type(ns.rdb.treasuryArchive) == "table" and ns.rdb.treasuryArchive["0.9"]
+	if type(a) ~= "table" then return nil end
+	if earlyCache and earlyCache.a == a then return earlyCache.list end
+	local names = {}
+	local sums = type(a.sums) == "table" and a.sums or {}
+	for name, copper in pairs(type(sums.byDonor) == "table" and sums.byDonor or {}) do
+		local clean = (tonumber(copper) or 0) > 0 and ns.King.CleanName(name)
+		if clean then names[#names + 1] = clean end
+	end
+	for _, e in ipairs(type(a.lines) == "table" and a.lines or {}) do
+		if type(e) == "table" and not e.out and not e.excluded and e.kind ~= "transfer" and (tonumber(e.money) or 0) > 0 then
+			local clean = ns.King.CleanName(e.name)
+			if clean then names[#names + 1] = clean end
+		end
+	end
+	names = Alphabetical(names)
+	local list = #names > 0 and { at = math.max(1, math.floor(tonumber(a.closed) or 1)), names = names } or nil
+	earlyCache = { a = a, list = list }
+	return list
+end
+
+-- This character holds 0.9's book: one of the Treasurer's pinned characters, a keeper (his
+-- account kept that book).
+local function EarlyHolder()
+	return RealKeeper() and TreasurerSpeaking(ns.me, GetGuildInfo("player") or "") or false
+end
+
+-- The early supporters as this client has them ({ at, names }), or nil: the Treasurer's own
+-- characters read the book they keep, everyone else the list their client sent.
+function Treasury.EarlySupporters()
+	if not ns.rdb then return nil end
+	local own = EarlyHolder() and ArchivedSupporters()
+	if own then return own end
+	local e = ns.rdb.treasuryEarly
+	return type(e) == "table" and type(e.names) == "table" and #e.names > 0 and e or nil
+end
+
+-- The list in pieces, each one message of the channel's size (TE~<guild>~<time>~<i>~<n>~).
+local function EarlyPieces(list, guild)
+	local room = 250 - #("TE~%s~%d~%d~%d~"):format(guild, list.at, Treasury.EARLY_PIECES, Treasury.EARLY_PIECES)
+	local pieces, cur, len = {}, {}, 0
+	for i = 1, math.min(#list.names, Treasury.EARLY_MAX) do
+		local name = list.names[i]
+		if #cur > 0 and len + 1 + #name > room then
+			pieces[#pieces + 1] = table.concat(cur, ",")
+			cur, len = {}, 0
+		end
+		len = len + (#cur > 0 and 1 or 0) + #name
+		cur[#cur + 1] = name
+	end
+	if #cur > 0 then pieces[#pieces + 1] = table.concat(cur, ",") end
+	while #pieces > Treasury.EARLY_PIECES do table.remove(pieces) end
+	return pieces
+end
+
+-- The holder's client sends the list, a piece every EARLY_PACE (the channel's queue stays
+-- light), with its yes to sharing (the names are who gave, as in his book).
+function Treasury.SendEarly(force)
+	if not CanSend() or not EarlyHolder() then return false end
+	local list = ArchivedSupporters()
+	if not list then return false end
+	local now = ns.Now()
+	if not force and now - lastEarlySent < Treasury.EARLY_GAP then return false end
+	lastEarlySent = now
+	local guild = Clean(GetGuildInfo("player"))
+	local pieces, token = EarlyPieces(list, guild), {}
+	earlySending = token
+	local function Piece(i)
+		if earlySending ~= token or not CanSend() then return end
+		ns.Comm.Send("CHANNEL", ("TE~%s~%d~%d~%d~%s"):format(guild, list.at, i, #pieces, pieces[i]), "treasuryearly" .. i)
+		if i < #pieces then
+			ns.After(Treasury.EARLY_PACE, "treasury early", function() Piece(i + 1) end)
+		else
+			earlySending = nil
+		end
+	end
+	Piece(1)
+	return true
+end
+
+-- A piece of the list: from one of the Treasurer's pinned characters (his name, set by the
+-- server). A list as new as ours changes nothing; a newer one replaces ours once all its
+-- pieces are in (an older list's piece meanwhile is dropped).
+function Treasury.HandleEarly(dist, sender, text)
+	if dist ~= "CHANNEL" or type(text) ~= "string" or not ns.rdb then return end
+	local guild, at, i, n, names = text:match("^TE~([^~]*)~(%d+)~(%d+)~(%d+)~([^~]*)$")
+	at, i, n = tonumber(at), tonumber(i), tonumber(n)
+	if not at or not TreasurerSpeaking(sender, guild) then return end
+	if at < 1 or at > Clock() + 600 or n < 1 or n > Treasury.EARLY_PIECES or i < 1 or i > n then return end
+	local held = ns.rdb.treasuryEarly
+	if type(held) == "table" and (tonumber(held.at) or 0) >= at then return end
+	local p = earlyPending
+	if not p or p.at ~= at or p.pieces ~= n then
+		if p and p.at > at then return end
+		p = { at = at, pieces = n, got = {}, count = 0, from = ns.FullName(sender) }
+		earlyPending = p
+	end
+	if p.got[i] then return end
+	local list = {}
+	for name in names:gmatch("[^,]+") do
+		local clean = ns.King.CleanName(name)
+		if clean then list[#list + 1] = clean end
+	end
+	p.got[i], p.count = list, p.count + 1
+	if p.count < p.pieces then return end
+	earlyPending = nil
+	local all = {}
+	for k = 1, p.pieces do
+		for _, name in ipairs(p.got[k]) do if #all < Treasury.EARLY_MAX then all[#all + 1] = name end end
+	end
+	ns.rdb.treasuryEarly = { at = at, names = Alphabetical(all), from = p.from, t = ns.Now() }
+	ns.Fire("TREASURY_CHANGED")
+end
+ns.Comm.Handle("TE", function(...) Treasury.HandleEarly(...) end)
+
+-- A client that may see the list (the ranking) and has none asks for it (TQ): EARLY_ASK_AFTER
+-- after login, then EARLY_ASK_AGAIN later while still without it, EARLY_ASKS times a session at
+-- most, never while someone else's ask is fresher than EARLY_ASK_HOLD (its answer reaches us).
+function Treasury.AskEarly()
+	if not earlyArmed or earlyAsks >= Treasury.EARLY_ASKS or not ns.rdb or ns.faction == "Horde" or not ns.IsMember() then return false end
+	if Treasury.EarlySupporters() or not Treasury.MaySee("ranking") then return false end
+	local now = ns.Now()
+	if now - lastEarlyAsk < Treasury.EARLY_ASK_AGAIN or now - heardEarlyAsk < Treasury.EARLY_ASK_HOLD then return false end
+	earlyAsks, lastEarlyAsk = earlyAsks + 1, now
+	local held = ns.rdb.treasuryEarly
+	ns.Comm.Send("CHANNEL", ("TQ~%d"):format(type(held) == "table" and tonumber(held.at) or 0), "treasuryearlyask")
+	return true
+end
+function Treasury.ArmEarly()
+	earlyArmed = true
+	return Treasury.AskEarly()
+end
+
+-- Someone asks: the holder answers when its list is newer than the asker's (EARLY_GAP apart at
+-- the soonest, however many ask: the answer goes to the whole channel).
+function Treasury.HandleEarlyAsk(dist, sender, text)
+	if dist ~= "CHANNEL" or type(text) ~= "string" then return end
+	local at = tonumber(text:match("^TQ~(%d+)$"))
+	if not at then return end
+	heardEarlyAsk = ns.Now()
+	local list = EarlyHolder() and ArchivedSupporters()
+	if list and list.at > at then Treasury.SendEarly() end
+end
+ns.Comm.Handle("TQ", function(...) Treasury.HandleEarlyAsk(...) end)
+
 ns.On("LOGIN", function()
 	Treasury.Migrate()
 	-- The account's characters, for gold between a keeper's own.
@@ -1580,7 +1914,12 @@ ns.On("LOGIN", function()
 		if ns.Now() - lastShare >= Treasury.SHARE_EVERY then Treasury.Share(true) end
 		Treasury.SendFlags()
 		Treasury.SendKeepers()
+		Treasury.AskEarly()
 	end)
+	-- The early supporters: sent by the Treasurer's character holding them once after login
+	-- (after his book), asked for by a client without them a little later.
+	ns.After(45, "treasury early", function() Treasury.SendEarly(true) end)
+	ns.After(Treasury.EARLY_ASK_AFTER, "treasury early", function() Treasury.ArmEarly() end)
 	ns.After(30, "treasury share", function()
 		Treasury.Share(true)
 		Treasury.SendFlags(true)
@@ -1635,7 +1974,7 @@ end
 
 function Treasury.Show(mode)
 	Treasury.mode = mode
-	bookShown, rankShown = Treasury.BOOK_SHOWN, Treasury.RANK_PAGE
+	bookShown, rankShown, earlyShown = Treasury.BOOK_SHOWN, Treasury.RANK_PAGE, Treasury.EARLY_SHOWN
 	ns.Fire("TREASURY_CHANGED")
 end
 
@@ -1651,6 +1990,9 @@ end
 function Treasury.MaySee(what)
 	return Treasury.Role() ~= "member" or Treasury.Shows(what)
 end
+
+-- How many keep a book: the Treasurer's characters and the King always, and the King's list.
+local function KeeperCount() return #ns.TREASURER_CHARACTERS + 1 + #Treasury.Keepers() end
 
 -- A keeper's name as the tab shows it (the army's name for the King).
 local function KeeperLabel(name)
@@ -1670,6 +2012,33 @@ local function RankLines(lines, rank)
 		lines[#lines + 1] = { indent = 1, text = Grey(L.SHOW_MORE:format(math.min(Treasury.RANK_PAGE, n - rankShown), rankShown, n)),
 			onClick = function() rankShown = rankShown + Treasury.RANK_PAGE; ns.Fire("TREASURY_CHANGED") end }
 	end
+end
+
+-- The early supporters (everyone who gave before 1.0): their names alone, in alphabetical
+-- order, a few to a row, 60 more a click. Nothing while this client has no list.
+local function EarlyLines(lines)
+	local list = Treasury.EarlySupporters()
+	if not list then return false end
+	local names = list.names
+	lines[#lines + 1] = { header = true, text = L.TREASURY_EARLY, tooltip = function(tt) tt:AddLine(L.TREASURY_EARLY_TIP, 1, 1, 1, true) end }
+	Para(lines, L.TREASURY_EARLY_HINT:format(#names))
+	local shown = math.min(#names, earlyShown)
+	local row = ""
+	for i = 1, shown do
+		local name = names[i] .. (i < shown and "," or "")
+		if row ~= "" and #row + 1 + #name > 58 then
+			lines[#lines + 1] = { indent = 1, text = row }
+			row = name
+		else
+			row = row == "" and name or (row .. " " .. name)
+		end
+	end
+	if row ~= "" then lines[#lines + 1] = { indent = 1, text = row } end
+	if #names > shown then
+		lines[#lines + 1] = { indent = 1, text = Grey(L.SHOW_MORE:format(math.min(Treasury.EARLY_SHOWN, #names - shown), shown, #names)),
+			onClick = function() earlyShown = earlyShown + Treasury.EARLY_SHOWN; ns.Fire("TREASURY_CHANGED") end }
+	end
+	return true
 end
 
 -- The items donated: each item, how many, and who gave it last (its tooltip, the item's own).
@@ -1768,6 +2137,13 @@ local function KeeperLines()
 	end
 	Row(ns.FullName(ns.TREASURER, ns.TREASURER_REALM), L.TREASURY_KEEPER_TREASURER:format(ns.TREASURER), {
 		tooltip = function(tt) tt:AddLine(L.TREASURY_KEEPER_PINNED, 1, 1, 1, true) end })
+	-- His mail character: his, pinned like him (not the King's to take off).
+	for _, pin in ipairs(ns.TREASURER_CHARACTERS) do
+		if pin ~= ns.TREASURER then
+			Row(ns.FullName(pin, ns.TREASURER_REALM), L.TREASURY_KEEPER_TREASURER_MAIL:format(pin), {
+				tooltip = function(tt) tt:AddLine(L.TREASURY_KEEPER_PINNED, 1, 1, 1, true) end })
+		end
+	end
 	local king = ns.KingCharacter and ns.KingCharacter()
 	if king then
 		Row(ns.FullName(king, ns.KingRealm and ns.KingRealm()), L.TREASURY_KEEPER_KING:format(ns.KING_NAME), {
@@ -1836,7 +2212,8 @@ local function SummaryLines(role)
 		if role ~= "member" then
 			RankLines(lines, {})
 			lines[#lines].gapAfter = true
-			lines[#lines + 1] = { text = Gold("> " .. L.TREASURY_KEEPERS_LINK:format(2 + #Treasury.Keepers())), onClick = function() Treasury.Show("keepers") end, gapAfter = true }
+			if EarlyLines(lines) then lines[#lines].gapAfter = true end
+			lines[#lines + 1] = { text = Gold("> " .. L.TREASURY_KEEPERS_LINK:format(KeeperCount())), onClick = function() Treasury.Show("keepers") end, gapAfter = true }
 		end
 		BankLines(lines, role)
 		return lines
@@ -1860,6 +2237,8 @@ local function SummaryLines(role)
 	if Treasury.MaySee("ranking") then
 		RankLines(lines, r.rank)
 		lines[#lines].gapAfter = true
+		-- Who gave before 1.0: with the ranking, for whoever may see it.
+		if EarlyLines(lines) then lines[#lines].gapAfter = true end
 	end
 	if Treasury.MaySee("book") then
 		ItemLines(lines, r.items)
@@ -1868,7 +2247,7 @@ local function SummaryLines(role)
 	end
 	-- The keepers: the King's to name, theirs to see.
 	if role ~= "member" then
-		lines[#lines + 1] = { text = Gold("> " .. L.TREASURY_KEEPERS_LINK:format(2 + #Treasury.Keepers())), onClick = function() Treasury.Show("keepers") end, gapAfter = true }
+		lines[#lines + 1] = { text = Gold("> " .. L.TREASURY_KEEPERS_LINK:format(KeeperCount())), onClick = function() Treasury.Show("keepers") end, gapAfter = true }
 	end
 	BankLines(lines, role)
 	-- The King: what the army sees now (the switches are the buttons in the box).
@@ -1975,9 +2354,14 @@ function Treasury.Reset()
 	asked = false
 	wipe(pending)
 	wipe(itemPending)
-	lastMoney = nil
-	bookShown, rankShown = Treasury.BOOK_SHOWN, Treasury.RANK_PAGE
+	lastMoney, lastRelay = nil, -math.huge
+	lastEarlySent, earlySending, earlyPending, earlyCache = -math.huge, nil, nil, nil
+	earlyAsks, lastEarlyAsk, earlyArmed, heardEarlyAsk = 0, -math.huge, false, -math.huge
+	bookShown, rankShown, earlyShown = Treasury.BOOK_SHOWN, Treasury.RANK_PAGE, Treasury.EARLY_SHOWN
 	Treasury.mode = "summary"
-	if ns.rdb then ns.rdb.treasuryReports, ns.rdb.treasuryBooks, ns.rdb.treasuryKeepers, ns.rdb.treasuryArchive = nil, nil, nil, nil end
+	if ns.rdb then
+		ns.rdb.treasuryReports, ns.rdb.treasuryBooks, ns.rdb.treasuryKeepers, ns.rdb.treasuryArchive = nil, nil, nil, nil
+		ns.rdb.treasuryEarly = nil
+	end
 	if ns.db then ns.db.keeperShares, ns.db.previewTreasuryKeepers = nil, nil end
 end

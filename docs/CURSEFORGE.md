@@ -220,6 +220,7 @@ shows the army something of it.
   keepers**, then **Add a treasury character**, by name or target; a click on one takes it off).
   The list is the King's word alone: every client checks it comes from his character, keeps it
   (it never runs out while he is away), and the Treasurer's addon repeats it.
+- **The Treasurer's mail**: Pyralis Andarai, his hunter where the treasury's mail goes, keeps a book of its own like him (pinned by name on his realm group, in any guild or none; gold between the two is a transfer, and outside an Olympus guild its book reaches the others through the Treasurer's addon).
 - **Each keeper's book**: gold and items a keeper receives by trade or mail are a donation, gold
   and items he gives a payment, each written down by itself in his own character's book, by his
   own addon (mail when he takes its gold, or once its items reach his bags; the auction house,
@@ -250,6 +251,7 @@ shows the army something of it.
   read 0.9's treasury, and 0.9 clients get a short copy of 1.0's, in 0.9's shape, from the
   Treasurer's addon.
 - **The ranking of donors** (all time) and the week's donations, with a copy for Discord.
+- **Early supporters**: everyone who gave before 1.0 (from 0.9's closed book, sent by the Treasurer's addon), names only, in alphabetical order, under the ranking and with its switch.
 - **The guild bank of <Olympus>**: whoever of that guild opens the bank with the addon on takes
   a snapshot of it (each tab's items with icons and counts, the bank's gold, when it was seen);
   a keeper's snapshot (the newest, whoever took it) reaches the King and, with his "book"
