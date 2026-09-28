@@ -500,6 +500,25 @@ function ns.IsTreasurer(name, guild)
 	return type(name) == "string" and type(guild) == "string" and ns.ShortName(name) == ns.TREASURER and guild:lower() == "olympus"
 		and OfGroup(name, ns.TREASURER_REALM)
 end
+-- The Treasurer's characters that keep a book of the treasury (1.0, Treasury.lua): the Treasurer
+-- himself (ns.TREASURER, his name for display: he is the Treasurer only in the guild Olympus,
+-- ns.IsTreasurer) and his hunter, where the treasury's mail goes (his word: "all the mail goes
+-- to that; I want the gold mailed to count as well"). The hunter is his mail character, in
+-- whatever guild or none, so no guild is checked for it: the server stamps the sender of an
+-- addon message and of a mail (nobody can write another's name there), and a Forever name is
+-- one across its realm group, so this full name on his realm group (ns.TREASURER_REALM's) can
+-- only be his. The same name on another realm group is someone else.
+ns.TREASURER_CHARACTERS = { "Pyralis Ashandar", "Pyralis Andarai" }
+-- One of the Treasurer's pinned characters other than the Treasurer himself (his mail's): by
+-- its exact name on his realm group, in any guild or none.
+function ns.IsTreasurerMail(name)
+	if type(name) ~= "string" or name == "" then return false end
+	local short = ns.ShortName(name)
+	for _, pin in ipairs(ns.TREASURER_CHARACTERS) do
+		if pin ~= ns.TREASURER and short == pin then return OfGroup(name, ns.TREASURER_REALM) end
+	end
+	return false
+end
 -- The King's name on the lines and the crown: the army's name for him on the Alliance side,
 -- his character's on the Horde (whose <Olympus> has a guild master of its own).
 function ns.KingName(leader)
@@ -1225,7 +1244,7 @@ SlashCmdList.OLYMPUS = function(input)
 			if on == "on" or on == "off" then ns.db.royalInspection = on == "on" end
 			ns.Print(ns.db.royalInspection == false and L.INSPECTION_OPT_OFF or L.INSPECTION_OPT_ON)
 		elseif cmd == "treasurer" then
-			-- The Treasurer's yes to sharing his book and the guild bank (Treasury.lua).
+			-- A keeper's yes to sharing his book and the guild bank (Treasury.lua).
 			local on = rest:lower()
 			if on == "on" or on == "off" then
 				ns.Treasury.SetConsent(on == "on")

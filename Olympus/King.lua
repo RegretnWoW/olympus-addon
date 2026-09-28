@@ -16,7 +16,7 @@ local L = ns.L
 --   T2~<id>~<P|B>~<guild>                  a Lord's answer to the roll call
 --   T3~<id>~<guild>~<ok>~<none>~<other>~<name:guild,...>   an inspection report
 -- Other modules add their own kinds (King.Register): Vox Populi (V, E), writs (W), the court
--- (C, Z), the gates (G), pardons (F).
+-- (C, Z), the gates (G), pardons (F), the treasury's switches and keepers (T, K: his alone).
 
 local King = {}
 ns.King = King
@@ -1189,8 +1189,8 @@ function King.State() return { summon = summon, inspect = inspect, agenda = agen
 -- the Realm and the Tabards), to see and try them. Nothing the view does reaches anyone.
 function King.SetDevView(on)
 	ns.db.devKingView = on and true or false
-	-- The preview's treasury switches were its own: gone with it.
-	if not on then ns.db.previewTreasuryFlags = nil end
+	-- The preview's treasury switches and keepers were its own: gone with it.
+	if not on then ns.db.previewTreasuryFlags, ns.db.previewTreasuryKeepers = nil, nil end
 	ns.Print(on and L.DEV_KING_VIEW_NOW_ON or L.DEV_KING_VIEW_NOW_OFF)
 	ns.Fire("DATA_CHANGED")
 	Changed()

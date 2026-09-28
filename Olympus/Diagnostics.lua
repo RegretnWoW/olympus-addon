@@ -336,9 +336,11 @@ function ns.StatusText()
 		add("privacy: zone and layer %s  |  channel %s  |  chat warning accepted: %s",
 			ns.Layers and ns.Layers.SharingState and ns.Layers.SharingState() or "?", c.sealed and "sealed (key holders)" or "public (anyone)",
 			ch and ch.warned and #ch.warned > 0 and table.concat(ch.warned, ",") or "none")
-		if ns.Treasury and ns.Treasury.IsTreasurer and ns.Treasury.IsTreasurer() then
+		if ns.Treasury and ns.Treasury.RealKeeper and ns.Treasury.RealKeeper() then
 			local v = ns.Treasury.Consent()
-			add("treasurer: book and bank %s (/oly treasurer on|off)", v == true and "shared" or (v == false and "private" or "not chosen (private)"))
+			local b = ns.Treasury.BookOf and ns.Treasury.BookOf(ns.me)
+			add("treasury keeper: book and bank %s (/oly treasurer on|off), book of %s opened at %s copper",
+				v == true and "shared" or (v == false and "private" or "not chosen (private)"), tostring(b and b.epoch or "-"), tostring(b and b.opening or "-"))
 		end
 		if ns.faction == "Horde" then
 			add("Horde King: %s, realm %s", tostring(ns.KING_CHARACTER.Horde), tostring(ns.KingRealm and ns.KingRealm() or "?"))
