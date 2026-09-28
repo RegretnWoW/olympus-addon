@@ -4,7 +4,9 @@ local L = ns.L
 -- Royal decrees sent to every Olympus guild over OlympusNet:
 --   ARMS   "Call to Arms!"  (Horde attacking here) - raid warning + sound, marker for 5 min
 --   MUSTER "Muster here"    (gather point)          - softer alert, marker for 30 min
--- Only Captains (rank <= ns.CAPTAIN_RANK) can send. Receivers rate-limit per sender.
+-- Only Captains (rank <= ns.CAPTAIN_RANK) can send. Receivers rate-limit per sender and, for
+-- senders only the census vouches for, the whole army (the flood guard). A decree's words are
+-- its sender's own text: sent with the logged API (1.0.0), like a chat line.
 
 local Decree = {}
 ns.Decree = Decree
@@ -135,7 +137,8 @@ function Decree.Send(kind, text)
 	end
 	lastSent = now
 	local guild = GetGuildInfo("player") or ""
-	ns.Comm.Send("CHANNEL", ns.Codec.EncodeDecree(kind, mapID, x, y, guild, ns.Roster.MyRank(), text))
+	-- Logged (1.0.0): the server keeps its words, so abuse can be reported (Comm.Send).
+	ns.Comm.Send("CHANNEL", ns.Codec.EncodeDecree(kind, mapID, x, y, guild, ns.Roster.MyRank(), text), nil, nil, true)
 	Show({ kind = kind, mapID = mapID, x = x, y = y, guild = guild, rank = ns.Roster.MyRank(), text = text or "", sender = ns.DisplayName(ns.me), t = now })
 end
 
@@ -175,8 +178,16 @@ ns.Comm.Handle("D1", function(dist, sender, text)
 	if dist ~= "CHANNEL" then return end
 	local d = ns.Codec.DecodeDecree(text)
 	if not d or not ns.IsFederation(d.guild) then return end
-	-- Trust the rank we can verify, never the rank written in the message.
-	local rank = ns.Data.KnownRank(sender, d.guild)
+	-- The King by his pinned name (the server stamps it), never by a vote: his decree needs no
+	-- census. So do his Hands' for his guild (the list he last sent, King.IsHandName), on every
+	-- client outside it: there they are of his Crown on his word (1.0.0); on its own members'
+	-- clients its roster says who speaks for it. Everyone else: the rank we can verify, never
+	-- the rank written in the message.
+	local mine = GetGuildInfo("player")
+	local kings = ns.IsKingGuild(d.guild)
+	local king = kings and ns.IsKingCharacter(sender)
+	local hand = kings and not king and not ns.IsKingGuild(mine) and ns.King ~= nil and ns.King.IsHandName(sender)
+	local rank = (king or hand) and 0 or ns.Data.KnownRank(sender, d.guild)
 	if not rank then
 		ns.Log("decree from %s ignored: rank in %s not verified", sender, d.guild)
 		return
@@ -187,12 +198,28 @@ ns.Comm.Handle("D1", function(dist, sender, text)
 	elseif rank > ns.CAPTAIN_RANK then
 		return
 	end
+	-- The King, his Hands and our own guild's officers (our roster: the server's word) never wait
+	-- behind the flood guard, which census ranks (anyone's votes) can fill. Anyone else speaks for
+	-- one guild only, as in the chats (Data.ClaimGuild).
+	local sure = king or hand or (mine ~= nil and d.guild == mine and ns.Roster.RankOf(sender) ~= nil)
+	if not sure and not ns.Data.ClaimGuild(sender, d.guild) then
+		ns.Log("decree from %s ignored: speaks for another guild than %s", sender, d.guild)
+		return
+	end
 	local now = ns.Now()
 	if lastBySender[sender] and now - lastBySender[sender] < PER_SENDER_COOLDOWN then return end
 	for i = #recent, 1, -1 do if now - recent[i] > 60 then table.remove(recent, i) end end
-	if #recent >= MAX_PER_MINUTE then return end
+	if #recent >= MAX_PER_MINUTE and not sure then return end
 	lastBySender[sender] = now
-	recent[#recent + 1] = now
+	if not sure then recent[#recent + 1] = now end
+	-- Its words come through the logged API (the server keeps them, so abuse can be reported),
+	-- as a chat line's do. One sent with the plain API, where this client has both (a sender
+	-- before 1.0.0, or edited code), still shows, without its words (1.0.0).
+	if d.text ~= "" and C_ChatInfo and C_ChatInfo.SendAddonMessageLogged and ns.Comm.DeliveredLogged
+		and not ns.Comm.DeliveredLogged() then
+		ns.Log("decree from %s shown without its text: not sent with the logged API", sender)
+		d.text = ""
+	end
 	d.sender, d.t = ns.DisplayName(sender), now
 	Show(d)
 end)

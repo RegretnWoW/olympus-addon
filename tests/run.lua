@@ -286,9 +286,14 @@ test("federation filter: Olympus however it was spelled, but not other words", f
 	end
 	eq(ns.Slips("olmps", "olympus", 2), 2); eq(ns.Slips("olympia", "olympus", 2), 2); eq(ns.Slips("abcdefg", "olympus", 2), 3)
 	eq(ns.Slips("olypmus", "olympus", 2), 1, "two neighbours swapped: one slip")
-	-- The main guild is still the exact name: the King and the Crown's officers.
-	eq(ns.IsCrownRank("OLYMPVS", 1), false, "an officer of a look-alike guild is no Crown officer")
-	eq(ns.IsCrownRank("Olympus", 1), true)
+	-- The main guild is still the exact name: the King and the Crown's officers (these on its own
+	-- members' clients since 1.0.0: see "crown permissions").
+	local savedGuild = GetGuildInfo
+	GetGuildInfo = function() return "Olympus", "Knight", 3 end
+	local crowned = { ns.IsCrownRank("OLYMPVS", 1), ns.IsCrownRank("Olympus", 1) }
+	GetGuildInfo = savedGuild
+	eq(crowned[1], false, "an officer of a look-alike guild is no Crown officer")
+	eq(crowned[2], true)
 end)
 
 test("number formatting", function()
@@ -675,9 +680,18 @@ end)
 
 test("crown permissions", function()
 	eq(ns.IsCrownRank("Olympus II", 0), true, "any guild master")
-	eq(ns.IsCrownRank("Olympus", 1), true, "officers of the main guild")
 	eq(ns.IsCrownRank("Olympus II", 1), false, "officers of other guilds")
 	eq(ns.IsCrownRank("Olympus", 3), false)
+	-- The officers of the main guild (1.0.0): of the Crown on its own members' clients, where
+	-- their rank is the server's (the roster); anywhere else only the census could name them,
+	-- and there they are Captains like any guild's officers.
+	eq(ns.IsCrownRank("Olympus", 1), false, "officers of the main guild, on another guild's client")
+	local savedGuild = GetGuildInfo
+	GetGuildInfo = function() return "Olympus", "Knight", 3 end
+	local theirs = ns.IsCrownRank("Olympus", 1)
+	GetGuildInfo = savedGuild
+	eq(theirs, true, "officers of the main guild, on its members' clients")
+	eq(ns.IsCrownRank("Olympus", 0), true, "its guild master everywhere")
 end)
 
 test("wall of shame round trip", function()
@@ -3211,7 +3225,10 @@ test("long chat splits at safe points and every part fits one message", function
 end)
 
 test("channel levels follow the realm hierarchy", function()
-	eq(Chan.LevelOf("Olympus", 0), 3); eq(Chan.LevelOf("Olympus", 1), 3); eq(Chan.LevelOf("Olympus", 2), 1)
+	eq(Chan.LevelOf("Olympus", 0), 3); eq(Chan.LevelOf("Olympus", 2), 1)
+	-- An officer of <Olympus>: a Lord on its members' clients, a Captain on any other (1.0.0).
+	eq(Chan.LevelOf("Olympus", 1), 2)
+	AsRank(3, function() eq(Chan.LevelOf("Olympus", 1), 3) end, "Olympus")
 	eq(Chan.LevelOf("Olympus II", 0), 3); eq(Chan.LevelOf("Olympus II", 1), 2); eq(Chan.LevelOf("Olympus II", 3), 1)
 	eq(Chan.LevelOf("Horde Pals", 0), 0)
 	local function uses()
@@ -3291,7 +3308,9 @@ test("sender ranks are verified on receipt, never taken from the message", funct
 		eq(R("Stranger-Realm", "A", MY_GUILD), "forged", "not in our roster")
 		eq(R("Member3", "A", "Olympus"), "forged", "a guildmate speaking for another guild")
 		eq(R("Asmongold", "L", "Olympus"), "ok", "the King, from the report")
-		eq(R("Capt", "L", "Olympus"), "ok", "officer of <Olympus>, from the report")
+		-- (1.0.0: an officer of <Olympus> the report names is a Captain here, not a Lord.)
+		eq(R("Capt", "L", "Olympus"), "rank", "officer of <Olympus>, from the report: no [Lords] outside <Olympus>")
+		eq(R("Capt", "C", "Olympus"), "ok", "officer of <Olympus>, from the report: [Captains]")
 		eq(R("Random", "A", "Olympus"), "ok", "unverified members can use [Olympus]")
 		eq(R("Random", "C", "Olympus"), "unverified")
 		eq(R("X", "C", "Olympus Bad"), "unverified", "conflicting report")
@@ -3833,6 +3852,46 @@ test("chat lines arrive through CHAT_MSG_ADDON_LOGGED, without our echo or block
 	if not ok then error(err, 0) end
 end)
 
+-- 1.0.0: a chat line sent in pieces reached the M1 handler while the logged flag told of the
+-- last piece alone: edited code sent the line in a plain piece and an empty last piece with the
+-- logged API, and a line the server never logged was shown (where the client has both APIs,
+-- a plain line is dropped). No version sends a chat line in pieces (Comm.SendChat): a message
+-- put together from pieces is never taken as logged.
+test("chat lines put together from pieces are never taken as logged, whichever piece came logged", function()
+	local events, login = {}, {}
+	local cns = setmetatable({}, { __index = ns })
+	cns.RegisterEvent = function(event, fn) events[event] = events[event] or {}; table.insert(events[event], fn) end
+	cns.On = function(name, fn) if name == "LOGIN" then table.insert(login, fn) end end
+	cns.After, cns.Every = function() end, function() end
+	local slash = { SlashCmdList.OLYMPUSALL, SlashCmdList.OLYMPUSCAPTAINS, SlashCmdList.OLYMPUSLORDS, StaticPopupDialogs.OLYMPUS_CHAT_PRIVACY }
+	C_ChatInfo = { RegisterAddonMessagePrefix = function() end, SendAddonMessageLogged = function() end }
+	ns.db.chatMute = nil
+	local ok, err = pcall(function()
+		assert(loadfile(ADDON_DIR .. "Comm.lua"))("Olympus", cns)
+		assert(loadfile(ADDON_DIR .. "Channels.lua"))("Olympus", cns)
+		for _, fn in ipairs(login) do fn() end
+		local function Plain(sender, text) for _, fn in ipairs(events.CHAT_MSG_ADDON) do fn(ns.PREFIX, text, "CHANNEL", sender) end end
+		local function Logged(sender, text) for _, fn in ipairs(events.CHAT_MSG_ADDON_LOGGED) do fn(ns.PREFIX, text, "CHANNEL", sender) end end
+		CHAT_LINES = {}
+		AsRank(3, function()
+			Logged("Member40", Msg("A", MY_GUILD, 900, "logged, whole"))
+			eq(#CHAT_LINES, 1, "a whole logged line is shown")
+			Plain("Member40", Msg("A", MY_GUILD, 901, "plain, whole"))
+			eq(#CHAT_LINES, 1, "a whole plain line is dropped")
+			Plain("Member40", "C9:1:2:" .. Msg("A", MY_GUILD, 902, "plain piece, logged empty last piece"))
+			Logged("Member40", "C9:2:2:")
+			eq(#CHAT_LINES, 1, "the words in a plain piece: dropped")
+			Logged("Member40", "C10:1:2:" .. Msg("A", MY_GUILD, 903, "every piece logged"))
+			Logged("Member40", "C10:2:2:")
+			eq(#CHAT_LINES, 1, "pieces, which no version sends: dropped")
+		end)
+	end)
+	SlashCmdList.OLYMPUSALL, SlashCmdList.OLYMPUSCAPTAINS, SlashCmdList.OLYMPUSLORDS = slash[1], slash[2], slash[3]
+	StaticPopupDialogs.OLYMPUS_CHAT_PRIVACY = slash[4]
+	C_ChatInfo = nil
+	if not ok then error(err, 0) end
+end)
+
 ---------------------------------------------------------------------------
 -- Realm groups: PvP and PvP 2 share one census (Core.lua), and what tells realms apart
 -- (names as the server sent them, the realm a report was sent from, guild peers by realm).
@@ -4206,7 +4265,8 @@ local function OldCodec()
 end
 
 -- Comm.lua loaded into a namespace of its own (fresh peers, stats and guard) with a clock the
--- test moves. Deliver(dist, sender, text) goes through the real CHAT_MSG_ADDON handler.
+-- test moves. Deliver(dist, sender, text) goes through the real CHAT_MSG_ADDON handler, and
+-- DeliverLogged (1.0.0) through the real CHAT_MSG_ADDON_LOGGED one (the logged API's).
 -- old (1.0.0): a client of 0.9.8 or 0.9.9 instead, their Comm and Codec (tests/fixtures).
 local function FreshComm(old)
 	local events, login = {}, {}
@@ -4223,12 +4283,15 @@ local function FreshComm(old)
 	local function Deliver(dist, sender, text)
 		for _, fn in ipairs(events.CHAT_MSG_ADDON) do fn(ns.PREFIX, text, dist, sender) end
 	end
+	local function DeliverLogged(dist, sender, text)
+		for _, fn in ipairs(events.CHAT_MSG_ADDON_LOGGED) do fn(ns.PREFIX, text, dist, sender) end
+	end
 	local id = 0
 	local function Report(sender, r)
 		id = id + 1
 		for _, c in ipairs(ns.Codec.Chunk(ns.Codec.EncodeReport(r), tostring(id))) do Deliver("CHANNEL", sender, c) end
 	end
-	return cns, Deliver, Report
+	return cns, Deliver, Report, DeliverLogged
 end
 
 test("runner-up: only a 0.7.11+ peer on the reporter's channel", function()
@@ -6726,19 +6789,23 @@ test("no Olympus file opens or closes the game's popups itself (ns.ShowDialog / 
 end)
 
 test("the King's guild in one place: <Olympus> on the Alliance, the Horde's once it is set", function()
-	local savedFaction, savedHorde = ns.faction, ns.KING_GUILD.Horde
+	local savedFaction, savedHorde, savedGuild = ns.faction, ns.KING_GUILD.Horde, GetGuildInfo
 	local ok, err = pcall(function()
 		ns.faction = "Alliance"
 		eq(ns.IsKingGuild("Olympus"), true); eq(ns.IsKingGuild("OLYMPUS"), true); eq(ns.IsKingGuild("Olympus II"), false); eq(ns.IsKingGuild(nil), false)
-		eq(ns.IsCrownRank("Olympus", 1), true); eq(ns.IsCrownRank("Olympus II", 1), false); eq(ns.IsCrownRank("Olympus II", 0), true)
+		eq(ns.IsCrownRank("Olympus II", 1), false); eq(ns.IsCrownRank("Olympus II", 0), true)
+		-- (Its officers are of the Crown on its members' clients, 1.0.0.)
+		GetGuildInfo = function() return "Olympus", "Knight", 3 end
+		eq(ns.IsCrownRank("Olympus", 1), true)
 		ns.faction = "Horde"
 		eq(ns.IsKingGuild("Mudhutters"), true, "the Horde's: <Mudhutters> (0.9.4)"); eq(ns.IsKingGuild("Olympus"), false)
 		ns.KING_GUILD.Horde = nil
 		eq(ns.IsKingGuild("Olympus"), false, "no Horde King with no guild set")
 		ns.KING_GUILD.Horde = "olympus horde"
+		GetGuildInfo = function() return "Olympus Horde", "Knight", 3 end
 		eq(ns.IsKingGuild("Olympus Horde"), true); eq(ns.IsKingGuild("Olympus"), false); eq(ns.IsCrownRank("Olympus Horde", 1), true)
 	end)
-	ns.faction, ns.KING_GUILD.Horde = savedFaction, savedHorde
+	ns.faction, ns.KING_GUILD.Horde, GetGuildInfo = savedFaction, savedHorde, savedGuild
 	if not ok then error(err, 0) end
 end)
 
@@ -7358,7 +7425,7 @@ test("#18: outsiders on the channel can't crown one of their own, and the King's
 	end)
 end)
 
-test("#18: an officer of <Olympus> the census names is of the Crown like any Lord, never the King", function()
+test("#18: an officer of <Olympus> the census names is never the King, and (1.0.0) of the Crown only on <Olympus>'s own clients", function()
 	WithThrone(function(w, K)
 		local D, savedLogin = ns.Data, ns.Comm.loginAt
 		local ok, err = pcall(function()
@@ -7373,9 +7440,11 @@ test("#18: an officer of <Olympus> the census names is of the Crown like any Lor
 			-- Three outsiders keep the King at its head and add one of their own as an officer.
 			for _, s in ipairs({ "Atk-Realm", "Accomplice-Realm", "Third-Realm" }) do Report("Atk:1:0", s) end
 			eq(D.KnownRank("Asmongold Asmongler-Realm", "Olympus"), 0, "every picture names the King")
-			-- The officers of <Olympus> are of the Crown: [Lords] and the Crown's decrees, what every
-			-- guild master of an Olympus guild has. Nothing of the King's.
-			eq(ns.Channels.LevelOf("Olympus", 1), ns.Channels.LevelOf("Olympus Zeus", 0))
+			-- (1.0.0) Outside <Olympus> an officer of it is a Captain like any guild's: no [Lords], no
+			-- Crown decree; before, three outsiders' reports made one of theirs of the Crown here.
+			eq(ns.Channels.LevelOf("Olympus", 1), ns.Channels.LevelOf("Olympus Zeus", 1))
+			eq(ns.IsCrownRank("Olympus", D.KnownRank("Atk-Realm", "Olympus")), false)
+			-- Nothing of the King's either.
 			for _, kind in ipairs({ "S", "I", "A", "X", "H", "W", "G", "F", "C", "Z", "V", "E", "T", "P", "Q" }) do
 				eq(K.Authorized(kind, "Atk-Realm", "Olympus"), false, kind)
 			end
@@ -8434,6 +8503,195 @@ test("0.9.1 privacy: no layer announcement without the player's yes, officers an
 		ns.db.throneLocation = nil
 		w.observe()
 		eq(w.layers(), 3)
+	end)
+end)
+
+-- 1.0.0: the King's layer went out only every ten minutes, and not at all when he showed his
+-- crown again within ten minutes of hiding it: players who logged in or reloaded while he
+-- shared, and everyone after an off and on, clicked "Ask invite for Asmon Layer" and read
+-- "try again in a minute" for up to ten.
+test("1.0.0 the King's layer goes with his crown: at once when he shows it, again after hiding it, and every minute", function()
+	local K = ns.King
+	local savedPos = C_Map.GetPlayerMapPosition
+	local ok, err = pcall(function()
+		WithLayerWatch(function(w)
+			C_Map.GetPlayerMapPosition = function() return { GetXY = function() return 0.42, 0.51 end } end
+			K.Reset()
+			GetGuildInfo = function() return "Olympus", "King", 0 end
+			ns.me = "Asmongold Asmongler-Realm"
+			ns.db.throneLocation = nil
+			w.observe()
+			eq(w.layers(), 0, "his crown hidden (the default): his layer stays home")
+			local function Crowns()
+				local n = 0
+				for _, m in ipairs(w.sent) do if m:find("^CHANNEL T1~P~") then n = n + 1 end end
+				return n
+			end
+			local layer = ("CHANNEL L1~1453~%d~0~Olympus"):format(w.npc)
+			-- He shows it: his crown and his layer go out now.
+			K.ToggleLocation()
+			eq(Crowns(), 1, "his crown")
+			eq(w.layers(), 1, "and his layer, at once")
+			eq(w.sent[#w.sent], layer)
+			-- He hides it: both withdrawn.
+			w.clock = w.clock + 120
+			K.ToggleLocation()
+			assert(w.sent[#w.sent - 1]:find("^CHANNEL T1~Q~"), "his crown withdrawn")
+			eq(w.sent[#w.sent], "CHANNEL L0~", "and his layer")
+			-- He shows it again three minutes after his layer last went out: his layer too, now
+			-- (before: only once ten minutes had passed since the last one).
+			w.clock = w.clock + 60
+			K.ToggleLocation()
+			eq(w.layers(), 2, "his layer again, at once")
+			eq(w.sent[#w.sent], layer)
+			-- Standing still: once a minute, so a player who just logged in or reloaded learns it
+			-- within a minute (his crown is repeated every 20 seconds).
+			for i = 1, 5 do
+				w.clock = w.clock + 60
+				ns.Layers.Tick()
+				eq(w.layers(), 2 + i, "minute " .. i)
+			end
+			-- Hidden: nothing from the ticker.
+			K.ToggleLocation()
+			for _ = 1, 3 do w.clock = w.clock + 60; ns.Layers.Tick() end
+			eq(w.layers(), 7, "hidden: no layer")
+			-- Anyone else who shares: every ten minutes, as before.
+			GetGuildInfo = function() return "Olympus II", "Officer", 1 end
+			ns.me = "Tester-Realm"
+			ns.db.shareLocation = true
+			w.observe()
+			eq(w.layers(), 8, "a new layer: at once")
+			for _ = 1, 9 do w.clock = w.clock + 60; ns.Layers.Tick() end
+			eq(w.layers(), 8, "not every minute: only the King's")
+			w.clock = w.clock + 60
+			ns.Layers.Tick()
+			eq(w.layers(), 9, "ten minutes on")
+		end)
+	end)
+	C_Map.GetPlayerMapPosition = savedPos
+	ns.db.throneLocation = nil
+	K.Reset()
+	if not ok then error(err, 0) end
+end)
+
+-- 1.0.0: with the King's layer unknown the line said "his addon announces it when he targets an
+-- NPC, try again in a minute", whatever the reason. While his crown is hidden (the default: his
+-- position is on stream) his layer is never announced, and a player on another realm never
+-- hears it: they tried again every minute for nothing.
+test("1.0.0 the King's line says why his layer is unknown: his crown is hidden, he is on another realm, or it is coming", function()
+	WithHop(function(w, H)
+		local savedPrint = ns.Print
+		local said = {}
+		local ok, err = pcall(function()
+			ns.King.Reset()
+			ns.rdb.guilds = SampleGuilds() -- the King online, two senders name him
+			ns.Print = function(m) said[#said + 1] = m end
+			local unknown = ns.L.HOP_KING_UNKNOWN:format("Asmon")
+			-- His crown is not on the map: nothing will come until he shows it.
+			H.AskKing()
+			assert(said[1] ~= unknown, "not 'try again in a minute' while his crown is hidden")
+			eq(said[1], ns.L.HOP_KING_HIDDEN:format("Asmon"))
+			local tips = {}
+			H.KingLine().tooltip({ AddLine = function(_, text) tips[#tips + 1] = text end })
+			eq(tips[2], ns.L.HOP_KING_HIDDEN:format("Asmon"), "the line's tooltip says the same")
+			eq(#w.sent, 0, "nothing asked")
+			-- His crown shows: his layer is on its way (his addon repeats it every minute now).
+			ns.King.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", "T1~P~3~Olympus~1453~420~510")
+			H.AskKing()
+			eq(said[2], unknown)
+			-- It came: the ask goes out.
+			ns.Layers.Receive("Asmongold-Realm", { mapID = 1453, zoneUID = 9, rank = 0, guild = "Olympus" })
+			H.AskKing()
+			eq(w.sent[#w.sent], "CHANNEL LQ~1~1453~9")
+			-- The census places him on another realm (a guild across two realms, the next realm's
+			-- reporter): a layer is a copy of a zone inside one realm, nobody here can join his.
+			-- Said so, whatever the crown.
+			local other = ns.L.HOP_KING_OTHER_REALM:format("Asmon", "OtherRealm")
+			ns.rdb.guilds = { ["Olympus"] = Vouched({ total = 990, online = 210, zones = {}, t = os.time(),
+				leader = "Asmongold-OtherRealm", leaderOnline = true }, "W1-Realm", "W2-Realm") }
+			H.AskKing()
+			eq(said[#said], other)
+			-- Even with his layer heard here (a channel the two realms share, Comm.ElectsAcrossRealms,
+			-- carries his announcements): his realm comes first, nothing is asked, and the line
+			-- neither sends us to his zone nor says we are on his layer.
+			ns.Layers.Receive("Asmongold-OtherRealm", { mapID = 1453, zoneUID = 7, rank = 0, guild = "Olympus" })
+			eq(H.King().zoneUID, 7, "his layer is known")
+			local asked = #w.sent
+			H.AskKing()
+			eq(said[#said], other, "his realm, not his layer")
+			eq(#w.sent, asked, "nothing asked")
+			w.see(7) -- (the same zone UID on our realm is another layer)
+			local lines = H.KingLines()
+			eq(#lines, 1, "no 'go there' line")
+			eq(lines[1].text:find(ns.L.HOP_KING_HERE:format("Asmon"), 1, true), nil, "not 'on his layer'")
+			tips = {}
+			lines[1].tooltip({ AddLine = function(_, text) tips[#tips + 1] = text end })
+			eq(tips[2], other, "the tooltip says the same")
+			-- Both languages have them, and neither says the channel stays inside one realm.
+			local savedLocale, pt = GetLocale, {}
+			GetLocale = function() return "ptBR" end
+			local loaded, lerr = pcall(function() assert(loadfile(ADDON_DIR .. "Locales.lua"))("Olympus", pt) end)
+			GetLocale = savedLocale
+			if not loaded then error(lerr, 0) end
+			for _, key in ipairs({ "HOP_KING_HIDDEN", "HOP_KING_OTHER_REALM" }) do
+				assert(type(ns.L[key]) == "string" and ns.L[key]:find("%s", 1, true), key)
+				assert(type(pt.L[key]) == "string" and pt.L[key] ~= ns.L[key] and pt.L[key]:find("%s", 1, true), "Portuguese " .. key)
+			end
+			eq(ns.L.HOP_KING_OTHER_REALM:find("channel", 1, true), nil)
+			eq(pt.L.HOP_KING_OTHER_REALM:find("canal", 1, true), nil)
+		end)
+		ns.Print = savedPrint
+		ns.King.Reset()
+		ns.rdb.guilds = {}
+		if not ok then error(err, 0) end
+	end)
+end)
+
+-- 1.0.0: a player's "the King's layer doesn't work" came with a /oly bug that said nothing of the
+-- King. Now one line says what this client knows of him: whether the census has him online (and
+-- how sure), the realm it places him on, his layer and his crown, and how long ago each was heard.
+test("1.0.0 /oly status and /oly bug say what this client knows of the King: offline, checking, online or confirmed, realm, layer, crown", function()
+	WithHop(function(w, H)
+		local savedMe, savedCrown = ns.me, ns.db.throneLocation
+		local ok, err = pcall(function()
+			ns.King.Reset()
+			local function Line() return ns.StatusText():match("\nking: ([^\n]*)") end
+			ns.rdb.guilds = {}
+			eq(Line(), "offline")
+			assert(ns.BuildBugReport():find("\nking: offline\n", 1, true), "in /oly bug too")
+			-- <Olympus> reports him online, nobody else names him yet.
+			ns.rdb.guilds = { ["Olympus"] = { total = 990, online = 210, zones = {}, t = w.clock, leader = "Asmongold", leaderOnline = true } }
+			eq(Line(), "checking (reported online, not confirmed yet)")
+			-- One other sender names him: shown, not yet what "For Olympus!" waits for.
+			ns.rdb.guilds = { ["Olympus"] = Vouched({ total = 990, online = 210, zones = {}, t = w.clock, leader = "Asmongold",
+				leaderOnline = true }, "W1-Realm") }
+			eq(Line(), "online (one report)  |  realm Realm (ours)  |  layer not known  |  crown not heard")
+			-- Two: confirmed. His crown, then his layer, and how long ago each came.
+			ns.rdb.guilds = SampleGuilds()
+			eq(Line(), "confirmed  |  realm Realm (ours)  |  layer not known  |  crown not heard")
+			ns.King.HandleCommand("CHANNEL", ns.KingCharacter() .. "-Realm", "T1~P~3~Olympus~1453~420~510")
+			w.clock = w.clock + 30
+			ns.Layers.Receive("Asmongold-Realm", { mapID = 1453, zoneUID = 9, rank = 0, guild = "Olympus" })
+			w.clock = w.clock + 5
+			eq(Line(), "confirmed  |  realm Realm (ours)  |  layer map 1453 zone 9, heard 5s ago  |  crown map 1453, heard 35s ago")
+			-- On another realm, said so.
+			ns.rdb.guilds = { ["Olympus"] = Vouched({ total = 990, online = 210, zones = {}, t = w.clock,
+				leader = "Asmongold-OtherRealm", leaderOnline = true }, "W1-Realm", "W2-Realm") }
+			assert(Line():find("^confirmed  |  realm OtherRealm %(another realm%)  |  layer not known"), Line())
+			-- On the King's own client: his crown, and when his layer last went out.
+			GetGuildInfo = function() return "Olympus", "King", 0 end
+			ns.me = ns.KingCharacter() .. "-Realm"
+			ns.db.throneLocation = nil
+			eq(Line(), "me  |  crown hidden  |  layer not sent")
+			ns.db.throneLocation = true
+			w.see(12)
+			w.clock = w.clock + 20
+			eq(Line(), "me  |  crown shown  |  layer sent 20s ago")
+		end)
+		ns.me, ns.db.throneLocation = savedMe, savedCrown
+		ns.King.Reset()
+		ns.rdb.guilds = {}
+		if not ok then error(err, 0) end
 	end)
 end)
 
@@ -19505,6 +19763,434 @@ test("1.0.0 treasury: the reminder a sharing keeper gets says what he shares goe
 	assert(rawget(pt.L, "TREASURY_YOU_AND_KING"):find("todo cliente nele recebe", 1, true))
 	assert(rawget(pt.L, "TREASURY_YOU_AND_KING_BUT"):find("todo cliente nele recebe", 1, true))
 end)
+
+---------------------------------------------------------------------------
+-- 1.0.0: decrees against colluding characters. A decree's sender needed only a census rank, and
+-- census ranks are anyone's votes: a few characters could make one of theirs a Captain or a Lord
+-- of a made-up Olympus guild, fill the army's flood guard (6 decrees a minute) with raid
+-- warnings, and so drop every other decree, the King's own and our own officers'. The King now
+-- counts by his pinned name alone, the King and our own guild's officers (our roster: the
+-- server's word) never wait behind the flood guard, and anyone else speaks for the one guild its
+-- reports and chat lines speak for (Data.ClaimGuild). A decree's words come through the logged
+-- API, as a chat line's do. Names are made up; the King's is read from ns.KingCharacter().
+---------------------------------------------------------------------------
+do
+	local D = ns.Data
+	local LEVELS = "~0,0,0,0,0,0,0~~"
+	-- A census report of `guild` as its sender would send it (Codec.DecodeReport).
+	local function R(guild, leader, officers, total, online)
+		return Codec.DecodeReport(("R2~%s~%d~%d~%s~1~1~~"):format(guild, total or 40, online or 9, leader) .. LEVELS .. (officers or ""))
+	end
+
+	-- A clock for Data (ns.Now), the Crown's login wait long past, a receiver in "Olympus II" at
+	-- `rank` (its roster: Member1 its guild master, Member2 to Member6 its officers).
+	local function Scene(rank, fn)
+		local saved = { now = ns.Now, login = ns.Comm.loginAt, guild = GetGuildInfo, guilds = ns.rdb.guilds, me = ns.me,
+			notice = RaidNotice_AddMessage, frame = RaidWarningFrame, alert = ns.PlayAlert, print = ns.Print, chat = C_ChatInfo }
+		local s = { clock = os.time() + 7 * 86400, warnings = {}, alerts = {} }
+		ns.Now = function() return s.clock end
+		ns.Comm.loginAt = s.clock - 3600
+		GetGuildInfo = function() return "Olympus II", "rank", rank end
+		ns.me = "Tester-Realm"
+		ns.rdb.guilds = {}
+		RaidWarningFrame = {}
+		RaidNotice_AddMessage = function(_, text) s.warnings[#s.warnings + 1] = text end
+		ns.PlayAlert = function(kind) s.alerts[#s.alerts + 1] = kind end
+		ns.Print = function() end
+		ns.Roster.Scan()
+		local ok, err = pcall(fn, s)
+		ns.Now, ns.Comm.loginAt, GetGuildInfo, ns.rdb.guilds, ns.me = saved.now, saved.login, saved.guild, saved.guilds, saved.me
+		RaidNotice_AddMessage, RaidWarningFrame, ns.PlayAlert, ns.Print, C_ChatInfo = saved.notice, saved.frame, saved.alert, saved.print, saved.chat
+		if not ok then error(err, 0) end
+	end
+
+	-- The real receive path: a fresh Comm (FreshComm) with Decree.lua loaded on it, so a D1 goes
+	-- through the addon message handler, admission and the decree handler as in the game.
+	-- Decree(...) comes with the plain API, Logged(...) with the logged one (and the raw
+	-- Deliver, DeliverLogged, for messages as they come).
+	local function DecreeClient(s)
+		local cns, Deliver, _, DeliverLogged = FreshComm()
+		cns.Now = function() return s.clock end
+		cns.Comm.loginAt = s.clock - 3600
+		assert(loadfile(ADDON_DIR .. "Decree.lua"))("Olympus", cns)
+		local function Decree(sender, kind, guild, text)
+			Deliver("CHANNEL", sender, Codec.EncodeDecree(kind, 1453, 0.5, 0.5, guild, 0, text or "x"))
+		end
+		local function Logged(sender, kind, guild, text)
+			DeliverLogged("CHANNEL", sender, Codec.EncodeDecree(kind, 1453, 0.5, 0.5, guild, 0, text or "x"))
+		end
+		return cns, Decree, Logged, Deliver, DeliverLogged
+	end
+
+	local n = 90000
+	local function Line(sender, tier, guild)
+		n = n + 1
+		local shown, why = ns.Channels.Receive("CHANNEL", sender, Msg(tier, guild, n % 10000, "line " .. n), 500000 + n * 10)
+		return shown and "shown" or why
+	end
+
+	-- Six Captains of a made-up guild (one report names them) send six raid warnings in six
+	-- seconds: the army's flood guard is full for a minute.
+	local function Flood(s, Decree, prefix)
+		local caps = {}
+		for i = 1, 6 do caps[i] = prefix .. string.char(96 + i) .. ":1:0" end
+		eq(D.Receive(R("Olympus " .. prefix, "Nobody", table.concat(caps, ",")), prefix .. "herald-Realm"), true)
+		for i = 1, 6 do
+			s.clock = s.clock + 1
+			Decree(prefix .. string.char(96 + i) .. "-Realm", "ARMS", "Olympus " .. prefix)
+		end
+	end
+
+	test("1.0.0 decrees: our own guild's officers get through however many census Captains filled the flood guard", function()
+		Scene(3, function(s)
+			local cns, Decree = DecreeClient(s)
+			Flood(s, Decree, "Blare")
+			eq(#cns.Decree.Active(), 6, "six raid warnings")
+			s.clock = s.clock + 1
+			Decree("Blareg-Realm", "ARMS", "Olympus Blare")
+			eq(#cns.Decree.Active(), 6, "a seventh census decree still waits")
+			-- Our officer (Member2, rank 1 in our roster: the server's word).
+			Decree("Member2-Realm", "ARMS", "Olympus II", "real attack")
+			eq(#cns.Decree.Active(), 7, "our officer's Call to Arms is shown")
+			eq(cns.Decree.Active()[1].sender, "Member2")
+			-- And it takes no room in the guard: the census still waits.
+			Decree("Blareh-Realm", "ARMS", "Olympus Blare")
+			eq(#cns.Decree.Active(), 7)
+			-- (Each sender keeps its own minute: our officer's second decree waits.)
+			s.clock = s.clock + 1
+			Decree("Member2-Realm", "MUSTER", "Olympus II")
+			eq(#cns.Decree.Active(), 7, "one a minute per sender")
+		end)
+	end)
+
+	test("1.0.0 decrees: the King's own needs no census and gets through a flood guard six census Captains filled", function()
+		Scene(3, function(s)
+			local KING = ns.KingCharacter()
+			local cns, Decree = DecreeClient(s)
+			Flood(s, Decree, "Clang")
+			eq(#cns.Decree.Active(), 6)
+			-- No <Olympus> report at all on this client (a fresh login): his pinned name is enough.
+			eq(ns.rdb.guilds.Olympus, nil)
+			s.clock = s.clock + 1
+			Decree(KING .. "-Realm", "ROYAL", "Olympus", "the King's real decree")
+			eq(#cns.Decree.Active(), 7, "the King's decree is shown")
+			eq(cns.Decree.Active()[1].guild, "Olympus"); eq(cns.Decree.Active()[1].kind, "ROYAL")
+			-- A namesake on another realm group is not him: census rules, and the flood guard, apply.
+			s.clock = s.clock + 1
+			Decree(KING .. "-Elsewhere", "ARMS", "Olympus", "a namesake")
+			eq(#cns.Decree.Active(), 7, "the namesake's decree is not shown")
+		end)
+	end)
+
+	test("1.0.0 decrees: a sender speaks for the one guild it speaks for (Data.ClaimGuild), as in the chats", function()
+		Scene(3, function(s)
+			-- Xander reports Olympus Xanadu; Yorick's report names Xander an officer of Olympus Yonder.
+			eq(D.Receive(R("Olympus Xanadu", "Nobody", "Yorick:1:0"), "Xander-Realm"), true)
+			eq(D.Receive(R("Olympus Yonder", "Nobody", "Xander:1:0"), "Yorick-Realm"), true)
+			eq(D.KnownRank("Xander-Realm", "Olympus Yonder"), 1, "the census names him an officer there")
+			local cns, Decree = DecreeClient(s)
+			Decree("Xander-Realm", "MUSTER", "Olympus Yonder")
+			eq(#cns.Decree.Active(), 0, "he reports Olympus Xanadu: no decree as Olympus Yonder")
+			-- A census Captain who reports nothing still sends his (the claim is his guild's),
+			-- and his chat lines as that guild still show.
+			eq(D.Receive(R("Olympus Gust", "Nobody", "Pansy:1:0"), "Vance-Realm"), true)
+			Decree("Pansy-Realm", "ARMS", "Olympus Gust")
+			eq(#cns.Decree.Active(), 1)
+			GetGuildInfo = function() return "Olympus II", "rank", 1 end
+			eq(Line("Pansy-Realm", "C", "Olympus Gust"), "shown")
+			-- Having spoken for Olympus Gust, not for another guild (for CLAIM_TTL).
+			eq(D.Receive(R("Olympus Sleet", "Nobody", "Pansy:1:0"), "Wendel-Realm"), true)
+			s.clock = s.clock + 61
+			Decree("Pansy-Realm", "ARMS", "Olympus Sleet")
+			eq(#cns.Decree.Active(), 1, "not as Olympus Sleet")
+		end)
+	end)
+
+	test("1.0.0 decrees: their words come through the logged API; one sent with the plain API (0.9.x) still shows, without them", function()
+		Scene(3, function(s)
+			local cns, Decree, Logged, Deliver = DecreeClient(s)
+			C_ChatInfo.SendAddonMessageLogged = function() end -- (this client has both APIs, as Forever's)
+			-- A 1.0.0 officer's decree, logged: its words shown.
+			Logged("Member3-Realm", "ARMS", "Olympus II", "Horde at the bridge")
+			eq(#cns.Decree.Active(), 1)
+			eq(cns.Decree.Active()[1].text, "Horde at the bridge")
+			assert(s.warnings[#s.warnings]:find("Horde at the bridge", 1, true), s.warnings[#s.warnings])
+			-- A 0.9.x client's (its own encoder, the plain API): shown, without its words.
+			s.clock = s.clock + 1
+			Deliver("CHANNEL", "Member4-Realm", OldCodec().EncodeDecree("MUSTER", 1453, 0.5, 0.5, "Olympus II", 1, "come to Goldshire"))
+			eq(#cns.Decree.Active(), 2, "its decree shows")
+			local d = cns.Decree.Active()[1]
+			eq(d.kind, "MUSTER"); eq(d.sender, "Member4"); eq(d.text, "", "without its words")
+			eq(s.warnings[#s.warnings]:find("Goldshire", 1, true), nil, "nor in the raid warning")
+			eq(#s.warnings, 2, "a raid warning all the same")
+			-- The same for the King's (a 0.9.x King): his decree, without its words.
+			s.clock = s.clock + 1
+			Decree(ns.KingCharacter() .. "-Realm", "ROYAL", "Olympus", "unlogged words")
+			eq(cns.Decree.Active()[1].kind, "ROYAL"); eq(cns.Decree.Active()[1].text, "")
+			-- A client without the logged API can't tell: the words as before.
+			C_ChatInfo.SendAddonMessageLogged = nil
+			s.clock = s.clock + 1
+			Decree("Member5-Realm", "MUSTER", "Olympus II", "at the gates")
+			eq(cns.Decree.Active()[1].text, "at the gates")
+		end)
+	end)
+
+	-- 1.0.0: a D1 sent in pieces (Codec.Chunk's "C<id>:<i>:<n>:") came to its handler while the
+	-- logged flag told of the last piece alone: edited code sent the words in a plain piece and an
+	-- empty last piece with the logged API, and the words the server never logged were shown, in
+	-- the raid warning too. No version sends a decree in pieces (Decree.Send: Comm.Send, whole):
+	-- a message put together from pieces is never taken as logged.
+	test("1.0.0 decrees: one put together from pieces is never taken as logged, whichever piece came logged: shown without its words", function()
+		Scene(3, function(s)
+			local cns, _, _, Deliver, DeliverLogged = DecreeClient(s)
+			C_ChatInfo.SendAddonMessageLogged = function() end -- (this client has both APIs, as Forever's)
+			local msg = Codec.EncodeDecree("MUSTER", 1453, 0.5, 0.5, "Olympus II", 1, "words the server never logged")
+			-- The words in a plain piece, an empty last piece with the logged API.
+			Deliver("CHANNEL", "Member3-Realm", "C77:1:2:" .. msg)
+			DeliverLogged("CHANNEL", "Member3-Realm", "C77:2:2:")
+			local d = cns.Decree.Active()[1]
+			eq(d and d.sender, "Member3", "the decree shows, as one sent with the plain API does")
+			eq(d.text, "", "without the words the server never logged")
+			eq(s.warnings[#s.warnings]:find("never logged", 1, true), nil, "nor in the raid warning")
+			-- Every piece logged: still pieces, which no version sends.
+			s.clock = s.clock + 1
+			DeliverLogged("CHANNEL", "Member4-Realm", "C78:1:2:" .. msg)
+			DeliverLogged("CHANNEL", "Member4-Realm", "C78:2:2:")
+			eq(cns.Decree.Active()[1].sender, "Member4"); eq(cns.Decree.Active()[1].text, "")
+			-- The whole decree with the logged API, as 1.0.0 sends it: its words.
+			s.clock = s.clock + 1
+			DeliverLogged("CHANNEL", "Member5-Realm", msg)
+			eq(cns.Decree.Active()[1].sender, "Member5"); eq(cns.Decree.Active()[1].text, "words the server never logged")
+			-- The same for a census Captain of another guild.
+			eq(D.Receive(R("Olympus Gale", "Nobody", "Peggy:1:0"), "Victor-Realm"), true)
+			local other = Codec.EncodeDecree("ARMS", 1453, 0.5, 0.5, "Olympus Gale", 1, "an unlogged insult")
+			Deliver("CHANNEL", "Peggy-Realm", "C5:1:2:" .. other)
+			DeliverLogged("CHANNEL", "Peggy-Realm", "C5:2:2:")
+			eq(cns.Decree.Active()[1].sender, "Peggy"); eq(cns.Decree.Active()[1].text, "")
+		end)
+	end)
+
+	test("1.0.0 decrees: ours go out with the logged API where the client has it, the plain one where it has not", function()
+		local saved = { channel = GetChannelName, pos = C_Map.GetPlayerMapPosition, map = C_Map.GetBestMapForUnit, guild = GetGuildInfo,
+			print = ns.Print, alert = ns.PlayAlert, notice = RaidNotice_AddMessage }
+		local ok, err = pcall(function()
+			GetChannelName = function() return 5 end
+			C_Map.GetBestMapForUnit = function() return 1453 end
+			C_Map.GetPlayerMapPosition = function() return { GetXY = function() return 0.42, 0.51 end } end
+			GetGuildInfo = function() return "Olympus II", "Captain", 1 end
+			ns.Print, ns.PlayAlert, RaidNotice_AddMessage = function() end, function() end, nil
+			local want = Codec.EncodeDecree("MUSTER", 1453, 0.42, 0.51, "Olympus II", 1, "at the bridge")
+			for _, logged in ipairs({ true, false }) do
+				local cns = FreshComm()
+				cns.Comm.loginAt = cns.clock - 1000
+				cns.Comm.JoinChannel()
+				assert(loadfile(ADDON_DIR .. "Decree.lua"))("Olympus", cns)
+				local sent = {}
+				C_ChatInfo.SendAddonMessage = function(_, msg, dist) sent[#sent + 1] = { "plain", dist, msg } end
+				if logged then C_ChatInfo.SendAddonMessageLogged = function(_, msg, dist) sent[#sent + 1] = { "logged", dist, msg } end end
+				cns.Decree.Send("MUSTER", "at the bridge")
+				for _ = 1, 5 do cns.Comm.Pump() end
+				local found
+				for _, m in ipairs(sent) do if m[3] == want then found = m end end
+				assert(found, "the decree went out")
+				eq(found[1], logged and "logged" or "plain"); eq(found[2], "CHANNEL")
+			end
+		end)
+		GetChannelName, C_Map.GetPlayerMapPosition, C_Map.GetBestMapForUnit, GetGuildInfo = saved.channel, saved.pos, saved.map, saved.guild
+		ns.Print, ns.PlayAlert, RaidNotice_AddMessage, C_ChatInfo = saved.print, saved.alert, saved.notice, nil
+		if not ok then error(err, 0) end
+	end)
+
+	test("1.0.0 decrees: a 0.9.8 or 0.9.9 client hands a logged decree to its handler, words and all (no protocol change)", function()
+		local savedChannel = GetChannelName
+		local ok, err = pcall(function()
+			GetChannelName = function() return 5 end
+			local old, _, _, DeliverLogged = FreshComm(true)
+			local got
+			old.Comm.Handle("D1", function(dist, sender, text) got = { dist = dist, sender = sender, text = text } end)
+			local msg = Codec.EncodeDecree("ARMS", 1453, 0.5, 0.5, "Olympus II", 1, "Horde at the farm")
+			DeliverLogged("CHANNEL", "Member2-Realm", msg)
+			assert(got, "handed to its D1 handler")
+			eq(got.dist, "CHANNEL"); eq(got.text, msg)
+			eq(OldCodec().DecodeDecree(msg).text, "Horde at the farm", "and its decoder reads it")
+		end)
+		GetChannelName, C_ChatInfo = savedChannel, nil
+		if not ok then error(err, 0) end
+	end)
+
+	-- 1.0.0: the officers of <Olympus> counted as the Crown on every client, and outside <Olympus>
+	-- only the census names them: three outsiders' reports that kept the King at its head and added
+	-- one of their own made him of the Crown there ([Lords], Royal decrees, Tabard inspections).
+	-- Now they are of the Crown on <Olympus> members' clients alone (their roster); elsewhere the
+	-- Crown of the King's guild is the King himself, by his pinned name, and the Hands he names.
+
+	-- <Olympus> as its reporter and runner-up picture it (the King at its head, Baron its officer),
+	-- then three outsiders' reports that add Sapper: theirs is the picture most senders give.
+	local function Forged(KING)
+		eq(D.Receive(R("Olympus", KING, "Baron:1:0", 1000, 300), "Bellman-Realm"), true)
+		eq(D.Receive(R("Olympus", KING, "Baron:1:0", 1000, 300), "Notary-Realm"), true)
+		for _, atk in ipairs({ "Rogue1-Realm", "Rogue2-Realm", "Rogue3-Realm" }) do
+			D.Receive(R("Olympus", KING, "Baron:1:0,Sapper:1:0", 1000, 300), atk)
+		end
+		eq(D.KnownRank("Sapper-Realm", "Olympus"), 1, "the census names Sapper an officer of <Olympus>")
+	end
+
+	test("1.0.0 the Crown: three outsiders who add one of their own to <Olympus>'s officers crown nobody on another guild's client", function()
+		Scene(0, function(s) -- (a guild master of Olympus II: he reads [Lords])
+			Forged(ns.KingCharacter())
+			eq(ns.IsCrownRank("Olympus", D.KnownRank("Sapper-Realm", "Olympus")), false, "not of the Crown here")
+			eq(Line("Sapper-Realm", "L", "Olympus"), "rank", "no [Lords]")
+			eq(Line("Sapper-Realm", "C", "Olympus"), "shown", "[Captains], as any guild's census officer")
+			local cns, Decree = DecreeClient(s)
+			Decree("Sapper-Realm", "HERALDRY", "Olympus")
+			s.clock = s.clock + 61
+			Decree("Sapper-Realm", "ROYAL", "Olympus", "made-up royal decree")
+			eq(#cns.Decree.Active(), 0, "no Crown decree")
+			-- The real officer the census names loses the same here (a Captain, no Crown).
+			eq(Line("Baron-Realm", "L", "Olympus"), "rank")
+			Decree("Baron-Realm", "ROYAL", "Olympus")
+			eq(#cns.Decree.Active(), 0)
+		end)
+	end)
+
+	test("1.0.0 the Crown: a real officer of <Olympus> keeps it for his own guild's members, whatever the census says", function()
+		Scene(1, function(s)
+			-- An officer of <Olympus> (our roster: Member2 to Member6 its officers).
+			GetGuildInfo = function() return "Olympus", "Knight", 1 end
+			ns.Roster.Scan()
+			-- The outsiders' reports of our own guild count for nothing here: our roster is its word.
+			for _, atk in ipairs({ "Rogue1-Realm", "Rogue2-Realm", "Rogue3-Realm" }) do
+				eq(D.Receive(R("Olympus", ns.KingCharacter(), "Baron:1:0,Sapper:1:0", 1000, 300), atk), false)
+			end
+			eq(D.KnownRank("Sapper-Realm", "Olympus"), nil, "Sapper is nobody in our roster")
+			eq(Line("Member2-Realm", "L", "Olympus"), "shown", "[Lords]")
+			eq(Line("Sapper-Realm", "L", "Olympus"), "forged", "not one of us")
+			local cns, Decree = DecreeClient(s)
+			Decree("Member2-Realm", "ROYAL", "Olympus", "the officer's royal decree")
+			eq(cns.Decree.Active()[1] and cns.Decree.Active()[1].kind, "ROYAL", "his Royal decree")
+			Decree("Sapper-Realm", "ROYAL", "Olympus")
+			eq(#cns.Decree.Active(), 1, "not Sapper's")
+			eq(ns.IsCrown(), true, "and he sends them: of the Crown on his own client")
+		end)
+	end)
+
+	test("1.0.0 the Crown: the King (by his name, no census needed) and his Hands still reach every client", function()
+		Scene(0, function(s)
+			local K, KING = ns.King, ns.KingCharacter() .. "-Realm"
+			local savedShow = StaticPopup_Show
+			StaticPopup_Show = function() end
+			local ok, err = pcall(function()
+				K.Reset()
+				eq(ns.rdb.guilds.Olympus, nil, "no census of <Olympus> on this client")
+				eq(Line(KING, "L", "Olympus"), "shown", "the King's [Lords] line")
+				local cns, Decree = DecreeClient(s)
+				Decree(KING, "ROYAL", "Olympus", "the King's decree")
+				eq(cns.Decree.Active()[1] and cns.Decree.Active()[1].kind, "ROYAL", "his Royal decree")
+				-- Forged reports change none of it.
+				Forged(ns.KingCharacter())
+				eq(Line(KING, "L", "Olympus"), "shown")
+				-- His Hands: his word names them, and the Throne's tools they use reach everyone.
+				K.HandleCommand("CHANNEL", KING, "T1~H~8~Olympus~Helper-Realm")
+				eq(K.Authorized("A", "Helper-Realm", "Olympus II"), true, "his Hand")
+				eq(K.Authorized("A", "Sapper-Realm", "Olympus"), false, "not a census officer")
+				K.HandleCommand("CHANNEL", "Helper-Realm", "T1~A~9~Olympus II~600~Stormwind City~Raid at dawn")
+				eq(K.Agenda() and K.Agenda().title, "Raid at dawn", "a Hand's agenda")
+			end)
+			StaticPopup_Show = savedShow
+			K.Reset()
+			if not ok then error(err, 0) end
+		end)
+	end)
+
+	-- 1.0.0: outside <Olympus> its Crown is the King and the Hands he names, and no code gave the
+	-- Hands the Crown: a real officer of <Olympus> the King named his Hand lost his Royal decrees,
+	-- Tabard inspections and [Lords] lines on every other guild's client with the previous commit.
+	-- Now a Hand speaking for the King's guild is of its Crown there, on the King's word alone (the
+	-- list he last sent, King.lua), never on a census vote; on <Olympus>'s own clients its roster
+	-- still says who speaks for it.
+	test("1.0.0 the Crown: a Hand the King names has [Lords] and the Crown's decrees for <Olympus> on every other guild's client, while the King's list names him", function()
+		Scene(0, function(s)
+			local K, KING = ns.King, ns.KingCharacter() .. "-Realm"
+			local savedShow = StaticPopup_Show
+			StaticPopup_Show = function() end
+			local ok, err = pcall(function()
+				K.Reset()
+				Forged(ns.KingCharacter()) -- (Baron: a real officer of <Olympus>; Sapper: the outsiders' man)
+				local cns, Decree, Logged = DecreeClient(s)
+				-- Before the King names him, Baron is a Captain here like any census officer.
+				Logged("Baron-Realm", "ROYAL", "Olympus", "too soon")
+				eq(#cns.Decree.Active(), 0, "a census officer of <Olympus>: no Royal decree")
+				eq(Line("Baron-Realm", "L", "Olympus"), "rank", "nor [Lords]")
+				-- The King names him his Hand.
+				K.HandleCommand("CHANNEL", KING, "T1~H~8~Olympus~Baron-Realm")
+				eq(K.IsHandName("Baron-Realm"), true)
+				s.clock = s.clock + 61
+				Logged("Baron-Realm", "ROYAL", "Olympus", "the Hand's royal decree")
+				eq(cns.Decree.Active()[1] and cns.Decree.Active()[1].kind, "ROYAL", "his Royal decree")
+				eq(cns.Decree.Active()[1].text, "the Hand's royal decree")
+				s.clock = s.clock + 61
+				Logged("Baron-Realm", "HERALDRY", "Olympus", "")
+				eq(cns.Decree.Active()[1].kind, "HERALDRY", "his Tabard inspection")
+				eq(Line("Baron-Realm", "L", "Olympus"), "shown", "his [Lords] line")
+				-- For the King's guild alone: speaking for another guild, the census rules as for anyone.
+				s.clock = s.clock + 61
+				Logged("Baron-Realm", "ROYAL", "Olympus Zeus")
+				eq(#cns.Decree.Active(), 2, "not as Olympus Zeus")
+				-- Only the King's word names Hands: Sapper naming himself is nobody's Hand.
+				K.HandleCommand("CHANNEL", "Sapper-Realm", "T1~H~9~Olympus~Sapper-Realm")
+				eq(K.IsHandName("Sapper-Realm"), false)
+				Logged("Sapper-Realm", "ROYAL", "Olympus")
+				eq(#cns.Decree.Active(), 2, "no Crown for Sapper")
+				eq(Line("Sapper-Realm", "L", "Olympus"), "rank")
+				-- Like the King's, a Hand's decree never waits behind the flood guard.
+				Flood(s, Decree, "Din")
+				eq(#cns.Decree.Active(), 8)
+				Logged("Baron-Realm", "ARMS", "Olympus", "the Hand's call")
+				eq(#cns.Decree.Active(), 9, "past six census Captains")
+				eq(cns.Decree.Active()[1].sender, "Baron")
+				-- The King takes him off his list: a Captain here again.
+				K.HandleCommand("CHANNEL", KING, "T1~H~10~Olympus~")
+				s.clock = s.clock + 61
+				Logged("Baron-Realm", "ROYAL", "Olympus")
+				eq(#cns.Decree.Active(), 9, "no longer his Hand")
+				eq(Line("Baron-Realm", "L", "Olympus"), "rank")
+				-- And a list the King stopped repeating ends (King.HANDS_FRESH).
+				K.HandleCommand("CHANNEL", KING, "T1~H~11~Olympus~Baron-Realm")
+				eq(Line("Baron-Realm", "L", "Olympus"), "shown")
+				s.clock = s.clock + K.HANDS_FRESH + 1
+				eq(K.IsHandName("Baron-Realm"), false)
+				assert(Line("Baron-Realm", "L", "Olympus") ~= "shown", "not once the list ended")
+			end)
+			StaticPopup_Show = savedShow
+			K.Reset()
+			if not ok then error(err, 0) end
+		end)
+	end)
+
+	test("1.0.0 the Crown: on <Olympus>'s own clients its roster, not the King's list of Hands, says who speaks for it", function()
+		Scene(1, function(s)
+			GetGuildInfo = function() return "Olympus", "Knight", 1 end
+			ns.Roster.Scan()
+			local K, KING = ns.King, ns.KingCharacter() .. "-Realm"
+			local savedShow = StaticPopup_Show
+			StaticPopup_Show = function() end
+			local ok, err = pcall(function()
+				K.Reset()
+				K.HandleCommand("CHANNEL", KING, "T1~H~8~Olympus~Helper-Realm")
+				eq(K.IsHandName("Helper-Realm"), true)
+				local cns, _, Logged = DecreeClient(s)
+				Logged("Helper-Realm", "ROYAL", "Olympus", "not one of us")
+				eq(#cns.Decree.Active(), 0, "a Hand not in our roster does not speak for our guild")
+				eq(Line("Helper-Realm", "L", "Olympus"), "forged")
+				Logged("Member2-Realm", "ROYAL", "Olympus", "our officer's")
+				eq(#cns.Decree.Active(), 1, "our officer, from our roster")
+			end)
+			StaticPopup_Show = savedShow
+			K.Reset()
+			if not ok then error(err, 0) end
+		end)
+	end)
+end
 
 print(("\n%d passed, %d failed"):format(passed, failed))
 os.exit(failed == 0 and 0 or 1)

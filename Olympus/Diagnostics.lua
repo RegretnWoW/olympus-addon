@@ -374,6 +374,8 @@ function ns.StatusText()
 	for _ in pairs(ns.rdb.seen or {}) do seen = seen + 1 end
 	add("who: %s  |  guilds seen=%d", ns.Who and ns.Who.StatusLine() or "not loaded", seen)
 	add("hop: %s", ns.Hop and ns.Hop.StatusLine and ns.Hop.StatusLine() or "not loaded")
+	-- (1.0.0) The King as this client knows him: why his layer can or can't be asked for.
+	add("king: %s", ns.Hop and ns.Hop.KingStatusLine and ns.Hop.KingStatusLine() or "not loaded")
 	add("borders: %s", ns.Borders and ns.Borders.StatusLine and ns.Borders.StatusLine() or "not loaded")
 	-- The gamepad UI and what the game refused us this session; what its code reads, as now.
 	local refused = type(ns.db.actionsBlocked) == "table" and ns.db.actionsBlocked or {}

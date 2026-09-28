@@ -40,10 +40,36 @@ until you turn it on.
 - **Sender names can't be forged.** Blizzard's server stamps every message with its sender.
 - **The King and the Treasurer are fixed characters.** Their commands count only when they
   come from those exact characters, so nobody else can issue them, whatever the census says.
-- **Ranks of other guilds come from the census**, the picture most reporters agree on. Several
-  characters working together can still invent a guild with "Olympus" in its name and reach
-  what its Lord could (anyone who really founds such a guild can too). Seal your channel
-  with `/oly key` so that only members of Olympus guilds can take part.
+  Since 1.0.0 the King's decrees and [Lords] lines count by his name too, with no census.
+- **Ranks of other guilds come from the census**, the picture most senders agree on, and a
+  census report is its sender's word: nothing the server tells an addon proves which guild a
+  sender belongs to. So a few characters working together can, today (1.0.0):
+  - make one of them the Lord of a made-up Olympus guild with two characters, even two alts of
+    one account logged in one after the other: [Lords] lines and the Crown's decrees (raid
+    warnings) on every client;
+  - make Captains of a made-up guild with one report, and with six of them fill the army's
+    flood guard (6 decrees a minute), so that every other decree a census rank vouches for is
+    dropped for that minute;
+  - leave a real guild contested with two senders (its Lord and officers lose their rank on
+    every other client while they vote), or take its picture with three (its reporter and
+    runner-up are two votes at most);
+  - show other numbers for a guild with one report that copies its leader and officers (800
+    members as 1, the King offline), and add up to 1,000 soldiers to the army's total for a day
+    with each made-up guild;
+  - have a made-up Captain's party invite accepted for a player who asked for a layer hop, and
+    put an innocent player on the King's untabarded list with his inspection report.
+
+  What 1.0.0 hardened: the King's decrees and [Lords] lines need no census, nor his Hands'
+  for `<Olympus>` (his word); those and your own guild's officers' decrees never wait behind
+  the flood guard; a decree speaks for one guild per sender, as the chats do, and its
+  words go out with Blizzard's logged addon-message function; and the officers of `<Olympus>`,
+  whom three outsiders' reports could add to the Crown on every client outside `<Olympus>`
+  before 1.0.0, are of the Crown only on its own members' clients (their roster), and
+  elsewhere only those the King names his Hands. The README's
+  [What colluding characters can reach](README.md#what-colluding-characters-can-reach) has
+  each outcome. The structural fix is **signed leadership, planned for 1.1**: ranks that come
+  with a signature every client checks, instead of a count of votes. Meanwhile seal your
+  channel with `/oly key`, so that only members of Olympus guilds can take part.
 - **Nothing on the channel is encrypted.** Everyone on it receives [Olympus], [Captains] and
   [Lords]; the addon only decides what to show. Don't write anything there that must stay
   secret.

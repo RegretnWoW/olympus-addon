@@ -9,11 +9,13 @@ local L = ns.L
 -- outside a group and with fewer recent invites, so many askers spread over many helpers.
 -- That helper gets "X wants to join your layer" (or invites at once, if they chose that) and
 -- says no when they can't; no answer or a no, the asker tries the next offer. The invite is
--- accepted for the asker, the game moves them to the helper's layer, and their addon takes
--- them out of the group once it sees the move. The main use: joining the King's layer while
--- he is online. Players alone on his layer are asked once whether the addon may do all of it
--- for them (invite, and let the guest go after a while: the guest's addon leaves, since only
--- a click may remove someone from a group).
+-- accepted for the asker when the helper is one the addon can vouch for (Hop.Trusted), never
+-- with the gamepad UI (the game's invite window and the player's click otherwise), the game
+-- moves them to the helper's layer, and their addon takes them out of the group once it sees
+-- the move. The main use: joining the King's layer while he is online. Players alone on his
+-- layer are asked once whether the addon may do all of it for them (invite, and let the guest
+-- go after a while: the guest's addon leaves, since only a click may remove someone from a
+-- group).
 --   LQ~<id>~<mapID>~<zoneUID>    (channel) who on this layer can invite me?
 --   LO~<id>~<group>~<load>       (whisper) I can: my group size (0 = none), my recent invites
 --   LR~<id>                      (whisper) please invite me
@@ -129,8 +131,8 @@ local function OnlyGuests()
 	return true
 end
 
--- Everyone helps unless they turned it off (/oly layerhelp off). Not the King: he is the one
--- everybody wants, and his screen is on stream.
+-- Everyone who shares their layer helps unless they turned it off (/oly layerhelp off). Not
+-- the King: he is the one everybody wants, and his screen is on stream.
 function Hop.CanHelp(mapID, zoneUID)
 	if ns.db.layerHelp == false or not ns.IsMember() then return false end
 	-- An offer tells the asker we are on that layer: only for players who share theirs (0.9.2).
@@ -661,7 +663,8 @@ function Hop.King(strict)
 			local full = ns.FullName(g.leader, g.realm or ns.realm)
 			if ns.Data.KnownRank(full, name, not strict) == 0 then
 				local where = ns.Layers.Of(full, true)
-				return { name = ns.KingName(g.leader), mapID = where and where.mapID, zoneUID = where and where.zoneUID }
+				return { name = ns.KingName(g.leader), mapID = where and where.mapID, zoneUID = where and where.zoneUID,
+					t = where and where.t, realm = ns.RealmOf(full) }
 			end
 		end
 	end
@@ -680,10 +683,27 @@ local function KingUnconfirmed()
 	return false
 end
 
+-- The census places the King on another realm than ours (his name in its report). A layer is a
+-- copy of a zone inside one realm: nobody here can join his, even when his crown and his layer
+-- reach us (a channel shared across realms, Comm.ElectsAcrossRealms). Checked before his layer.
+function Hop.KingOtherRealm(k)
+	return k ~= nil and k.realm ~= nil and ns.realm ~= nil and ns.realm ~= "?" and k.realm ~= ns.realm
+end
+
+-- Why nobody can ask for the King's layer now (1.0.0), instead of "try again in a minute"
+-- whatever the reason: he plays on another realm (Hop.KingOtherRealm), his crown is not on the
+-- map (off, or he is in a dungeon: his layer is only announced while it shows, Layers.Sharing),
+-- or it is and his layer is on its way (his addon repeats it every minute, Layers.KING_EVERY).
+function Hop.KingUnknownText(k)
+	if Hop.KingOtherRealm(k) then return L.HOP_KING_OTHER_REALM:format(k.name, k.realm) end
+	if not (ns.King and ns.King.Location and ns.King.Location()) then return L.HOP_KING_HIDDEN:format(k.name) end
+	return L.HOP_KING_UNKNOWN:format(k.name)
+end
+
 function Hop.AskKing()
 	local k = Hop.King()
 	if not k then return ns.Print(KingUnconfirmed() and L.HOP_KING_CHECKING:format(ns.KingName()) or L.HOP_KING_OFFLINE) end
-	if not k.zoneUID then return ns.Print(L.HOP_KING_UNKNOWN:format(k.name)) end
+	if Hop.KingOtherRealm(k) or not k.zoneUID then return ns.Print(Hop.KingUnknownText(k)) end
 	if ns.Layers.CurrentMap() ~= k.mapID then return ns.Print(L.HOP_KING_ELSEWHERE:format(k.name, Hop.ZoneName(k.mapID))) end
 	Hop.Ask(k.mapID, k.zoneUID, L.LAYER_OF:format(k.name))
 end
@@ -696,10 +716,12 @@ function Hop.KingLines()
 	-- The size of a title, with the crown the map shows him with.
 	local crown = "|T" .. ns.CROWN_ICON .. ":0|t "
 	local mine = ns.Layers.Mine()
-	if k.zoneUID and mine and mine.mapID == k.mapID and mine.zoneUID == k.zoneUID then
+	-- (On another realm his layer is not ours to join or be on, whatever reaches us of it.)
+	local away = Hop.KingOtherRealm(k)
+	if not away and k.zoneUID and mine and mine.mapID == k.mapID and mine.zoneUID == k.zoneUID then
 		return Hop.WithAutoLine({ { text = crown .. "|cff40ff40" .. L.HOP_KING_HERE:format(k.name) .. "|r", color = "GameFontNormal", gapAfter = true } }, k)
 	end
-	local elsewhere = k.zoneUID and ns.Layers.CurrentMap() ~= k.mapID
+	local elsewhere = not away and k.zoneUID and ns.Layers.CurrentMap() ~= k.mapID
 	local busy = ask and ask.phase ~= "done"
 	local line = {
 		text = crown .. "|cffffd200" .. (busy and L.HOP_KING_BUSY or L.HOP_KING_LINE):format(k.name) .. "|r",
@@ -708,8 +730,8 @@ function Hop.KingLines()
 		onClick = function() Hop.AskKing() end,
 		tooltip = function(tt)
 			tt:AddLine(L.HOP_KING_LINE:format(k.name), 1, 0.82, 0)
-			if not k.zoneUID then
-				tt:AddLine(L.HOP_KING_UNKNOWN:format(k.name), 1, 1, 1, true)
+			if away or not k.zoneUID then
+				tt:AddLine(Hop.KingUnknownText(k), 1, 1, 1, true)
 			elseif elsewhere then
 				tt:AddLine(L.HOP_KING_ELSEWHERE:format(k.name, Hop.ZoneName(k.mapID)), 1, 0.6, 0.2, true)
 			else
@@ -871,6 +893,28 @@ function Hop.StatusLine()
 	return ("help=%s auto=%s king=%s  |  asks=%d offers=%d requests=%d invites=%d noes=%d joins=%d moves=%d releases=%d guests=%d  |  now=%s"):format(
 		tostring(ns.db.layerHelp ~= false), tostring(ns.db.layerAutoInvite == true), tostring(KingChoice() or "-"),
 		s.asks, s.offers, s.requests, s.invites, s.noes, s.joins, s.moves, s.releases, n, ask and ask.phase or "-")
+end
+
+-- What this client knows of the King, for /oly status and /oly bug (1.0.0: "the King's layer
+-- doesn't work" said nothing of why). Elsewhere: confirmed (two reports name him online),
+-- online (one report), checking (reported online, not confirmed yet) or offline; the realm the
+-- census places him on; his layer and when it was heard; his crown and when it was heard. On
+-- his own client: his crown shown or hidden, and when his layer last went out.
+function Hop.KingStatusLine()
+	local K = ns.King
+	if K and K.IsKing and K.IsKing() then
+		local sent = ns.Layers.SentAt and ns.Layers.SentAt()
+		return ("me  |  crown %s  |  layer %s"):format(K.SharingLocation() and "shown" or "hidden",
+			sent and ("sent " .. ns.Ago(sent)) or "not sent")
+	end
+	local k, state = Hop.King(true), "confirmed"
+	if not k then k, state = Hop.King(), "online (one report)" end
+	if not k then return KingUnconfirmed() and "checking (reported online, not confirmed yet)" or "offline" end
+	local realm = k.realm and (k.realm .. (Hop.KingOtherRealm(k) and " (another realm)" or " (ours)")) or "?"
+	local layer = k.zoneUID and ("map %d zone %d, heard %s"):format(k.mapID, k.zoneUID, ns.Ago(k.t)) or "not known"
+	local at = K and K.Location and K.Location()
+	local crown = at and ("map %d, heard %s"):format(at.mapID, ns.Ago(at.t)) or "not heard"
+	return ("%s  |  realm %s  |  layer %s  |  crown %s"):format(state, realm, layer, crown)
 end
 
 -- On again also forgets the King's layer answer: the window may ask again.
