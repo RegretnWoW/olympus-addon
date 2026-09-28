@@ -14,23 +14,16 @@ exist, who leads them, or where the army is.
 This addon answers exactly that. It adds up every Olympus guild live, in a window that
 looks like Blizzard's Guild window and docks right next to it.
 
-<p align="center">
-<img src="docs/1-census.png" width="400" alt="The census on WoW: Forever: 35,679 soldiers in 72 Olympus guilds">
-</p>
-<p align="center"><sub>Live on the Forever beta: 16,194 soldiers in 21 guilds, and one guild's details on hover.</sub></p>
+<p align="center"><img src="docs/olympus-1.jpg" alt="The whole army at a glance: every Olympus guild, live"></p>
 
 <table>
 <tr>
-<td><img src="docs/2-the-realm.png" alt="The Realm: King, Lords, Captains, ranks"></td>
-<td><img src="docs/3-person-card.png" alt="Person card with Whisper, Invite and Who"></td>
-</tr>
-<tr>
-<td><img src="docs/4-decrees.png" alt="Decrees: call to arms, muster, royal decree"></td>
-<td><img src="docs/5-tabards-wall-of-shame.png" alt="Tabard inspection and the untabarded list"></td>
+<td><img src="docs/olympus-2.jpg" alt="The Realm: the King, the Treasurer and every Lord and Captain"></td>
+<td><img src="docs/olympus-3.jpg" alt="One click to anyone: whisper, invite or find a Lord or Captain"></td>
 </tr>
 </table>
 
-<sub>These four were taken with example data.</sub>
+<p align="center"><img src="docs/olympus-4.jpg" alt="Where the army stands: soldiers per zone on the world map"></p>
 
 > **Status:** built for WoW: Forever and running on the Forever beta (1.60.1), where the
 > census already adds up reports from many Olympus guilds. Also tested on Classic Era (1.15)
