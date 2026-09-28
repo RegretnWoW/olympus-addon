@@ -13,9 +13,15 @@ ns.Layers = Layers
 local ANNOUNCE_EVERY = 600
 local MIN_GAP = 30
 local EXPIRE = 2 * ANNOUNCE_EVERY + 60 -- a missed announce does not drop anyone
+-- The King's layer goes with his crown (King.lua), which he repeats every 20 seconds: his
+-- client repeats his layer about once a minute, not every ten, so a player who just logged in
+-- or reloaded can ask to join him a minute later, not ten (1.0.0). One client, one message a
+-- minute. (Just under the minute of the ticker below, whose seconds may come a little early.)
+Layers.KING_EVERY = 55
 
 local mine          -- { mapID, zoneUID, t }
 local lastAnnounce = 0
+local sentAt        -- when our layer last went out (Layers.SentAt: /oly status)
 local seen = {}     -- [mapID][zoneUID]["Name-Realm"] = { rank, guild, t }
 local where = {}    -- ["Name-Realm"] = { mapID, zoneUID }: each sender counts on one layer only
 local lastFire, fireQueued = -math.huge, false -- LAYERS_CHANGED for the announcements (Receive)
@@ -65,7 +71,9 @@ local retryQueued = false
 local function Announce(force)
 	if not mine or not IsInGuild() or not Announces() then return end
 	local now = ns.Now()
-	if not force and now - lastAnnounce < ANNOUNCE_EVERY then return end
+	local K = ns.King
+	local every = (K and K.IsKing and K.IsKing()) and Layers.KING_EVERY or ANNOUNCE_EVERY
+	if not force and now - lastAnnounce < every then return end
 	if now - lastAnnounce < MIN_GAP then
 		-- A layer change too soon after the last one: announced once the gap is over, so
 		-- nobody (the King's hop above all) is sent to a layer we already left.
@@ -86,8 +94,9 @@ local function Announce(force)
 	-- officer: his crown's layer always goes.)
 	if not ns.Roster.IsOfficer() and not Layers.InSample() then return end
 	ns.Comm.Send("CHANNEL", ns.Codec.EncodeLayer(mine.mapID, mine.zoneUID, ns.Roster.MyRank(), guild), "layer")
-	announced = true
+	announced, sentAt = true, now
 end
+function Layers.SentAt() return announced and sentAt or nil end
 
 -- Our layer does not follow every creature: some show another server's zone UID (a zone's
 -- border, creatures from another shard), and a layer that flips back and forth every second
@@ -125,8 +134,11 @@ end
 
 function Layers.Mine() return mine end
 Layers.Observe = Observe -- tests
+-- The King turned his crown on (King.ToggleLocation): his layer goes out now, not when the next
+-- announcement is due (up to ten minutes when he had shown it before hiding it, 1.0.0).
+function Layers.AnnounceNow() Announce(true) end
 local asked = false -- the sharing question was put to the player this session
-function Layers.Reset() mine, pending, asked = nil, nil, false; wipe(seen); wipe(where); lastFire, fireQueued = -math.huge, false end -- tests
+function Layers.Reset() mine, pending, asked = nil, nil, false; wipe(seen); wipe(where); lastFire, fireQueued = -math.huge, false; lastAnnounce, announced, sentAt = 0, false, nil end -- tests
 
 -- The player's answer: on, our layer goes out at once; either way our guild's reporter learns
 -- it from our hello (it names our zone only while we share, Comm.SharesZone).
@@ -332,16 +344,21 @@ ns.Comm.Handle("L1", function(dist, sender, text)
 	if l then Layers.Receive(sender, l) end
 end)
 
+-- Every minute: layers nobody repeated leave, ours goes out again when due (the King's every
+-- minute while his crown shows, anyone else's every ten), and the sharing question is asked
+-- when it can be.
+function Layers.Tick()
+	Prune()
+	Announce(false)
+	Layers.AskChoice()
+end
+
 ns.On("LOGIN", function()
 	ns.RegisterEvent("PLAYER_TARGET_CHANGED", function() Observe("target") end)
 	ns.RegisterEvent("UPDATE_MOUSEOVER_UNIT", function() Observe("mouseover") end)
 	ns.RegisterEvent("NAME_PLATE_UNIT_ADDED", function(unit) Observe(unit) end)
 	ns.RegisterEvent("ZONE_CHANGED_NEW_AREA", function() mine, pending = nil, nil; ns.Fire("LAYERS_CHANGED") end)
-	ns.Every(60, "layer announce", function()
-		Prune()
-		Announce(false)
-		Layers.AskChoice()
-	end)
+	ns.Every(60, "layer announce", Layers.Tick)
 	-- Once the login settled (our officers hand out the realm key in the first seconds, and
 	-- the question names the channel's state); then on the minute until it could be asked.
 	ns.After(45, "location choice", Layers.AskChoice)

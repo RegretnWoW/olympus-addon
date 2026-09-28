@@ -84,9 +84,11 @@ Layer"** with his crown. One click (or `/oly hop`) and the addon does the asking
 - It picks one of them, favouring players outside a group and with fewer recent invites. They
   get **"X wants to join your layer"** with **Invite**, **Not now** and **Always invite**. No
   answer or a no, and the next one is asked.
-- The invite is accepted for you, the game moves you to the layer, and the addon takes you out
-  of the group as soon as it sees the move (or offers a **Leave group** button if it can't
-  tell).
+- The invite is accepted for you when that player is one the addon can vouch for (a member of
+  your own guild, or a Lord or Captain the census confirms); anyone else's, and every invite
+  while Blizzard's gamepad UI is on, waits for your click in the game's own invite window. The
+  game moves you to the layer, and the addon takes you out of the group as soon as it sees the
+  move (or offers a **Leave group** button if it can't tell).
 
 Players alone on the King's layer are asked once per login: **"Asmon is online and you are on
 his layer. May the addon invite the players who want to join, and take them out of the group
@@ -95,16 +97,23 @@ a **Don't ask me again** box. With For Olympus! the addon invites on its own (on
 are alone or with its guests, never into a group of your friends) and lets each guest go after
 90 seconds: the guest's addon leaves the group, since only a click may remove someone.
 
-Any other layer in the Realm tab's layer list works the same way: click it. Everyone with the
-addon helps by default; `/oly layerhelp off` stops the requests, `/oly layerhelp on` also
-forgets the answer to the King's layer window, `/oly layerauto on` invites them without the
-window. Helpers must be in the same zone as the layer they are on, and the King himself is
-never asked.
+Any other layer in the Realm tab's layer list works the same way: click it. Everyone who
+shares their zone and layer (`/oly location on`) helps by default: a player who keeps them
+private is never asked, since an offer would tell the asker where they are. `/oly layerhelp
+off` stops the requests, `/oly layerhelp on` also forgets the answer to the King's layer
+window, `/oly layerauto on` invites them without the window. Helpers must be in the same zone
+as the layer they are on, and the King himself is never asked.
 
 Layers are known from the members who share their zone and layer (see Privacy, below):
 the more share, the better hopping works. Asking works either way, and says on the channel
-the zone you are in and the layer you want. The King's layer is known while he shares it or
-shows his crown on the map.
+the zone you are in and the layer you want. The King's layer is known only while his crown
+shows on the map (**Show me on the map** on his Throne, off by default): his addon sends it
+the moment he shows the crown and repeats it every minute while it shows. With his crown
+hidden (or while he is in a dungeon, where it hides) the line says so instead of "try again in
+a minute". A layer is a copy of a zone inside one realm: when the census places him on another
+realm than yours, the line says that, even if his layer reaches your channel. The `king:` line
+of `/oly status` (and of `/oly bug`) says what your addon knows of him: online and how sure,
+his realm, his layer and his crown, and how long ago each was heard.
 
 ### Person details
 Click any Lord, Captain, racer or inspected player. You get the same card the Guild window
@@ -203,7 +212,9 @@ tools lives where it belongs:
 - **Show me on the map** (his own button, with the crown): while he turns it on, everyone with
   the addon sees a crown where he is, on the world map and the minimap. Off by default (his
   position is on stream); the same button hides it, its tooltip says whether it is on now, and
-  the top of the Throne page reminds him while it is.
+  the top of the Throne page reminds him while it is. His layer goes out with it, at once and
+  then every minute, so the army can ask to join him (**Ask invite for Asmon Layer**); hidden,
+  it is withdrawn with the crown.
 
 Every command is checked on each client: it only counts if the sender is the King by name
 (the server stamps every sender's name, so nobody else can carry his), or one of the Hands he
@@ -518,7 +529,8 @@ Limits, stated honestly:
 
 - One summary per guild about every 3 minutes, not one per player.
 - In a full guild only the members who could be elected keep saying hello; the rest go quiet.
-- Layers are announced by officers plus a stable 1 in 8 sample who share them, every 10 minutes.
+- Layers are announced by officers plus a stable 1 in 8 sample who share them, every 10 minutes
+  (the King's alone every minute, while his crown shows: one client, one message a minute).
 - A layer request goes out once; only about 6 players answer it, each by a whisper to the asker.
 - Messages are spaced 1.2 s apart, below Blizzard's addon message limits, and alert sounds
   play at most once every 15 seconds.

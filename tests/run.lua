@@ -8437,6 +8437,195 @@ test("0.9.1 privacy: no layer announcement without the player's yes, officers an
 	end)
 end)
 
+-- 1.0.0: the King's layer went out only every ten minutes, and not at all when he showed his
+-- crown again within ten minutes of hiding it: players who logged in or reloaded while he
+-- shared, and everyone after an off and on, clicked "Ask invite for Asmon Layer" and read
+-- "try again in a minute" for up to ten.
+test("1.0.0 the King's layer goes with his crown: at once when he shows it, again after hiding it, and every minute", function()
+	local K = ns.King
+	local savedPos = C_Map.GetPlayerMapPosition
+	local ok, err = pcall(function()
+		WithLayerWatch(function(w)
+			C_Map.GetPlayerMapPosition = function() return { GetXY = function() return 0.42, 0.51 end } end
+			K.Reset()
+			GetGuildInfo = function() return "Olympus", "King", 0 end
+			ns.me = "Asmongold Asmongler-Realm"
+			ns.db.throneLocation = nil
+			w.observe()
+			eq(w.layers(), 0, "his crown hidden (the default): his layer stays home")
+			local function Crowns()
+				local n = 0
+				for _, m in ipairs(w.sent) do if m:find("^CHANNEL T1~P~") then n = n + 1 end end
+				return n
+			end
+			local layer = ("CHANNEL L1~1453~%d~0~Olympus"):format(w.npc)
+			-- He shows it: his crown and his layer go out now.
+			K.ToggleLocation()
+			eq(Crowns(), 1, "his crown")
+			eq(w.layers(), 1, "and his layer, at once")
+			eq(w.sent[#w.sent], layer)
+			-- He hides it: both withdrawn.
+			w.clock = w.clock + 120
+			K.ToggleLocation()
+			assert(w.sent[#w.sent - 1]:find("^CHANNEL T1~Q~"), "his crown withdrawn")
+			eq(w.sent[#w.sent], "CHANNEL L0~", "and his layer")
+			-- He shows it again three minutes after his layer last went out: his layer too, now
+			-- (before: only once ten minutes had passed since the last one).
+			w.clock = w.clock + 60
+			K.ToggleLocation()
+			eq(w.layers(), 2, "his layer again, at once")
+			eq(w.sent[#w.sent], layer)
+			-- Standing still: once a minute, so a player who just logged in or reloaded learns it
+			-- within a minute (his crown is repeated every 20 seconds).
+			for i = 1, 5 do
+				w.clock = w.clock + 60
+				ns.Layers.Tick()
+				eq(w.layers(), 2 + i, "minute " .. i)
+			end
+			-- Hidden: nothing from the ticker.
+			K.ToggleLocation()
+			for _ = 1, 3 do w.clock = w.clock + 60; ns.Layers.Tick() end
+			eq(w.layers(), 7, "hidden: no layer")
+			-- Anyone else who shares: every ten minutes, as before.
+			GetGuildInfo = function() return "Olympus II", "Officer", 1 end
+			ns.me = "Tester-Realm"
+			ns.db.shareLocation = true
+			w.observe()
+			eq(w.layers(), 8, "a new layer: at once")
+			for _ = 1, 9 do w.clock = w.clock + 60; ns.Layers.Tick() end
+			eq(w.layers(), 8, "not every minute: only the King's")
+			w.clock = w.clock + 60
+			ns.Layers.Tick()
+			eq(w.layers(), 9, "ten minutes on")
+		end)
+	end)
+	C_Map.GetPlayerMapPosition = savedPos
+	ns.db.throneLocation = nil
+	K.Reset()
+	if not ok then error(err, 0) end
+end)
+
+-- 1.0.0: with the King's layer unknown the line said "his addon announces it when he targets an
+-- NPC, try again in a minute", whatever the reason. While his crown is hidden (the default: his
+-- position is on stream) his layer is never announced, and a player on another realm never
+-- hears it: they tried again every minute for nothing.
+test("1.0.0 the King's line says why his layer is unknown: his crown is hidden, he is on another realm, or it is coming", function()
+	WithHop(function(w, H)
+		local savedPrint = ns.Print
+		local said = {}
+		local ok, err = pcall(function()
+			ns.King.Reset()
+			ns.rdb.guilds = SampleGuilds() -- the King online, two senders name him
+			ns.Print = function(m) said[#said + 1] = m end
+			local unknown = ns.L.HOP_KING_UNKNOWN:format("Asmon")
+			-- His crown is not on the map: nothing will come until he shows it.
+			H.AskKing()
+			assert(said[1] ~= unknown, "not 'try again in a minute' while his crown is hidden")
+			eq(said[1], ns.L.HOP_KING_HIDDEN:format("Asmon"))
+			local tips = {}
+			H.KingLine().tooltip({ AddLine = function(_, text) tips[#tips + 1] = text end })
+			eq(tips[2], ns.L.HOP_KING_HIDDEN:format("Asmon"), "the line's tooltip says the same")
+			eq(#w.sent, 0, "nothing asked")
+			-- His crown shows: his layer is on its way (his addon repeats it every minute now).
+			ns.King.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", "T1~P~3~Olympus~1453~420~510")
+			H.AskKing()
+			eq(said[2], unknown)
+			-- It came: the ask goes out.
+			ns.Layers.Receive("Asmongold-Realm", { mapID = 1453, zoneUID = 9, rank = 0, guild = "Olympus" })
+			H.AskKing()
+			eq(w.sent[#w.sent], "CHANNEL LQ~1~1453~9")
+			-- The census places him on another realm (a guild across two realms, the next realm's
+			-- reporter): a layer is a copy of a zone inside one realm, nobody here can join his.
+			-- Said so, whatever the crown.
+			local other = ns.L.HOP_KING_OTHER_REALM:format("Asmon", "OtherRealm")
+			ns.rdb.guilds = { ["Olympus"] = Vouched({ total = 990, online = 210, zones = {}, t = os.time(),
+				leader = "Asmongold-OtherRealm", leaderOnline = true }, "W1-Realm", "W2-Realm") }
+			H.AskKing()
+			eq(said[#said], other)
+			-- Even with his layer heard here (a channel the two realms share, Comm.ElectsAcrossRealms,
+			-- carries his announcements): his realm comes first, nothing is asked, and the line
+			-- neither sends us to his zone nor says we are on his layer.
+			ns.Layers.Receive("Asmongold-OtherRealm", { mapID = 1453, zoneUID = 7, rank = 0, guild = "Olympus" })
+			eq(H.King().zoneUID, 7, "his layer is known")
+			local asked = #w.sent
+			H.AskKing()
+			eq(said[#said], other, "his realm, not his layer")
+			eq(#w.sent, asked, "nothing asked")
+			w.see(7) -- (the same zone UID on our realm is another layer)
+			local lines = H.KingLines()
+			eq(#lines, 1, "no 'go there' line")
+			eq(lines[1].text:find(ns.L.HOP_KING_HERE:format("Asmon"), 1, true), nil, "not 'on his layer'")
+			tips = {}
+			lines[1].tooltip({ AddLine = function(_, text) tips[#tips + 1] = text end })
+			eq(tips[2], other, "the tooltip says the same")
+			-- Both languages have them, and neither says the channel stays inside one realm.
+			local savedLocale, pt = GetLocale, {}
+			GetLocale = function() return "ptBR" end
+			local loaded, lerr = pcall(function() assert(loadfile(ADDON_DIR .. "Locales.lua"))("Olympus", pt) end)
+			GetLocale = savedLocale
+			if not loaded then error(lerr, 0) end
+			for _, key in ipairs({ "HOP_KING_HIDDEN", "HOP_KING_OTHER_REALM" }) do
+				assert(type(ns.L[key]) == "string" and ns.L[key]:find("%s", 1, true), key)
+				assert(type(pt.L[key]) == "string" and pt.L[key] ~= ns.L[key] and pt.L[key]:find("%s", 1, true), "Portuguese " .. key)
+			end
+			eq(ns.L.HOP_KING_OTHER_REALM:find("channel", 1, true), nil)
+			eq(pt.L.HOP_KING_OTHER_REALM:find("canal", 1, true), nil)
+		end)
+		ns.Print = savedPrint
+		ns.King.Reset()
+		ns.rdb.guilds = {}
+		if not ok then error(err, 0) end
+	end)
+end)
+
+-- 1.0.0: a player's "the King's layer doesn't work" came with a /oly bug that said nothing of the
+-- King. Now one line says what this client knows of him: whether the census has him online (and
+-- how sure), the realm it places him on, his layer and his crown, and how long ago each was heard.
+test("1.0.0 /oly status and /oly bug say what this client knows of the King: offline, checking, online or confirmed, realm, layer, crown", function()
+	WithHop(function(w, H)
+		local savedMe, savedCrown = ns.me, ns.db.throneLocation
+		local ok, err = pcall(function()
+			ns.King.Reset()
+			local function Line() return ns.StatusText():match("\nking: ([^\n]*)") end
+			ns.rdb.guilds = {}
+			eq(Line(), "offline")
+			assert(ns.BuildBugReport():find("\nking: offline\n", 1, true), "in /oly bug too")
+			-- <Olympus> reports him online, nobody else names him yet.
+			ns.rdb.guilds = { ["Olympus"] = { total = 990, online = 210, zones = {}, t = w.clock, leader = "Asmongold", leaderOnline = true } }
+			eq(Line(), "checking (reported online, not confirmed yet)")
+			-- One other sender names him: shown, not yet what "For Olympus!" waits for.
+			ns.rdb.guilds = { ["Olympus"] = Vouched({ total = 990, online = 210, zones = {}, t = w.clock, leader = "Asmongold",
+				leaderOnline = true }, "W1-Realm") }
+			eq(Line(), "online (one report)  |  realm Realm (ours)  |  layer not known  |  crown not heard")
+			-- Two: confirmed. His crown, then his layer, and how long ago each came.
+			ns.rdb.guilds = SampleGuilds()
+			eq(Line(), "confirmed  |  realm Realm (ours)  |  layer not known  |  crown not heard")
+			ns.King.HandleCommand("CHANNEL", ns.KingCharacter() .. "-Realm", "T1~P~3~Olympus~1453~420~510")
+			w.clock = w.clock + 30
+			ns.Layers.Receive("Asmongold-Realm", { mapID = 1453, zoneUID = 9, rank = 0, guild = "Olympus" })
+			w.clock = w.clock + 5
+			eq(Line(), "confirmed  |  realm Realm (ours)  |  layer map 1453 zone 9, heard 5s ago  |  crown map 1453, heard 35s ago")
+			-- On another realm, said so.
+			ns.rdb.guilds = { ["Olympus"] = Vouched({ total = 990, online = 210, zones = {}, t = w.clock,
+				leader = "Asmongold-OtherRealm", leaderOnline = true }, "W1-Realm", "W2-Realm") }
+			assert(Line():find("^confirmed  |  realm OtherRealm %(another realm%)  |  layer not known"), Line())
+			-- On the King's own client: his crown, and when his layer last went out.
+			GetGuildInfo = function() return "Olympus", "King", 0 end
+			ns.me = ns.KingCharacter() .. "-Realm"
+			ns.db.throneLocation = nil
+			eq(Line(), "me  |  crown hidden  |  layer not sent")
+			ns.db.throneLocation = true
+			w.see(12)
+			w.clock = w.clock + 20
+			eq(Line(), "me  |  crown shown  |  layer sent 20s ago")
+		end)
+		ns.me, ns.db.throneLocation = savedMe, savedCrown
+		ns.King.Reset()
+		ns.rdb.guilds = {}
+		if not ok then error(err, 0) end
+	end)
+end)
+
 test("0.9.1 privacy: a report kept private names no zone at all, and 0.9.0's decoder reads it (#13)", function()
 	local r = ns.Roster.Scan()
 	assert(r.leaderZone and r.officers[1].zone and r.zones.m1453, "the roster knows where everyone is")

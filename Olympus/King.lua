@@ -749,8 +749,10 @@ function King.ToggleLocation()
 	if King.SharingLocation() then
 		ns.Print(L.THRONE_LOCATION_SHOWN)
 		-- His crown is his yes for his layer too (Layers.lua): the army asks to join him there.
+		-- Both go out now (1.0.0: his layer waited for its next announcement, up to ten minutes).
 		ns.Print(L.THRONE_LOCATION_LAYER)
 		SendLocation(true)
+		ns.Layers.AnnounceNow()
 	else
 		ns.Print(L.THRONE_LOCATION_HIDDEN)
 		lastLocation = { t = -math.huge }
