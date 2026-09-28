@@ -782,7 +782,7 @@ Other limits:
 | `/oly layerhelp on` · `/oly layerhelp off` | get (or not) requests to invite players to your layer |
 | `/oly layerauto on` · `/oly layerauto off` | invite layer requests without the window |
 | `/oly location on` · `/oly location off` | share (or not) your zone and layer on the Olympus channel |
-| `/oly borders on` · `/oly borders off` | the game's elite borders round the portrait of your target, focus and your own frame (Forever): gold for the King, silver for Lords, Captains and the High Council, grey for Veterans and Raiders of Olympus guilds; on by default, hidden with the gamepad UI |
+| `/oly borders on` · `/oly borders off` | elite borders round the portrait of your target, focus and your own frame (Forever): the game's gold wings for the King, silver wings for the High Council, gold for Lords and silver for Captains, and Max's bronze wings for Raiders and bronze for Veterans of Olympus guilds; on by default, hidden with the gamepad UI |
 | `/oly key <secret>` | officers: seal the Olympus channel |
 | `/oly block <name>` | ignore a player |
 | `/oly map` | zone markers on the world map |
@@ -810,6 +810,9 @@ Council signing round trip: a throwaway key in a temporary folder, lists signed 
 `scripts/council-sign.py` and checked by `Olympus/Sign.lua` (never the author's key). This
 is the same command CI uses; it stops with a nonzero exit status on failure.
 The TOC file check also catches filename case mismatches on CI's Linux filesystem.
+The offline suite checks the border textures in `Olympus/media/borders/` (32-bit TGAs with
+alpha, 256 x 256); with Pillow installed, `scripts/check.sh` also checks they are what
+`scripts/make-borders.py` builds from Max's PNGs in `media/borders/src/`.
 
 ```bash
 bash scripts/check.sh                    # full repository checks used by CI
@@ -818,6 +821,7 @@ scripts/lint-globals.sh                   # catches locals used before they are 
 bash tests/check-scripts.sh               # verify check-script failure handling (also run in CI)
 bash tests/sign-roundtrip.sh              # the High Council signing script end to end (needs python3)
 python3 tests/fixtures/make-link-vectors.py --check  # Olympus Link's shared vectors, sample, draw and inbox (needs "cryptography")
+python3 scripts/make-borders.py [--check] # the border textures from media/borders/src (needs Pillow)
 python3 scripts/link-keys.py ca           # the author, once: Olympus Link's council authority (see below)
 python3 scripts/council-sign.py sign "First Surname,..." [realm group]  # the author: sign the High Council list
 python3 scripts/council-sign.py council [council.json]  # the author: sign the names, departments and titles (see the script)
@@ -848,6 +852,7 @@ Gundlach and contributors (speedata, 3-clause BSD) for Olympus Link's QR code
   showed what an attacker could do.
 - **Code and ideas:** RoyLeviGit (Olympus chats in their own chat window), Artz (hiding the
   Issue Reporter), bjess9 (CI and the shared checks).
+- **Art:** Max (the bronze elite borders of Raiders and Veterans, drawn over the game's own).
 - **Reports from the field:** Riukensei and PartyRockAce (the gamepad UI), Ignitheus (whispers
   to Forever names), Pyralis Ashandar, the Treasurer (the treasury and the guild bank), and the
   player who told us WoW had handed him the channel.

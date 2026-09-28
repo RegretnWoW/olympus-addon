@@ -61,6 +61,18 @@ luajit tests/run.lua
 printf 'Running the signing round trip...\n'
 bash tests/sign-roundtrip.sh
 
+# Max's border textures (Olympus/media/borders): the offline tests check the .tga files
+# themselves; with Pillow installed, also that they are what scripts/make-borders.py builds
+# from his PNGs in media/borders/src (the script changes nothing with --check).
+if [ -f scripts/make-borders.py ]; then
+	printf 'Checking the border textures against their PNG sources...\n'
+	if command -v python3 >/dev/null 2>&1 && python3 -c 'import PIL' >/dev/null 2>&1; then
+		PYTHONDONTWRITEBYTECODE=1 python3 scripts/make-borders.py --check
+	else
+		printf 'python3 with Pillow not found: the border textures check skipped.\n'
+	fi
+fi
+
 # Olympus Link's vectors, sample, draw and inbox, shared with the page's and the Worker's tests:
 # checked again with Python's "cryptography" wherever it is installed (the script changes nothing).
 if [ -f tests/fixtures/make-link-vectors.py ]; then

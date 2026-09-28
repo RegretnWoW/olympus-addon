@@ -2,20 +2,21 @@ local ADDON, ns = ...
 local L = ns.L
 
 -- The elite borders (1.0.1, asked for on the community Discord): the game's own elite and rare
--- art around the portrait of an Olympus player on your target and focus frames, and around your
--- own portrait for your own rank, like Elite Player Frame (Enhanced) but for other players too.
--- `/oly borders on|off`, on by default.
+-- art, and Max's bronze frames drawn over it, around the portrait of an Olympus player on your
+-- target and focus frames, and around your own portrait for your own rank, like Elite Player
+-- Frame (Enhanced) but for other players too. `/oly borders on|off`, on by default.
 --
 -- How, on Forever's unit frames (Blizzard_UnitFrame, the "Camelot" family: TargetFrameTemplate
 -- and PlayerFrame): the game draws an elite or rare creature's border with BossPortraitFrameTexture,
 -- a texture of the frame's TargetFrameContainer, set in TargetFrameMixin:CheckClassification
 -- (GetBossPortraitFrameData gives the atlas and where it goes). Olympus leaves that texture alone:
 -- it puts its own hidden textures on the same container, one per border, just above the game's
--- (same layer, one sublevel up), with the same atlases and offsets, sized and anchored once, out of
--- combat. From then on it only shows and hides them: Show and Hide are not protected for a texture
--- (the client's API documentation marks them protected for a frame only), so a target change in
--- combat is fine. The game's frames get no call from Olympus but those CreateTexture, and nothing
--- written in them but hooksecurefunc's hook, which keeps their CheckClassification secure.
+-- (same layer, one sublevel up), with the game's atlases (or Max's files, at the size and offsets
+-- of the game's frames they were drawn over), sized and anchored once, out of combat. From then on
+-- it only shows and hides them: Show and Hide are not protected for a texture (the client's API
+-- documentation marks them protected for a frame only), so a target change in combat is fine.
+-- The game's frames get no call from Olympus but those CreateTexture, and nothing written in them
+-- but hooksecurefunc's hook, which keeps their CheckClassification secure.
 -- After the game's CheckClassification on the target and focus frames (hooksecurefunc on the frames
 -- themselves: the mixin's functions were copied into them when they were made) Olympus shows the
 -- border of the unit again, so it follows every update the game makes.
@@ -34,14 +35,21 @@ local L = ns.L
 local Borders = {}
 ns.Borders = Borders
 
--- Max's second option: the High Council gold, like the King. Off: the High Council is silver.
+-- Max's second option: the High Council gold, like the King. Off: the High Council is silver
+-- (both winged).
 ns.BORDERS_COUNCIL_GOLD = false
 
--- Who gets which border, checked from the top: the first that holds is the border. The art is
--- the game's own, as Blizzard_UnitFrame/Camelot/TargetFrameUtils.lua (GetBossPortraitFrameData)
--- gives it for a boss, a rare and an elite creature, with the offsets the game anchors each at
--- (x, y: from the top right of the target frame's container; mirrored on your own frame).
--- shade: drawn without colour, this dark (1 = as the game draws it).
+-- Who gets which border, checked from the top: the first that holds is the border (Max's list,
+-- highest first). The game's art is as Blizzard_UnitFrame/Camelot/TargetFrameUtils.lua
+-- (GetBossPortraitFrameData) gives it for a boss, a rare and an elite creature, at the offsets the
+-- game anchors each at (x, y: from the top right of the target frame's container; mirrored on your
+-- own frame). The plain silver is the game's too, by the name Forever's client knows it (its
+-- Mainline TargetFrameUtils.lua gives it to a rare elite): the plain gold's size and shape, so at
+-- the plain gold's offsets. Each is drawn as the game draws it: no tint, no desaturation.
+-- A tier may name a file instead of an atlas: file (the texture's path), coords (the art's area
+-- on it: left, right, top, bottom), width and height (its size on screen, the game's 1x size of
+-- the frame it was drawn over) and fallback (that frame's atlas, drawn without colour when the
+-- client can't load the file).
 -- Who:
 --   king     the King of our faction: his character (ns.IsKingCharacter) in his guild
 --            (ns.IsKingGuild); where no character is pinned, that guild's guild master
@@ -52,13 +60,21 @@ ns.BORDERS_COUNCIL_GOLD = false
 --   officer  its officers: the census's (the same way), or our own guild's officer ranks (Roster.lua)
 --   ranks    a member of an Olympus guild whose rank name holds one of these words (any case, a
 --            whole word): rank names are what each guild master wrote, as the game shows them
+local WINGED = "UI-HUD-UnitFrame-Target-PortraitOn-Boss-Gold-Winged"
+local PLAIN = "UI-HUD-UnitFrame-Target-PortraitOn-Boss-Gold"
+-- Max's bronze frames, drawn over the winged and the plain gold at twice their size: 256 x 256
+-- TGAs, the art at the top left (scripts/make-borders.py makes them from media/borders/src).
+local MEDIA = "Interface\\AddOns\\Olympus\\media\\borders\\"
 Borders.TIERS = {
-	{ name = "gold", atlas = "UI-HUD-UnitFrame-Target-PortraitOn-Boss-Gold-Winged", x = 11, y = -4,
-		king = true, council = "BORDERS_COUNCIL_GOLD" },
-	{ name = "silver", atlas = "UI-HUD-UnitFrame-Target-PortraitOn-Boss-Rare-Silver-Winged", x = 8, y = -7,
-		council = true, leader = true, officer = true },
-	{ name = "grey", atlas = "UI-HUD-UnitFrame-Target-PortraitOn-Boss-Gold", x = 0, y = 1, shade = 0.55,
-		ranks = { "veteran", "veterano", "veterana", "raider" } },
+	{ name = "gold-elite", atlas = WINGED, x = 11, y = -4, king = true, council = "BORDERS_COUNCIL_GOLD" },
+	{ name = "silver-elite", atlas = "UI-HUD-UnitFrame-Target-PortraitOn-Boss-Rare-Silver-Winged", x = 8, y = -7,
+		council = true },
+	{ name = "gold", atlas = PLAIN, x = 0, y = 1, leader = true },
+	{ name = "silver", atlas = "ui-hud-unitframe-target-portraiton-boss-rare-silver", x = 0, y = 1, officer = true },
+	{ name = "bronze-elite", file = MEDIA .. "bronze-winged", coords = { 0, 220 / 256, 0, 180 / 256 }, width = 110, height = 90,
+		x = 11, y = -4, fallback = WINGED, ranks = { "raider" } },
+	{ name = "bronze", file = MEDIA .. "bronze-plain", coords = { 0, 200 / 256, 0, 200 / 256 }, width = 100, height = 100,
+		x = 0, y = 1, fallback = PLAIN, ranks = { "veteran", "veterano", "veterana" } },
 }
 
 -- Where they go: the frame (a global of the game's), its container, and the hook that follows the
@@ -143,7 +159,8 @@ local function Match(f)
 	return nil
 end
 
--- The border a unit gets now ("gold", "silver", "grey" or nil), worked out afresh.
+-- The border a unit gets now (a tier's name: "gold-elite", "silver-elite", "gold", "silver",
+-- "bronze-elite", "bronze"; nil for none), worked out afresh.
 function Borders.TierOf(unit)
 	local t = Match(Facts(unit))
 	return t and t.name or nil
@@ -176,6 +193,31 @@ local function AtlasExists(atlas)
 	return ok and v ~= nil
 end
 
+-- A tier's art on a new texture (mirror: turned round, for your own portrait), or false when the
+-- client has none of it. An atlas at its own size; a file at the tier's size, its art's area only.
+-- A file SetTexture fails or says false for: the game's frame it was drawn over, without colour.
+-- The game's way to turn art round is its texture coordinates the other way, right before left
+-- (Blizzard_OrderHallTalents.lua, for an atlas).
+local function Dress(tex, t, mirror)
+	local left, right, top, bottom = 0, 1, 0, 1
+	local ok, loaded = false, false
+	if t.file then ok, loaded = pcall(tex.SetTexture, tex, t.file) end
+	if ok and loaded ~= false then
+		tex:SetSize(t.width, t.height)
+		left, right, top, bottom = unpack(t.coords)
+		if not mirror then tex:SetTexCoord(left, right, top, bottom) end
+	elseif t.file then
+		if not (t.fallback and AtlasExists(t.fallback)) then return false end
+		ns.Log("borders: %s not loaded, the game's %s without colour instead", t.file, t.fallback)
+		tex:SetAtlas(t.fallback, true, nil, true)
+		tex:SetDesaturated(true)
+	else
+		tex:SetAtlas(t.atlas, true, nil, true)
+	end
+	if mirror then tex:SetTexCoord(right, left, top, bottom) end
+	return true
+end
+
 -- Once, with mouse and keyboard and out of combat (a texture of the game's frames may count as
 -- theirs, whose points and size are not ours to set in combat): the textures, then the hooks.
 -- A client without Forever's unit frames (Classic Era, Anniversary) gets none.
@@ -193,23 +235,20 @@ function Borders.Install()
 		if type(container) == "table" and type(container.CreateTexture) == "function" then
 			local rig = { tex = {} }
 			for _, t in ipairs(Borders.TIERS) do
-				if AtlasExists(t.atlas) then
+				-- (A missing atlas: no texture. A file's is made to try it: one the client can't
+				-- load, with no atlas to fall back to, stays hidden and unused.)
+				if t.file or AtlasExists(t.atlas) then
 					local tex = container:CreateTexture(nil, "ARTWORK", nil, 3)
-					tex:SetAtlas(t.atlas, true, nil, true)
-					if spec.mirror then
-						-- The game's way to turn an atlas round (Blizzard_OrderHallTalents.lua). The target's
-						-- portrait sits 26 px from its frame's right edge, yours 24 px from its left.
-						tex:SetTexCoord(1, 0, 0, 1)
-						tex:SetPoint("TOPLEFT", container, "TOPLEFT", -(t.x + 2), t.y)
-					else
-						tex:SetPoint("TOPRIGHT", container, "TOPRIGHT", t.x, t.y)
-					end
-					if t.shade then
-						tex:SetDesaturated(true)
-						tex:SetVertexColor(t.shade, t.shade, t.shade)
-					end
 					tex:Hide()
-					rig.tex[t.name] = tex
+					if Dress(tex, t, spec.mirror) then
+						if spec.mirror then
+							-- The target's portrait sits 26 px from its frame's right edge, yours 24 px from its left.
+							tex:SetPoint("TOPLEFT", container, "TOPLEFT", -(t.x + 2), t.y)
+						else
+							tex:SetPoint("TOPRIGHT", container, "TOPRIGHT", t.x, t.y)
+						end
+						rig.tex[t.name] = tex
+					end
 				end
 			end
 			rigs[spec.unit] = rig
