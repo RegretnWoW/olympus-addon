@@ -345,9 +345,19 @@ local function AddHistory(tier, e)
 	while #list > HISTORY do table.remove(list, 1) end
 end
 
-local function Accept(tier, sender, guild, class, text, mine)
+-- Every line kept goes through here, whether it is then shown, muted or held back by the flood
+-- guard: into the history the Realm tab shows (CHAT_CHANGED) and, from someone else, already
+-- checked and sanitized, to a companion reading along (CHAT_LINE, for
+-- OlympusBridge.RegisterChatObserver). The mute and the flood guard only decide what this chat
+-- frame shows.
+local function Keep(tier, sender, guild, class, text, mine)
 	AddHistory(tier, { sender = sender, guild = guild, class = class, text = text, mine = mine or nil })
 	ns.Fire("CHAT_CHANGED", tier)
+	if not mine then ns.Fire("CHAT_LINE", tier, sender, text) end
+end
+
+local function Accept(tier, sender, guild, class, text, mine)
+	Keep(tier, sender, guild, class, text, mine)
 	if Muted()[tier] then return false, "muted" end
 	Show(tier, sender, guild, class, text)
 	stats.shown = stats.shown + 1
@@ -598,11 +608,10 @@ function Channels.Receive(dist, sender, text, now)
 	end
 	-- A muted channel only goes to history, so it takes nothing from the flood guard. A line
 	-- the guard keeps off the chat frame still goes to the history (the Realm tab's chats stay
-	-- whole for everyone), and the player is told (Channels.FloodNotice).
+	-- whole for everyone, and a companion hears it), and the player is told (Channels.FloodNotice).
 	if not Muted()[m.tier] and Flooded(m.tier, sender, now) then
 		stats.flood = stats.flood + 1
-		AddHistory(m.tier, { sender = sender, guild = m.guild, class = m.class, text = m.text })
-		ns.Fire("CHAT_CHANGED", m.tier)
+		Keep(m.tier, sender, m.guild, m.class, m.text, false)
 		Held(m.tier, now)
 		return false, "flood"
 	end

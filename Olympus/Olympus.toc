@@ -48,3 +48,4 @@ Views.lua
 UI.lua
 GuildFrame.lua
 Borders.lua
+Bridge.lua
