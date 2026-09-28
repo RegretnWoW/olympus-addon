@@ -121,12 +121,21 @@ function Data.RecordSightings(players, capped)
 end
 ns.Who.Listen(Data.RecordSightings)
 
+-- The server's clock (1.0.0), the same second on every realm, where ns.Now() is this computer's:
+-- nil on a client without it.
+function Data.ServerTime()
+	if type(GetServerTime) ~= "function" then return nil end
+	local ok, t = pcall(GetServerTime)
+	return ok and type(t) == "number" and t > 0 and t or nil
+end
+
 function Data.SetLocal(r)
 	r.t = ns.Now()
+	r.st = Data.ServerTime() -- field 25 of our report: when it was made, by the server's clock
 	r.reporter = ns.DisplayName(ns.me)
 	r.reporterFull = ns.me
 	r.realm = ns.realm
-	r.from = ns.realm -- travels in the report: whoever hears it on another realm knows the channel is shared
+	r.from = ns.realm -- travels in the report: whoever hears it on another realm sees the channel shared (/oly status)
 	r.heardOn = ns.realm -- see Data.Receive
 	r.mine = true
 	ns.rdb.guilds[r.guild] = r

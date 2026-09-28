@@ -252,6 +252,12 @@ local function NamesLines(c)
 	}
 end
 
+-- "ClassicBetaPvP,ClassicBetaPvP2", two realms named at most (then "+n"), or "-".
+local function RealmList(list)
+	if type(list) ~= "table" or #list == 0 then return "-" end
+	return table.concat(list, ",", 1, math.min(#list, 2)) .. (#list > 2 and (",+" .. (#list - 2)) or "")
+end
+
 -- Does the channel cross realms (a report sent from another realm reached us), where do our
 -- guildmates with the addon play, and is our guild's reporter heard?
 local function TopologyLines(c)
@@ -263,6 +269,12 @@ local function TopologyLines(c)
 		("topology: guild peers by realm %s"):format(CountList(c.peerRealms)),
 		("topology: own guild's report heard from %s"):format(c.heardOwn and (c.heardOwn .. " " .. ns.Ago(c.heardOwnAt)) or "nobody yet"),
 		("topology: left out of the election: %s"):format(c.benched and #c.benched > 0 and table.concat(c.benched, ", ") or "none"),
+		-- 1.0.0: a reporter per realm (or one for all while the channel is shared), and what our
+		-- own report says of our guild's realms (fields 25-27).
+		("topology: reporter elected on %s  |  quiet after %s before us"):format(
+			c.electAll and "every realm (channel shared)" or "this realm", tostring(c.quietAfter or "?")),
+		("topology: guild on %s  |  report st=%s cap=%s pres=%s"):format(RealmList(c.presence), tostring(c.reportSt or "-"),
+			tostring(c.reportCap or "-"), type(c.reportPres) == "table" and #c.reportPres > 0 and table.concat(c.reportPres, ".", 1, math.min(#c.reportPres, 4)) or "-"),
 	}
 end
 
@@ -321,8 +333,8 @@ function ns.StatusText()
 			for i = 1, #list, stride do parts[#parts + 1] = ("%s %s"):format(tostring(list[i]), tostring(list[i + 1])) end
 			add("chat channels: %s", table.concat(parts, ", "))
 		end
-		add("other channels dropped: %d  |  census asked %d, answered %d  |  runner-up: %s  |  first channel msg: %s",
-			c.otherChannel or 0, c.asked or 0, c.answered or 0, tostring(c.runnerUp), tostring(c.chanArgs))
+		add("other channels dropped: %d  |  census asked %d (left out %d), answered %d  |  runner-up: %s  |  first channel msg: %s",
+			c.otherChannel or 0, c.asked or 0, c.askSkipped or 0, c.answered or 0, tostring(c.runnerUp), tostring(c.chanArgs))
 		for _, line in ipairs(NamesLines(c)) do add("%s", line) end
 		for _, line in ipairs(TopologyLines(c)) do add("%s", line) end
 		local ch = ns.Channels and ns.Channels.Stats()

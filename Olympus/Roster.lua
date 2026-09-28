@@ -179,6 +179,10 @@ function Roster.TryScan()
 	if r.home ~= ns.realm then ns.LinkRealms(ns.realm, r.home) end
 	r.users = ns.Comm.PeerCount() + 1
 	r.versions = ns.Comm.PeerVersions and ns.Comm.PeerVersions() or nil
+	-- 1.0.0: the realms our guild's addon users play on now, and what our client takes part in
+	-- (fields 27 and 26 of the report).
+	r.pres = ns.Comm.Presence and ns.Comm.Presence() or nil
+	r.cap = ns.Comm.CAPABILITY
 	ns.Data.SetLocal(r)
 	ns.Comm.MaybeBroadcast(r)
 end

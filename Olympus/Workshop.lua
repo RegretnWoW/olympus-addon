@@ -1071,12 +1071,21 @@ end
 -- A client holding a newer list answers as a relay sends (HS~, then HT~), with the lists newer
 -- than the asker's only. 0.9.8 clients drop HQ unread (Comm hands a type it has no handler for
 -- to nobody, and logs nothing).
+-- Across realms (1.0.0, a moderator on PvP 2 who never got the lists: each realm of WoW:
+-- Forever has an OlympusNet of its own, and nobody on his had them). Our guild reaches its
+-- members on every realm, so the lists travel over GUILD too, taken with the same checks
+-- (only a newer list, the same signature budget): a relay now and then (RelayGuild), the
+-- author's client at login, and answers to asks there (a client whose guild has addon users on
+-- another realm asks over GUILD too). A client that takes a newer list from its guild puts it
+-- on its own realm's channel once (PassOn). Versions before 1.0.0 put nothing together from
+-- pieces over GUILD and take the lists from the channel alone: they never see these.
 ---------------------------------------------------------------------------
 
 Workshop.COUNCIL_MAX = 30
 Workshop.RELAY_EVERY = 1800 -- a client passes the list along about every 30 minutes...
 Workshop.RELAYS = 3         -- ...and about this many clients do, whatever the army's size
 local lastCouncilSent = -math.huge
+local lastGuildSent = -math.huge -- our last relay over GUILD (1.0.0: RelayGuild)
 
 -- Asking: once LIST_ASK_AFTER to LIST_ASK_AFTER + LIST_ASK_SPREAD seconds after login, then,
 -- while still without the name list (or holding a list older than one heard of), again
@@ -1098,15 +1107,26 @@ Workshop.LIST_ASK_AGAIN, Workshop.LIST_ASK_EVERY, Workshop.LIST_ASKS = 150, 600,
 Workshop.LIST_ANSWER_MIN, Workshop.LIST_ANSWER_SPREAD, Workshop.LIST_ANSWER_GAP = 3, 12, 120
 Workshop.LIST_DRAW_GAP, Workshop.LIST_ANSWERS, Workshop.LIST_ASK_FROM = 30, 3, 120
 Workshop.AUTHOR_ANSWER_MIN, Workshop.AUTHOR_ANSWER_SPREAD, Workshop.AUTHOR_ANSWER_GAP = 1, 2, 60
+-- Passing a list taken from our guild on to our channel (1.0.0, PassOn): our guild's reporter on
+-- this realm PASS_MIN to PASS_MIN + PASS_SPREAD seconds after; its runner-up PASS_HOLD after the
+-- reporter's copy would be in (the lists go out one piece each SEND_EVERY); anyone else, about
+-- RELAYS of our guild's addon users on this realm, as long again after the runner-up's turn and
+-- up to PASS_HOLD more. Each only when the same list was not heard on the channel meanwhile.
+Workshop.PASS_MIN, Workshop.PASS_SPREAD, Workshop.PASS_HOLD, Workshop.SEND_EVERY = 1, 3, 15, 1.2
 local LIST_STORE = { HS = "council", HT = "councilTitles" }
 local advertised = { HS = 0, HT = 0 } -- the newest list times heard of this session
 local listAsks, lastListAsk, askArmed = 0, -math.huge, false
 local listHeardAt = -math.huge -- the last list newer than ours heard on the channel
 local heardAsk        -- someone else's asks heard lately: { names, titles, t }, the lowest times
-local answering       -- our answer waiting: { names, titles, heard = { HS, HT }, mine }
-local answeredAt = { HS = -math.huge, HT = -math.huge } -- our last answer of each list
-local drawnAt = { HS = -math.huge, HT = -math.huge }    -- our last draw for each list, won or not
-local askedFrom, askedFromCount = {}, 0                 -- sender -> when its ask last counted
+-- Answers go back where the ask came from, the channel or our guild (1.0.0), each lane on its
+-- own clock: an answer waiting { names, titles, heard = { HS, HT }, mine }, our last answer of
+-- each list, our last draw for each list (won or not), and sender -> when its ask last counted.
+local function NewLane()
+	return { answering = nil, answeredAt = { HS = -math.huge, HT = -math.huge }, drawnAt = { HS = -math.huge, HT = -math.huge },
+		askedFrom = {}, askedFromCount = 0 }
+end
+local lanes = { CHANNEL = NewLane(), GUILD = NewLane() }
+local passing         -- lists taken from our guild, on their way to our channel: { HS = blob, HT = blob, send }
 
 -- The list of a kind ("HS" names, "HT" titles) we hold, as signed, and its time (0: none).
 local function HeldList(kind)
@@ -1126,22 +1146,95 @@ local function Advertise(kind, at)
 	if at and at > advertised[kind] then advertised[kind] = at end
 end
 
--- A list heard on the channel from someone else: the very one our answer would send, so the
--- asker has it (the author's answer goes anyway). Only the list we hold, byte for byte: a
--- forged one with the same time never silences anyone. One newer than ours (taken or not)
--- answers our ask: the next one waits LIST_ASK_EVERY.
-local function HeardList(kind, blob)
+-- A list heard from someone else, on the channel or over GUILD (1.0.0): the very one our answer
+-- there would send, so the asker has it (the author's answer goes anyway); on the channel, the
+-- one we were to pass on to it (PassOn). Only the list we hold, byte for byte: a forged one
+-- with the same time never silences anyone. One newer than ours (taken or not) answers our
+-- ask: the next one waits LIST_ASK_EVERY.
+local function HeardList(kind, blob, dist)
 	local at = tonumber(blob:match("^" .. kind .. "1~(%d+)~"))
 	local _, held = HeldList(kind)
 	if at and at > held then listHeardAt = ns.Now() end
-	if answering and not answering.mine and blob == (HeldList(kind)) then answering.heard[kind] = true end
+	local mine = blob == (HeldList(kind))
+	local lane = lanes[dist]
+	local answering = lane and lane.answering
+	if answering and not answering.mine and mine then answering.heard[kind] = true end
+	if dist == "CHANNEL" and passing and passing[kind] == blob then passing[kind] = nil end
 end
 
 local function AuthorLists() return ns.COUNCIL_SIGNED ~= nil or ns.COUNCIL_TITLES ~= nil end
 
-local function SendLists(names, titles)
-	if names then ns.Comm.SendChunked("HS~" .. names) end
-	if titles then ns.Comm.SendChunked("HT~" .. titles) end
+-- On the channel, or over GUILD (1.0.0).
+local function SendLists(names, titles, dist)
+	dist = dist == "GUILD" and "GUILD" or nil
+	if names then ns.Comm.SendChunked("HS~" .. names, nil, dist) end
+	if titles then ns.Comm.SendChunked("HT~" .. titles, nil, dist) end
+end
+
+-- Our guild's addon users on other realms than ours, online now (1.0.0; Comm counts them from
+-- their hellos).
+local function GuildSpansRealms()
+	return ns.Comm.SpansRealms ~= nil and ns.Comm.SpansRealms() == true
+end
+
+-- Our guild's addon users online, ourselves included (on this realm alone: sameRealm).
+local function GuildUsers(sameRealm)
+	return (ns.Comm.PeerCount and ns.Comm.PeerCount(sameRealm) or 0) + 1
+end
+
+-- The pieces a list goes out in (as "HS~" or "HT~" and the list).
+local function Pieces(blob)
+	return math.ceil((#blob + 3) / ns.Codec.CHUNK)
+end
+
+-- A list newer than ours taken from our guild (1.0.0): a guildmate on another realm may have
+-- sent it, and our realm's channel may not have it (each realm has an OlympusNet of its own).
+-- We put it on our channel once, the way a relay sends it, unless the same list is heard there
+-- first. Every guildmate on this realm takes the same list at once, so not all of them: our
+-- guild's reporter here soon, its runner-up once the reporter's copy of the lists taken should
+-- have come, and a few others after that (see PASS_*). Taken lists of both kinds go out
+-- together (the second one taken meanwhile moves the others' turn by the time it takes to send).
+local function PassOn(kind, blob)
+	local p = passing
+	if p then
+		p[kind], p.pieces[kind] = blob, Pieces(blob)
+		return
+	end
+	local reporter, runnerUp = ns.Comm.isReporter == true, ns.Comm.isRunnerUp == true
+	p = { [kind] = blob, pieces = { [kind] = Pieces(blob) }, at = ns.Now(), send = true }
+	passing = p
+	local extra = 0
+	if reporter then
+		extra = Workshop.random() * Workshop.PASS_SPREAD
+	elseif not runnerUp then
+		extra = Workshop.random() * Workshop.PASS_HOLD
+		p.send = Workshop.random() <= math.min(1, Workshop.RELAYS / GuildUsers(true))
+	end
+	local function Due()
+		if reporter then return p.at + Workshop.PASS_MIN + extra end
+		local n = 0
+		for _, count in pairs(p.pieces) do n = n + count end
+		local later = Workshop.PASS_HOLD + n * Workshop.SEND_EVERY
+		return p.at + (runnerUp and later or 2 * later + extra)
+	end
+	local function Try()
+		if passing ~= p then return end
+		local left = Due() - ns.Now()
+		if left > 0.05 then
+			Workshop.after(left, "council pass on", Try)
+			return
+		end
+		passing = nil
+		if not p.send then return end
+		-- Only the lists we still hold: a newer one taken meanwhile has its own turn.
+		local names = p.HS and p.HS == (HeldList("HS")) and p.HS or nil
+		local titles = p.HT and p.HT == (HeldList("HT")) and p.HT or nil
+		if not names and not titles then return end
+		lastCouncilSent = ns.Now()
+		ns.Log("High Council: passing the lists from our guild on to our channel")
+		SendLists(names, titles)
+	end
+	Workshop.after(Due() - p.at, "council pass on", Try)
 end
 
 local function CouncilNames()
@@ -1211,11 +1304,12 @@ function Workshop.TakeCouncil(blob, sender)
 	return true
 end
 
+-- From the channel, or from our guild (1.0.0): the same checks either way.
 function Workshop.HandleCouncil(dist, sender, text)
-	if dist ~= "CHANNEL" or type(text) ~= "string" then return end
+	if (dist ~= "CHANNEL" and dist ~= "GUILD") or type(text) ~= "string" then return end
 	local blob = text:match("^HS~(HS1~.*)$") or text
-	Workshop.TakeCouncil(blob, ns.FullName(sender))
-	HeardList("HS", blob)
+	if Workshop.TakeCouncil(blob, ns.FullName(sender)) and dist == "GUILD" then PassOn("HS", blob) end
+	HeardList("HS", blob, dist)
 end
 ns.Comm.Handle("HS", function(...) Workshop.HandleCouncil(...) end)
 
@@ -1276,10 +1370,10 @@ function Workshop.TakeTitles(blob, sender)
 end
 
 function Workshop.HandleTitles(dist, sender, text)
-	if dist ~= "CHANNEL" or type(text) ~= "string" then return end
+	if (dist ~= "CHANNEL" and dist ~= "GUILD") or type(text) ~= "string" then return end
 	local blob = text:match("^HT~(HT1~.*)$") or text
-	Workshop.TakeTitles(blob, ns.FullName(sender))
-	HeardList("HT", blob)
+	if Workshop.TakeTitles(blob, ns.FullName(sender)) and dist == "GUILD" then PassOn("HT", blob) end
+	HeardList("HT", blob, dist)
 end
 ns.Comm.Handle("HT", function(...) Workshop.HandleTitles(...) end)
 
@@ -1303,6 +1397,25 @@ function Workshop.RelayCouncil(force)
 	SendLists(names, titles)
 end
 
+-- The same over GUILD (1.0.0), to our guildmates on other realms: only while our guild has addon
+-- users online on another realm, at most once each RELAY_EVERY, and about RELAYS of our guild's
+-- addon users each time (a guild of a thousand sends a handful), when our send queue has room
+-- (the census report comes first). force: now, whatever these (the author's client at login).
+Workshop.GUILD_QUEUE = 30
+function Workshop.RelayGuild(force)
+	local names, titles = HeldList("HS"), (HeldList("HT"))
+	if not names and not titles then return false end
+	local now = ns.Now()
+	if not force then
+		if now - lastGuildSent < Workshop.RELAY_EVERY or not GuildSpansRealms() then return false end
+		if ns.Comm.QueueSize and ns.Comm.QueueSize() > Workshop.GUILD_QUEUE then return false end
+	end
+	lastGuildSent = now
+	if not force and Workshop.random() > math.min(1, Workshop.RELAYS / GuildUsers()) then return false end
+	SendLists(names, titles, "GUILD")
+	return true
+end
+
 -- Whether we should ask: no name list at all, or one older than a list heard of.
 function Workshop.NeedLists()
 	if type(ns.rdb and ns.rdb.council) ~= "table" then return true end
@@ -1323,7 +1436,11 @@ function Workshop.AskLists()
 	local h = heardAsk
 	if h and now - h.t < Workshop.LIST_ASK_HOLD and h.names <= names and h.titles <= titles then return false end
 	listAsks, lastListAsk = listAsks + 1, now
-	ns.Comm.Send("CHANNEL", ("HQ~%s~%s"):format(names, titles), "councillists")
+	local ask = ("HQ~%s~%s"):format(names, titles)
+	ns.Comm.Send("CHANNEL", ask, "councillists")
+	-- Our guild too (1.0.0) while it has addon users online on another realm: they may hold the
+	-- lists where nobody on our realm does.
+	if GuildSpansRealms() then ns.Comm.Send("GUILD", ask, "councillistsguild") end
 	if listAsks < Workshop.LIST_ASKS then
 		Workshop.after(Workshop.LIST_ASK_AGAIN, "council lists", function() Workshop.AskLists() end)
 	end
@@ -1334,76 +1451,86 @@ end
 -- An answer already waiting covers the asks that come meanwhile. Each list is drawn for and
 -- sent on a clock of its own: an ask for the titles alone never holds the names back, and a
 -- draw lost (or an answer left out) holds a client back LIST_DRAW_GAP only.
-function Workshop.AnswerAsk(names, titles)
-	if answering then
-		answering.names, answering.titles = math.min(answering.names, names), math.min(answering.titles, titles)
+-- dist (1.0.0): where the ask came from, and where the answer goes: the channel (about
+-- LIST_ANSWERS of the addons the census counts take it up) or our guild (about LIST_ANSWERS of
+-- its addon users), each on its own clock.
+function Workshop.AnswerAsk(names, titles, dist)
+	dist = dist == "GUILD" and "GUILD" or "CHANNEL"
+	local lane = lanes[dist]
+	if lane.answering then
+		local a = lane.answering
+		a.names, a.titles = math.min(a.names, names), math.min(a.titles, titles)
 		return false
 	end
 	local now, mine = ns.Now(), AuthorLists()
 	local gap = mine and Workshop.AUTHOR_ANSWER_GAP or Workshop.LIST_ANSWER_GAP
 	local kinds = {}
 	for kind, than in pairs({ HS = names, HT = titles }) do
-		if NewerList(kind, than) and now - answeredAt[kind] >= gap
-			and (mine or now - drawnAt[kind] >= Workshop.LIST_DRAW_GAP) then
+		if NewerList(kind, than) and now - lane.answeredAt[kind] >= gap
+			and (mine or now - lane.drawnAt[kind] >= Workshop.LIST_DRAW_GAP) then
 			kinds[#kinds + 1] = kind
 		end
 	end
 	if #kinds == 0 then return false end
 	if not mine then
 		-- A census that counts nobody but us is not in yet (whoever asked is online too).
-		local users = ns.King and ns.King.AddonsOnline and ns.King.AddonsOnline() or 1
+		local users = dist == "GUILD" and GuildUsers() or (ns.King and ns.King.AddonsOnline and ns.King.AddonsOnline() or 1)
 		if users <= 1 then return false end
-		for _, kind in ipairs(kinds) do drawnAt[kind] = now end
+		for _, kind in ipairs(kinds) do lane.drawnAt[kind] = now end
 		if Workshop.random() > math.min(1, Workshop.LIST_ANSWERS / users) then return false end
 	end
 	local pending = { names = names, titles = titles, heard = {}, mine = mine }
-	answering = pending
+	lane.answering = pending
 	local wait = mine and Workshop.AUTHOR_ANSWER_MIN + Workshop.random() * Workshop.AUTHOR_ANSWER_SPREAD
 		or Workshop.LIST_ANSWER_MIN + Workshop.random() * Workshop.LIST_ANSWER_SPREAD
 	Workshop.after(wait, "council answer", function()
-		if answering ~= pending then return end
-		answering = nil
+		if lane.answering ~= pending then return end
+		lane.answering = nil
 		local at, send = ns.Now(), {}
 		for kind, than in pairs({ HS = pending.names, HT = pending.titles }) do
-			if not pending.heard[kind] and at - answeredAt[kind] >= gap then send[kind] = NewerList(kind, than) end
+			if not pending.heard[kind] and at - lane.answeredAt[kind] >= gap then send[kind] = NewerList(kind, than) end
 		end
-		if send.HS then answeredAt.HS = at end
-		if send.HT then answeredAt.HT = at end
-		SendLists(send.HS, send.HT)
+		if send.HS then lane.answeredAt.HS = at end
+		if send.HT then lane.answeredAt.HT = at end
+		SendLists(send.HS, send.HT, dist)
 	end)
 	return true
 end
 
+-- An ask on the channel, or over GUILD from a guildmate (1.0.0, maybe on another realm).
 function Workshop.HandleListAsk(dist, sender, text)
-	if dist ~= "CHANNEL" or type(text) ~= "string" or #text > 40 then return end
+	if (dist ~= "CHANNEL" and dist ~= "GUILD") or type(text) ~= "string" or #text > 40 then return end
 	sender = ns.FullName(sender)
 	if type(sender) ~= "string" or sender == ns.me then return end
 	local names, titles = text:match("^HQ~(%d+)~(%d+)$")
 	names, titles = tonumber(names), tonumber(titles)
 	if not names or not titles then return end
-	-- One sender's asks count once per LIST_ASK_FROM: a character sending asks without end
-	-- brings no more draws than that (a client of ours asks LIST_ASK_AGAIN apart at the soonest).
-	local now = ns.Now()
+	-- One sender's asks count once per LIST_ASK_FROM (on each lane: a client whose guild spans
+	-- realms asks both): a character sending asks without end brings no more draws than that (a
+	-- client of ours asks LIST_ASK_AGAIN apart at the soonest).
+	local now, lane = ns.Now(), lanes[dist]
+	local askedFrom = lane.askedFrom
 	if now - (askedFrom[sender] or -math.huge) < Workshop.LIST_ASK_FROM then return end
 	if not askedFrom[sender] then
-		if askedFromCount >= 200 then -- (the table stays small: the old ones go first)
+		if lane.askedFromCount >= 200 then -- (the table stays small: the old ones go first)
 			for name, t in pairs(askedFrom) do
-				if now - t >= Workshop.LIST_ASK_FROM then askedFrom[name], askedFromCount = nil, askedFromCount - 1 end
+				if now - t >= Workshop.LIST_ASK_FROM then askedFrom[name], lane.askedFromCount = nil, lane.askedFromCount - 1 end
 			end
-			if askedFromCount >= 200 then wipe(askedFrom); askedFromCount = 0 end
+			if lane.askedFromCount >= 200 then wipe(askedFrom); lane.askedFromCount = 0 end
 		end
-		askedFromCount = askedFromCount + 1
+		lane.askedFromCount = lane.askedFromCount + 1
 	end
 	askedFrom[sender] = now
 	Advertise("HS", names)
 	Advertise("HT", titles)
+	-- (Its answer reaches us wherever it goes: the channel we are on, or our guild.)
 	local h = heardAsk
 	if h and now - h.t < Workshop.LIST_ASK_HOLD then
 		h.names, h.titles = math.min(h.names, names), math.min(h.titles, titles)
 	else
 		heardAsk = { names = names, titles = titles, t = now }
 	end
-	Workshop.AnswerAsk(names, titles)
+	Workshop.AnswerAsk(names, titles, dist)
 end
 ns.Comm.Handle("HQ", function(...) Workshop.HandleListAsk(...) end)
 
@@ -1411,9 +1538,12 @@ ns.Comm.Handle("HQ", function(...) Workshop.HandleListAsk(...) end)
 function Workshop.ResetListAsk()
 	advertised.HS, advertised.HT = 0, 0
 	listAsks, lastListAsk, askArmed, heardAsk, listHeardAt = 0, -math.huge, false, nil, -math.huge
-	answering = nil
-	answeredAt.HS, answeredAt.HT, drawnAt.HS, drawnAt.HT = -math.huge, -math.huge, -math.huge, -math.huge
-	wipe(askedFrom); askedFromCount = 0
+	-- (In place: an answer or a pass-on still waiting finds nothing left to send.)
+	for _, lane in pairs(lanes) do
+		for k, v in pairs(NewLane()) do lane[k] = v end
+		lane.answering = nil
+	end
+	passing, lastGuildSent = nil, -math.huge
 end
 
 -- /oly council (list): the names in chat; on the King's screen while the councillors' names are
@@ -1915,12 +2045,17 @@ end
 -- relay for sure, the whole army at once after a server restart. A client without the lists
 -- asks for them (0.9.9): first LIST_ASK_AFTER to LIST_ASK_AFTER + LIST_ASK_SPREAD after login,
 -- then when due (Workshop.AskLists), the council's ticker trying too.
+-- Over GUILD (1.0.0) the same: the author's client sends his lists to his guildmates on every
+-- realm at once too, any other client a whole RELAY_EVERY after login at the earliest (RelayGuild).
 function Workshop.CouncilLogin()
-	lastCouncilSent = ns.Now()
+	lastCouncilSent, lastGuildSent = ns.Now(), ns.Now()
 	if ns.COUNCIL_SIGNED then Workshop.TakeCouncil(ns.COUNCIL_SIGNED) end
 	if ns.COUNCIL_TITLES then Workshop.TakeTitles(ns.COUNCIL_TITLES) end
 	if ns.COUNCIL_SIGNED or ns.COUNCIL_TITLES then
-		ns.After(15, "council", function() Workshop.RelayCouncil(true) end)
+		ns.After(15, "council", function()
+			Workshop.RelayCouncil(true)
+			Workshop.RelayGuild(true)
+		end)
 	end
 	ns.After(Workshop.LIST_ASK_AFTER + Workshop.random() * Workshop.LIST_ASK_SPREAD, "council lists", function()
 		askArmed = true
@@ -1928,6 +2063,7 @@ function Workshop.CouncilLogin()
 	end)
 	ns.Every(60, "council", function()
 		Workshop.RelayCouncil()
+		Workshop.RelayGuild()
 		Workshop.AskLists()
 		Workshop.SayAvailable()
 		Workshop.SayIcon()
