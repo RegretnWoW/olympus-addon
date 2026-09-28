@@ -3852,6 +3852,46 @@ test("chat lines arrive through CHAT_MSG_ADDON_LOGGED, without our echo or block
 	if not ok then error(err, 0) end
 end)
 
+-- 1.0.0: a chat line sent in pieces reached the M1 handler while the logged flag told of the
+-- last piece alone: edited code sent the line in a plain piece and an empty last piece with the
+-- logged API, and a line the server never logged was shown (where the client has both APIs,
+-- a plain line is dropped). No version sends a chat line in pieces (Comm.SendChat): a message
+-- put together from pieces is never taken as logged.
+test("chat lines put together from pieces are never taken as logged, whichever piece came logged", function()
+	local events, login = {}, {}
+	local cns = setmetatable({}, { __index = ns })
+	cns.RegisterEvent = function(event, fn) events[event] = events[event] or {}; table.insert(events[event], fn) end
+	cns.On = function(name, fn) if name == "LOGIN" then table.insert(login, fn) end end
+	cns.After, cns.Every = function() end, function() end
+	local slash = { SlashCmdList.OLYMPUSALL, SlashCmdList.OLYMPUSCAPTAINS, SlashCmdList.OLYMPUSLORDS, StaticPopupDialogs.OLYMPUS_CHAT_PRIVACY }
+	C_ChatInfo = { RegisterAddonMessagePrefix = function() end, SendAddonMessageLogged = function() end }
+	ns.db.chatMute = nil
+	local ok, err = pcall(function()
+		assert(loadfile(ADDON_DIR .. "Comm.lua"))("Olympus", cns)
+		assert(loadfile(ADDON_DIR .. "Channels.lua"))("Olympus", cns)
+		for _, fn in ipairs(login) do fn() end
+		local function Plain(sender, text) for _, fn in ipairs(events.CHAT_MSG_ADDON) do fn(ns.PREFIX, text, "CHANNEL", sender) end end
+		local function Logged(sender, text) for _, fn in ipairs(events.CHAT_MSG_ADDON_LOGGED) do fn(ns.PREFIX, text, "CHANNEL", sender) end end
+		CHAT_LINES = {}
+		AsRank(3, function()
+			Logged("Member40", Msg("A", MY_GUILD, 900, "logged, whole"))
+			eq(#CHAT_LINES, 1, "a whole logged line is shown")
+			Plain("Member40", Msg("A", MY_GUILD, 901, "plain, whole"))
+			eq(#CHAT_LINES, 1, "a whole plain line is dropped")
+			Plain("Member40", "C9:1:2:" .. Msg("A", MY_GUILD, 902, "plain piece, logged empty last piece"))
+			Logged("Member40", "C9:2:2:")
+			eq(#CHAT_LINES, 1, "the words in a plain piece: dropped")
+			Logged("Member40", "C10:1:2:" .. Msg("A", MY_GUILD, 903, "every piece logged"))
+			Logged("Member40", "C10:2:2:")
+			eq(#CHAT_LINES, 1, "pieces, which no version sends: dropped")
+		end)
+	end)
+	SlashCmdList.OLYMPUSALL, SlashCmdList.OLYMPUSCAPTAINS, SlashCmdList.OLYMPUSLORDS = slash[1], slash[2], slash[3]
+	StaticPopupDialogs.OLYMPUS_CHAT_PRIVACY = slash[4]
+	C_ChatInfo = nil
+	if not ok then error(err, 0) end
+end)
+
 ---------------------------------------------------------------------------
 -- Realm groups: PvP and PvP 2 share one census (Core.lua), and what tells realms apart
 -- (names as the server sent them, the realm a report was sent from, guild peers by realm).
@@ -19766,7 +19806,8 @@ do
 
 	-- The real receive path: a fresh Comm (FreshComm) with Decree.lua loaded on it, so a D1 goes
 	-- through the addon message handler, admission and the decree handler as in the game.
-	-- Decree(...) comes with the plain API, Logged(...) with the logged one.
+	-- Decree(...) comes with the plain API, Logged(...) with the logged one (and the raw
+	-- Deliver, DeliverLogged, for messages as they come).
 	local function DecreeClient(s)
 		local cns, Deliver, _, DeliverLogged = FreshComm()
 		cns.Now = function() return s.clock end
@@ -19778,7 +19819,7 @@ do
 		local function Logged(sender, kind, guild, text)
 			DeliverLogged("CHANNEL", sender, Codec.EncodeDecree(kind, 1453, 0.5, 0.5, guild, 0, text or "x"))
 		end
-		return cns, Decree, Logged, Deliver
+		return cns, Decree, Logged, Deliver, DeliverLogged
 	end
 
 	local n = 90000
@@ -19891,6 +19932,41 @@ do
 			s.clock = s.clock + 1
 			Decree("Member5-Realm", "MUSTER", "Olympus II", "at the gates")
 			eq(cns.Decree.Active()[1].text, "at the gates")
+		end)
+	end)
+
+	-- 1.0.0: a D1 sent in pieces (Codec.Chunk's "C<id>:<i>:<n>:") came to its handler while the
+	-- logged flag told of the last piece alone: edited code sent the words in a plain piece and an
+	-- empty last piece with the logged API, and the words the server never logged were shown, in
+	-- the raid warning too. No version sends a decree in pieces (Decree.Send: Comm.Send, whole):
+	-- a message put together from pieces is never taken as logged.
+	test("1.0.0 decrees: one put together from pieces is never taken as logged, whichever piece came logged: shown without its words", function()
+		Scene(3, function(s)
+			local cns, _, _, Deliver, DeliverLogged = DecreeClient(s)
+			C_ChatInfo.SendAddonMessageLogged = function() end -- (this client has both APIs, as Forever's)
+			local msg = Codec.EncodeDecree("MUSTER", 1453, 0.5, 0.5, "Olympus II", 1, "words the server never logged")
+			-- The words in a plain piece, an empty last piece with the logged API.
+			Deliver("CHANNEL", "Member3-Realm", "C77:1:2:" .. msg)
+			DeliverLogged("CHANNEL", "Member3-Realm", "C77:2:2:")
+			local d = cns.Decree.Active()[1]
+			eq(d and d.sender, "Member3", "the decree shows, as one sent with the plain API does")
+			eq(d.text, "", "without the words the server never logged")
+			eq(s.warnings[#s.warnings]:find("never logged", 1, true), nil, "nor in the raid warning")
+			-- Every piece logged: still pieces, which no version sends.
+			s.clock = s.clock + 1
+			DeliverLogged("CHANNEL", "Member4-Realm", "C78:1:2:" .. msg)
+			DeliverLogged("CHANNEL", "Member4-Realm", "C78:2:2:")
+			eq(cns.Decree.Active()[1].sender, "Member4"); eq(cns.Decree.Active()[1].text, "")
+			-- The whole decree with the logged API, as 1.0.0 sends it: its words.
+			s.clock = s.clock + 1
+			DeliverLogged("CHANNEL", "Member5-Realm", msg)
+			eq(cns.Decree.Active()[1].sender, "Member5"); eq(cns.Decree.Active()[1].text, "words the server never logged")
+			-- The same for a census Captain of another guild.
+			eq(D.Receive(R("Olympus Gale", "Nobody", "Peggy:1:0"), "Victor-Realm"), true)
+			local other = Codec.EncodeDecree("ARMS", 1453, 0.5, 0.5, "Olympus Gale", 1, "an unlogged insult")
+			Deliver("CHANNEL", "Peggy-Realm", "C5:1:2:" .. other)
+			DeliverLogged("CHANNEL", "Peggy-Realm", "C5:2:2:")
+			eq(cns.Decree.Active()[1].sender, "Peggy"); eq(cns.Decree.Active()[1].text, "")
 		end)
 	end)
 

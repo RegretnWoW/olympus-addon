@@ -1193,6 +1193,12 @@ local function OnAddonMessage(prefix, text, dist, sender, target, zoneChannelID,
 		if not full then return end
 		local fullHandler = handlers[full:sub(1, 2)]
 		if fullHandler and full:sub(3, 3) == "~" then
+			-- Put together from pieces: whether it came logged is known of the piece that ended it
+			-- alone, so the whole never counts as logged (1.0.0). A chat line or a decree's words
+			-- in plain pieces with an empty last piece logged were shown; no version sends either
+			-- in pieces (Comm.SendChat, Comm.Send), so such a decree shows without its words and
+			-- such a line is dropped (Decree.lua, Channels.lua).
+			deliveredLogged = false
 			fullHandler(dist, sender, full)
 			return
 		end
