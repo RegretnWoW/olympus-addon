@@ -1356,10 +1356,11 @@ local function LivePart(b, own)
 	return { name = b.name, opening = Treasury.Opening(b), balance = Treasury.Balance(b), allIn = t.allIn, allOut = t.allOut, week = t.weekIn,
 		donors = #t.givers, weekNames = names, rank = t.ranking, book = lines, items = t.items, t = when, own = own, b = b }
 end
--- Another character of this account said yes to sharing its book (the Treasurer's 0.9.3 yes is his).
+-- Another character of this account said yes to sharing its book (the Treasurer's 0.9.3 yes is his,
+-- while he has given no answer since: his no of 1.0 stays a no).
 local function SharesBook(key, name)
-	local shares = ns.db and ns.db.keeperShares
-	local yes = type(shares) == "table" and shares[key] or nil
+	local shares, yes = ns.db and ns.db.keeperShares, nil
+	if type(shares) == "table" then yes = shares[key] end
 	if yes ~= nil then return yes == true end
 	return TreasurerPin(name) == 1 and ns.db.treasurerShares == true
 end
@@ -1773,10 +1774,20 @@ local function EarlyPieces(list, guild)
 	return pieces
 end
 
+-- 0.9's book was the Treasurer's: its names go out with his own yes (his 1.0 answer, or his
+-- 0.9.3 one while he has given none since), whichever of his pinned characters holds it. His
+-- mail character's yes is to its own book, not to his.
+local function TreasurerYes()
+	if TreasurerPin(ns.me) == 1 then return Treasury.Consent() == true end
+	return SharesBook(TreasurerCharacter() or OwnKey(ns.TREASURER), ns.TREASURER)
+end
+local function MaySendEarly() return CanSend() and EarlyHolder() and TreasurerYes() end
+
 -- The holder's client sends the list, a piece every EARLY_PACE (the channel's queue stays
--- light), with its yes to sharing (the names are who gave, as in his book).
+-- light), with its own yes to sharing and the Treasurer's (the names are who gave, as in his
+-- book).
 function Treasury.SendEarly(force)
-	if not CanSend() or not EarlyHolder() then return false end
+	if not MaySendEarly() then return false end
 	local list = ArchivedSupporters()
 	if not list then return false end
 	local now = ns.Now()
@@ -1786,7 +1797,7 @@ function Treasury.SendEarly(force)
 	local pieces, token = EarlyPieces(list, guild), {}
 	earlySending = token
 	local function Piece(i)
-		if earlySending ~= token or not CanSend() then return end
+		if earlySending ~= token or not MaySendEarly() then return end
 		ns.Comm.Send("CHANNEL", ("TE~%s~%d~%d~%d~%s"):format(guild, list.at, i, #pieces, pieces[i]), "treasuryearly" .. i)
 		if i < #pieces then
 			ns.After(Treasury.EARLY_PACE, "treasury early", function() Piece(i + 1) end)
@@ -1852,7 +1863,8 @@ function Treasury.ArmEarly()
 end
 
 -- Someone asks: the holder answers when its list is newer than the asker's (EARLY_GAP apart at
--- the soonest, however many ask: the answer goes to the whole channel).
+-- the soonest, however many ask: the answer goes to the whole channel), with the same yeses as
+-- its own sending (SendEarly).
 function Treasury.HandleEarlyAsk(dist, sender, text)
 	if dist ~= "CHANNEL" or type(text) ~= "string" then return end
 	local at = tonumber(text:match("^TQ~(%d+)$"))

@@ -13845,6 +13845,79 @@ test("1.0 the early supporters: everyone who gave before 1.0, names only, alphab
 	end)
 end)
 
+test("1.0 the early supporters go out from his mail character only with the Treasurer's own yes: 0.9's book was his", function()
+	WithThrone(function(w, K)
+		local T = ns.Treasury
+		local saved = { split = ns.splitNames, after = ns.After, inGuild = IsInGuild, shares = ns.db.treasurerShares }
+		local ok, err = pcall(function()
+			ns.splitNames = true
+			local timers = {}
+			ns.After = function(_, _, fn) timers[#timers + 1] = fn end
+			local function RunTimers() while #timers > 0 do table.remove(timers, 1)() end end
+			local function Sent()
+				local out = {}
+				for _, s in ipairs(w.sent) do if s.msg:sub(1, 3) == "TE~" then out[#out + 1] = s.msg end end
+				return out
+			end
+			-- His 0.9 book, archived on his account (his mail character reads it there too).
+			ns.rdb.treasuryEpoch = nil
+			ns.rdb.treasury = { { name = "Alice Early", money = 100, how = "mail", t = w.clock - 1000 } }
+			AsTreasurer()
+			T.Migrate()
+			local want = ("TE~Olympus~%d~1~1~Alice Early"):format(ns.rdb.treasuryArchive["0.9"].closed)
+			ns.db.myCharacters = { [TREASURER_KEY] = true, [ANDARAI_KEY] = true }
+			-- His mail character, in an Olympus guild, holds the list: a client's ask (TQ), then its
+			-- own sending after login. Returns what each sent.
+			local function Try(shares, treasurerShares)
+				ns.db.keeperShares, ns.db.treasurerShares = shares, treasurerShares
+				AsAndarai("Olympus")
+				w.clock = w.clock + T.EARLY_GAP
+				w.sent, timers = {}, {}
+				T.HandleEarlyAsk("CHANNEL", "Soldier-Realm", "TQ~0")
+				RunTimers()
+				local asked = Sent()
+				w.sent = {}
+				local sent = T.SendEarly(true)
+				RunTimers()
+				return sent, Sent(), asked
+			end
+			-- The Treasurer's no: nothing from his mail character, though it said yes to its own book.
+			local sent, te, asked = Try({ [TREASURER_KEY] = false, [ANDARAI_KEY] = true }, false)
+			eq(sent, false, "his no"); eq(#te, 0, "his no: not sent"); eq(#asked, 0, "his no: an ask not answered")
+			-- His no of 1.0 over a yes of 0.9.3 left behind: still a no.
+			sent, te, asked = Try({ [TREASURER_KEY] = false, [ANDARAI_KEY] = true }, true)
+			eq(sent, false); eq(#te + #asked, 0, "his 1.0 no over his 0.9.3 yes")
+			-- His 0.9.3 no, or no answer at all: nothing either.
+			sent, te, asked = Try({ [ANDARAI_KEY] = true }, false)
+			eq(sent, false); eq(#te + #asked, 0, "his 0.9.3 no")
+			sent, te, asked = Try({ [ANDARAI_KEY] = true }, nil)
+			eq(sent, false); eq(#te + #asked, 0, "he never answered")
+			-- The mail character's own no still keeps it quiet, whatever his.
+			sent, te, asked = Try({ [TREASURER_KEY] = true, [ANDARAI_KEY] = false }, true)
+			eq(sent, false); eq(#te + #asked, 0, "its own no")
+			-- Both yes (his 1.0 yes, or his 0.9.3 yes unanswered since): sent, and an ask answered.
+			sent, te, asked = Try({ [TREASURER_KEY] = true, [ANDARAI_KEY] = true }, false)
+			eq(sent, true); eq(#te, 1); eq(te[1], want); eq(#asked, 1, "an ask answered"); eq(asked[1], want)
+			sent, te, asked = Try({ [ANDARAI_KEY] = true }, true)
+			eq(sent, true); eq(te[1], want, "his 0.9.3 yes"); eq(#asked, 1)
+			-- His character not yet among the account's: his answer by his name on our realm.
+			ns.db.myCharacters = { [ANDARAI_KEY] = true }
+			sent, te, asked = Try({ [TREASURER_KEY] = false, [ANDARAI_KEY] = true }, true)
+			eq(sent, false); eq(#te + #asked, 0, "his no, found by his name")
+			sent, te = Try({ [TREASURER_KEY] = true, [ANDARAI_KEY] = true }, nil)
+			eq(sent, true); eq(te[1], want)
+			-- The Treasurer himself: his own yes alone (his mail character's no is about its own book).
+			ns.db.myCharacters = { [TREASURER_KEY] = true, [ANDARAI_KEY] = true }
+			ns.db.keeperShares, ns.db.treasurerShares = { [TREASURER_KEY] = true, [ANDARAI_KEY] = false }, nil
+			AsTreasurer()
+			w.sent, timers = {}, {}
+			eq(T.SendEarly(true), true); RunTimers(); eq(Sent()[1], want)
+		end)
+		ns.splitNames, ns.After, IsInGuild, ns.db.treasurerShares = saved.split, saved.after, saved.inGuild, saved.shares
+		if not ok then error(err, 0) end
+	end)
+end)
+
 test("1.0 the Treasurer's mail and the early supporters: their lines in both languages, with the same format arguments", function()
 	local savedLocale, pt = GetLocale, {}
 	GetLocale = function() return "ptBR" end
