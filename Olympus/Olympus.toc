@@ -47,3 +47,4 @@ Recruit.lua
 Views.lua
 UI.lua
 GuildFrame.lua
+Borders.lua

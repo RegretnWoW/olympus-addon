@@ -550,6 +550,7 @@ Limits, stated honestly:
 | `/oly layerhelp on` · `/oly layerhelp off` | get (or not) requests to invite players to your layer |
 | `/oly layerauto on` · `/oly layerauto off` | invite layer requests without the window |
 | `/oly location on` · `/oly location off` | share (or not) your zone and layer on the Olympus channel |
+| `/oly borders on` · `/oly borders off` | the game's elite borders round the portrait of your target, focus and your own frame (Forever): gold for the King, silver for Lords, Captains and the High Council, grey for Veterans and Raiders of Olympus guilds; on by default, hidden with the gamepad UI |
 | `/oly key <secret>` | officers: seal the Olympus channel |
 | `/oly block <name>` | ignore a player |
 | `/oly map` | zone markers on the world map |

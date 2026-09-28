@@ -711,6 +711,12 @@ L.HELP_TREASURER = "  /oly treasurer on|off - a keeper of the treasury shares hi
 L.INSPECTION_OPT_ON = "You take part in the King's Royal Inspection when your addon is in the sample: a 2-minute patrol of the players around you, reported to him. /oly inspection off says no."
 L.INSPECTION_OPT_OFF = "You don't take part in Royal Inspections: you still hear the King's call, and nothing is inspected or reported. /oly inspection on takes part again."
 L.HELP_INSPECTION = "  /oly inspection on|off - take part in the King's Royal Inspection, or not"
+-- 1.0.1: the elite borders (Borders.lua)
+L.HELP_BORDERS = "  /oly borders on | off - elite borders on your target, focus and your own portrait (the King, Lords, Captains, the High Council, Veterans and Raiders), or none"
+L.BORDERS_ON = "Elite borders on, on your target, your focus and your own portrait: gold for the King, silver for Lords, Captains and the High Council, grey for Veterans and Raiders. /oly borders off hides them."
+L.BORDERS_ON_COUNCIL_GOLD = "Elite borders on, on your target, your focus and your own portrait: gold for the King and the High Council, silver for Lords and Captains, grey for Veterans and Raiders. /oly borders off hides them."
+L.BORDERS_OFF = "Elite borders off: none on your target, your focus or your own portrait. /oly borders on shows them again."
+L.BORDERS_GAMEPAD = "With the gamepad UI they stay hidden: Olympus leaves the game's unit frames alone there. They come back with mouse and keyboard."
 -- 0.9.5: issue reporter
 L.ISSUE_HIDE = "Hide"
 L.ISSUE_HIDE_TIP = "Hides Blizzard's Issue Reporter at every login. /oly issuereporter show brings it back."
@@ -1640,6 +1646,11 @@ if GetLocale and GetLocale() == "ptBR" then
 	L.INSPECTION_OPT_ON = "Você participa da Inspeção Real do Rei quando seu addon cai na amostra: uma patrulha de 2 minutos nos jogadores ao seu redor, reportada a ele. /oly inspection off recusa."
 	L.INSPECTION_OPT_OFF = "Você não participa das Inspeções Reais: ainda ouve o chamado do Rei, e nada é inspecionado nem reportado. /oly inspection on volta a participar."
 	L.HELP_INSPECTION = "  /oly inspection on|off - participar ou não da Inspeção Real do Rei"
+	L.HELP_BORDERS = "  /oly borders on | off - bordas de elite no seu alvo, no seu foco e no seu próprio retrato (o Rei, Lordes, Capitães, o High Council, Veteranos e Raiders), ou nenhuma"
+	L.BORDERS_ON = "Bordas de elite ligadas no seu alvo, no seu foco e no seu próprio retrato: dourada para o Rei, prateada para Lordes, Capitães e o High Council, cinza para Veteranos e Raiders. /oly borders off esconde."
+	L.BORDERS_ON_COUNCIL_GOLD = "Bordas de elite ligadas no seu alvo, no seu foco e no seu próprio retrato: dourada para o Rei e o High Council, prateada para Lordes e Capitães, cinza para Veteranos e Raiders. /oly borders off esconde."
+	L.BORDERS_OFF = "Bordas de elite desligadas: nenhuma no seu alvo, no seu foco ou no seu próprio retrato. /oly borders on mostra de novo."
+	L.BORDERS_GAMEPAD = "Com a interface de gamepad elas ficam escondidas: lá o Olympus deixa em paz os quadros de unidade do jogo. Elas voltam com mouse e teclado."
 	-- 0.9.5: issue reporter
 	L.ISSUE_HIDE = "Esconder"
 	L.ISSUE_HIDE_TIP = "Esconde o Issue Reporter da Blizzard em todo login. /oly issuereporter show traz de volta."
