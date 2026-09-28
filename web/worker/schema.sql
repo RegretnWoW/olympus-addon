@@ -55,11 +55,20 @@ CREATE TABLE IF NOT EXISTS council_keys (
   first_seen INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS council_keys_by_id ON council_keys (key_id);
+CREATE INDEX IF NOT EXISTS council_keys_by_character ON council_keys (character);
 
 -- The revocation list of the council authority's keys: a key id here counts no more, whether a
 -- link carried it before or not (POST /api/link/keys {"key_id", "revoke": true}).
 CREATE TABLE IF NOT EXISTS revoked_keys (
   key_id     TEXT PRIMARY KEY,
+  revoked_at INTEGER NOT NULL
+);
+
+-- Characters whose keys were all revoked at once (POST /api/link/keys {"character", "revoke":
+-- true}): a council authority certificate for one of them signed at or before revoked_at (its end
+-- less CA_DAYS) counts no more, whatever key it names; the keys registered for it were revoked too.
+CREATE TABLE IF NOT EXISTS revoked_characters (
+  character  TEXT PRIMARY KEY,                     -- "Name-Realm"
   revoked_at INTEGER NOT NULL
 );
 

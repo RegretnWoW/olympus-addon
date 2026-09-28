@@ -288,6 +288,8 @@ test('confirmer: bad ids, kinds and options are refused', { skip }, () => {
 		['confirmer', 'testkey01', 'p', '--character', 'Some,One-ClassicBetaPvP'],
 		['confirmer', 'testkey01', 'p', '--character', `${'x'.repeat(60)}-Realm`], // 66 bytes
 		['revoke', 'x'],
+		['revoke', '--character', 'NoRealm'],
+		['revoke', '--character'],
 		['ca', 'what'],
 		['nope'],
 		[],
@@ -296,6 +298,25 @@ test('confirmer: bad ids, kinds and options are refused', { skip }, () => {
 		assert.notEqual(r.status, 0, args.join(' '));
 		assert.equal(r.stdout, '', args.join(' '));
 	}
+});
+
+test('revoke --character: the SQL that revokes every key of a character (its council authority certificates until now, its registered keys), which D1 takes', { skip }, async () => {
+	const DB = await makeD1();
+	if (!DB) return;
+	const character = "Sömë O'Councillor-ClassicBetaPvP"; // a quote and letters beyond ASCII, as SQL text
+	await DB.prepare('INSERT INTO keys (key_id, public_key, owner_discord_id, owner_username, character, kind, bootstrap, created, cert_exp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+		.bind('testkey09', publicHexOf('09'.repeat(32)), OLD_OWNER, null, character, 'c', 1, 1780000000, 1830000000)
+		.run();
+	const r = run(['revoke', '--character', character]);
+	assert.equal(r.status, 0, r.stderr);
+	await DB.exec(r.stdout);
+	const at = (await DB.prepare('SELECT revoked_at FROM revoked_characters WHERE character = ?').bind(character).first()).revoked_at;
+	assert.ok(Math.abs(at - nowS()) < 60, 'revoked now');
+	assert.equal((await DB.prepare('SELECT revoked FROM keys WHERE key_id = ?').bind('testkey09').first()).revoked, 1);
+	// Again later: the time moves (certificates signed in between are revoked too).
+	await DB.exec('UPDATE revoked_characters SET revoked_at = 1 WHERE 1');
+	await DB.exec(run(['revoke', '--character', character]).stdout);
+	assert.ok((await DB.prepare('SELECT revoked_at FROM revoked_characters WHERE character = ?').bind(character).first()).revoked_at > 1);
 });
 
 test('public: the public key of a seed on stdin', { skip }, () => {

@@ -14649,6 +14649,61 @@ test("Olympus Link: a councillor's key rotated (/oly discord key new), asked for
 	end)
 end)
 
+test("Olympus Link: a councillor key rotated or removed in game still counts at the bot until revoked: /oly discord key new and key off say its id; /oly discord certified lists what the author's client signed", function()
+	WithLink(function(w)
+		ns.LINK_CA_KEYS = { SAMPLE.ca_pub }
+		local me = "Test Councillor-" .. ns.AUTHOR_REALM
+		local samples = 0
+		Link.EntropySample = function() samples = samples + 1 return "retired " .. samples end
+		ns.me = me
+		-- A key made here, certified by the author's client (as in its own game), kept.
+		local function Certify()
+			Link.Tick(); RunFrames(w)
+			ns.Comm.senderHook(AUTHOR_CHAR, "CHANNEL"); RunFrames(w)
+			local dc = Whispers(w, "DC~")
+			ns.me, ns.LINK_CA_SEED = AUTHOR_CHAR, SAMPLE.ca_seed
+			Link.HandleCertRequest("WHISPER", me, dc[#dc].msg); RunFrames(w)
+			ns.me, ns.LINK_CA_SEED = me, nil
+			local de = Whispers(w, "DE~")
+			Link.HandleCertificate("WHISPER", AUTHOR_CHAR, de[#de].msg); RunFrames(w)
+			local k = Link.Key()
+			assert(k and k.cert, "certified")
+			return k
+		end
+		local k1 = Certify()
+		-- The review's case: after a rotation the old key's id was nowhere a councillor could read it.
+		w.printed = {}
+		w.clock = w.clock + Link.CA_GAP
+		SlashCmdList.OLYMPUS("discord key new")
+		assert(Said(w, ns.L.LINK_KEY_OLD:format(k1.id)), "the old key's id, to send to the keeper")
+		RunFrames(w)
+		local k2 = Certify()
+		assert(k2.id ~= k1.id)
+		w.printed = {}
+		SlashCmdList.OLYMPUS("discord key off")
+		assert(Said(w, ns.L.LINK_KEY_OLD:format(k2.id)), "and when it is turned off")
+		-- A key that never had a certificate counted nowhere: nothing to say.
+		SlashCmdList.OLYMPUS("discord key new")
+		RunFrames(w)
+		w.printed = {}
+		SlashCmdList.OLYMPUS("discord key off")
+		for _, line in ipairs(w.printed) do assert(not line:find(ns.L.LINK_KEY_OLD:sub(1, 12), 1, true), line) end
+		-- The author's client lists every certificate it signed, for the keeper.
+		ns.me = AUTHOR_CHAR
+		w.printed = {}
+		SlashCmdList.OLYMPUS("discord certified")
+		eq(#w.printed, 3)
+		eq(w.printed[1], ns.L.LINK_CA_LOG:format(2))
+		eq(w.printed[2], ns.L.LINK_CA_LOG_LINE:format(k1.id, me, date("!%Y-%m-%d", Link.ParseCert(k1.cert).exp)))
+		eq(w.printed[3], ns.L.LINK_CA_LOG_LINE:format(k2.id, me, date("!%Y-%m-%d", Link.ParseCert(k2.cert).exp)))
+		-- A client that certified nothing says so.
+		Link.Store().certified = nil
+		w.printed = {}
+		SlashCmdList.OLYMPUS("discord certified")
+		eq(w.printed[1], ns.L.LINK_CA_LOG_NONE)
+	end)
+end)
+
 test("Olympus Link: the council authority's certificate the addon makes is lua-ca-cert of tests/fixtures/ed25519-vectors.txt, byte for byte (Python and node check it there)", function()
 	WithLink(function(w)
 		ns.LINK_CA_KEYS, ns.LINK_CA_SEED = { SAMPLE.ca_pub }, SAMPLE.ca_seed

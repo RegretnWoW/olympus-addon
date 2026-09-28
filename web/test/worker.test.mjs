@@ -502,6 +502,58 @@ describe('Worker', { skip: probe ? false : 'node:sqlite is not available in this
 		assert.equal((await keys({ key_id: 'nosuchkey1', revoke: true })).reason, 'unknown-key');
 	});
 
+	test('revoking a character: every council authority certificate for it signed until then stops counting, keys it rotated away and never showed included; one signed after counts', async () => {
+		// The review's case: a councillor rotated (/oly discord key new) or left the list, and the
+		// keeper can name only the current key; the old one's certificate runs for up to a year.
+		await setup();
+		assert.equal((await submit(B5.bundle, USER_C)).status, 'linked', 'CK (the old key) counted and was recorded');
+		const seedHex = crypto.createHash('sha256').update('olympus-link-test:rotated-away').digest('hex');
+		const newId = await councilKeyId(publicHexOf(seedHex));
+		COUNCIL_KEYS[newId] = { key_id: newId, seed_hex: seedHex, kind: 'c', ca: true };
+		try {
+			let r = await keys({ character: CK.character, revoke: true });
+			assert.deepEqual([r.http, r.status, r.character, r.revoked, r.keys, r.council_keys], [200, 'ok', CK.character, true, [], [CK.key_id]]);
+			assert.equal((await row('SELECT revoked_at FROM revoked_characters WHERE character = ?', CK.character)).revoked_at, NOW);
+			await env.DB.prepare('UPDATE codes SET discord_id = ? WHERE r = ?').bind(USER_C.id, B3.R).run();
+			const base = { ...B3, requester: 'Another Requester-ClassicBetaPvP' };
+			const year = LINK.CA_DAYS * 86400;
+			for (const [name, proof] of [
+				['the recorded key', [1799990200, CK.key_id, CK.character, 'w']],
+				['a key never seen here, certified an hour before the revocation', [1799990200, newId, CK.character, 'w', { exp: NOW + year - 3600 }]],
+				['certified the second of the revocation', [1799990200, newId, CK.character, 'w', { exp: NOW + year }]],
+			]) {
+				r = await submit(await makeBundle(base, [proof]), USER_C);
+				assert.equal(r.reason, 'not-enough', `${name}: ${r.message}`);
+				assert.match(r.message, /its character was revoked/, name);
+			}
+			assert.equal(discord.calls.length, 1, 'only B5 gave a role');
+			// A certificate the authority signs for that character afterwards (back on the list, a new key): counts.
+			r = await submit(await makeBundle(base, [[1799990200, newId, CK.character, 'w', { exp: NOW + year + 60 }]]), USER_C);
+			assert.equal(r.status, 'linked', r.message);
+			// Revoking again later covers that one too.
+			clock = NOW + 120;
+			assert.equal((await keys({ character: CK.character, revoke: true })).status, 'ok');
+			assert.equal((await row('SELECT revoked_at FROM revoked_characters WHERE character = ?', CK.character)).revoked_at, NOW + 120);
+		} finally {
+			delete COUNCIL_KEYS[newId];
+		}
+		// A character's registered keys are revoked with it.
+		clock = NOW;
+		await setup();
+		const r = await keys({ character: COUNCILLOR, revoke: true });
+		assert.deepEqual([r.status, r.keys, r.council_keys], ['ok', ['council01'], []]);
+		assert.equal((await row('SELECT revoked FROM keys WHERE key_id = ?', 'council01')).revoked, 1);
+		const x = await submit(B1.bundle, USER_C);
+		assert.equal(x.reason, 'not-enough');
+		assert.match(x.message, /revoked key/);
+		// Only a character's name, as the game writes it.
+		for (const character of ['NoRealm', '', 7, 'Some,One-Realm']) {
+			const bad = await keys({ character, revoke: true });
+			assert.deepEqual([bad.http, bad.reason], [400, 'format'], String(character));
+		}
+		assert.equal((await keys({ character: CK.character })).reason, 'format', 'without "revoke": true it is not a revocation');
+	});
+
 	test('mode a refusals: window, key age, account age, replaced, revoked, own key, unlinked confirmer', async () => {
 		const three = [
 			[1799990200, 'player01', OWN.player01, 'r'],

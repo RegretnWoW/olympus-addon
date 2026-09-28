@@ -8,6 +8,7 @@
   python3 scripts/link-keys.py ca public                      # the public key of dist/LinkCA.lua, again
   python3 scripts/link-keys.py public < seed.txt              # the public key of a seed (to compare)
   python3 scripts/link-keys.py revoke <id>                    # the SQL that revokes a key
+  python3 scripts/link-keys.py revoke --character <Name-Realm> # ...or every key of a character
 
 "backend" prints a fresh seed for the Worker secret LINK_BACKEND_SEED and its public key, which
 goes in the Worker var LINK_BACKEND_PUBLIC and in the addon (ns.LINK_BACKEND_KEYS, Link.lua).
@@ -406,8 +407,18 @@ def ca(args):
 
 
 def revoke(args):
+    if len(args) == 2 and args[0] == "--character":
+        # Every key of a character (a councillor off the signed list, or keys of theirs you can't
+        # name): the council authority's certificates for it signed until now, and its registered keys.
+        if not valid_character(args[1]):
+            sys.exit("--character: \"Name-Realm\" as the game writes it.")
+        character = sql_text(args[1])
+        print("INSERT INTO revoked_characters (character, revoked_at) VALUES (%s, unixepoch()) "
+              "ON CONFLICT(character) DO UPDATE SET revoked_at = excluded.revoked_at;" % character)
+        print("UPDATE keys SET revoked = 1, revoked_at = unixepoch() WHERE character = %s AND revoked = 0;" % character)
+        return
     if len(args) != 1 or not KEY_ID.match(args[0]):
-        sys.exit("usage: link-keys.py revoke <id>")
+        sys.exit("usage: link-keys.py revoke <id> | link-keys.py revoke --character <Name-Realm>")
     if CA_KEY_ID.match(args[0]):
         # A councillor's key the council authority certified: never in keys, so on the revocation list.
         print("INSERT OR IGNORE INTO revoked_keys (key_id, revoked_at) VALUES (%s, unixepoch());" % sql_text(args[0]))

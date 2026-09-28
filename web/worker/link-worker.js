@@ -39,6 +39,8 @@ export const LINK = {
 	CERT_DAYS: 365, // a councillor key's certificate life, unless the request says otherwise...
 	CERT_DAYS_PLAYER: 90, // ...a player key's: a revoked or replaced one stays in the addons' draw until it ends...
 	CERT_DAYS_MAX: 3650, // ...up to this
+	CA_DAYS: 365, // the life of a council authority's certificate (the addon's Link.CA_DAYS): one
+	// ending at exp was signed at exp - this, which is how a character's revocation finds the older ones
 };
 
 const R_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
@@ -525,7 +527,8 @@ async function checkProof(env, b, p, code, t) {
 // whether it is revoked. A key this Worker never registered counts only as a High Councillor's
 // certified by the council authority (the author's client, LINK_CA_PUBLIC): the certificate the
 // proof carries is then checked here (tier c, the key's id the first 12 hex of SHA-256 of it,
-// valid when the proof was signed), the revocation list (revoked_keys) can end it, and a key
+// valid when the proof was signed), the revocation lists can end it (revoked_keys by its id,
+// revoked_characters every certificate of a character signed before its revocation), and a key
 // already recorded for another character (council_keys, by the key itself) is refused. The
 // record is written with the first link it confirmed, once its signature checked: a certificate
 // for someone else's public key, carried with a signature nobody made, records nothing.
@@ -544,6 +547,10 @@ async function proofKey(env, p) {
 	if (await env.DB.prepare('SELECT 1 AS x FROM revoked_keys WHERE key_id = ?').bind(p.keyId).first()) return { why: 'revoked key' };
 	if (!(await councilCertificate(env, cert))) return { why: 'unknown key (not certified by the council authority)' };
 	if (p.issued >= cert.exp) return { why: 'signed after its certificate ended' };
+	// Its character revoked (a councillor off the list, or keys of theirs you can't name): every
+	// certificate for it signed before then, whatever key it names.
+	const gone = await env.DB.prepare('SELECT revoked_at FROM revoked_characters WHERE character = ?').bind(cert.character).first();
+	if (gone && cert.exp - LINK.CA_DAYS * 86400 <= gone.revoked_at) return { why: 'its character was revoked (a certificate from before)' };
 	const known = await env.DB.prepare('SELECT character FROM council_keys WHERE public_key = ?').bind(cert.publicHex).first();
 	if (known && known.character !== cert.character) return { why: 'a council key recorded for another character' };
 	// Its owner, when the councillor's character is linked: never confirms that account's codes or characters.
@@ -681,15 +688,21 @@ export async function councilCertificate(env, c) {
 // Your key tool (admin token): register a confirmer's public key for one character, get its
 // certificate (a player key's once it counts: certFrom), renew it, or revoke a key (a High
 // Councillor's key the council authority certified too: its id goes on the revocation list,
-// seen here or not). The seed never comes here: it stays with the confirmer.
+// seen here or not), or every key of a character (a councillor off the signed list: every
+// council authority certificate for that character signed until now, and its registered keys).
+// The seed never comes here: it stays with the confirmer.
 //   {"key_id", "public_key", "owner_discord_id", "owner_username", "character", "kind", "bootstrap", "days", "replace"}
 //   {"key_id", "renew": true, "days"}
 //   {"key_id", "revoke": true}
+//   {"character", "revoke": true}
 async function routeKeys(request, env) {
 	if (!(await adminAuthorized(request, env))) return json({ status: 'error', reason: 'auth' }, 401);
 	const body = await readJson(request, 4 * 1024);
 	const t = now();
 	const fail = (reason, message, status = 400, extra = {}) => json({ status: 'error', reason, message, ...extra }, status);
+	if (body && typeof body === 'object' && body.revoke === true && body.key_id === undefined && body.character !== undefined) {
+		return revokeCharacter(env, body.character, t, fail);
+	}
 	if (!body || typeof body !== 'object' || typeof body.key_id !== 'string' || !KEYID_RE.test(body.key_id)) return fail('format', 'key_id: 6 to 16 of a-z and 0-9.');
 	const keyId = body.key_id;
 	if (body.days !== undefined && (!Number.isInteger(body.days) || body.days < 1 || body.days > LINK.CERT_DAYS_MAX)) {
@@ -768,6 +781,21 @@ async function routeKeys(request, env) {
 			.bind(keyId, pub, owner, username, character, kind, bootstrap, t, exp),
 	]);
 	return json(keyAnswer(key, cert, exp, ready ? replacedId(older) : null));
+}
+
+// Every key of a character, at once: the council authority's certificates for it signed until now
+// (whatever key they name, seen here or not: the ones a councillor rotated away included) stop
+// counting, and so do the keys registered for it. A certificate the authority signs for it later
+// counts again (a councillor back on the list, after /oly discord key new).
+async function revokeCharacter(env, character, t, fail) {
+	if (typeof character !== 'string' || !validCharacter(character)) return fail('format', 'character: "Name-Realm" as the game writes it.');
+	const registered = (await env.DB.prepare('SELECT key_id FROM keys WHERE character = ? AND revoked = 0').bind(character).all()).results || [];
+	await env.DB.batch([
+		env.DB.prepare('INSERT INTO revoked_characters (character, revoked_at) VALUES (?, ?) ON CONFLICT(character) DO UPDATE SET revoked_at = excluded.revoked_at').bind(character, t),
+		env.DB.prepare('UPDATE keys SET revoked = 1, revoked_at = ? WHERE character = ? AND revoked = 0').bind(t, character),
+	]);
+	const council = (await env.DB.prepare('SELECT key_id FROM council_keys WHERE character = ? ORDER BY first_seen').bind(character).all()).results || [];
+	return json({ status: 'ok', character, revoked: true, keys: registered.map((k) => k.key_id), council_keys: council.map((k) => k.key_id) });
 }
 
 // The owner's keys neither revoked nor replaced, but `except`: the certified one first.

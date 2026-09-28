@@ -132,13 +132,33 @@ What the Worker does with them, in plain words:
   nobody made, leaves no trace. From then on, the same key with a certificate naming another
   character is refused. (The author's client never certifies one key for two characters either:
   it keeps a record of every key it certified.)
-- Revoking one (a councillor left, or their computer was compromised): send
+- A key the councillor no longer uses keeps counting here until you revoke it: this Worker never
+  asks the councillor's game, and a certificate lasts a year. Whoever holds that key (a leaked
+  one, or the councillor after leaving) could still make links with it outside the game. So:
+- Revoking one key (it leaked, or the councillor replaced it): send
   `{"key_id": "<the 12 hex digits>", "revoke": true}` to `/api/link/keys` (or run the SQL of
   `python3 scripts/link-keys.py revoke <id>`). It goes on the revocation list (`revoked_keys`) at
   once, whether a link used it already or not, and its confirmations stop counting. `/oly discord
-  status` in the councillor's game shows the key id. The councillor types `/oly discord key new`:
-  their addon makes a new key and gets its certificate from the author's the next time they meet.
-  A councillor the author takes off the signed list stops confirming at once, key or not.
+  status` in the councillor's game shows the current key's id; `/oly discord key new` (a new key,
+  whose certificate comes from the author's client the next time they meet) and `/oly discord key
+  off` print the old key's id for them to send you, and say it counts until you revoke it.
+- Revoking a councillor (the author took them off the signed list, or you can't name all their
+  keys): send `{"character": "<Name-Realm>", "revoke": true}` (or run the SQL of `python3
+  scripts/link-keys.py revoke --character <Name-Realm>`). Every certificate the council authority
+  signed for that character until now stops counting, whatever key it names, seen here or not
+  (keys they rotated away included), and so do the keys you registered for that character. The
+  answer lists those keys, and the authority's keys seen for that character. A certificate the
+  authority signs for it afterwards counts (a councillor back on the list, whose addon makes a new
+  key with `/oly discord key new` after you revoked). So revoke only the old key's id when a
+  councillor just rotated a leaked key: revoking the character would stop the new one too, until
+  another `key new`.
+- Taking a councillor off the signed list stops them in game at once: their addon stops
+  confirming, and nobody's addon asks them or keeps a link that counts on them. It does not stop
+  them here (this Worker never sees the signed list): revoke the character too.
+- What the council authority signed: in the author's game, `/oly discord certified` prints every
+  certificate his client signed (the key id, the character, the end), which his SavedVariables
+  keep (`OlympusDB.discord.certified`). He sends you that list when a councillor leaves or a key
+  leaks, and you revoke by key id or by character.
 - One councillor's key never confirms codes of their own Discord account or its characters, once
   their character is linked (the Worker looks it up in `members`).
 
@@ -152,11 +172,12 @@ wrangler d1 create olympus-link
 wrangler d1 execute olympus-link --remote --file web/worker/schema.sql
 ```
 
-Seven tables: `codes` (every code issued, single use, with its draw threshold), `keys`
+Eight tables: `codes` (every code issued, single use, with its draw threshold), `keys`
 (confirmer public keys you registered, one certified per Discord account, each for one
 character, with the end of their certificate), `council_keys` (High Councillors' keys the council
 authority certified, recorded with the first link each one helped accept), `revoked_keys` (the council
-authority's keys you revoked), `used` (the proofs that counted), `members` (linked characters,
+authority's keys you revoked), `revoked_characters` (characters whose keys you revoked all at
+once), `used` (the proofs that counted), `members` (linked characters,
 with how their guild was checked) and `inbox_uploads` (every bundle received: the audit trail and
 the page's rate limit). The full schema is in "The D1 schema" below.
 
@@ -370,7 +391,8 @@ python3 scripts/link-keys.py confirmer <id> p --character "<Name-Realm>" --owner
   announces the old player key, requesters may ask it in vain. Once they typed the new lines in
   game, revoke the old key. In that order: rotate the key in game first, then revoke.
   **Revoking**: `{"key_id": "<id>", "revoke": true}`, or `python3 scripts/link-keys.py revoke
-  <id>`, and the confirmer types `/oly discord key off`. A revoked key's confirmations stop
+  <id>`, and the confirmer types `/oly discord key off` (every key of one character at once:
+  `{"character": "<Name-Realm>", "revoke": true}`, step 1b). A revoked key's confirmations stop
   counting at once, including ones not delivered yet: a leaked key is revoked at once, without
   waiting. A link carries up to two councillor confirmations, so one revoked councillor key
   does not sink it; the Worker counts any three valid player confirmations of the up to four a
@@ -457,7 +479,7 @@ All JSON. The page's calls carry the session cookie; the tools' carry the admin 
 | `POST /api/link/submit` | page | `{"bundle": "OLB5~..."}` | `200 {"status", "reason", "message", "R", "characters"}`; `429` after 10 an hour |
 | `POST /api/link/inbox` | watcher tool | `{"bundles": [{"R", "bundle", "from", "t"}]}` (500 at most) | `200 {"results": [{"R", "status", "reason", "message"}]}` |
 | `POST /api/link/bot-code` | gateway bot | `{"id", "username"}` | `200 {"token", "command", "exp", "mode", "reply"}` |
-| `POST /api/link/keys` | you | `{"key_id", "public_key", "owner_discord_id", "owner_username", "character", "kind", "bootstrap", "days", "replace"}`, or `{"key_id", "renew": true, "days"}`, or `{"key_id", "revoke": true}` | `200 {"status": "ok", "key_id", "kind", "character", "public_key", "cert", "cert_exp", "cert_from", "command", "replaced"}`: a new player key's `cert`, `cert_exp` and `command` are `null` (with a `message`) until `cert_from`, when `renew` gives them (`{"status": "ok", "revoked": true}` for a revoke, with `"council": true` and the councillor's `character`, once seen, for a key of the council authority's); `409 {"reason": "key-id-used" \| "public-key-used" \| "owner-has-key" \| "character-not-linked" \| "revoked" \| "replaced" \| "too-early"}` (`too-early` with `cert_from`), `404 {"reason": "unknown-key"}`, `400 {"reason": "format"}` |
+| `POST /api/link/keys` | you | `{"key_id", "public_key", "owner_discord_id", "owner_username", "character", "kind", "bootstrap", "days", "replace"}`, or `{"key_id", "renew": true, "days"}`, or `{"key_id", "revoke": true}`, or `{"character", "revoke": true}` | `200 {"status": "ok", "key_id", "kind", "character", "public_key", "cert", "cert_exp", "cert_from", "command", "replaced"}`: a new player key's `cert`, `cert_exp` and `command` are `null` (with a `message`) until `cert_from`, when `renew` gives them (`{"status": "ok", "revoked": true}` for a revoke, with `"council": true` and the councillor's `character`, once seen, for a key of the council authority's; `{"status": "ok", "character", "revoked": true, "keys", "council_keys"}` for a character: the registered keys it revoked, the authority's keys seen for it); `409 {"reason": "key-id-used" \| "public-key-used" \| "owner-has-key" \| "character-not-linked" \| "revoked" \| "replaced" \| "too-early"}` (`too-early` with `cert_from`), `404 {"reason": "unknown-key"}`, `400 {"reason": "format"}` |
 | `POST /api/discord/interactions` | Discord | an interaction | `PING`, or `/link` answered ephemerally |
 
 `status` is `linked` (reason `linked`, or `already` when that link had already counted),
@@ -532,7 +554,8 @@ For every bundle, from the page or the inbox:
    proof carries) names its public key, its tier and the confirming character as registered; or
    a High Councillor's key the council authority certified (the certificate checks with
    `LINK_CA_PUBLIC`, tier `c`, the id the key's hash, valid when the proof was signed), not on the
-   revocation list and not recorded for another character. Then: its owner is not the code's account;
+   revocation list, not signed (its end less a year) at or before a revocation of its character,
+   and not recorded for another character. Then: its owner is not the code's account;
    the Worker rebuilds the exact `OLY4` text and verifies the Ed25519 signature with the key
    (WebCrypto: a non-canonical signature fails); the confirmer is one of the key owner's linked
    characters (except bootstrap and council authority keys: their certificate names the
@@ -871,11 +894,20 @@ CREATE TABLE IF NOT EXISTS council_keys (
   first_seen INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS council_keys_by_id ON council_keys (key_id);
+CREATE INDEX IF NOT EXISTS council_keys_by_character ON council_keys (character);
 
 -- The revocation list of the council authority's keys: a key id here counts no more, whether a
 -- link carried it before or not (POST /api/link/keys {"key_id", "revoke": true}).
 CREATE TABLE IF NOT EXISTS revoked_keys (
   key_id     TEXT PRIMARY KEY,
+  revoked_at INTEGER NOT NULL
+);
+
+-- Characters whose keys were all revoked at once (POST /api/link/keys {"character", "revoke":
+-- true}): a council authority certificate for one of them signed at or before revoked_at (its end
+-- less CA_DAYS) counts no more, whatever key it names; the keys registered for it were revoked too.
+CREATE TABLE IF NOT EXISTS revoked_characters (
+  character  TEXT PRIMARY KEY,                     -- "Name-Realm"
   revoked_at INTEGER NOT NULL
 );
 
@@ -965,6 +997,8 @@ export const LINK = {
 	CERT_DAYS: 365, // a councillor key's certificate life, unless the request says otherwise...
 	CERT_DAYS_PLAYER: 90, // ...a player key's: a revoked or replaced one stays in the addons' draw until it ends...
 	CERT_DAYS_MAX: 3650, // ...up to this
+	CA_DAYS: 365, // the life of a council authority's certificate (the addon's Link.CA_DAYS): one
+	// ending at exp was signed at exp - this, which is how a character's revocation finds the older ones
 };
 
 const R_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
@@ -1451,7 +1485,8 @@ async function checkProof(env, b, p, code, t) {
 // whether it is revoked. A key this Worker never registered counts only as a High Councillor's
 // certified by the council authority (the author's client, LINK_CA_PUBLIC): the certificate the
 // proof carries is then checked here (tier c, the key's id the first 12 hex of SHA-256 of it,
-// valid when the proof was signed), the revocation list (revoked_keys) can end it, and a key
+// valid when the proof was signed), the revocation lists can end it (revoked_keys by its id,
+// revoked_characters every certificate of a character signed before its revocation), and a key
 // already recorded for another character (council_keys, by the key itself) is refused. The
 // record is written with the first link it confirmed, once its signature checked: a certificate
 // for someone else's public key, carried with a signature nobody made, records nothing.
@@ -1470,6 +1505,10 @@ async function proofKey(env, p) {
 	if (await env.DB.prepare('SELECT 1 AS x FROM revoked_keys WHERE key_id = ?').bind(p.keyId).first()) return { why: 'revoked key' };
 	if (!(await councilCertificate(env, cert))) return { why: 'unknown key (not certified by the council authority)' };
 	if (p.issued >= cert.exp) return { why: 'signed after its certificate ended' };
+	// Its character revoked (a councillor off the list, or keys of theirs you can't name): every
+	// certificate for it signed before then, whatever key it names.
+	const gone = await env.DB.prepare('SELECT revoked_at FROM revoked_characters WHERE character = ?').bind(cert.character).first();
+	if (gone && cert.exp - LINK.CA_DAYS * 86400 <= gone.revoked_at) return { why: 'its character was revoked (a certificate from before)' };
 	const known = await env.DB.prepare('SELECT character FROM council_keys WHERE public_key = ?').bind(cert.publicHex).first();
 	if (known && known.character !== cert.character) return { why: 'a council key recorded for another character' };
 	// Its owner, when the councillor's character is linked: never confirms that account's codes or characters.
@@ -1607,15 +1646,21 @@ export async function councilCertificate(env, c) {
 // Your key tool (admin token): register a confirmer's public key for one character, get its
 // certificate (a player key's once it counts: certFrom), renew it, or revoke a key (a High
 // Councillor's key the council authority certified too: its id goes on the revocation list,
-// seen here or not). The seed never comes here: it stays with the confirmer.
+// seen here or not), or every key of a character (a councillor off the signed list: every
+// council authority certificate for that character signed until now, and its registered keys).
+// The seed never comes here: it stays with the confirmer.
 //   {"key_id", "public_key", "owner_discord_id", "owner_username", "character", "kind", "bootstrap", "days", "replace"}
 //   {"key_id", "renew": true, "days"}
 //   {"key_id", "revoke": true}
+//   {"character", "revoke": true}
 async function routeKeys(request, env) {
 	if (!(await adminAuthorized(request, env))) return json({ status: 'error', reason: 'auth' }, 401);
 	const body = await readJson(request, 4 * 1024);
 	const t = now();
 	const fail = (reason, message, status = 400, extra = {}) => json({ status: 'error', reason, message, ...extra }, status);
+	if (body && typeof body === 'object' && body.revoke === true && body.key_id === undefined && body.character !== undefined) {
+		return revokeCharacter(env, body.character, t, fail);
+	}
 	if (!body || typeof body !== 'object' || typeof body.key_id !== 'string' || !KEYID_RE.test(body.key_id)) return fail('format', 'key_id: 6 to 16 of a-z and 0-9.');
 	const keyId = body.key_id;
 	if (body.days !== undefined && (!Number.isInteger(body.days) || body.days < 1 || body.days > LINK.CERT_DAYS_MAX)) {
@@ -1694,6 +1739,21 @@ async function routeKeys(request, env) {
 			.bind(keyId, pub, owner, username, character, kind, bootstrap, t, exp),
 	]);
 	return json(keyAnswer(key, cert, exp, ready ? replacedId(older) : null));
+}
+
+// Every key of a character, at once: the council authority's certificates for it signed until now
+// (whatever key they name, seen here or not: the ones a councillor rotated away included) stop
+// counting, and so do the keys registered for it. A certificate the authority signs for it later
+// counts again (a councillor back on the list, after /oly discord key new).
+async function revokeCharacter(env, character, t, fail) {
+	if (typeof character !== 'string' || !validCharacter(character)) return fail('format', 'character: "Name-Realm" as the game writes it.');
+	const registered = (await env.DB.prepare('SELECT key_id FROM keys WHERE character = ? AND revoked = 0').bind(character).all()).results || [];
+	await env.DB.batch([
+		env.DB.prepare('INSERT INTO revoked_characters (character, revoked_at) VALUES (?, ?) ON CONFLICT(character) DO UPDATE SET revoked_at = excluded.revoked_at').bind(character, t),
+		env.DB.prepare('UPDATE keys SET revoked = 1, revoked_at = ? WHERE character = ? AND revoked = 0').bind(t, character),
+	]);
+	const council = (await env.DB.prepare('SELECT key_id FROM council_keys WHERE character = ? ORDER BY first_seen').bind(character).all()).results || [];
+	return json({ status: 'ok', character, revoked: true, keys: registered.map((k) => k.key_id), council_keys: council.map((k) => k.key_id) });
 }
 
 // The owner's keys neither revoked nor replaced, but `except`: the certified one first.

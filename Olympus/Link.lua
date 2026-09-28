@@ -1427,25 +1427,34 @@ local function DropKey()
 	return had
 end
 
+-- A key dropped in game whose certificate still runs keeps counting at the bot (whose checks
+-- don't ask this addon) until its keeper revokes it: its id is said, to send them.
+local function SayOldKey(k)
+	local c = type(k) == "table" and Link.ParseCert(k.cert)
+	if c and c.exp > ServerTime() then ns.Print(L.LINK_KEY_OLD:format(k.id)) end
+end
+
 function Link.SetKey(args)
 	args = tostring(args or ""):match("^%s*(.-)%s*$")
 	local d = Store()
 	if args == "" then return Link.ShowKey() end
 	local verb = args:lower()
 	if verb == "off" then
-		DropKey()
+		local had = DropKey()
 		d.nokey[ns.me] = true -- (a councillor's addon makes no new key by itself)
-		return ns.Print(ns.IsHighCouncillor(ns.me) and L.LINK_KEY_OFF_COUNCIL or L.LINK_KEY_OFF)
+		ns.Print(ns.IsHighCouncillor(ns.me) and L.LINK_KEY_OFF_COUNCIL or L.LINK_KEY_OFF)
+		return SayOldKey(had)
 	end
 	if verb == "new" then
 		-- A councillor's new key (a lost or leaked one, or one a year old): made here, and the
 		-- author's client certifies it the next time it is heard.
 		if not ns.IsHighCouncillor(ns.me) then return ns.Print(L.LINK_KEY_NEW_ONLY) end
 		if #Link.CAKeys() == 0 then return ns.Print(L.LINK_NOT_OPEN) end
-		DropKey()
+		local had = DropKey()
 		d.nokey[ns.me] = nil
 		Link.MakeCouncilKey()
-		return ns.Print(L.LINK_KEY_NEW)
+		ns.Print(L.LINK_KEY_NEW)
+		return SayOldKey(had)
 	end
 	local id, seed = args:match("^(%S+)%s+(%S+)$")
 	id = id and id:lower()
@@ -1533,7 +1542,8 @@ end
 -- debugprofilestop and GetTimePreciseSec over eight frames on this computer (the frame-to-frame
 -- jitter), and the exact second the key was made: tens of bits, not 256. That is enough for a key
 -- that only confirms Discord links, whose certificate lasts a year, that the bot's keeper can
--- revoke at once (the Worker's revocation list) and that /oly discord key new replaces. A
+-- revoke at once (the Worker's revocation lists, by key or by character) and that /oly discord key
+-- new replaces in game (it prints the old key's id: the keeper revokes that one at the bot). A
 -- councillor who wants a key made from a real random source asks the bot's keeper for one
 -- (scripts/link-keys.py confirmer, on a computer) and types it with /oly discord key <id> <key>.
 function Link.EntropySample()
@@ -2097,6 +2107,24 @@ function Link.PrintStatus()
 	end
 end
 
+-- /oly discord certified: the council authority's record (the author's client), for the bot's
+-- keeper, who can revoke a key by its id or every key of a character (web/WORKER.md, step 1b).
+function Link.PrintCertified()
+	local list = {}
+	for id, e in pairs(Link.Certified() or {}) do
+		if type(e) == "table" and type(e.name) == "string" and tonumber(e.exp) then
+			list[#list + 1] = { id = tostring(id), name = e.name, exp = tonumber(e.exp) }
+		end
+	end
+	if #list == 0 then return ns.Print(L.LINK_CA_LOG_NONE) end
+	table.sort(list, function(a, b)
+		if a.name ~= b.name then return a.name < b.name end
+		return a.exp < b.exp
+	end)
+	ns.Print(L.LINK_CA_LOG:format(#list))
+	for _, e in ipairs(list) do print(L.LINK_CA_LOG_LINE:format(e.id, e.name, date("!%Y-%m-%d", e.exp))) end
+end
+
 -- One line for /oly status and the bug report: never the key itself, the code or a proof.
 function Link.StatusLine()
 	local key, now = Link.Key(), ns.Now()
@@ -2129,7 +2157,7 @@ function Link.StatusLine()
 end
 
 -- /oly discord [code | show | status | forget | key [<id> <key> | new | off] | cert [<certificate>] |
--- watcher on|off]
+-- watcher on|off | certified]
 function Link.Slash(rest)
 	rest = tostring(rest or ""):match("^%s*(.-)%s*$")
 	local verb, arg = rest:match("^(%S*)%s*(.-)$")
@@ -2140,6 +2168,8 @@ function Link.Slash(rest)
 		Link.ShowWindow(true)
 	elseif verb == "status" and arg == "" then
 		Link.PrintStatus()
+	elseif verb == "certified" and arg == "" then
+		Link.PrintCertified()
 	elseif verb == "forget" and arg == "" then
 		Link.Forget()
 	elseif verb == "key" then
