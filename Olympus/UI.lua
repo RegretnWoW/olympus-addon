@@ -43,7 +43,7 @@ local TABS = {
 	{ key = "throne", label = "TAB_THRONE", icon = function() return UI.FirstTexture(UI.CROWNS) end },
 	-- The King's and his Hands' questions to the army (Vox.lua), the same way.
 	{ key = "vox", label = "TAB_VOX", icon = function() return UI.FirstTexture(UI.HORNS) end },
-	-- The Treasurer's book, and the King's copy of his report (Treasury.lua), the same way.
+	-- The treasury: its keepers' books together (Treasury.lua), the same way.
 	{ key = "treasury", label = "TAB_TREASURY", icon = "Interface\\Icons\\INV_Misc_Coin_02" },
 	-- The addon author's alone (Workshop.lua), the same way.
 	{ key = "workshop", label = "TAB_WORKSHOP", icon = "Interface\\Icons\\Trade_Engineering" },
@@ -117,7 +117,7 @@ local BUTTONS = {
 		{ "VOX_END", function() ns.Vox.CloseNow() end },
 		{ "VOX_SHOW", function() ns.Vox.ShowLive() end },
 	},
-	-- The Treasury: the book (whoever may see it), the Treasurer's opening balance, a copy.
+	-- The Treasury: the book (whoever may see it), a keeper's own opening balance, a copy.
 	treasury = {
 		{ "TREASURY_BOOK_BTN", function() ns.Treasury.Show(ns.Treasury.mode == "book" and "summary" or "book") end, refresh = true,
 			shown = function() return ns.Treasury.MaySee("book") end,
@@ -128,7 +128,7 @@ local BUTTONS = {
 				tt:AddLine(book and ns.Treasury.SummaryTip() or L.TREASURY_BOOK_BTN_TIP, 1, 1, 1, true)
 			end },
 		{ "TREASURY_OPENING_BTN", function() ns.ShowDialog("OLYMPUS_TREASURY_OPENING") end,
-			shown = function() return ns.Treasury.IsTreasurer() end },
+			shown = function() return ns.Treasury.IsKeeper() end },
 		{ "COPY_BTN", function() UI.ShowCopy(L.TREASURY_TITLE, ns.Treasury.DiscordText()) end,
 			shown = function() return ns.Treasury.Role() ~= "member" end },
 	},

@@ -212,28 +212,56 @@ Horde the King is Duskmonkey Boneback, guild master of `<Mudhutters>` (0.9.4): h
 as an Olympus guild there, whatever its name. Answers go to the King alone. Nothing another player sends can put free text on his screen: only names and
 Olympus guild names.
 
-### The Treasury (the Treasurer, the King, and the army when the King says so)
-A tab with a coin for the Treasurer of Olympus (that exact character, in the guild OLYMPUS),
-for the King, and for every member once the King shows the army something of it.
-- **The book**: gold the Treasurer receives by trade or mail is a donation, gold he gives by
-  trade or mail a payment, each written down by itself (mail when he takes its gold; the
-  auction house and cash on delivery don't count).
-- **The treasury is the book, not his gold**: an opening balance he sets, plus what came in,
-  less what went out. What he earns playing is his. A trade of his items (or his work: an
-  enchant, a lock opened) for gold is a sale, of his gold for items a purchase, gold with his
-  own characters his own: they go in the book as not counted, and a click on the line counts it
-  if it was the treasury's (or stops counting one that wasn't). A payment by mail that comes
-  back stops counting by itself.
+### The Treasury (its keepers, the King, and the army when the King says so)
+A tab with a coin for the treasury's keepers, for the King, and for every member once the King
+shows the army something of it.
+- **Its keepers (1.0)**: the Treasurer of Olympus (that exact character, in the guild OLYMPUS),
+  the King, and up to 5 characters the King adds on the Treasury tab (**The treasury's
+  keepers**, then **Add a treasury character**, by name or target; a click on one takes it off).
+  The list is the King's word alone: every client checks it comes from his character, keeps it
+  (it never runs out while he is away), and the Treasurer's addon repeats it.
+- **Each keeper's book**: gold and items a keeper receives by trade or mail are a donation, gold
+  and items he gives a payment, each written down by itself in his own character's book, by his
+  own addon (mail when he takes its gold, or once its items reach his bags; the auction house,
+  cash on delivery and the game's mail don't count).
+- **A book is not the keeper's gold**: its opening balance, plus what came in, less what went
+  out. What he earns playing is his. A trade of his items (or his work: an enchant, a lock
+  opened) for gold is a sale, of his gold for items a purchase, gold with his own characters his
+  own: they go in the book as not counted, and a click on the line counts it if it was the
+  treasury's (or stops counting one that wasn't). A payment by mail that comes back stops
+  counting by itself.
+- **Between keepers, a transfer**: gold or items one keeper gives another is the treasury's own
+  moving: in both books and in each one's balance, never a donation or a payment (the totals and
+  the ranking of donors leave it out). The addon can't tell another keeper's alts apart (that
+  would mean sending every keeper's alts on the channel): gold from one of them shows as a
+  donation, and a click on the line stops counting it.
+- **One treasury**: the keepers' books together. The balance is their sum; the totals, the
+  week's donations and the ranking of donors are one list each (someone who gave to two keepers
+  is one line); the book shows every keeper's lines by time, with who received each one. Each
+  keeper's balance and when his book last came show under the total; a keeper not heard from
+  for a while still counts.
+- **Items donated**: every item given to the treasury, how many, and who gave it last (hover it
+  for the item itself), with the army's "book" switch; the item lines are in the book too.
+- **1.0's fresh start**: at a keeper's first login on 1.0 the old book (0.9's, the Treasurer's)
+  is closed and kept in the saved variables, never shown or sent, and his new book opens at his
+  character's gold then (a keeper the King names later: at his gold then). The treasury starts
+  from their sum; the totals, the week and the ranking start at zero. A keeper can set his own
+  book's opening balance on the tab. The era travels in each book ("1.0"): 1.0 clients never
+  read 0.9's treasury, and 0.9 clients get a short copy of 1.0's, in 0.9's shape, from the
+  Treasurer's addon.
 - **The ranking of donors** (all time) and the week's donations, with a copy for Discord.
 - **The guild bank of <Olympus>**: whoever of that guild opens the bank with the addon on takes
   a snapshot of it (each tab's items with icons and counts, the bank's gold, when it was seen);
-  the Treasurer's snapshot reaches the King and, with his "book" switch, the army. Hover an
-  item for its tooltip. Nothing is ever moved in the bank: it is a picture.
-- **Sent by his addon by itself** (every 5 minutes and after a change): the balance, the totals,
-  the ranking and the latest lines of the book, on the Olympus channel. Every client checks it
-  comes from the Treasurer himself.
+  a keeper's snapshot (the newest, whoever took it) reaches the King and, with his "book"
+  switch, the army. Hover an item for its tooltip. Nothing is ever moved in the bank: it is a
+  picture. On WoW: Forever the bank's window opens through the game's interaction manager,
+  which 1.0 listens to (0.9's addon never saw it open there); a client with no guild bank says
+  so on the tab.
+- **Sent by each keeper's addon by itself** (every 5 minutes and after a change), once he said
+  yes: his book's balance, totals, ranking, items donated and latest lines, on the Olympus
+  channel. Every client checks it comes from a keeper himself.
 - **The King chooses what the army sees**, with three buttons: the balance, the ranking, the
-  book. Until he does, only the Treasurer and the King see them (the Treasurer's tab says so).
+  book. Until he does, only the keepers and the King see them (a keeper's tab says so).
   With any of them on, the Treasury tab appears for every member with the addon, showing only
   what he turned on (the book behind its own button), and the balance shows under the Treasurer
   in the Realm. The Treasurer's addon repeats the King's latest word, so members who never meet
@@ -353,7 +381,7 @@ tracking. Your name is on every message (the game adds it). What goes where:
 | [Olympus], [Captains] and [Lords] lines | everyone on the Olympus channel, all three | when you write one |
 | Hello: addon version, realm, public or sealed channel, whether you share your zone | your guild | every minute or so |
 | Your position as a dot on the map | your guild | only with `/oly share` (off by default) |
-| The Treasurer's book (balance, donations and who gave them, the ranking) and the guild bank of `<Olympus>` (its gold and items) | everyone on the Olympus channel receives the bytes; the addon shows them to the King, and to the army only with his switches | only after the Treasurer says yes (asked once; `/oly treasurer on\|off`), withdrawn at once when he turns it off |
+| A treasury keeper's book (balance, gold and items given and who gave them, the ranking) and the guild bank of `<Olympus>` (its gold and items) | everyone on the Olympus channel receives the bytes; the addon shows them to the King, and to the army only with his switches | only after that keeper says yes (each keeper, the King too, is asked once; `/oly treasurer on\|off`), withdrawn at once when he turns it off |
 | The King's crown on the map, and with it his zone and layer | everyone on the Olympus channel | only while the King turns it on (Throne tab), whatever he answered to the question |
 
 Decrees and the King's calls go out when someone sends one (a decree carries its sender's
@@ -407,7 +435,8 @@ copy. No addon can prevent that. What this one does is make an edited copy usele
   members of that guild, so the realm key and guild elections can't be faked from outside.
 - **Sender names cannot be forged.** The server stamps every message with its sender.
   - **The King and the Treasurer are known by name**, not by vote: only their characters can
-    send their commands and the treasury. A report of `<Olympus>` naming anyone else as its
+    send their commands and the treasury (with the characters the King names to the treasury,
+    whose books count while his list names them). A report of `<Olympus>` naming anyone else as its
     leader counts for nothing, not even as a vote, so outsiders can't crown one of their own.
     Their names count on their realm group only (Forever's PvP realms): a namesake anywhere
     else is someone else, and there is no King there.
@@ -491,7 +520,7 @@ Limits, stated honestly:
 | `/oly all <text>` · `/oly captains <text>` · `/oly lords <text>` | the same, as `/oly` commands |
 | `/oly mute olympus` · `/oly mute captains` · `/oly mute lords` | hide or show a channel in chat |
 | `/oly chatwindow <number or name> [olympus\|captains\|lords]` · `/oly chatwindow main` | show the Olympus chats in another chat window, or back in the main one |
-| `/oly treasurer on\|off` | the Treasurer shares his book and the guild bank, or keeps them private |
+| `/oly treasurer on\|off` | a keeper of the treasury (the Treasurer, the King, a character he named) shares his book and the guild bank, or keeps them private |
 | `/oly rollcall on\|off` | answer the author's roll calls (version, client, channel state) or not |
 | `/oly inspection on\|off` | take part in the King's Royal Inspection when sampled (a 2-minute patrol reported to him), or not |
 | `/oly issuereporter hide\|show` | hide Blizzard's Issue Reporter box (beta clients) at every login, or show it again (also a "Hide" button on it) |

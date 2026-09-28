@@ -1194,7 +1194,7 @@ SlashCmdList.OLYMPUS = function(input)
 			if on == "on" or on == "off" then ns.db.royalInspection = on == "on" end
 			ns.Print(ns.db.royalInspection == false and L.INSPECTION_OPT_OFF or L.INSPECTION_OPT_ON)
 		elseif cmd == "treasurer" then
-			-- The Treasurer's yes to sharing his book and the guild bank (Treasury.lua).
+			-- A keeper's yes to sharing his book and the guild bank (Treasury.lua).
 			local on = rest:lower()
 			if on == "on" or on == "off" then
 				ns.Treasury.SetConsent(on == "on")
