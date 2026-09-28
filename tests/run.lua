@@ -19487,5 +19487,24 @@ test("1.0.0 OfficerSpy's bridge: on the King's screen, while the councillors' na
 	if not ok then error(err, 0) end
 end)
 
+test("1.0.0 treasury: the reminder a sharing keeper gets says what he shares goes out on the Olympus channel, hidden or shown (both languages)", function()
+	local T, L = ns.Treasury, ns.L
+	local saved = ns.rdb.treasuryFlags
+	ns.rdb.treasuryFlags = {}
+	assert(T.WhoSees():find("every client on it receives it", 1, true), T.WhoSees())
+	assert(T.WhoSees():find("bank", 1, true), "the bank named too: " .. T.WhoSees())
+	ns.rdb.treasuryFlags = { ranking = true }
+	assert(T.WhoSees():find(L.TREASURY_PART_RANKING, 1, true) and T.WhoSees():find("every client on it receives it", 1, true), T.WhoSees())
+	ns.rdb.treasuryFlags = saved
+	local pt = { L = setmetatable({}, { __index = ns.L }) }
+	local savedLocale = GetLocale
+	GetLocale = function() return "ptBR" end
+	local ok, err = pcall(function() assert(loadfile(ADDON_DIR .. "Locales.lua"))("Olympus", pt) end)
+	GetLocale = savedLocale
+	if not ok then error(err, 0) end
+	assert(rawget(pt.L, "TREASURY_YOU_AND_KING"):find("todo cliente nele recebe", 1, true))
+	assert(rawget(pt.L, "TREASURY_YOU_AND_KING_BUT"):find("todo cliente nele recebe", 1, true))
+end)
+
 print(("\n%d passed, %d failed"):format(passed, failed))
 os.exit(failed == 0 and 0 or 1)
