@@ -4054,7 +4054,8 @@ test("reports: fields 21 and 22 (reporter's realm, guild's home) are optional bo
 	local d = C.DecodeReport(payload)
 	eq(d.from, "ClassicBetaPvP2"); eq(d.home, "ClassicBetaPvP")
 	local f = C.Split(payload, "~")
-	eq(#f, 24, "22 fields, the faction (23) and the versions (24)")
+	-- (1.0.0 adds three fields after them: st, cap and pres, their own test below.)
+	eq(#f, 27, "22 fields, the faction (23), the versions (24), then 1.0.0's 25-27")
 	local withVersions = C.DecodeReport(C.EncodeReport({ guild = "Olympus V", total = 9, online = 1, zones = {},
 		versions = { ["0.8.2"] = 3, ["0.8.1"] = 1, ["?"] = 1 } }))
 	eq(withVersions.versions["0.8.2"], 3); eq(withVersions.versions["0.8.1"], 1)
@@ -4108,9 +4109,17 @@ test("a report heard by a character on another realm of the group is no previous
 	if not ok then error(err, 0) end
 end)
 
+-- The Codec of 0.9.8 and 0.9.9 (tests/fixtures/codec-0.9.8.lua), in a namespace of its own.
+local function OldCodec()
+	local ons = {}
+	assert(loadfile(ROOT .. "tests/fixtures/codec-0.9.8.lua"))("Olympus", ons)
+	return ons.Codec
+end
+
 -- Comm.lua loaded into a namespace of its own (fresh peers, stats and guard) with a clock the
 -- test moves. Deliver(dist, sender, text) goes through the real CHAT_MSG_ADDON handler.
-local function FreshComm()
+-- old (1.0.0): a client of 0.9.8 or 0.9.9 instead, their Comm and Codec (tests/fixtures).
+local function FreshComm(old)
 	local events, login = {}, {}
 	local cns = setmetatable({}, { __index = ns })
 	cns.RegisterEvent = function(event, fn) events[event] = events[event] or {}; table.insert(events[event], fn) end
@@ -4119,7 +4128,8 @@ local function FreshComm()
 	cns.clock = 100000
 	cns.Now = function() return cns.clock end
 	C_ChatInfo = { RegisterAddonMessagePrefix = function() end }
-	assert(loadfile(ADDON_DIR .. "Comm.lua"))("Olympus", cns)
+	if old then cns.Codec = OldCodec() end
+	assert(loadfile(old and (ROOT .. "tests/fixtures/comm-0.9.8.lua") or (ADDON_DIR .. "Comm.lua")))("Olympus", cns)
 	for _, fn in ipairs(login) do fn() end
 	local function Deliver(dist, sender, text)
 		for _, fn in ipairs(events.CHAT_MSG_ADDON) do fn(ns.PREFIX, text, dist, sender) end
@@ -4420,21 +4430,26 @@ test("election guard: a reporter never heard on the channel is left out a while,
 end)
 
 test("election guard: a reporter named with its realm over GUILD and without it on the channel is heard", function()
-	local savedChannel = GetChannelName
+	local savedChannel, savedShared = GetChannelName, ns.rdb.shared
 	local ok, err = pcall(function()
 		local cns, Deliver, Report = FreshComm()
 		local C = cns.Comm
 		C.loginAt = cns.clock - 1000
 		local ours = { guild = MY_GUILD, total = 1000, online = 300, zones = {} }
+		-- (1.0.0: a peer of another realm is elected only while our channel is shared, which its
+		-- reports, sent from its realm, prove: before the first one, we report.)
+		local his = { guild = MY_GUILD, total = 1000, online = 300, zones = {}, from = "ClassicBetaPvP2" }
+		ns.rdb.shared = nil
 		GetChannelName = function() return 5 end
 		C.JoinChannel()
 		local function Tick(seconds, heard)
 			cns.clock = cns.clock + seconds
 			Deliver("GUILD", "Abe-ClassicBetaPvP2", "H1~0.7.11~ClassicBetaPvP2~p")
-			if heard then Report("Abe", ours) end
+			if heard then Report("Abe", his) end
 			C.MaybeBroadcast(ours)
 		end
 		Tick(0)
+		eq(C.reporterName, "Tester", "the channel not seen shared: Abe is on another realm's")
 		for _ = 1, 8 do Tick(180, true) end
 		eq(C.reporterName, "Abe-ClassicBetaPvP2", "heard as Abe: stays elected"); eq(#C.Stats().benched, 0)
 		for _ = 1, 3 do Tick(180) end
@@ -4442,7 +4457,7 @@ test("election guard: a reporter named with its realm over GUILD and without it 
 		Tick(0, true)
 		eq(C.reporterName, "Abe-ClassicBetaPvP2", "heard as Abe: in again")
 	end)
-	GetChannelName, C_ChatInfo = savedChannel, nil
+	GetChannelName, C_ChatInfo, ns.rdb.shared = savedChannel, nil, savedShared
 	if not ok then error(err, 0) end
 end)
 
@@ -4541,9 +4556,16 @@ test("/oly status: realm, census, raw names and topology, short, and without the
 		for _, want in ipairs({ "realm: Classic Beta PvP = ClassicBetaPvP  id=4619 native=nil guid=4619  guild home=ours",
 			"census: " .. BETA .. " (seed)  unique names=true  connected=none", "names raw: roster Realm=1000  e.g. [Member1-Realm]",
 			"names raw: roster by server (GUID) ?=1000", "topology: channel SHARED (ClassicBetaPvP2 -> ClassicBetaPvP, 4m ago)",
-			"topology: guild peers by realm" }) do
+			"topology: guild peers by realm",
+			-- 1.0.0: the channel seen shared, one reporter for every realm; then what our report says.
+			"topology: reporter elected on every realm (channel shared)  |  quiet after 10 before us",
+			"topology: guild on ClassicBetaPvP  |  report st=" }) do
 			assert(text:find(want, 1, true), want .. "\n" .. text)
 		end
+		ns.rdb.shared = nil
+		assert(ns.StatusText():find("topology: reporter elected on this realm  |  quiet after 10 before us", 1, true),
+			"not shared: our realm's reporter (our guild on one realm: 10 of it say hello)")
+		ns.rdb.shared = { realm = "ClassicBetaPvP2", to = "ClassicBetaPvP", t = os.time() - 250 }
 		-- The longest these lines get on the beta: still short.
 		local long = "Bellattrixx Lesstrange-ClassicBetaPvP2"
 		GetGuildInfo = function() return MY_GUILD, "Hero", 3, "ClassicBetaPvP2" end
@@ -4557,6 +4579,9 @@ test("/oly status: realm, census, raw names and topology, short, and without the
 			local c = keep.Stats()
 			c.raw, c.rawSample = { ch = raw, g = raw }, { ch = long, g = long }
 			c.reportRealms, c.peerRealms, c.heardOwn, c.heardOwnAt, c.benched = realms, realms, long, os.time() - 100, { long }
+			-- (1.0.0: a guild on three realms, the server's clock, a report naming five.)
+			c.presence = { "ClassicBetaPvP", "ClassicBetaPvP2", "ClassicBetaPvP3" }
+			c.reportSt, c.reportCap, c.reportPres = 1790000000, "a", { "a1b", "c2d", "e3f", "g4h", "i5j" }
 			return c
 		end
 		ns.Who.RawCounts = function() return raw, 30, long end
@@ -4568,7 +4593,8 @@ test("/oly status: realm, census, raw names and topology, short, and without the
 				assert(#line <= 110, ("too long for the /oly bug window (%d): %s"):format(#line, line))
 			end
 		end
-		eq(checked, 12)
+		eq(checked, 14, "(1.0.0: two more topology lines)")
+		assert(text:find("topology: guild on ClassicBetaPvP,ClassicBetaPvP2,+1  |  report st=1790000000 cap=a pres=a1b.c2d.e3f.g4h", 1, true), text)
 		assert(text:find("connected=ClassicBetaPvP2,ClassicBetaPvE,+1", 1, true), "ours left out, two named\n" .. text)
 	end)
 	C_AutoComplete, GetRealmID, GetNativeRealmID, RegionalUniqueNamesEnabled, UnitGUID = nil, nil, nil, nil, nil
@@ -8163,6 +8189,7 @@ do
 			eq(lock.tries, 6); eq(lock.nextIn, 600)
 			-- An honest owner opens it: in at the next try, and the census is asked for again.
 			id = 5
+			C.random = function() return 0 end -- (1.0.0: the ask's second is drawn in 4 to 45 s; here the first)
 			w.Wait(600)
 			eq(C.GuardStats().locked, nil, "open again")
 			eq(C.ChannelReady(), true)
@@ -9225,10 +9252,13 @@ test("0.9.8 the High Council: no client relays the list before the census says h
 		eq(#sent, 1, "one try each half hour")
 		clock = clock + W.RELAY_EVERY; Census(); W.RelayCouncil()
 		eq(#sent, 2, "this one")
-		-- The author's client sends his list at every login, even one it held already.
+		-- The author's client sends his list at every login, even one it held already (1.0.0: on
+		-- the channel, then over GUILD to his guildmates on every realm).
 		ns.COUNCIL_SIGNED = COUNCIL_LIST1
+		ns.Comm.SendChunked = function(msg, _, dist) sent[#sent + 1] = msg; sent[msg .. (dist or "")] = true end
 		W.CouncilLogin()
-		eq(#sent, 3); eq(sent[3], "HS~" .. COUNCIL_LIST1)
+		eq(#sent, 4); eq(sent[3], "HS~" .. COUNCIL_LIST1); eq(sent["HS~" .. COUNCIL_LIST1], true, "the channel")
+		eq(sent[4], "HS~" .. COUNCIL_LIST1); eq(sent["HS~" .. COUNCIL_LIST1 .. "GUILD"], true, "our guild")
 	end)
 	ns.rdb.council, ns.Comm.SendChunked, ns.Now, W.random, ns.COUNCIL_SIGNED = saved.council, saved.chunked, saved.now, saved.random, saved.signed
 	ns.rdb.guilds, ns.After = saved.guilds, saved.after
@@ -10085,13 +10115,18 @@ test("0.9.9 the High Council's titles: past the addon's limits, the rest is left
 	end)
 end)
 
-test("0.9.9 the High Council's titles: on the channel only, for this realm group only, for names on the name list only", function()
+test("0.9.9 the High Council's titles: on the channel (1.0.0: or from our guild), for this realm group only, for names on the name list only", function()
 	WithTestCouncil(function()
 		local W = ns.Workshop
 		W.TakeCouncil(COUNCIL_TEST_NAMES2) -- Test Councillor and Other Mod
 		W.HandleTitles("WHISPER", "Any Player-Realm", "HT~" .. COUNCIL_TEST_TITLES)
-		W.HandleTitles("GUILD", "Any Player-Realm", "HT~" .. COUNCIL_TEST_TITLES)
-		eq(ns.rdb.councilTitles, nil, "not by whisper, not over the guild")
+		eq(ns.rdb.councilTitles, nil, "not by whisper")
+		-- 1.0.0: over the guild too (a guildmate may play on a realm whose channel has the lists
+		-- where ours has none); its own tests are under "1.0.0 the High Council's lists".
+		ns.After = function() end -- (the pass-on to our channel it schedules: not here)
+		W.HandleTitles("GUILD", "Guildmate-OtherRealm", "HT~" .. COUNCIL_TEST_TITLES)
+		eq(ns.rdb.councilTitles.at, 1800000002, "from our guild")
+		ns.rdb.councilTitles = nil
 		W.HandleTitles("CHANNEL", "Any Player-Realm", "HT~" .. COUNCIL_TEST_TITLES)
 		eq(ns.rdb.councilTitles.at, 1800000002, "the channel")
 		-- Titles for the councillors of the name list alone: Third and Fourth Mod are not on it,
@@ -11444,19 +11479,38 @@ end)
 -- The census (King.AddonsOnline) counts net.users addons online: 3 unless the test says
 -- otherwise, so that it counts others than the client itself (a holder whose census counts
 -- nobody else takes no ask up) and every draw is won (3 takers in 3).
+-- Realms and guilds (1.0.0): each client plays on a realm and is in a guild, "Realm" and "G"
+-- unless the test says otherwise (net.Client(name, rdb, { realm, guild, reporter, runnerUp })).
+-- As on WoW: Forever, the channel reaches the sender's realm alone (each realm has an OlympusNet
+-- of its own) and GUILD the sender's guildmates on every realm; a whisper reaches everyone here.
+-- Comm counts a client's guildmates among the test's clients (PeerCount, SpansRealms).
 local function CouncilNet(fn)
 	local dialogs = {}
 	for k, v in pairs(StaticPopupDialogs) do dialogs[k] = v end
 	local net = { clock = 1800000100, users = 3, sent = {}, clients = {} }
+	local function Reaches(from, c, dist)
+		if dist == "CHANNEL" then return c.realm == (from.realm or "Realm") end
+		if dist == "GUILD" then return c.guild == (from.guild or "G") end
+		return true
+	end
 	local function Post(from, dist, msg)
 		net.sent[#net.sent + 1] = { client = from, from = from.name, dist = dist, msg = msg, t = net.clock }
 		for _, c in ipairs(net.clients) do
-			local h = c ~= from and msg:sub(3, 3) == "~" and c.handlers[msg:sub(1, 2)]
+			local h = c ~= from and Reaches(from, c, dist) and msg:sub(3, 3) == "~" and c.handlers[msg:sub(1, 2)]
 			if h then h(dist, from.name, msg) end
 		end
 	end
-	function net.Client(name, rdb)
-		local c = { name = name, handlers = {}, timers = {} }
+	-- c's guildmates among the clients (on c's realm alone: sameRealm).
+	local function Guildmates(c, sameRealm)
+		local n = 0
+		for _, o in ipairs(net.clients) do
+			if o ~= c and o.guild == c.guild and (not sameRealm or o.realm == c.realm) then n = n + 1 end
+		end
+		return n
+	end
+	function net.Client(name, rdb, where)
+		where = where or {}
+		local c = { name = name, handlers = {}, timers = {}, realm = where.realm or "Realm", guild = where.guild or "G" }
 		local cns = setmetatable({ me = name, rdb = rdb or {}, db = {} }, { __index = ns })
 		cns.On, cns.Fire, cns.Log = function() end, function() end, function() end
 		cns.Now = function() return net.clock end
@@ -11466,8 +11520,12 @@ local function CouncilNet(fn)
 		cns.Comm = {
 			Handle = function(kind, f) c.handlers[kind] = f end,
 			Send = function(dist, msg) Post(c, dist, msg) end,
-			SendChunked = function(msg) Post(c, "CHANNEL", msg) end,
+			SendChunked = function(msg, _, dist) Post(c, dist or "CHANNEL", msg) end,
 			Whisper = function() end,
+			PeerCount = function(sameRealm) return Guildmates(c, sameRealm) end,
+			SpansRealms = function() return Guildmates(c) > Guildmates(c, true) end,
+			QueueSize = function() return 0 end,
+			isReporter = where.reporter, isRunnerUp = where.runnerUp,
 		}
 		assert(loadfile(ADDON_DIR .. "Workshop.lua"))("Olympus", cns)
 		c.ns, c.W = cns, cns.Workshop
@@ -11475,7 +11533,8 @@ local function CouncilNet(fn)
 		net.clients[#net.clients + 1] = c
 		return c
 	end
-	function net.Hear(name, msg, dist) Post({ name = name }, dist or "CHANNEL", msg) end
+	-- (where: the outsider's realm and guild, "Realm" and "G" unless given.)
+	function net.Hear(name, msg, dist, where) Post({ name = name, realm = where and where.realm, guild = where and where.guild }, dist or "CHANNEL", msg) end
 	function net.Run(seconds)
 		local stop = net.clock + seconds
 		while true do
@@ -11493,12 +11552,12 @@ local function CouncilNet(fn)
 		net.clock = stop
 	end
 	-- The types of the messages a client (or anyone: nil) sent, in order: "HQ HS HT"; of one
-	-- type only, when given.
-	function net.Types(from, kind)
+	-- type only, when given; sent one way only (1.0.0: "CHANNEL" or "GUILD"), when given.
+	function net.Types(from, kind, dist)
 		local out = {}
 		for _, s in ipairs(net.sent) do
 			local t = s.msg:sub(1, 2)
-			if (not from or s.client == from) and (not kind or t == kind) then out[#out + 1] = t end
+			if (not from or s.client == from) and (not kind or t == kind) and (not dist or s.dist == dist) then out[#out + 1] = t end
 		end
 		return table.concat(out, " ")
 	end
@@ -11512,9 +11571,9 @@ local function CouncilNet(fn)
 end
 
 -- A client holding the test key's name list (NAMES4, at 1800000001) and, unless told not to,
--- its titles list (TITLES, at 1800000002).
-local function CouncilHolder(net, name, namesOnly)
-	local c = net.Client(name)
+-- its titles list (TITLES, at 1800000002). where: as net.Client's.
+local function CouncilHolder(net, name, namesOnly, where)
+	local c = net.Client(name, nil, where)
 	eq(c.W.TakeCouncil(COUNCIL_TEST_NAMES4), true, name)
 	if not namesOnly then eq(c.W.TakeTitles(COUNCIL_TEST_TITLES), true, name) end
 	return c
@@ -11615,7 +11674,7 @@ test("0.9.9 a holder of a newer list answers an ask once, 3 to 15 s after it, as
 			local h = CouncilHolder(net, "Holder-Realm")
 			h.W.random = function() return 0.999 end
 			-- Not on the channel, not ours, not an ask: nothing (and none of it takes its turn).
-			net.Hear("Asker-Realm", "HQ~0~0", "GUILD")
+			-- (1.0.0 answers an ask from our guild over GUILD: "1.0.0 the High Council's lists" tests.)
 			net.Hear("Asker-Realm", "HQ~0~0", "WHISPER")
 			net.Hear("Holder-Realm", "HQ~0~0")
 			for _, bad in ipairs({ "HQ~0", "HQ~0~0~0", "HQ~x~0", "HQ~-1~0", "HQ~ 0~0", "HQ~0~0 ", "HQ~" .. ("9"):rep(20) .. "~" .. ("9"):rep(20) }) do
@@ -11827,9 +11886,9 @@ test("0.9.9 HQ on the channel: this version's Comm hands it to the Workshop; a 0
 		local dialogs, ci = {}, C_ChatInfo
 		for k, v in pairs(StaticPopupDialogs) do dialogs[k] = v end
 		local ok, err = pcall(function()
-			-- Comm.lua has not changed since 0.9.8, and 0.9.8's Workshop registers no HQ handler:
-			-- a Comm without the Workshop is a 0.9.8 client hearing the ask.
-			local old, Deliver = FreshComm()
+			-- 0.9.8's Workshop registers no HQ handler: its Comm (tests/fixtures; 1.0.0 changed
+			-- this version's) without the Workshop is a 0.9.8 client hearing the ask.
+			local old, Deliver = FreshComm(true)
 			local logs = {}
 			old.Log = function(fmt, ...) logs[#logs + 1] = fmt:format(...) end
 			Deliver("CHANNEL", "Asker-Realm", "HQ~0~0")
@@ -13136,6 +13195,681 @@ test("1.0.0 photo mode: the author's /oly photo hides all but Olympus and the wo
 	ns.Print, ns.me, ns.devThrone, ns.devWorkshop, ns.UI = saved.print, saved.me, saved.devThrone, saved.devWorkshop, saved.UI
 	if not ok then error(err, 0) end
 end)
+
+---------------------------------------------------------------------------
+-- 1.0.0: realms. WoW: Forever's PvP and PvP 2 each have an OlympusNet of their own, while GUILD
+-- reaches a guild's members on both: each realm elects its own reporter for a guild (report
+-- fields 25-27: server time, part, realms), and the High Council's lists cross over GUILD.
+---------------------------------------------------------------------------
+do
+	local P1, P2 = "ClassicBetaPvP", "ClassicBetaPvP2"
+
+	-- A FreshComm on the channel, its clock `ago` seconds after login, and the table to restore.
+	local function OnChannel(old)
+		local saved = { channel = GetChannelName, shared = ns.rdb.shared, guilds = ns.rdb.guilds }
+		GetChannelName = function() return 5 end
+		ns.rdb.shared = nil -- (WoW: Forever: no report sent from another realm reaches our channel)
+		local cns, Deliver, Report = FreshComm(old)
+		cns.Comm.loginAt = cns.clock - 1000
+		cns.Comm.JoinChannel()
+		return cns, Deliver, Report, function()
+			GetChannelName, C_ChatInfo, ns.rdb.shared, ns.rdb.guilds = saved.channel, nil, saved.shared, saved.guilds
+		end
+	end
+	local function Guarded(fn)
+		local restore
+		local ok, err = pcall(function() fn(function(old) local a, b, c, r = OnChannel(old); restore = r; return a, b, c end) end)
+		if restore then restore() end
+		if not ok then error(err, 0) end
+	end
+
+	test("1.0.0 a reporter on each realm: guildmates on PvP 2 who sort first leave us our guild's reporter on our realm", function()
+		Guarded(function(Open)
+			local cns, Deliver, Report = Open()
+			local C = cns.Comm
+			local ours = { guild = MY_GUILD, total = 1000, online = 300, zones = {} }
+			local function Far()
+				Deliver("GUILD", "Abe-" .. P2, "H1~0.9.9~" .. P2 .. "~p")
+				Deliver("GUILD", "Ada-" .. P2, "H1~1.0.0~" .. P2 .. "~p")
+			end
+			-- Abe and Ada play on PvP 2 and sort before us (Tester, on Realm). Before 1.0.0 Abe was
+			-- elected for every realm: never heard on our channel, our guild was off our realm's
+			-- census until the guard left him out (400 s), then Ada (400 s more).
+			Far()
+			C.MaybeBroadcast(ours)
+			eq(C.isReporter, true, "nobody of our realm sorts before us: we report on our realm's channel")
+			for _ = 1, 10 do
+				cns.clock = cns.clock + 60
+				Far()
+				C.MaybeBroadcast(ours)
+				eq(C.isReporter, true, "still, minute after minute")
+			end
+			eq(#C.Stats().benched, 0, "nobody of another realm watched, nobody left out")
+			-- A guildmate of our realm who sorts first is elected; the runner-up comes from our realm too.
+			Deliver("GUILD", "Bob", "H1~1.0.0~Realm~p")
+			Far()
+			C.MaybeBroadcast(ours)
+			eq(C.isReporter, false); eq(C.reporterName, "Bob")
+			Report("Bob", ours)
+			C.MaybeBroadcast(ours)
+			eq(C.isRunnerUp, true, "we back Bob, not Abe or Ada")
+			-- A peer whose hello names no realm (before 0.7.11) may play on ours: it stays in.
+			Deliver("GUILD", "Aaa", "H1~0.7.10")
+			C.MaybeBroadcast(ours)
+			eq(C.reporterName, "Aaa", "a peer of a realm we don't know is kept")
+		end)
+	end)
+
+	test("1.0.0 one reporter for every realm while a report sent from another realm reached our channel within the hour", function()
+		Guarded(function(Open)
+			local cns, Deliver, Report = Open()
+			local C = cns.Comm
+			local ours = { guild = MY_GUILD, total = 1000, online = 300, zones = {} }
+			local function Tick(seconds)
+				cns.clock = cns.clock + (seconds or 0)
+				Deliver("GUILD", "Abe-" .. P2, "H1~1.0.0~" .. P2 .. "~p")
+				C.MaybeBroadcast(ours)
+			end
+			Tick()
+			eq(C.isReporter, true, "the channel not seen shared: our realm's reporter")
+			eq(C.Stats().electAll, false)
+			-- Abe's report, sent from PvP 2, heard on our channel: it is shared, one reporter for all.
+			Report("Abe-" .. P2, { guild = MY_GUILD, total = 1000, online = 300, zones = {}, from = P2 })
+			eq(ns.rdb.shared.realm, P2)
+			Tick()
+			eq(C.reporterName, "Abe-" .. P2, "every realm's peers elect one reporter, as before 1.0.0")
+			eq(C.Stats().electAll, true)
+			-- An hour later without another such report: our realm's again.
+			Tick(3601)
+			eq(C.isReporter, true, "an hour without a report from another realm")
+			-- Shared between two other realms of our group: not our channel.
+			ns.rdb.shared = { realm = P2, to = "ClassicBetaPvP3", t = cns.clock }
+			Tick()
+			eq(C.isReporter, true, "another realm's channel")
+			ns.rdb.shared = { realm = "Realm", to = P2, t = cns.clock - 100 }
+			Tick()
+			eq(C.reporterName, "Abe-" .. P2, "ours heard on PvP 2's channel: shared too")
+		end)
+	end)
+
+	test("1.0.0 the hello quiet rule counts our realm: 10 guildmates before us on one realm, 5 on each of two, 3 at least", function()
+		Guarded(function(Open)
+			local cns, Deliver = Open()
+			local C = cns.Comm
+			local hellos, peers = 0, {}
+			C_ChatInfo.SendAddonMessage = function(_, msg) if msg:find("^H1~") then hellos = hellos + 1 end end
+			-- `seconds` later, every peer (all of them sort before us) says hello again.
+			local function Hear(seconds)
+				cns.clock = cns.clock + seconds
+				for name, realm in pairs(peers) do Deliver("GUILD", name .. "-" .. realm, "H1~1.0.0~" .. realm .. "~p") end
+			end
+			-- A minute later: does our hello go?
+			local function Says()
+				Hear(60)
+				local before = hellos
+				C.Hello()
+				for _ = 1, 5 do C.Pump() end
+				return hellos > before
+			end
+			eq(Says(), true, "the first")
+			for i = 1, 9 do peers["Aa" .. i] = "Realm" end
+			Hear(0)
+			eq(C.QuietAfter(), 10, "our guild on one realm"); eq(Says(), true, "9 of our realm before us")
+			peers.Ab = "Realm"
+			eq(Says(), false, "10 before us: quiet")
+			-- Our guild on PvP 2 too: 5 talking on each realm. Guildmates there never count here.
+			for i = 1, 10 do peers["Ac" .. i] = P2 end
+			for i = 5, 9 do peers["Aa" .. i] = nil end
+			peers.Ab = nil
+			Hear(0)
+			eq(C.QuietAfter(), 5)
+			Hear(181) -- (those gone quiet are out of the election's 3 minutes)
+			eq(Says(), true, "4 of our realm before us (and 10 of PvP 2): before 1.0.0, 14 kept us quiet")
+			peers.Ab = "Realm"
+			eq(Says(), false, "5 of our realm before us")
+			-- Three realms: 4 each; six: 3 at least.
+			peers.Ad = "ClassicBetaPvP3"
+			Hear(0)
+			eq(C.QuietAfter(), 4)
+			for i = 4, 6 do peers["Ae" .. i] = "ClassicBetaPvP" .. i end
+			Hear(0)
+			eq(C.QuietAfter(), 3)
+			-- A shared channel: one reporter for every realm, and 10 of every realm before us.
+			ns.rdb.shared = { realm = P2, to = "Realm", t = cns.clock }
+			eq(C.QuietAfter(), 10)
+			eq(C.Stats().quietAfter, 10)
+		end)
+	end)
+
+	test("1.0.0 our guild's realms (field 27): the realms the counted hellos name, ours included, as codes", function()
+		Guarded(function(Open)
+			local cns, Deliver = Open()
+			local C = cns.Comm
+			eq(table.concat(C.PresenceRealms(), ","), "Realm"); eq(C.SpansRealms(), false)
+			eq(table.concat(C.Presence(), "."), C.RealmCode("Realm"))
+			Deliver("GUILD", "Abe-" .. P2, "H1~1.0.0~" .. P2 .. "~p")
+			Deliver("GUILD", "Old", "H1~0.7.10") -- (no realm named: none added)
+			Deliver("GUILD", "Bob", "H1~1.0.0~Realm~p")
+			eq(table.concat(C.PresenceRealms(), ","), P2 .. ",Realm"); eq(C.SpansRealms(), true)
+			local a, b = C.RealmCode(P2), C.RealmCode("Realm")
+			assert(a:find("^[0-9a-z][0-9a-z][0-9a-z]$") and a ~= b, a .. " " .. b)
+			eq(table.concat(C.Presence(), "."), a < b and (a .. "." .. b) or (b .. "." .. a), "sorted")
+			-- Counted as long as the census counts them (12 minutes: quiet ones say hello each 10).
+			cns.clock = cns.clock + 721
+			eq(table.concat(C.PresenceRealms(), ","), "Realm"); eq(C.SpansRealms(), false)
+		end)
+	end)
+
+	test("1.0.0 report fields 25-27 (server time, part, realms) round-trip; 0.9.8 and 0.9.9 decode the same 24 fields", function()
+		local C = ns.Codec
+		local r = { guild = "Olympus V", total = 900, online = 120, zones = { ["Stormwind City"] = 30 }, leader = "Lead", users = 12,
+			from = P1, home = P2, versions = { ["1.0.0"] = 3, ["0.9.8"] = 1 }, officers = { { name = "Off", rank = 1, level = 60 } },
+			st = 1790000123, cap = "a", pres = { "zz9", "k3a", "k3a", "BAD", "x9b" } }
+		local payload = C.EncodeReport(r)
+		local f = C.Split(payload, "~")
+		eq(#f, 27)
+		eq(tonumber(f[25], 36), 1790000123); eq(f[25], f[25]:lower())
+		eq(f[26], "a"); eq(f[27], "k3a.x9b.zz9", "each realm once, sorted, three letters or digits")
+		local d = C.DecodeReport(payload)
+		eq(d.st, 1790000123); eq(d.cap, "a"); eq(table.concat(d.pres, "."), "k3a.x9b.zz9")
+		-- Left empty (no GetServerTime, nothing known): nil each.
+		local base = C.Split(C.EncodeReport({ guild = "Olympus V", total = 9, online = 1, zones = {} }), "~")
+		eq(base[25] .. base[26] .. base[27], "")
+		local plain = C.DecodeReport(table.concat(base, "~"))
+		eq(plain.st, nil); eq(plain.cap, nil); eq(plain.pres, nil)
+		-- Whatever a sender puts there: only what the fields may hold.
+		local function With(a, b, c)
+			base[25], base[26], base[27] = a, b, c
+			return C.DecodeReport(table.concat(base, "~"))
+		end
+		local bad = With("ZZ", "q", "abcd.k3a.k3a.K3A..x")
+		eq(bad.st, nil, "base 36 in lowercase only"); eq(bad.cap, nil, "a, b or c"); eq(table.concat(bad.pres, "."), "k3a")
+		eq(With("123456789", "c", "").st, nil, "8 digits at most"); eq(With("zz", "c", "").cap, "c")
+		local many = {}
+		for i = 1, 20 do many[i] = ("r%02d"):format(i) end
+		eq(#With("", "", table.concat(many, ".")).pres, C.MAX_PRES, "12 realms at most")
+		eq(#C.Split(C.Split(C.EncodeReport({ guild = "Olympus V", total = 9, online = 1, zones = {}, pres = many }), "~")[27], "."), C.MAX_PRES)
+		-- 0.9.8 and 0.9.9 (tests/fixtures/codec-0.9.8.lua) read the first 24 fields and leave the rest.
+		local function Same(x, y, path)
+			if type(x) ~= "table" or type(y) ~= "table" then eq(x, y, path) return end
+			for k, v in pairs(x) do Same(v, y[k], path .. "." .. tostring(k)) end
+			for k in pairs(y) do if x[k] == nil then error(path .. "." .. tostring(k) .. " only in one", 0) end end
+		end
+		local old = OldCodec().DecodeReport(payload)
+		assert(old, "decoded")
+		local new = C.DecodeReport(payload)
+		new.st, new.cap, new.pres = nil, nil, nil
+		Same(old, new, "report")
+	end)
+
+	test("1.0.0 our own report carries the server's time, our part and our guild's realms", function()
+		local keep = { db = ns.db, rdb = ns.rdb, realm = ns.realm, group = ns.group, print = print, st = GetServerTime }
+		local ok, err = pcall(function()
+			print = function() end
+			ns.db = { log = {}, blocked = {}, realms = { Realm = { guilds = {}, seen = {} } } }
+			ns.realm, ns.group, ns.rdb = "Realm", "Realm", ns.db.realms.Realm
+			GetServerTime = function() return 1790000000 end
+			ns.Roster.RequestScan(true)
+			ns.Roster.TryScan()
+			local mine = ns.rdb.guilds[MY_GUILD]
+			eq(mine.st, 1790000000); eq(mine.cap, "a")
+			local codes = table.concat(mine.pres, ".")
+			eq(codes, table.concat(ns.Comm.Presence(), ".")); assert(codes:find(ns.Comm.RealmCode("Realm"), 1, true), codes)
+			local d = ns.Codec.DecodeReport(ns.Codec.EncodeReport(mine))
+			eq(d.st, 1790000000); eq(d.cap, "a"); eq(table.concat(d.pres, "."), codes)
+			-- Without the server's clock, or with one that fails: no time.
+			GetServerTime = nil
+			ns.Data.SetLocal(mine); eq(mine.st, nil)
+			GetServerTime = function() error("no clock") end
+			ns.Data.SetLocal(mine); eq(mine.st, nil)
+		end)
+		ns.db, ns.rdb, ns.realm, ns.group, print, GetServerTime = keep.db, keep.rdb, keep.realm, keep.group, keep.print, keep.st
+		ns.Roster.Scan()
+		if not ok then error(err, 0) end
+	end)
+
+	test("1.0.0 the census request after joining: at a second drawn in 4 to 45 s, left out when someone asked within 30 s", function()
+		Guarded(function(Open)
+			local cns, Deliver = Open()
+			local C = cns.Comm
+			local timers, sent = {}, {}
+			cns.After = function(delay, _, fn) timers[#timers + 1] = { at = cns.clock + delay, fn = fn } end
+			C_ChatInfo.SendAddonMessage = function(_, msg, dist) sent[#sent + 1] = dist .. " " .. msg end
+			local function Run(seconds)
+				local stop = cns.clock + seconds
+				while true do
+					local due, index
+					for i, t in ipairs(timers) do if t.at <= stop and (not due or t.at < due.at) then due, index = t, i end end
+					if not due then break end
+					table.remove(timers, index)
+					cns.clock = math.max(cns.clock, due.at)
+					due.fn()
+				end
+				cns.clock = stop
+				for _ = 1, 5 do C.Pump() end
+			end
+			local function Asks()
+				local n = 0
+				for _, s in ipairs(sent) do if s == "CHANNEL Q1~" then n = n + 1 end end
+				return n
+			end
+			C.random = function() return 0 end; eq(C.AskWait(), 4, "the soonest")
+			C.random = function() return 1 end; eq(C.AskWait(), 45, "the latest")
+			C.random = function() return 0.5 end
+			-- Joined (General already /1): our ask 24.5 s later, not 4 s as before 1.0.0.
+			local savedChannel = GetChannelName
+			GetChannelName = function(id) if id == 1 then return 1, "General" end return 5 end
+			C.JoinSoon(15)
+			GetChannelName = savedChannel
+			Run(24)
+			eq(Asks(), 0, "not yet")
+			-- Someone else asks meanwhile: every guild's answer to it reaches us too. Ours is left out.
+			Deliver("CHANNEL", "Other", "Q1~")
+			Run(1)
+			eq(Asks(), 0, "left out"); eq(C.Stats().askSkipped, 1); eq(C.Stats().asked, 0)
+			-- Nothing heard 65 s later: the second ask goes (nobody asked within 30 s).
+			Run(65)
+			eq(Asks(), 1, "asked, the second time"); eq(C.Stats().asked, 1)
+			Run(600)
+			eq(Asks(), 1, "twice a session at most")
+			-- A client that heard no ask asks at once; one heard 31 s before is no reason to wait.
+			local cns2, Deliver2 = FreshComm()
+			local C2 = cns2.Comm
+			C2.JoinChannel()
+			Deliver2("CHANNEL", "Other", "Q1~")
+			cns2.clock = cns2.clock + 31
+			C2.AskCensus()
+			eq(C2.Stats().asked, 1); eq(C2.Stats().askSkipped, 0)
+		end)
+	end)
+
+	test("1.0.0 our guild on two realms, 0.9.8/0.9.9 and 1.0.0 clients mixed: each realm's channel hears our guild from a reporter of that realm", function()
+		local saved = { channel = GetChannelName, ci = C_ChatInfo }
+		local ok, err = pcall(function()
+			GetChannelName = function() return 5 end
+			-- Ada sorts first in the whole guild; Ben (0.9.8) first on PvP 2; Cal (0.9.8) on PvP.
+			local specs = { { "Ada", P1 }, { "Cal", P1, true }, { "Fay", P1 }, { "Ben", P2, true }, { "Dee", P2 }, { "Eli", P2 } }
+			local start, clients = 100000, {}
+			for _, s in ipairs(specs) do
+				local cns, Deliver = FreshComm(s[3])
+				cns.me, cns.realm, cns.rdb, cns.clock = s[1] .. "-" .. s[2], s[2], { guilds = {} }, start
+				cns.Comm.loginAt = start
+				cns.Comm.JoinChannel()
+				clients[#clients + 1] = { name = cns.me, realm = s[2], old = s[3], cns = cns, C = cns.Comm, Deliver = Deliver }
+			end
+			local by = {}
+			for _, c in ipairs(clients) do by[c.name:match("^%a+")] = c end
+			-- As on WoW: Forever: the channel reaches the sender's realm, GUILD every guildmate.
+			local function Route(from)
+				C_ChatInfo.SendAddonMessage = function(_, msg, dist)
+					for _, c in ipairs(clients) do
+						if c ~= from and (dist == "GUILD" or (dist == "CHANNEL" and c.realm == from.realm)) then c.Deliver(dist, from.name, msg) end
+					end
+					return true
+				end
+			end
+			-- When a realm's channel last carried our guild's report, as its 1.0.0 clients heard it.
+			local function HeardOn(realm)
+				local last = -math.huge
+				for _, c in ipairs(clients) do
+					if c.realm == realm and not c.old then last = math.max(last, c.C.Stats().heardOwnAt or -math.huge) end
+				end
+				return last
+			end
+			local ours = { guild = MY_GUILD, total = 1000, online = 300, zones = {} }
+			local worst = { [P1] = 0, [P2] = 0 }
+			-- 30 minutes: each client says hello and scans its roster each minute, and sends one
+			-- message each 1.2 s.
+			for i = 0, 1500 do
+				local now = start + i * 1.2
+				for _, c in ipairs(clients) do c.cns.clock = now end
+				if i % 50 == 0 then
+					for _, c in ipairs(clients) do c.C.Hello(); c.C.MaybeBroadcast(ours) end
+					if now - start >= 600 then
+						for realm in pairs(worst) do worst[realm] = math.max(worst[realm], now - HeardOn(realm)) end
+					end
+				end
+				for _, c in ipairs(clients) do Route(c); c.C.Pump() end
+			end
+			-- From minute 10 on, each realm's channel heard our guild at least every 3 reports' time.
+			assert(worst[P1] <= 2 * 180, "PvP went " .. worst[P1] .. " s without our guild's report")
+			assert(worst[P2] <= 2 * 180, "PvP 2 went " .. worst[P2] .. " s without our guild's report")
+			-- One reporter on each realm, of that realm; our clients name it and leave nobody out.
+			for _, c in ipairs(clients) do
+				eq(c.C.isReporter == true, c == by.Ada or c == by.Ben, c.name .. " reports")
+				if not c.old then
+					eq(c.C.reporterName, c.realm == P1 and by.Ada.name or by.Ben.name, c.name .. "'s reporter")
+					eq(#c.C.Stats().benched, 0, c.name .. " leaves nobody out")
+				end
+			end
+			-- Ben's 0.9.8 client went its own way (it left Ada out, never heard on PvP 2) and
+			-- landed on itself: the reporter our clients there elected from the start.
+			eq(#by.Ben.C.Stats().benched, 1)
+			-- The old clients read our 27-field reports as they read theirs.
+			for _, c in ipairs({ by.Cal, by.Ben }) do
+				local st = c.C.Stats()
+				eq(st.bad, 0, c.name); assert(st.reports > 0, c.name)
+			end
+		end)
+		GetChannelName, C_ChatInfo = saved.channel, saved.ci
+		if not ok then error(err, 0) end
+	end)
+
+	test("1.0.0 the lists' pieces over GUILD: this version puts them together for HS and HT alone; 0.9.8 and 0.9.9 never do", function()
+		local saved = { channel = GetChannelName }
+		local ok, err = pcall(function()
+			GetChannelName = function() return 5 end
+			-- A 1.0.0 client sends both lists over GUILD, in pieces, through its send queue.
+			local cns = FreshComm()
+			local C = cns.Comm
+			C.JoinChannel()
+			local out = {}
+			C_ChatInfo.SendAddonMessage = function(_, msg, dist) out[#out + 1] = { dist = dist, msg = msg } end
+			C.SendChunked("HS~" .. COUNCIL_TEST_NAMES4, nil, "GUILD")
+			C.SendChunked("HT~" .. COUNCIL_TEST_TITLES, nil, "GUILD")
+			for _ = 1, 20 do C.Pump() end
+			assert(#out > 2, "in pieces: " .. #out)
+			for _, o in ipairs(out) do eq(o.dist, "GUILD") end
+			local function Heard(old, dist)
+				local rns, Deliver = FreshComm(old)
+				local got = {}
+				for _, kind in ipairs({ "HS", "HT" }) do
+					rns.Comm.Handle(kind, function(d, _, text) got[#got + 1] = d .. " " .. text end)
+				end
+				for _, o in ipairs(out) do Deliver(dist, "Mate-" .. P2, o.msg) end
+				return got
+			end
+			-- This version: each whole list reaches its handler, from GUILD.
+			local got = Heard(false, "GUILD")
+			eq(#got, 2); eq(got[1], "GUILD HS~" .. COUNCIL_TEST_NAMES4); eq(got[2], "GUILD HT~" .. COUNCIL_TEST_TITLES)
+			-- 0.9.8 and 0.9.9 (their Comm, tests/fixtures): no GUILD pieces put together, so nothing
+			-- reaches their handlers (which take lists from the channel alone: `dist ~= "CHANNEL"`
+			-- returns first in their HandleCouncil and HandleTitles). The same pieces on the channel do.
+			eq(#Heard(true, "GUILD"), 0, "0.9.8 and 0.9.9 put nothing together from GUILD")
+			eq(#Heard(true, "CHANNEL"), 2, "(the channel's, as ever)")
+			-- This version: the pieces of anything else over GUILD reach nobody.
+			local rns, Deliver = FreshComm()
+			local seen = {}
+			for _, kind in ipairs({ "V5", "HQ", "M1" }) do rns.Comm.Handle(kind, function() seen[#seen + 1] = kind end) end
+			local id = 0
+			local function Pieces(payload)
+				id = id + 1
+				for _, c in ipairs(ns.Codec.Chunk(payload, "7" .. id)) do Deliver("GUILD", "Mate-" .. P2, c) end
+			end
+			Pieces("V5~" .. ("x"):rep(400))
+			Pieces("HQ~" .. ("1"):rep(300))
+			Pieces(ns.Codec.EncodeReport({ guild = "Olympus IV", total = 9, online = 1, zones = {} }))
+			eq(#seen, 0); eq(rns.Comm.Stats().reports, 0, "no census report from GUILD")
+		end)
+		GetChannelName, C_ChatInfo = saved.channel, nil
+		if not ok then error(err, 0) end
+	end)
+
+	-- The High Council's lists across realms (1.0.0). A client with the test key's lists (NAMES4,
+	-- TITLES) as its store holds them; no signature check needed to hold them.
+	local function Holding()
+		return { council = { at = 1800000001, blob = COUNCIL_TEST_NAMES4, names = {} },
+			councilTitles = { at = 1800000002, blob = COUNCIL_TEST_TITLES, depts = {} } }
+	end
+	-- The seconds our channel takes to send both lists, one piece each 1.2 s.
+	local function SendTime()
+		return (#ns.Codec.Chunk("HS~" .. COUNCIL_TEST_NAMES4, "1") + #ns.Codec.Chunk("HT~" .. COUNCIL_TEST_TITLES, "1")) * 1.2
+	end
+
+	test("1.0.0 the High Council's lists across realms: a councillor on PvP 2 asks his guild too, a guildmate on PvP answers, and PvP 2's channel gets them once", function()
+		WithTestCouncil(function()
+			CouncilNet(function(net)
+				-- PvP holds the lists (its channel got them); nobody on PvP 2 does. The councillor's
+				-- guild has addon users on both; another guild plays on PvP 2 alone.
+				local h = CouncilHolder(net, "Holder-" .. P1, false, { realm = P1 })
+				local m = net.Client("Third Mod-" .. P2, nil, { realm = P2, reporter = true })
+				local o = net.Client("Other-" .. P2, nil, { realm = P2, guild = "Other Guild" })
+				m.W.random = function() return 0 end     -- asks 45 s after login; passes a list on 1 s after taking it
+				o.W.random = function() return 0.999 end -- would ask 90 s after login
+				m.W.CouncilLogin(); o.W.CouncilLogin()
+				net.Run(45)
+				eq(net.Types(m, "HQ", "CHANNEL"), "HQ", "on his realm's channel, as before")
+				eq(net.Types(m, "HQ", "GUILD"), "HQ", "and to his guild, which has addon users on another realm")
+				eq(net.Types(o, "HQ"), "", "(the other guild's client heard that ask: its own waits)")
+				net.Run(9)
+				eq(net.Types(h, nil, "GUILD"), "HS HT", "the holder on PvP answers over GUILD (3 to 15 s; here 9 s)")
+				eq(net.Types(h, nil, "CHANNEL"), "", "(PvP's channel heard no ask)")
+				eq(m.ns.rdb.council.blob, COUNCIL_TEST_NAMES4, "taken from his guild")
+				eq(m.ns.rdb.councilTitles.blob, COUNCIL_TEST_TITLES)
+				net.Run(1)
+				eq(net.Types(m, nil, "CHANNEL"), "HQ HS HT", "passed on to PvP 2's channel, as a relay sends them")
+				eq(o.ns.rdb.council.blob, COUNCIL_TEST_NAMES4, "the other guild on PvP 2 holds them too")
+				eq(o.ns.rdb.councilTitles.blob, COUNCIL_TEST_TITLES)
+				net.Run(1200)
+				eq(net.Types(m, "HS", "CHANNEL"), "HS", "once")
+				eq(net.Types(o, "HQ"), "", "it never had to ask")
+				eq(net.Types(h, "HQ"), "", "(nor did the holder)")
+			end)
+		end)
+	end)
+
+	test("1.0.0 a list taken from our guild goes on to our channel once: our reporter's copy first, the runner-up's if none came, a few others' after that", function()
+		WithTestCouncil(function()
+			local later = 15 + SendTime() -- the runner-up's wait: the reporter's copy should be in by then
+			-- Our guild on PvP 2 (roles: "reporter", "runner" or anyone), all without the lists.
+			local function Guild(net, roles)
+				local out = {}
+				for i, role in ipairs(roles) do
+					out[i] = net.Client(("Mate%d-%s"):format(i, P2), nil, { realm = P2, reporter = role == "reporter", runnerUp = role == "runner" })
+				end
+				return out
+			end
+			-- A guildmate on PvP relays both over GUILD: every one of them takes them at once.
+			local function Relay(net)
+				net.Hear("Far-" .. P1, "HS~" .. COUNCIL_TEST_NAMES4, "GUILD", { realm = P1 })
+				net.Hear("Far-" .. P1, "HT~" .. COUNCIL_TEST_TITLES, "GUILD", { realm = P1 })
+			end
+			CouncilNet(function(net)
+				local m = Guild(net, { "reporter", "runner", "any", "any" })
+				for _, c in ipairs(m) do c.W.random = function() return 0 end end
+				Relay(net)
+				eq(net.Types(), "HS HT", "(the relay)")
+				net.Run(1)
+				eq(net.Types(m[1], nil, "CHANNEL"), "HS HT", "our reporter on PvP 2, 1 to 4 s after (here 1 s)")
+				net.Run(3 * later)
+				eq(net.Types(nil, nil, "CHANNEL"), "HS HT", "everyone else heard it on the channel: none of theirs")
+				-- The same lists over GUILD again: held, nothing more on the channel.
+				Relay(net)
+				net.Run(3 * later)
+				eq(net.Types(nil, nil, "CHANNEL"), "HS HT", "once")
+			end)
+			CouncilNet(function(net)
+				-- No reporter of ours on PvP 2 took them (not online, or it held them): the runner-up.
+				local m = Guild(net, { "runner", "any", "any" })
+				for _, c in ipairs(m) do c.W.random = function() return 0 end end
+				Relay(net)
+				net.Run(later - 0.1)
+				eq(net.Types(nil, nil, "CHANNEL"), "", "not before its time")
+				net.Run(0.2)
+				eq(net.Types(m[1], nil, "CHANNEL"), "HS HT", "the runner-up, 15 s after the reporter's copy would be in")
+				net.Run(3 * later)
+				eq(net.Types(nil, nil, "CHANNEL"), "HS HT")
+			end)
+			CouncilNet(function(net)
+				-- Neither: about 3 of our guild's addon users on PvP 2 (here 10: 3 in 10), after that.
+				local m = Guild(net, { "any", "any", "any", "any", "any", "any", "any", "any", "any", "any" })
+				for i, c in ipairs(m) do c.W.random = function() return i == 1 and 0 or 0.5 end end
+				Relay(net)
+				net.Run(2 * later - 0.1)
+				eq(net.Types(nil, nil, "CHANNEL"), "")
+				net.Run(0.2)
+				eq(net.Types(m[1], nil, "CHANNEL"), "HS HT", "the one that drew 0 in 0.3")
+				net.Run(3 * later)
+				eq(net.Types(nil, nil, "CHANNEL"), "HS HT", "the others drew 0.5: none of theirs")
+			end)
+			CouncilNet(function(net)
+				-- A list heard on our channel before our turn: left out. One with the same time that
+				-- is not the list (changed, or not signed) holds nobody back.
+				local m = Guild(net, { "reporter" })
+				m[1].W.random = function() return 1 end -- due 4 s after
+				Relay(net)
+				net.Hear("Faker-" .. P2, "HS~" .. COUNCIL_TEST_NAMES4:gsub("Fourth Mod", "Faker Guy"), "CHANNEL", { realm = P2, guild = "Other" })
+				net.Hear("Relay-" .. P2, "HT~" .. COUNCIL_TEST_TITLES, "CHANNEL", { realm = P2, guild = "Other" })
+				net.Run(10)
+				eq(net.Types(m[1], nil, "CHANNEL"), "HS", "the names alone: the titles came on the channel from someone else")
+			end)
+		end)
+	end)
+
+	test("1.0.0 the High Council's lists over GUILD: each client once every 30 minutes at most, about 3 of a guild, only while it spans realms", function()
+		WithTestCouncil(function()
+			CouncilNet(function(net)
+				net.users = 300 -- (the channel's relays: 3 in 300, none of these clients)
+				local N, clients = 30, {}
+				for i = 1, N do
+					local realm = i % 2 == 0 and P1 or P2
+					local c = net.Client(("Mate%d-%s"):format(i, realm), Holding(), { realm = realm })
+					c.W.random = function() return i / N end -- 3 in 30 draw in: the first three
+					clients[i] = c
+					c.W.CouncilLogin()
+				end
+				net.Run(1799)
+				eq(net.Types(nil, nil, "GUILD"), "", "not in their first 30 minutes (until the census counts our guild's users)")
+				net.Run(61)
+				eq(net.Types(nil, "HS", "GUILD"), "HS HS HS", "then about 3 of our guild's 30 addon users")
+				for i = 1, 3 do eq(net.Types(clients[i], nil, "GUILD"), "HS HT", "the names and the titles together") end
+				net.Run(1739)
+				eq(net.Types(nil, "HS", "GUILD"), "HS HS HS", "not again within 30 minutes")
+				net.Run(61)
+				eq(net.Types(nil, "HS", "GUILD"), "HS HS HS HS HS HS")
+				eq(net.Types(nil, nil, "CHANNEL"), "", "(nothing passed on: everyone held them)")
+			end)
+			CouncilNet(function(net)
+				-- Our guild on one realm: never over GUILD (the channel reaches all of it).
+				local a = net.Client("A-" .. P1, Holding(), { realm = P1 })
+				net.Client("B-" .. P1, Holding(), { realm = P1 })
+				a.W.random = function() return 0 end
+				a.W.CouncilLogin()
+				net.Run(3700)
+				eq(net.Types(a, nil, "GUILD"), "")
+				-- A second realm: at its next minute. A full send queue (the census report first): waits.
+				local b = net.Client("C-" .. P2, Holding(), { realm = P2 })
+				local queue = 31
+				a.ns.Comm.QueueSize = function() return queue end
+				net.Run(60)
+				eq(net.Types(a, nil, "GUILD"), "", "31 messages waiting")
+				queue = 0
+				net.Run(60)
+				eq(net.Types(a, nil, "GUILD"), "HS HT", "the queue emptied")
+				eq(b.ns.rdb.council.blob, COUNCIL_TEST_NAMES4)
+			end)
+			CouncilNet(function(net)
+				-- The author's client: at login, on the channel and over GUILD, even a guild on one realm.
+				local author = net.Client("Author-" .. P1, nil, { realm = P1 })
+				author.ns.COUNCIL_SIGNED, author.ns.COUNCIL_TITLES = COUNCIL_TEST_NAMES4, COUNCIL_TEST_TITLES
+				author.W.CouncilLogin()
+				net.Run(14)
+				eq(net.Types(author), "")
+				net.Run(1)
+				eq(net.Types(author, nil, "CHANNEL"), "HS HT", "15 s after login")
+				eq(net.Types(author, nil, "GUILD"), "HS HT", "and to his guildmates on every realm")
+			end)
+		end)
+	end)
+
+	test("1.0.0 the High Council's lists from our guild: the same checks as on the channel (a newer list only, one signature budget)", function()
+		WithTestCouncil(function()
+			local W, S = ns.Workshop, ns.Sign
+			local verify, checks, clock, passes = S.Verify, 0, 1000000, 0
+			ns.Now = function() return clock end
+			-- (A pass-on to our channel counted as it starts; ResetListAsk ends the one waiting.)
+			ns.After = function(_, what) if what == "council pass on" then passes = passes + 1 end end
+			ns.Comm.SendChunked = function() end
+			S.Verify = function(...) checks = checks + 1 return verify(...) end
+			W.HandleCouncil("GUILD", "Mate-" .. P2, "HS~" .. COUNCIL_TEST_NAMES2)
+			eq(checks, 1); eq(ns.rdb.council.blob, COUNCIL_TEST_NAMES2, "taken from our guild")
+			eq(passes, 1, "on its way to our channel")
+			W.ResetListAsk()
+			-- Older, or the one held, from our guild or the channel: not checked, not taken, not passed on.
+			W.HandleCouncil("GUILD", "Mate2-" .. P2, "HS~" .. COUNCIL_TEST_NAMES4)
+			W.HandleCouncil("GUILD", "Mate3-" .. P2, "HS~" .. COUNCIL_TEST_NAMES2)
+			W.HandleCouncil("CHANNEL", "Any-Realm", "HS~" .. COUNCIL_TEST_NAMES2)
+			eq(checks, 1); eq(ns.rdb.council.blob, COUNCIL_TEST_NAMES2); eq(passes, 1)
+			-- Once a minute per sender and kind of list: the titles are checked, a newer titles list not yet.
+			W.HandleTitles("GUILD", "Mate-" .. P2, "HT~" .. COUNCIL_TEST_TITLES)
+			eq(checks, 2); eq(passes, 2)
+			W.ResetListAsk()
+			W.HandleTitles("GUILD", "Mate-" .. P2, "HT~" .. COUNCIL_TEST_PUBLIC)
+			eq(checks, 2, "once a minute per sender"); eq(ns.rdb.councilTitles.public, false); eq(passes, 2)
+			clock = clock + 61
+			W.HandleTitles("GUILD", "Mate-" .. P2, "HT~" .. COUNCIL_TEST_PUBLIC)
+			eq(checks, 3); eq(ns.rdb.councilTitles.public, true, "a minute later"); eq(passes, 3)
+			W.ResetListAsk()
+			-- A forged list: refused, checked once from anyone, never passed on.
+			local forged = "HT~HT1~1900000000~Realm~1~^^Faker Guy=Boss~" .. ("ab"):rep(256)
+			clock = clock + 61
+			W.HandleTitles("GUILD", "Faker-" .. P2, forged)
+			W.HandleTitles("GUILD", "Other Faker-" .. P2, forged)
+			eq(checks, 4); eq(passes, 3)
+			-- VERIFY_MAX checks a minute in all, from our guild and the channel together.
+			clock = clock + 61
+			for i = 1, 10 do
+				W.HandleCouncil(i % 2 == 0 and "GUILD" or "CHANNEL", "Bot" .. i .. "-Realm",
+					("HS~HS1~%d~Realm~Fake Name~%s"):format(2000000000 + i, ("ab"):rep(256)))
+			end
+			eq(checks, 4 + W.VERIFY_MAX, "a few a minute in all")
+			-- Nothing but the channel and our guild.
+			ns.rdb.councilTitles = nil
+			clock = clock + 61
+			W.HandleTitles("WHISPER", "Any-Realm", "HT~" .. COUNCIL_TEST_TITLES)
+			eq(ns.rdb.councilTitles, nil, "not by whisper")
+		end)
+	end)
+
+	test("1.0.0 an ask from our guild is answered over GUILD, one on the channel on the channel, each on its own clock", function()
+		WithTestCouncil(function()
+			CouncilNet(function(net)
+				-- The holder plays on PvP; its guildmate on PvP 2 asks their guild, a player of another
+				-- guild asks PvP's channel.
+				local h = CouncilHolder(net, "Holder-" .. P1, false, { realm = P1 })
+				local mate = net.Client("Mate-" .. P2, nil, { realm = P2 })
+				local other = { realm = P1, guild = "Other" }
+				h.W.random = function() return 0 end -- answers 3 s after an ask
+				mate.ns.Comm.Send("GUILD", "HQ~0~0")
+				net.Hear("Asker-" .. P1, "HQ~0~0", "CHANNEL", other)
+				net.Run(4)
+				eq(net.Types(h, nil, "GUILD"), "HS HT", "our guild's ask, over GUILD")
+				eq(net.Types(h, nil, "CHANNEL"), "HS HT", "the channel's, on the channel")
+				eq(mate.ns.rdb.council.blob, COUNCIL_TEST_NAMES4, "the guildmate on PvP 2 holds them")
+				-- Both again past the 2 minutes; this time the lists went out on PvP's channel from
+				-- someone else: the channel's answer is left out, not our guild's (PvP 2 never hears
+				-- PvP's channel).
+				net.Run(130)
+				mate.ns.rdb.council, mate.ns.rdb.councilTitles = nil, nil
+				mate.ns.Comm.Send("GUILD", "HQ~0~0")
+				net.Hear("Asker2-" .. P1, "HQ~0~0", "CHANNEL", other)
+				net.Hear("Relay-" .. P1, "HS~" .. COUNCIL_TEST_NAMES4, "CHANNEL", other)
+				net.Hear("Relay-" .. P1, "HT~" .. COUNCIL_TEST_TITLES, "CHANNEL", other)
+				net.Run(4)
+				eq(net.Types(h, nil, "GUILD"), "HS HT HS HT", "over GUILD all the same")
+				eq(net.Types(h, nil, "CHANNEL"), "HS HT", "left out on the channel")
+				-- And the other way: the lists heard over GUILD leave our guild's answer out alone.
+				net.Run(130)
+				mate.ns.Comm.Send("GUILD", "HQ~0~0")
+				net.Hear("Asker3-" .. P1, "HQ~0~0", "CHANNEL", other)
+				net.Hear("Relay2-" .. P2, "HS~" .. COUNCIL_TEST_NAMES4, "GUILD", { realm = P2 })
+				net.Hear("Relay2-" .. P2, "HT~" .. COUNCIL_TEST_TITLES, "GUILD", { realm = P2 })
+				net.Run(4)
+				eq(net.Types(h, nil, "GUILD"), "HS HT HS HT", "left out over GUILD")
+				eq(net.Types(h, nil, "CHANNEL"), "HS HT HS HT", "the channel's answered")
+			end)
+			CouncilNet(function(net)
+				-- A guild on one realm: its clients ask the channel alone, as before 1.0.0.
+				local a = net.Client("Asker-Realm")
+				net.Client("Mate-Realm")
+				a.W.random = function() return 0 end
+				a.W.CouncilLogin()
+				net.Run(45)
+				eq(net.Types(a, "HQ", "CHANNEL"), "HQ"); eq(net.Types(a, "HQ", "GUILD"), "", "not to our guild")
+			end)
+		end)
+	end)
+end
 
 print(("\n%d passed, %d failed"):format(passed, failed))
 os.exit(failed == 0 and 0 or 1)

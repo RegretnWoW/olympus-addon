@@ -1,3 +1,7 @@
+-- Olympus/Codec.lua as 0.9.8 and 0.9.9 ship it, for tests/run.lua: copied unchanged from
+-- `git show v0.9.8:Olympus/Codec.lua` (the file is the same from 0.9.3 to 0.9.9). Its report
+-- decoder reads 24 fields and leaves any after them unread. Loaded like the addon loads its
+-- files: loadfile("tests/fixtures/codec-0.9.8.lua")("Olympus", ns) sets ns.Codec.
 local ADDON, ns = ...
 
 -- Wire format. Pure functions, no WoW API, covered by tests/run.lua.
@@ -12,11 +16,6 @@ local ADDON, ns = ...
 --           and stop reading at leaderZone)
 --   faction (23) A|H; versions (24, v0.8.2) "0.8.2=3,0.8.1=1": the guild's addon users by
 --           version (the author's Workshop). Older versions stop reading before either.
---   st (25, 1.0.0) the server time the report was made, in base 36 (empty without
---           GetServerTime); cap (26) a|b|c, what else the reporter's client takes part in
---           ("a": reporting alone); pres (27) "k3a.x9b": the realms of the guild's addon users
---           online, as Comm.RealmCode gives them, sorted. Versions before 1.0.0 read 24 fields
---           and leave these unread.
 -- Chunk:   C<id>:<i>:<n>:<piece>   (addon messages are limited to 255 bytes)
 -- Hello:   H1~<version>~<realm>    (sent on GUILD so members with the addon find each other;
 --                                    older versions send no realm)
@@ -174,47 +173,6 @@ end
 Codec.MAX_OFFICERS = 30
 Codec.MAX_RANKS = 10
 Codec.MAX_TOP = 5
-Codec.MAX_PRES = 12 -- realms named in field 27, at most
-Codec.CAPS = { a = true, b = true, c = true }
-
--- A whole number >= 0 in base 36 (lowercase), and back: at most 8 digits, nil otherwise.
-local B36 = "0123456789abcdefghijklmnopqrstuvwxyz"
-function Codec.Base36(n)
-	n = math.floor(tonumber(n) or -1)
-	if n < 0 then return nil end
-	local out = ""
-	repeat
-		local d = n % 36
-		out = B36:sub(d + 1, d + 1) .. out
-		n = math.floor(n / 36)
-	until n == 0
-	return out
-end
-local function unBase36(s)
-	if type(s) ~= "string" or #s > 8 or not s:find("^[0-9a-z]+$") then return nil end
-	return tonumber(s, 36)
-end
-
--- Field 27: realm codes (three letters or digits each), each once, sorted, MAX_PRES at most.
-local function encPres(list)
-	local out, seen = {}, {}
-	for _, code in ipairs(list or {}) do
-		if type(code) == "string" and code:find("^[0-9a-z][0-9a-z][0-9a-z]$") and not seen[code] then
-			seen[code], out[#out + 1] = true, code
-		end
-	end
-	table.sort(out)
-	return table.concat(out, ".", 1, math.min(#out, Codec.MAX_PRES))
-end
-local function decPres(s)
-	if type(s) ~= "string" or s == "" then return nil end
-	local out, seen = {}, {}
-	for code in s:gmatch("[^%.]+") do
-		if #out >= Codec.MAX_PRES then break end
-		if code:find("^[0-9a-z][0-9a-z][0-9a-z]$") and not seen[code] then seen[code], out[#out + 1] = true, code end
-	end
-	return #out > 0 and out or nil
-end
 
 function Codec.EncodeReport(r)
 	local levels = {}
@@ -244,9 +202,6 @@ function Codec.EncodeReport(r)
 		clean(r.home or ""),
 		r.faction == "Horde" and "H" or "A",
 		encMap(r.versions, 12),
-		Codec.Base36(r.st) or "",
-		Codec.CAPS[r.cap] and r.cap or "",
-		encPres(r.pres),
 	}, "~")
 end
 
@@ -316,11 +271,6 @@ function Codec.DecodeReport(s)
 		faction = f[23] == "H" and "Horde" or "Alliance",
 		-- Field 24 (v0.8.2): the guild's addon users by version ("0.8.2", or "?" for unknown).
 		versions = Codec.Versions(decMap(f[24], 12)),
-		-- Fields 25-27 (1.0.0): when it was made (server time), the reporter's part, and the
-		-- realms of the guild's addon users. Older versions send none: nil.
-		st = unBase36(f[25]),
-		cap = Codec.CAPS[f[26] or ""] and f[26] or nil,
-		pres = decPres(f[27]),
 	}
 end
 
