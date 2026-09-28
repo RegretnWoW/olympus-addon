@@ -47,9 +47,9 @@ ns.BORDERS_COUNCIL_GOLD = false
 --            (ns.IsKingGuild); where no character is pinned, that guild's guild master
 --   council  the High Council (the signed list, ns.IsHighCouncillor): true, or the name of the
 --            ns flag that must be on for it (except on the King's screen while he streams)
---   leader   the guild master of an Olympus guild, as its census report names him (our own
---            guild's: our roster)
---   officer  its officers: the report's officers, or our own guild's officer ranks (Roster.lua)
+--   leader   the guild master of an Olympus guild, as its census names him (Data.KnownRank:
+--            another sender's word, never his own; our own guild's: our roster)
+--   officer  its officers: the census's (the same way), or our own guild's officer ranks (Roster.lua)
 --   ranks    a member of an Olympus guild whose rank name holds one of these words (any case, a
 --            whole word): rank names are what each guild master wrote, as the game shows them
 Borders.TIERS = {
@@ -120,14 +120,13 @@ local function Facts(unit)
 		f.leader = rank == 0
 		f.officer = type(rank) == "number" and rank > 0 and rank <= ns.CAPTAIN_RANK
 	elseif type(report) == "table" then
-		-- Another guild: its census report (Data.lua), whose names belong to its reporter's realm.
-		local home = report.realm or ns.realm
-		f.leader = type(report.leader) == "string" and ns.FullName(report.leader, home) == who
-		if not f.leader and type(report.officers) == "table" then
-			for _, o in ipairs(report.officers) do
-				if type(o) == "table" and type(o.name) == "string" and ns.FullName(o.name, home) == who then f.officer = true break end
-			end
-		end
+		-- Another guild: the rank its census gives him, as the census's other checks trust it
+		-- (Data.KnownRank, soft: what only shows, like the King's line): the picture most senders
+		-- give, and someone else naming him in it. One report never makes its own sender a Lord
+		-- or a Captain: alone, against the guild's other senders, or once their row is old.
+		local rank = ns.Data.KnownRank(who, f.guild, true)
+		f.leader = rank == 0
+		f.officer = type(rank) == "number" and rank > 0 and rank <= ns.CAPTAIN_RANK
 	end
 	return f
 end
@@ -156,7 +155,8 @@ local function Compute(unit, guid)
 	local t = Match(f)
 	local report = f and f.report
 	local k = { guid = guid, tier = t and t.name or nil, guild = f and f.guild, report = report,
-		rt = type(report) == "table" and report.t or nil, council = ns.rdb and ns.rdb.council }
+		rt = type(report) == "table" and report.t or nil, vouch = type(report) == "table" and report.vouch or nil,
+		council = ns.rdb and ns.rdb.council }
 	known[unit] = k
 	return k
 end
@@ -258,14 +258,17 @@ function Borders.RefreshAll(fresh)
 	for _, spec in ipairs(RIGS) do Borders.Refresh(spec.unit, fresh) end
 end
 
--- The census or the High Council's list changed: only a unit whose guild's report (or the list)
--- is not the one its border was worked out from is worked out again.
+-- The census or the High Council's list changed: only a unit whose guild's report, its votes (an
+-- outvoted report keeps the row and changes the votes, which Data.KnownRank reads) or the list
+-- are not the ones its border was worked out from is worked out again.
 function Borders.CensusChanged()
 	if not installed then return end
 	local rdb = ns.rdb
 	for unit, k in pairs(known) do
 		local report = k.guild and rdb and type(rdb.guilds) == "table" and rdb.guilds[k.guild] or nil
-		if report ~= k.report or (type(report) == "table" and report.t or nil) ~= k.rt or (rdb and rdb.council) ~= k.council then
+		local row = type(report) == "table"
+		if report ~= k.report or (row and report.t or nil) ~= k.rt or (row and report.vouch or nil) ~= k.vouch
+			or (rdb and rdb.council) ~= k.council then
 			Borders.Refresh(unit, true)
 		end
 	end

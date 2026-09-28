@@ -18703,7 +18703,7 @@ local BORDER_KING = BorderUnit("Asmongold Asmongler", "OLYMPUS", "Guild Master",
 local function WithBorders(fn, setup)
 	local saved, savedNs = {}, { faction = ns.faction, guilds = ns.rdb.guilds, council = ns.rdb.council, borders = ns.db.borders,
 		borderMod = ns.Borders, split = ns.splitNames, me = ns.me, types = Enum.InputDeviceInterfaceType, dev = ns.devThrone,
-		view = ns.db.devKingView }
+		view = ns.db.devKingView, loginAt = ns.Comm.loginAt }
 	for _, name in ipairs(BORDER_GLOBALS) do saved[name] = _G[name] end
 	local w = { log = {}, seq = {}, units = { player = BORDER_ME }, hooks = {}, textures = {}, events = {}, on = {}, printed = {},
 		noAtlas = {}, style = 0, combat = false }
@@ -18781,10 +18781,14 @@ local function WithBorders(fn, setup)
 		ns.faction, ns.splitNames = "Alliance", nil
 		ns.db.borders, ns.devThrone, ns.db.devKingView = nil, nil, nil
 		ns.SetCouncilNamesShown(false)
+		-- Other guilds' ranks as the census trusts them (Data.KnownRank): a fresh row that two other
+		-- senders vouch for, long enough after login for a Lord's.
 		ns.rdb.guilds = {
-			["Olympus Zeus"] = { guild = "Olympus Zeus", leader = "Zeusy", officers = { { name = "Capt" }, { name = "Far Away-Other" } }, realm = "Realm", t = 100 },
-			["Olympus Horde"] = { guild = "Olympus Horde", leader = "Grunt", officers = {}, realm = "Realm", t = 100 },
+			["Olympus Zeus"] = Vouched({ guild = "Olympus Zeus", leader = "Zeusy", officers = { { name = "Capt" }, { name = "Far Away-Other" } },
+				realm = "Realm", t = ns.Now() }, "W1-Realm", "W2-Realm"),
+			["Olympus Horde"] = Vouched({ guild = "Olympus Horde", leader = "Grunt", officers = {}, realm = "Realm", t = ns.Now() }, "W1-Realm", "W2-Realm"),
 		}
+		ns.Comm.loginAt = ns.Now() - ns.Data.CROWN_AFTER - 1
 		ns.rdb.council = { names = { ["sage owl"] = true } } -- (made-up names only)
 		if setup then setup(w) end
 		local bns = setmetatable({}, { __index = ns })
@@ -18829,7 +18833,7 @@ local function WithBorders(fn, setup)
 	for _, name in ipairs(BORDER_GLOBALS) do _G[name] = saved[name] end
 	ns.faction, ns.rdb.guilds, ns.rdb.council, ns.db.borders = savedNs.faction, savedNs.guilds, savedNs.council, savedNs.borders
 	ns.Borders, ns.splitNames, ns.me, Enum.InputDeviceInterfaceType = savedNs.borderMod, savedNs.split, savedNs.me, savedNs.types
-	ns.devThrone, ns.db.devKingView = savedNs.dev, savedNs.view
+	ns.devThrone, ns.db.devKingView, ns.Comm.loginAt = savedNs.dev, savedNs.view, savedNs.loginAt
 	ns.SetCouncilNamesShown(false)
 	if not ok then error(err, 0) end
 end
@@ -19215,6 +19219,61 @@ test("1.0.1 borders: nothing outside an Olympus guild, on clients without Foreve
 		w.target(BORDER_KING)
 		eq(w.shown("target"), "gold")
 	end, function(w) w.unknownEvents = { PLAYER_FOCUS_CHANGED = true, INPUT_DEVICE_INTERFACE_TRANSITION = true } end)
+end)
+
+-- The review of 1.0.1: silver for another guild's Lords and Captains came from its census row as
+-- it stood, so one report naming its own sender an officer (or the guild master) made him silver
+-- for everyone. Now the rank the census's other checks trust (Data.KnownRank, soft as for the
+-- King's line): named by another sender of the picture most senders give, never by his own.
+test("1.0.1 borders: a census report never makes its own sender silver (Data.KnownRank), alone, in the King's guild or once the honest row is old", function()
+	WithBorders(function(w)
+		local D, LEVELS = ns.Data, "~0,0,0,0,0,0,0~~"
+		local function Report(guild, leader, officers, sender)
+			return D.Receive(Codec.DecodeReport("R2~" .. guild .. "~40~9~" .. leader .. "~1~1~~" .. LEVELS .. officers), sender)
+		end
+		w.internal("LOGIN")
+		local function Tier(unit) w.target(unit) return w.shown("target") end
+		-- Alone: a plain member's report naming himself an officer, or the guild master.
+		eq(Report("Olympus Anvil", "Anvilboss", "Selfnamed:1:0", "Selfnamed-Realm"), true, "taken: nobody else reports it")
+		eq(D.KnownRank("Selfnamed-Realm", "Olympus Anvil", true), nil)
+		eq(Tier(BorderUnit("Selfnamed", "Olympus Anvil", "Peasant", 6)), nil, "his own word: no officer's border")
+		eq(Report("Olympus Tongs", "Crowntaker", "", "Crowntaker-Realm"), true)
+		eq(Tier(BorderUnit("Crowntaker", "Olympus Tongs", "Peasant", 6)), nil, "his own word: no guild master's border")
+		-- The King's guild: a report that names the King its leader passes, and adds its sender.
+		eq(Report("OLYMPUS", "Asmongold Asmongler", "Peonx:1:0", "Peonx-Realm"), true)
+		eq(Tier(BorderUnit("Peonx", "OLYMPUS", "Peasant", 7)), nil, "a peasant of the King's guild")
+		eq(Tier(BORDER_KING), "gold", "the King as ever")
+		-- A real guild master is silver once another sender (his runner-up) names him too: the census
+		-- changing for the targeted player shows it.
+		local tongs = BorderUnit("Tongsboss", "Olympus Tongs2", "Guild Master", 0)
+		eq(Report("Olympus Tongs2", "Tongsboss", "", "Tongsboss-Realm"), true)
+		eq(Tier(tongs), nil, "his own report alone: not yet")
+		eq(Report("Olympus Tongs2", "Tongsboss", "", "Tongsrunner-Realm"), true)
+		w.internal("DATA_CHANGED")
+		eq(w.shown("target"), "silver", "named by his runner-up too")
+		-- Two honest senders' row (the fixture's): a forged report is outvoted while it is fresh, and
+		-- taken as the row once it is 16 minutes old, but is still one sender's word on himself.
+		local savedNow, clock = ns.Now, ns.Now()
+		ns.Now = function() return clock end
+		local ok, err = pcall(function()
+			local forged = "Capt:1:0,Far Away-Other:1:0,Zatk:1:0"
+			eq(Tier(BorderUnit("Capt", "Olympus Zeus", "Titan", 1)), "silver")
+			local n = w.computed()
+			eq(Report("Olympus Zeus", "Zeusy", forged, "Zatk-Realm"), false, "outvoted")
+			w.internal("DATA_CHANGED")
+			eq(w.computed(), n + 1, "its votes changed, not its row: the target's border worked out again (Data.KnownRank reads the votes)")
+			w.internal("DATA_CHANGED")
+			eq(w.computed(), n + 1, "nothing changed: not again")
+			eq(Tier(BorderUnit("Zatk", "Olympus Zeus", "Peasant", 6)), nil)
+			clock = clock + 16 * 60
+			eq(Report("Olympus Zeus", "Zeusy", forged, "Zatk-Realm"), true, "the row now")
+			eq(D.KnownRank("Zatk-Realm", "Olympus Zeus", true), nil)
+			eq(Tier(BorderUnit("Zatk", "Olympus Zeus", "Peasant", 6)), nil, "still his own word")
+			eq(Tier(BorderUnit("Capt", "Olympus Zeus", "Titan", 1)), "silver", "the officer the honest senders name")
+		end)
+		ns.Now = savedNow
+		if not ok then error(err, 0) end
+	end)
 end)
 
 print(("\n%d passed, %d failed"):format(passed, failed))
