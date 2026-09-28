@@ -373,9 +373,10 @@ Nothing leaves the game. There is no server, no website, no account and no track
 
 **Realms vs layers.** A realm (ClassicBetaPvP, ClassicBetaPvP2...) is a separate world
 with its own guilds; layers are copies of a zone *inside* one realm. Guilds on the same
-realm always see each other, whatever layer they are on. Whether the hidden channel also
-reaches another realm is not confirmed yet (the "topology" lines of `/oly bug` say so once
-a report from the other realm arrives). Realms whose guilds span each other share one
+realm always see each other, whatever layer they are on. The hidden channel stays inside
+one realm (PvP and PvP 2 each have their own), while guild chat reaches a guild's members on
+both. So since 1.0.0 each realm elects its own reporter for a guild, and the High Council's
+lists cross over through guild chat. Realms whose guilds span each other share one
 census and one realm key: PvP and PvP 2 on the beta from the start, and any realm your
 guild turns out to be homed on. Alts on any other realm keep their census apart, and the
 window shows which realms you are counting.
