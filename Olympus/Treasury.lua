@@ -809,6 +809,9 @@ function Treasury.Show(mode)
 	ns.Fire("TREASURY_CHANGED")
 end
 
+-- The ranking and the book from their first page again (the tab's search changed, Views.lua).
+function Treasury.FirstPage() bookShown, rankShown = Treasury.BOOK_SHOWN, Treasury.RANK_PAGE end
+
 -- Who looks at the tab: the Treasurer (his book), the King (the treasury, all of it), a member
 -- (what the King shows).
 function Treasury.Role()
@@ -824,11 +827,24 @@ function Treasury.MaySee(what)
 	return role ~= "member" or Treasury.Shows(what)
 end
 
-local function RankLines(lines, rank)
+-- The donors of the ranking a search finds (`q`, folded: Views.Query), each with its place in
+-- the whole ranking; all of them without one. The ranking's first RANK_SENT only, as ever.
+local function RankFound(rank, q)
+	local out = {}
+	for i = 1, math.min(#rank, Treasury.RANK_SENT) do
+		if ns.Holds(q, rank[i].name) then out[#out + 1] = i end
+	end
+	return out
+end
+
+-- `q`: the tab's search (the donors it finds, RankFound, a page at a time as ever).
+local function RankLines(lines, rank, q)
+	local found = RankFound(rank, q)
 	lines[#lines + 1] = { header = true, text = L.TREASURY_RANKING }
 	if #rank == 0 then lines[#lines + 1] = { text = Grey(L.TREASURY_NONE) } end
-	local n = math.min(#rank, Treasury.RANK_SENT)
-	for i = 1, math.min(n, rankShown) do
+	local n = #found
+	for k = 1, math.min(n, rankShown) do
+		local i = found[k]
 		local g = rank[i]
 		lines[#lines + 1] = { indent = 1, text = (i <= 3 and Gold or tostring)(("%d. %s"):format(i, g.name)), right = Treasury.Coins(g.money) }
 	end
@@ -862,29 +878,48 @@ local function BookRow(e, clickable)
 end
 
 -- The book: in and out, newest first. The Treasurer's own (every line, a click counts it or
--- not), or the lines his treasury last carried.
-local function BookLines(role)
+-- not), or the lines his treasury last carried. `q`, the tab's search (Views.Query): the way
+-- back, then only the lines whose donor (or whoever was paid) holds it, a page at a time as
+-- ever, under the book's header; "No match" for none.
+local function BookLines(role, q)
 	local lines = { { text = Gold("< " .. L.TREASURY_TITLE), onClick = function() Treasury.Show("summary") end, gapAfter = true } }
+	local book
+	if role == "treasurer" then
+		book = {}
+		local all = Book()
+		for i = #all, 1, -1 do
+			if ns.Holds(q, all[i].name) then book[#book + 1] = all[i] end
+		end
+	else
+		local r = Treasury.Report()
+		book = {}
+		for _, e in ipairs(r and r.book or {}) do
+			if ns.Holds(q, e.name) then book[#book + 1] = e end
+		end
+	end
+	if q and #book == 0 then
+		lines[#lines + 1] = { text = Grey(L.SEARCH_NO_MATCH) }
+		return lines
+	end
 	lines[#lines + 1] = { header = true, text = L.TREASURY_BOOK }
 	if role == "treasurer" then
-		Para(lines, L.TREASURY_BOOK_HOW)
-		lines[#lines].gapAfter = true
-		local book = Book()
+		if not q then
+			Para(lines, L.TREASURY_BOOK_HOW)
+			lines[#lines].gapAfter = true
+		end
 		if #book == 0 then lines[#lines + 1] = { text = Grey(L.TREASURY_NONE) } end
-		local last = math.max(1, #book - bookShown + 1)
-		for i = #book, last, -1 do lines[#lines + 1] = BookRow(book[i], true) end
+		for k = 1, math.min(#book, bookShown) do lines[#lines + 1] = BookRow(book[k], true) end
 		-- Every line within reach, 40 more a click.
-		if last > 1 then
-			lines[#lines + 1] = { text = Gold("> " .. L.TREASURY_OLDER:format(last - 1)), onClick = function()
+		if #book > bookShown then
+			lines[#lines + 1] = { text = Gold("> " .. L.TREASURY_OLDER:format(#book - bookShown)), onClick = function()
 				bookShown = bookShown + Treasury.BOOK_SHOWN
 				ns.Fire("TREASURY_CHANGED")
 			end }
 		end
 		return lines
 	end
-	local r = Treasury.Report()
-	if not r or #r.book == 0 then lines[#lines + 1] = { text = Grey(L.TREASURY_NONE) } end
-	for _, e in ipairs(r and r.book or {}) do lines[#lines + 1] = BookRow(e, false) end
+	if #book == 0 then lines[#lines + 1] = { text = Grey(L.TREASURY_NONE) } end
+	for _, e in ipairs(book) do lines[#lines + 1] = BookRow(e, false) end
 	return lines
 end
 
@@ -915,7 +950,31 @@ local function BankLines(lines, role)
 	lines[#lines].gapAfter = true
 end
 
-local function SummaryLines(role)
+-- The summary while the tab's search holds `q`: the donors it finds in the ranking, "No match"
+-- for none, and the way to the book (searched there too). Nothing else.
+local function SummarySearch(role, q)
+	local rank
+	if role == "treasurer" then
+		rank = Treasury.Totals().ranking
+	else
+		local r = Treasury.Report()
+		rank = r and r.rank or {}
+	end
+	local lines = {}
+	if #RankFound(rank, q) > 0 then
+		RankLines(lines, rank, q)
+		lines[#lines].gapAfter = true
+	else
+		lines[#lines + 1] = { text = Grey(L.SEARCH_NO_MATCH), gapAfter = true }
+	end
+	if Treasury.MaySee("book") then
+		lines[#lines + 1] = { text = Gold("> " .. L.TREASURY_BOOK), onClick = function() Treasury.Show("book") end, gapAfter = true }
+	end
+	return lines
+end
+
+local function SummaryLines(role, q)
+	if q then return SummarySearch(role, q) end
 	local lines = { { header = true, text = L.TREASURY_TITLE } }
 	local balance, allIn, allOut, week, donors, rank, asOf
 	if role == "treasurer" then
@@ -969,12 +1028,19 @@ local function SummaryLines(role)
 	return lines
 end
 
-function Treasury.Build()
+-- `q`: the tab's search (Views.Query), for the ranking and the book; nil for none.
+function Treasury.Build(q)
 	local role = Treasury.Role()
 	if Treasury.mode == "book" and not Treasury.MaySee("book") then Treasury.mode = "summary" end
-	local lines = Treasury.mode == "book" and BookLines(role) or SummaryLines(role)
+	local lines = Treasury.mode == "book" and BookLines(role, q) or SummaryLines(role, q)
 	local detail = role == "treasurer" and L.TREASURY_DETAIL_TREASURER or role == "king" and L.TREASURY_DETAIL_KING or L.TREASURY_DETAIL_MEMBER
 	return lines, L.TAB_TREASURY, detail
+end
+
+-- A list of donors shows on the tab (the book, or the ranking): its search box too (Views.lua).
+function Treasury.Searchable()
+	if Treasury.mode == "book" and Treasury.MaySee("book") then return true end
+	return Treasury.MaySee("ranking")
 end
 
 -- For Discord.
