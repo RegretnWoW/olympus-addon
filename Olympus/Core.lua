@@ -991,6 +991,7 @@ StandIn("Treasury", {})
 StandIn("Acts", { "WritPrompt" })
 StandIn("Dialog", {})
 StandIn("Bank", {})
+StandIn("Link", { "Slash" })
 
 -- Blizzard's gamepad UI (WoW: Forever's controller mode) is on.
 function ns.GamepadUI()
@@ -1069,7 +1070,7 @@ end
 ns.RegisterEvent("PLAYER_LOGIN", function()
 	ns.CheckFaction()
 	local missing = {}
-	for _, key in ipairs({ "Who", "Channels", "King", "Hop", "Workshop", "Vox", "Court", "Treasury", "Acts", "Dialog", "Bank" }) do
+	for _, key in ipairs({ "Who", "Channels", "King", "Hop", "Workshop", "Vox", "Court", "Treasury", "Acts", "Dialog", "Bank", "Link" }) do
 		if ns[key].missing then missing[#missing + 1] = key .. ".lua" end
 	end
 	if #missing > 0 then
@@ -1104,6 +1105,7 @@ local function Help()
 	print(L.HELP_INSPECTION)
 	print(L.HELP_ISSUE)
 	print(L.HELP_COUNCIL)
+	print(L.HELP_DISCORD)
 	print("  /oly decrees - decrees")
 	print("  /oly arms [text] | /oly muster [text] - decree (officers; 'test' = local preview)")
 	print(L.HELP_CHAN_ALL)
@@ -1126,8 +1128,18 @@ end
 
 SLASH_OLYMPUS1 = "/olympus"
 SLASH_OLYMPUS2 = "/oly"
+-- What an error report names as the command: the command itself, with what followed it for
+-- all but /oly discord (0.9.10: a Discord code, a confirmer's key: never in a report or the log).
+local function SlashWhere(input)
+	input = tostring(input)
+	local cmd = input:match("^%s*(%S*)") or ""
+	if cmd:lower() == "discord" then return "slash discord" end
+	return "slash " .. input
+end
+ns.SlashWhere = SlashWhere -- tests
+
 SlashCmdList.OLYMPUS = function(input)
-	ns.SafeCall("slash " .. tostring(input), function()
+	ns.SafeCall(SlashWhere(input), function()
 		local cmd, rest = (input or ""):match("^%s*(%S*)%s*(.-)%s*$")
 		cmd = (cmd or ""):lower()
 		if cmd == "" then
@@ -1271,6 +1283,9 @@ SlashCmdList.OLYMPUS = function(input)
 			ns.Channels.ToggleMute(rest)
 		elseif cmd == "chatwindow" then
 			ns.Channels.ChooseWindow(rest)
+		elseif cmd == "discord" then
+			-- Olympus Link (Link.lua): this character's Discord role; confirmers' keys; watchers.
+			ns.Link.Slash(rest)
 		else
 			Help()
 		end
