@@ -1,8 +1,10 @@
-// web/WORKER.md carries the schema, the test vectors and the whole reference Worker in its
-// own text (Fernmelder copies from it): they must stay the files the tests run. After a change
+// web/WORKER.md carries the schema, the test vectors, the core and the whole reference Worker in
+// its own text (Fernmelder copies from it): they must stay the files the tests run. After a change
 // to one of those files, rewrite the guide's copies with
 //   node web/test/docs.test.mjs --write
-// The guide's vectors must verify too, and the paths it names must exist.
+// The guide's vectors must verify too, and the paths it names must exist. web/FERN.md, the short
+// way in, must name only what link-core.mjs exports, the settings the addon and the page hold, and
+// files that exist.
 
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -12,12 +14,17 @@ import { fileURLToPath } from 'node:url';
 import { REPO, guideVectors, verify } from './helpers.mjs';
 import { parseBundle, parseToken, signedMessage, linkTag, drawThreshold } from '../public/core.js';
 import { verifyCertificate, councilCertificate, councilKeyId } from '../worker/link-worker.js';
+import * as core from '../worker/link-core.mjs';
+import { CONFIG } from '../public/config.js';
+import { vectors } from './helpers.mjs';
 
 const GUIDE = join(REPO, 'web', 'WORKER.md');
+const FERN = join(REPO, 'web', 'FERN.md');
 
 // <!-- block: <name> --> then a fenced block: the block is replaced by what the name gives.
 const BLOCKS = {
 	'web/worker/schema.sql': () => readFileSync(join(REPO, 'web/worker/schema.sql'), 'utf8'),
+	'web/worker/link-core.mjs': () => readFileSync(join(REPO, 'web/worker/link-core.mjs'), 'utf8'),
 	'web/worker/link-worker.js': () => readFileSync(join(REPO, 'web/worker/link-worker.js'), 'utf8'),
 	vectors: () => `${JSON.stringify(guideVectors(), null, 2)}\n`,
 };
@@ -108,5 +115,50 @@ if (process.argv[1] === fileURLToPath(import.meta.url) && process.argv.includes(
 		const paths = new Set([...md.matchAll(/\b((?:web|scripts)\/[A-Za-z0-9_./-]*[A-Za-z0-9_])/g)].map((m) => m[1]));
 		assert.ok(paths.size > 5);
 		for (const p of paths) assert.ok(existsSync(join(REPO, p)), p);
+	});
+
+	const fern = readFileSync(FERN, 'utf8');
+
+	test('FERN.md: the paths and links it names exist, and it and WORKER.md point at each other', () => {
+		const paths = new Set([...fern.matchAll(/\b((?:web|scripts)\/[A-Za-z0-9_./-]*[A-Za-z0-9_])/g)].map((m) => m[1]));
+		assert.ok(paths.size >= 5);
+		for (const p of paths) assert.ok(existsSync(join(REPO, p)), p);
+		for (const [, target] of fern.matchAll(/\]\(([^)#\s]+)(?:#[^)]*)?\)/g)) {
+			if (/^https?:/.test(target)) continue;
+			assert.ok(existsSync(join(REPO, 'web', target)), `link: ${target}`);
+		}
+		const anchors = new Set([...fern.matchAll(/^#+ (.+)$/gm)].map((m) => m[1].toLowerCase().replace(/[^a-z0-9 -]/g, '').replace(/ /g, '-')));
+		for (const [, anchor] of fern.matchAll(/\]\(#([^)]+)\)/g)) assert.ok(anchors.has(anchor), `#${anchor}`);
+		assert.match(fern, /\]\(WORKER\.md\)/, 'FERN.md links to WORKER.md');
+		assert.match(md, /\]\(FERN\.md\)/, 'WORKER.md links to FERN.md');
+	});
+
+	test('FERN.md names only what link-core.mjs exports', () => {
+		const imported = [...fern.matchAll(/import \{([^}]+)\} from '\.\/link-core\.mjs'/g)].flatMap((m) => m[1].split(',').map((x) => x.trim()));
+		assert.ok(imported.length >= 4);
+		const called = [...fern.matchAll(/`([a-z][A-Za-z]+)\(/g)].map((m) => m[1]);
+		const named = [...fern.matchAll(/`([a-z][A-Za-z]+)`/g)].map((m) => m[1]).filter((n) => /[A-Z]/.test(n) && n !== 'keyId');
+		for (const name of new Set([...imported, ...called, ...named])) {
+			if (name === 'promote' || name === 'demote') continue; // the bot's own
+			assert.equal(typeof core[name], 'function', `link-core.mjs exports ${name}`);
+		}
+	});
+
+	test('FERN.md: the settings are the ones the addon and the page hold, and its fake proof is the fixtures\'', () => {
+		const lua = readFileSync(join(REPO, 'Olympus', 'Link.lua'), 'utf8');
+		const ca = /^ns\.LINK_CA_KEYS = \{ "([0-9a-f]{64})" \}$/m.exec(lua)[1];
+		assert.ok(fern.includes(`LINK_CA_PUBLIC = "${ca}"`), 'the council authority\'s public key');
+		assert.ok(md.includes(`LINK_CA_PUBLIC = "${ca}"`), 'WORKER.md\'s too');
+		assert.ok(fern.includes(`\`${CONFIG.PAGE_URL}\``), 'the page\'s address, the Discord redirect');
+		const origin = new URL(CONFIG.PAGE_URL).origin;
+		assert.ok(fern.includes(`LINK_ORIGIN = "${origin}"`) && md.includes(`LINK_ORIGIN = "${origin}"`), 'the origin, in both');
+		assert.ok(fern.includes(`\`${CONFIG.VERIFY_COMMAND}\``), 'the command the page names');
+		const body = /--data '(\{[^']+\})'/.exec(fern);
+		assert.ok(body, 'a curl with a body');
+		const { text, discordToken } = JSON.parse(body[1]);
+		assert.equal(text, vectors.bundles[0].bundle);
+		assert.ok(parseBundle(text).ok && core.parseBundle(text).ok);
+		assert.equal(typeof discordToken, 'string');
+		for (const reason of core.PROOF_REASONS) assert.ok(md.includes(`\`${reason}\``), `WORKER.md names the reason ${reason}`);
 	});
 }

@@ -1,61 +1,151 @@
-// The page's backend calls (web/public/backend.js) against the Worker's routes, the demo that
-// never touches the network, and the two languages of the page.
+// The page's settings (web/public/config.js), the one request it makes and the Discord sign-in
+// (web/public/backend.js), the demo that never touches the network, and the two languages of the
+// page. No network here: fetch is a stub that records what the page would send.
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { test } from 'node:test';
-import { createBackend, BackendError, DEMO_STATES, DEMO_DATA } from '../public/backend.js';
+import { CONFIG } from '../public/config.js';
+import { createBackend, isConfigured, proofRequest, authorizeUrl, redirectUri, newState, readSignIn, hasSignIn, DEMO_STATES, DEMO_DATA, TOKEN_LIFE_MAX } from '../public/backend.js';
 import { strings, pickLang, fill } from '../public/i18n.js';
-import { parseToken, checkBundle } from '../public/core.js';
-import { vectors } from './helpers.mjs';
+import { checkBundle } from '../public/core.js';
+import { PROOF_REASONS } from '../worker/link-core.mjs';
+import { REPO, vectors } from './helpers.mjs';
 
-function stubFetch(answers) {
+const PAGE = 'https://dnl-gentile.github.io/olympus-addon/';
+const READY = { ...CONFIG, PROOF_URL: 'https://bot.example.workers.dev/proof', DISCORD_CLIENT_ID: '300000000000000123', SITE_TOKEN: '' };
+const TOKEN = 'dGVzdC1hY2Nlc3MtdG9rZW4tZm9yLXRoZS1wYWdl'; // a made-up access token
+const STATE = '0123456789abcdef0123456789abcdef';
+
+function stubFetch(answer) {
 	const calls = [];
 	const fetchImpl = async (url, init) => {
 		calls.push({ url, init });
-		const a = answers[url];
-		if (!a) throw new TypeError('network down');
-		return new Response(a.body === undefined ? null : JSON.stringify(a.body), { status: a.status || 200 });
+		if (!answer) throw new TypeError('network down');
+		return new Response(answer.body === undefined ? null : JSON.stringify(answer.body), { status: answer.status || 200 });
 	};
 	return { calls, fetchImpl };
 }
 
-test('backend: me() is the user, or null when signed out', async () => {
-	const user = { id: '1', username: 'some_player', global_name: 'Some Player', avatar: null };
-	let s = stubFetch({ '/api/link/me': { body: { user } } });
-	assert.deepEqual(await createBackend({ fetchImpl: s.fetchImpl }).me(), user);
-	assert.equal(s.calls[0].init.method, 'GET');
-	assert.equal(s.calls[0].init.credentials, 'same-origin');
-	s = stubFetch({ '/api/link/me': { status: 401, body: { user: null } } });
-	assert.equal(await createBackend({ fetchImpl: s.fetchImpl }).me(), null);
-	s = stubFetch({ '/api/link/me': { status: 500 } });
-	await assert.rejects(createBackend({ fetchImpl: s.fetchImpl }).me(), BackendError);
-	s = stubFetch({});
-	await assert.rejects(createBackend({ fetchImpl: s.fetchImpl }).me(), (e) => e.reason === 'server');
-	assert.equal(createBackend({ fetchImpl: s.fetchImpl }).loginUrl('/link/?lang=pt'), '/login?next=%2Flink%2F%3Flang%3Dpt');
+test('config.js: the page\'s address is the addon\'s, and the bot\'s settings are placeholders or real ones', () => {
+	assert.deepEqual(Object.keys(CONFIG).sort(), ['DISCORD_CLIENT_ID', 'PAGE_URL', 'PROOF_URL', 'SITE_TOKEN', 'VERIFY_COMMAND']);
+	assert.equal(CONFIG.PAGE_URL, PAGE);
+	// The QR code and the copy box open the same address (Olympus/Link.lua), with the link after #.
+	const lua = readFileSync(join(REPO, 'Olympus', 'Link.lua'), 'utf8');
+	assert.equal(/^ns\.LINK_SITE = "([^"]*)"$/m.exec(lua)[1], CONFIG.PAGE_URL);
+	assert.equal(redirectUri(`${PAGE}index.html?lang=pt#b=OLB5~x`), PAGE, 'the Discord redirect is the page\'s folder');
+	assert.match(CONFIG.VERIFY_COMMAND, /^\/[a-z0-9_-]{1,32}$/);
+	assert.equal(typeof CONFIG.SITE_TOKEN, 'string');
+	// Either the bot is not named yet (the page says Olympus Link is not open) or it is, all of it.
+	const placeholders = /^PASTE-/.test(CONFIG.PROOF_URL) && /^PASTE-/.test(CONFIG.DISCORD_CLIENT_ID);
+	assert.ok(placeholders || isConfigured(CONFIG), 'PROOF_URL (https) and DISCORD_CLIENT_ID (digits) together');
+	assert.equal(isConfigured(CONFIG), !placeholders);
 });
 
-test('backend: code() is the token, errors carry the Worker\'s reason', async () => {
-	const token = vectors.backend.tokens[0].token;
-	let s = stubFetch({ '/api/link/code': { body: { token, command: `/oly discord ${token}` } } });
-	assert.equal(await createBackend({ fetchImpl: s.fetchImpl }).code(), token);
-	assert.equal(s.calls[0].init.method, 'POST');
-	assert.equal(s.calls[0].init.headers['Content-Type'], 'application/json');
-	s = stubFetch({ '/api/link/code': { status: 429, body: { status: 'error', reason: 'limit', message: 'x' } } });
-	await assert.rejects(createBackend({ fetchImpl: s.fetchImpl }).code(), (e) => e.reason === 'limit' && e.status === 429);
+test('index.html: the Content-Security-Policy lets the page reach the bot\'s /proof and nothing else', () => {
+	const html = readFileSync(join(REPO, 'web', 'public', 'index.html'), 'utf8');
+	const csp = /http-equiv="Content-Security-Policy" content="([^"]+)"/.exec(html)[1];
+	const connect = (/(?:^|;\s*)connect-src ([^;]+)/.exec(csp) || [])[1].trim().split(/\s+/);
+	const allowed = ["'self'"];
+	if (isConfigured(CONFIG)) allowed.push(new URL(CONFIG.PROOF_URL).origin);
+	assert.deepEqual(connect.sort(), allowed.sort(), 'connect-src: the page itself and the bot\'s /proof');
+	assert.doesNotMatch(csp, /\*/, 'no wildcard anywhere');
+	assert.match(csp, /(?:^|;\s*)default-src 'self'(?:;|$)/);
+	assert.match(html, /<meta name="referrer" content="no-referrer">/);
+	// Every address of the page's own files is relative: it runs under /olympus-addon/.
+	for (const m of html.matchAll(/(?:src|href)="([^"]+)"/g)) {
+		const u = m[1];
+		if (/^https:\/\/fonts\.(googleapis|gstatic)\.com(\/|$)/.test(u) || u.startsWith('#')) continue;
+		assert.ok(!u.startsWith('/') && !/^[a-z]+:/i.test(u), `relative: ${u}`);
+	}
+	for (const file of ['app.js', 'backend.js', 'scanner.js', 'qr-worker.js', 'core.js']) {
+		const src = readFileSync(join(REPO, 'web', 'public', file), 'utf8');
+		assert.doesNotMatch(src, /(?:fetch|Worker|importScripts|assign)\(\s*['"`]\//, `${file}: no path from the site's root`);
+	}
 });
 
-test('backend: submit(bundle) sends the bundle and returns the Worker\'s answer', async () => {
+test('isConfigured: an https /proof and a Discord application id, or the page stays closed', () => {
+	assert.equal(isConfigured(READY), true);
+	assert.equal(isConfigured({ ...READY, PROOF_URL: 'PASTE-THE-PROOF-URL-HERE' }), false);
+	assert.equal(isConfigured({ ...READY, PROOF_URL: 'http://bot.example/proof' }), false, 'never in the clear');
+	assert.equal(isConfigured({ ...READY, PROOF_URL: 'http://localhost:8787/proof' }), true, 'but on this computer (wrangler dev)');
+	assert.equal(isConfigured({ ...READY, PROOF_URL: 'https://user:pw@bot.example/proof' }), false);
+	assert.equal(isConfigured({ ...READY, DISCORD_CLIENT_ID: 'PASTE-THE-DISCORD-CLIENT-ID-HERE' }), false);
+	assert.equal(isConfigured({ ...READY, DISCORD_CLIENT_ID: '12ab' }), false);
+});
+
+test('the one request: POST {text, discordToken} to /proof, no cookie, no referrer, the site token only when there is one', () => {
 	const bundle = vectors.bundles[0].bundle;
-	const answer = { status: 'linked', reason: 'linked', message: 'ok', characters: ['Some Player-ClassicBetaPvP'] };
-	let s = stubFetch({ '/api/link/submit': { body: answer } });
-	assert.deepEqual(await createBackend({ fetchImpl: s.fetchImpl }).submit(bundle), answer);
-	assert.deepEqual(JSON.parse(s.calls[0].init.body), { bundle });
-	s = stubFetch({ '/api/link/submit': { status: 200, body: { status: 'rejected', reason: 'expired', message: 'm' } } });
-	assert.deepEqual(await createBackend({ fetchImpl: s.fetchImpl }).submit(bundle), { status: 'rejected', reason: 'expired', message: 'm', characters: [] });
-	s = stubFetch({ '/api/link/submit': { status: 401 } });
-	assert.equal((await createBackend({ fetchImpl: s.fetchImpl }).submit(bundle)).reason, 'login');
-	s = stubFetch({ '/api/link/submit': { status: 502 } });
-	assert.equal((await createBackend({ fetchImpl: s.fetchImpl }).submit(bundle)).reason, 'server');
+	let { url, init } = proofRequest(READY, bundle, TOKEN);
+	assert.equal(url, READY.PROOF_URL);
+	assert.equal(init.method, 'POST');
+	assert.equal(init.mode, 'cors');
+	assert.equal(init.credentials, 'omit');
+	assert.equal(init.referrerPolicy, 'no-referrer');
+	assert.equal(init.cache, 'no-store');
+	assert.deepEqual(init.headers, { Accept: 'application/json', 'Content-Type': 'application/json' });
+	assert.deepEqual(JSON.parse(init.body), { text: bundle, discordToken: TOKEN });
+	assert.deepEqual(Object.keys(JSON.parse(init.body)), ['text', 'discordToken'], 'nothing else in the body');
+	({ url, init } = proofRequest({ ...READY, SITE_TOKEN: 'page-token-123' }, bundle, TOKEN));
+	assert.equal(init.headers.Authorization, 'Bearer page-token-123');
+	assert.deepEqual(JSON.parse(init.body), { text: bundle, discordToken: TOKEN }, 'the site token never in the body');
+});
+
+test('submit(): sends that request and returns the bot\'s answer; a network or bot failure says so', async () => {
+	const bundle = vectors.bundles[0].bundle;
+	const answer = { status: 'linked', reason: 'linked', message: 'ok', username: 'some.player', characters: ['Some Player-ClassicBetaPvP'] };
+	let s = stubFetch({ body: answer });
+	assert.deepEqual(await createBackend({ config: READY, fetchImpl: s.fetchImpl }).submit(bundle, TOKEN), answer);
+	assert.equal(s.calls.length, 1);
+	assert.deepEqual(s.calls[0], proofRequest(READY, bundle, TOKEN));
+	s = stubFetch({ body: { status: 'rejected', reason: 'expired', message: 'm' } });
+	assert.deepEqual(await createBackend({ config: READY, fetchImpl: s.fetchImpl }).submit(bundle, TOKEN), { status: 'rejected', reason: 'expired', message: 'm', characters: [] });
+	s = stubFetch({ status: 401, body: { status: 'error', reason: 'login', message: 'x' } });
+	assert.equal((await createBackend({ config: READY, fetchImpl: s.fetchImpl }).submit(bundle, TOKEN)).reason, 'login');
+	for (const [status, reason] of [[401, 'login'], [429, 'limit'], [502, 'server']]) {
+		s = stubFetch({ status });
+		assert.equal((await createBackend({ config: READY, fetchImpl: s.fetchImpl }).submit(bundle, TOKEN)).reason, reason, String(status));
+	}
+	s = stubFetch(null);
+	assert.deepEqual(await createBackend({ config: READY, fetchImpl: s.fetchImpl }).submit(bundle, TOKEN), { status: 'error', reason: 'server', message: '', characters: [] });
+	assert.equal(createBackend({ config: READY, fetchImpl: s.fetchImpl }).configured, true);
+	assert.equal(createBackend({ config: { ...READY, PROOF_URL: '' }, fetchImpl: s.fetchImpl }).configured, false);
+});
+
+test('the sign-in: Discord\'s own page, the implicit grant, identify only, back to the page\'s folder with this tab\'s state', () => {
+	const u = new URL(authorizeUrl(READY, { state: STATE, redirect: PAGE }));
+	assert.equal(`${u.origin}${u.pathname}`, 'https://discord.com/oauth2/authorize');
+	assert.deepEqual(Object.fromEntries(u.searchParams), { client_id: READY.DISCORD_CLIENT_ID, response_type: 'token', scope: 'identify', redirect_uri: PAGE, state: STATE });
+	assert.equal(createBackend({ config: READY }).loginUrl(STATE, PAGE), u.href);
+	const a = newState();
+	const b = newState();
+	assert.match(a, /^[0-9a-f]{32}$/);
+	assert.notEqual(a, b);
+});
+
+test('the answer from Discord: the token with this tab\'s state only, never another\'s, and nothing when there is none', () => {
+	const now = 1_800_000_000_000;
+	const back = (params) => ({ hash: `#${new URLSearchParams(params)}`, search: '' });
+	const good = { token_type: 'Bearer', access_token: TOKEN, expires_in: '604800', scope: 'identify', state: STATE };
+	assert.deepEqual(readSignIn(back(good), STATE, now), { kind: 'token', token: TOKEN, exp: now + 604800 * 1000 });
+	assert.equal(hasSignIn(back(good)), true);
+	// Another state, or none kept in this tab (a sign-in started elsewhere): the token is dropped.
+	assert.deepEqual(readSignIn(back(good), 'ffffffffffffffffffffffffffffffff', now), { kind: 'bad-state' });
+	assert.deepEqual(readSignIn(back(good), null, now), { kind: 'bad-state' });
+	assert.deepEqual(readSignIn(back({ ...good, state: undefined }), STATE, now), { kind: 'bad-state' });
+	// Refusals and oddities.
+	assert.deepEqual(readSignIn(back({ error: 'access_denied', state: STATE }), STATE, now), { kind: 'denied' });
+	assert.deepEqual(readSignIn({ hash: '', search: `?error=invalid_scope&state=${STATE}` }, STATE, now), { kind: 'error' });
+	assert.deepEqual(readSignIn(back({ ...good, token_type: 'Basic' }), STATE, now), { kind: 'error' });
+	assert.deepEqual(readSignIn(back({ ...good, access_token: 'x y' }), STATE, now), { kind: 'error' });
+	assert.deepEqual(readSignIn(back({ ...good, scope: 'guilds' }), STATE, now), { kind: 'error' });
+	assert.equal(readSignIn(back({ ...good, expires_in: String(30 * 86400) }), STATE, now).exp, now + TOKEN_LIFE_MAX * 1000, 'a week at most');
+	// A link from the game, or nothing: not a sign-in.
+	for (const where of [{ hash: '#b=OLB5~x', search: '' }, { hash: '', search: '?lang=pt' }, {}]) {
+		assert.deepEqual(readSignIn(where, STATE, now), { kind: 'none' });
+		assert.equal(hasSignIn(where), false);
+	}
 });
 
 test('demo: every state answers without a network call, with the vectors\' data', async () => {
@@ -65,17 +155,14 @@ test('demo: every state answers without a network call, with the vectors\' data'
 	for (const state of DEMO_STATES) {
 		const b = createBackend({ demo: state, fetchImpl });
 		assert.equal(b.demo, state);
-		const user = await b.me();
-		assert.equal(user === null, state === 'login' || state === 'scanned', state);
-		assert.ok(!b.loginUrl('/').startsWith('/login'), state);
+		assert.equal(b.configured, state !== 'closed', state);
+		assert.ok(!b.loginUrl('s', PAGE).startsWith('https:'), state);
 		if (state === 'found') continue; // it stays "sending" for its screenshot
-		if (state === 'code') assert.ok(parseToken(await b.code()).ok);
 		if (state === 'done' || state === 'error') {
-			const r = await b.submit(DEMO_DATA.bundles[0]);
+			const r = await b.submit(DEMO_DATA.bundles[0], 'demo');
 			assert.equal(r.status, state === 'done' ? 'linked' : 'rejected');
 		}
 	}
-	assert.equal(DEMO_DATA.token, vectors.backend.tokens[0].token);
 	assert.deepEqual(DEMO_DATA.bundles, [vectors.bundles[0].bundle, vectors.bundles[1].bundle]);
 	for (const text of DEMO_DATA.bundles) assert.ok(checkBundle(text).ok);
 });
@@ -94,8 +181,10 @@ test('languages: English by default, Portuguese for "pt", the same keys in both'
 			.sort();
 	assert.deepEqual(keys(strings.pt), keys(strings.en));
 	assert.equal(strings.pt.steps.length, strings.en.steps.length);
+	assert.equal(strings.en.steps.length, 4, 'your code, in game, read it, done');
 	for (const lang of ['en', 'pt']) {
 		for (const [k, v] of Object.entries(strings[lang])) if (typeof v === 'string') assert.ok(v.trim() !== '', `${lang}.${k}`);
+		assert.match(strings[lang].codeStep1, /\{command\}/, `${lang}: the bot's command, from config.js`);
 	}
 	// The exact lines the page must say.
 	assert.equal(strings.en.loginNote, 'We only see your Discord name and avatar.');
@@ -112,16 +201,18 @@ test('the code step warns about streams, in both languages', () => {
 	assert.match(strings.pt.codeStream, /janela do Olympus Link/);
 	assert.match(strings.en.waitStream, /off the stream/);
 	assert.match(strings.pt.waitStream, /fora da transmissão/);
-	assert.match(strings.en.codeReveal, /Click to show/);
 });
 
-test('every answer the Worker can give has its words, in both languages', async () => {
-	const src = (await import('node:fs')).readFileSync(new URL('../worker/link-worker.js', import.meta.url), 'utf8');
-	const reasons = new Set([...src.matchAll(/reject\('([a-z-]+)'/g), ...src.matchAll(/reason: '([a-z-]+)'/g)].map((m) => m[1]));
-	for (const r of ['tag', 'guild-unverified', 'not-enough', 'discord', 'server']) assert.ok(reasons.has(r), r);
-	for (const r of reasons) {
-		if (['auth', 'origin', 'already', 'linked'].includes(r)) continue; // the tools', the page's own origin, and success
+test('every answer the bot\'s /proof can give has its words, in both languages', () => {
+	for (const r of PROOF_REASONS) {
+		if (r === 'linked' || r === 'already') continue; // success: the done step
 		assert.ok(strings.en.errors[r], `en: ${r}`);
 		assert.ok(strings.pt.errors[r], `pt: ${r}`);
 	}
+	// And every refusal or error the core and the reference Worker write is one of them, or a tool's.
+	const tools = new Set(['auth', 'method', 'username', 'unknown-key', 'key-id-used', 'public-key-used', 'owner-has-key', 'character-not-linked', 'revoked', 'replaced', 'too-early']);
+	const src = ['link-core.mjs', 'link-worker.js'].map((f) => readFileSync(join(REPO, 'web', 'worker', f), 'utf8')).join('\n');
+	const reasons = new Set([...src.matchAll(/(?:reject|failure|fail)\('([a-z-]+)'/g), ...src.matchAll(/reason: '([a-z-]+)'/g)].map((m) => m[1]));
+	for (const r of ['tag', 'guild-unverified', 'not-enough', 'discord', 'server', 'login', 'origin', 'site', 'limit']) assert.ok(reasons.has(r), r);
+	for (const r of reasons) assert.ok(PROOF_REASONS.includes(r) || tools.has(r), `${r}: in PROOF_REASONS, or a tool's`);
 });
