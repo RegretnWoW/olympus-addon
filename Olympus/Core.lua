@@ -1266,8 +1266,12 @@ SlashCmdList.OLYMPUS = function(input)
 			ns.Print(ns.db.royalInspection == false and L.INSPECTION_OPT_OFF or L.INSPECTION_OPT_ON)
 		elseif cmd == "borders" then
 			-- The elite borders on the target, focus and your own portrait (Borders.lua): on or off.
+			-- The author's preview of a tier round his own portrait (test <tier>|off): his alone;
+			-- anyone else's gets what /oly borders says, and nothing is done.
 			local on = rest:lower()
-			if on == "on" or on == "off" then ns.Borders.SetEnabled(on == "on") else ns.Borders.Report() end
+			local tier = on:match("^test%s+(%S+)$") or (on == "test" and "" or nil)
+			if on == "on" or on == "off" then ns.Borders.SetEnabled(on == "on")
+			elseif not (tier and ns.Borders.SetPreview(tier) == true) then ns.Borders.Report() end
 		elseif cmd == "treasurer" then
 			-- A keeper's yes to sharing his book and the guild bank (Treasury.lua).
 			local on = rest:lower()

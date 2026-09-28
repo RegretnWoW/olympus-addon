@@ -19692,6 +19692,359 @@ test("1.0.1 borders: a census report never gives its own sender a Lord's or a Ca
 	end)
 end)
 
+-- 1.0.0: the author's preview (/oly borders test <tier>|off, Borders.SetPreview). His character
+-- holds no Olympus rank (a Member of <Olympus II> here), so his own portrait showed none of the
+-- six borders and he could not check them in game.
+do
+	local AUTHOR_UNIT = BorderUnit("Faladoriel Skylance", "Olympus II", "Member", 3, { realm = "ClassicBetaPvP" })
+	local function AsAuthor(w) w.units.player = AUTHOR_UNIT; ns.me = "Faladoriel Skylance-ClassicBetaPvP" end
+	local MEDIA = "Interface\\AddOns\\Olympus\\media\\borders\\"
+	local TIER_LIST = "gold-elite, silver-elite, gold, silver, bronze-elite, bronze"
+
+	-- Everything the addon could send while fn runs (an addon message by either API, a chat line,
+	-- Comm's own queues), recorded in `sent`.
+	local function RecordingSends(fn)
+		local saved = { info = C_ChatInfo, chat = SendChatMessage, send = ns.Comm.Send, whisper = ns.Comm.Whisper }
+		local sent = {}
+		C_ChatInfo = setmetatable({}, { __index = function(_, k) return function() sent[#sent + 1] = "C_ChatInfo." .. k end end })
+		SendChatMessage = function() sent[#sent + 1] = "SendChatMessage" end
+		ns.Comm.Send = function() sent[#sent + 1] = "Comm.Send" end
+		ns.Comm.Whisper = function() sent[#sent + 1] = "Comm.Whisper" end
+		local ok, err = pcall(fn, sent)
+		C_ChatInfo, SendChatMessage, ns.Comm.Send, ns.Comm.Whisper = saved.info, saved.chat, saved.send, saved.whisper
+		if not ok then error(err, 0) end
+	end
+
+	test("1.0.0 borders preview: the author's /oly borders test <tier> shows it round his own portrait (turned round) and on his target or focus while that is himself, at the tier's art, size and offsets; off ends it", function()
+		WithBorders(function(w)
+			ns.Borders = w.B -- (the slash command's: the stand-in otherwise)
+			w.internal("LOGIN")
+			eq(w.shown("player"), nil, "his own rank: no border")
+			-- As the tier test above has them: the art, its size (nil: the atlas's own), on his own
+			-- frame its texture coordinates turned round and its point from the left; on the target
+			-- its point from the right.
+			local want = {
+				{ "gold-elite", "atlas UI-HUD-UnitFrame-Target-PortraitOn-Boss-Gold-Winged", nil, "1 0 0 1", "-13 -4", "11 -4" },
+				{ "silver-elite", "atlas UI-HUD-UnitFrame-Target-PortraitOn-Boss-Rare-Silver-Winged", nil, "1 0 0 1", "-10 -7", "8 -7" },
+				{ "gold", "atlas UI-HUD-UnitFrame-Target-PortraitOn-Boss-Gold", nil, "1 0 0 1", "-2 1", "0 1" },
+				{ "silver", "atlas ui-hud-unitframe-target-portraiton-boss-rare-silver", nil, "1 0 0 1", "-2 1", "0 1" },
+				{ "bronze-elite", "file " .. MEDIA .. "bronze-winged", "110 90", "0.859375 0 0 0.703125", "-13 -4", "11 -4" },
+				{ "bronze", "file " .. MEDIA .. "bronze-plain", "100 100", "0.78125 0 0 0.78125", "-2 1", "0 1" },
+			}
+			for _, row in ipairs(want) do
+				local name, art, size, coord, mineAt, targetAt = unpack(row, 1, 6)
+				SlashCmdList.OLYMPUS("borders test " .. name)
+				eq(w.printed[#w.printed], ns.L.BORDERS_PREVIEW_ON:format(name))
+				eq(w.B.Preview(), name)
+				eq(w.shown("player"), name, name .. " round his own portrait")
+				local tex = w.shownTexture("player")
+				eq(tex.file and ("file " .. tex.file) or ("atlas " .. tostring(tex.atlas)), art, name .. ": its art")
+				eq(tex.size, size, name .. ": its size"); eq(tex.coord, coord, name .. ": turned round")
+				eq(tex.point, "TOPLEFT PlayerFrame.PlayerFrameContainer TOPLEFT " .. mineAt, name .. ": round his portrait")
+				eq(tex.desaturated, nil, "no desaturation"); eq(tex.color, nil, "no tint")
+				-- /oly status: the frame's border, and the preview's.
+				local status = ns.StatusText()
+				assert(status:find("target -, focus -, player " .. name .. "  |", 1, true), status)
+				assert(status:find("  |  preview " .. name .. "\n", 1, true) or status:find("  |  preview " .. name .. "$"), status)
+				-- Targeting himself: the target frame too, as the game's own art sits there.
+				w.target(w.units.player)
+				eq(w.shown("target"), name, name .. " targeting himself")
+				local t = w.shownTexture("target")
+				eq(t.point, "TOPRIGHT TargetFrame.TargetFrameContainer TOPRIGHT " .. targetAt, name .. " on the target: where")
+				-- Anyone else: their own border, as ever.
+				w.target(BorderUnit("Zeusy", "Olympus Zeus", "Zeus", 0))
+				eq(w.shown("target"), "gold", "a Lord as ever")
+				w.target(BorderUnit("Stranger", "Stormwind Traders", "Member", 3))
+				eq(w.shown("target"), nil, "a stranger: none")
+				w.target(nil)
+			end
+			-- His focus on himself; any case; a new tier replaces the last.
+			w.units.focus = w.units.player
+			w.fire("PLAYER_FOCUS_CHANGED")
+			eq(w.shown("focus"), "bronze", "his focus on himself")
+			SlashCmdList.OLYMPUS("borders test GOLD-Elite")
+			eq(w.B.Preview(), "gold-elite", "any case")
+			eq(w.shown("player"), "gold-elite"); eq(w.shown("focus"), "gold-elite")
+			-- A word that is no tier, or none: which tiers there are, nothing changed.
+			for _, cmd in ipairs({ "borders test platinum", "borders test", "borders test  " }) do
+				SlashCmdList.OLYMPUS(cmd)
+				eq(w.printed[#w.printed], ns.L.BORDERS_PREVIEW_HELP:format(TIER_LIST), cmd)
+				eq(w.B.Preview(), "gold-elite", cmd); eq(w.shown("player"), "gold-elite", cmd)
+			end
+			-- Off: his own rank's border (none) again, everywhere.
+			SlashCmdList.OLYMPUS("borders test off")
+			eq(w.printed[#w.printed], ns.L.BORDERS_PREVIEW_OFF)
+			eq(w.B.Preview(), nil); eq(w.shown("player"), nil); eq(w.shown("focus"), nil)
+			w.target(w.units.player)
+			eq(w.shown("target"), nil, "targeting himself: none again")
+			assert(not ns.StatusText():find("preview", 1, true), "gone from /oly status")
+			-- The borders' own machinery unchanged: the same textures, the same hooks.
+			eq(#w.textures, 18); eq(table.concat(w.hooks, " "), "TargetFrame.CheckClassification FocusFrame.CheckClassification")
+			for _, entry in ipairs(w.log) do assert(entry:find(":CreateTexture$"), entry) end
+		end, AsAuthor)
+		-- An author who does hold a rank: the preview in its place while on, his own again after.
+		WithBorders(function(w)
+			ns.Borders = w.B
+			w.internal("LOGIN")
+			eq(w.shown("player"), "silver", "his officer rank")
+			SlashCmdList.OLYMPUS("borders test bronze")
+			eq(w.shown("player"), "bronze")
+			SlashCmdList.OLYMPUS("borders test off")
+			eq(w.shown("player"), "silver", "his own again")
+		end, function(w)
+			AsAuthor(w)
+			w.units.player = BorderUnit("Faladoriel Skylance", "Olympus II", "Titan", 1, { realm = "ClassicBetaPvP" })
+		end)
+	end)
+
+	test("1.0.0 borders preview: the Workshop lists the six tiers for the author; a click shows one, a click on it again ends it; not in the copy for Discord", function()
+		WithBorders(function(w)
+			ns.Borders = w.B
+			w.internal("LOGIN")
+			local function Section()
+				local lines, at = ns.Workshop.Build(), nil
+				for i, l in ipairs(lines) do if l.header and l.text == ns.L.BORDERS_PREVIEW_TITLE then at = i end end
+				assert(at, "a section of the Workshop")
+				local rows = {}
+				for i = at + 1, #lines do rows[#rows + 1] = lines[i] end
+				return lines[at], rows
+			end
+			local head, rows = Section()
+			eq(#rows, 6, "one row per tier, the last of the tab")
+			assert(head.right:find(ns.L.BORDERS_PREVIEW_NONE, 1, true), "off")
+			for i, t in ipairs(w.B.TIERS) do
+				assert(rows[i].text:find(t.name, 1, true), t.name)
+				assert(rows[i].text:find(ns.L["BORDERS_WHO_" .. t.name:upper():gsub("%-", "_")], 1, true), t.name .. ": who holds it")
+				eq(type(rows[i].onClick), "function"); eq(type(rows[i].tooltip), "function"); eq(rows[i].right, nil)
+			end
+			rows[5].onClick()
+			eq(w.B.Preview(), "bronze-elite"); eq(w.shown("player"), "bronze-elite", "clicked: shown")
+			eq(w.printed[#w.printed], ns.L.BORDERS_PREVIEW_ON:format("bronze-elite"))
+			head, rows = Section()
+			assert(head.right:find(ns.L.BORDERS_PREVIEW_NOW:format("bronze-elite"), 1, true), head.right)
+			assert(rows[5].right and rows[5].right:find(ns.L.BORDERS_PREVIEW_SHOWN, 1, true), "marked shown")
+			eq(rows[1].right, nil)
+			rows[1].onClick()
+			eq(w.shown("player"), "gold-elite", "another tier")
+			head, rows = Section()
+			rows[1].onClick()
+			eq(w.B.Preview(), nil, "clicked again: off"); eq(w.shown("player"), nil)
+			rows[2].onClick()
+			assert(not ns.Workshop.ReportText():find(ns.L.BORDERS_PREVIEW_TITLE, 1, true), "not in the copy for Discord")
+			SlashCmdList.OLYMPUS("borders test off")
+		end, AsAuthor)
+	end)
+
+	test("1.0.0 borders preview: anyone but the author gets what /oly borders says, and nothing is done; the author's test build as his views", function()
+		local others = {
+			{ "Tester-Realm", BORDER_ME },
+			{ "Faladoriel Skylance-Elsewhere", BorderUnit("Faladoriel Skylance", "Olympus II", "Member", 3, { realm = "Elsewhere" }) },
+			{ "Faladoriel-ClassicBetaPvP", BorderUnit("Faladoriel", "Olympus II", "Member", 3, { realm = "ClassicBetaPvP" }) },
+		}
+		for _, who in ipairs(others) do
+			WithBorders(function(w)
+				ns.Borders = w.B
+				w.internal("LOGIN")
+				local n = w.computed()
+				for _, cmd in ipairs({ "borders test gold-elite", "borders test", "borders test off", "borders test bronze" }) do
+					local printed = #w.printed
+					SlashCmdList.OLYMPUS(cmd)
+					eq(#w.printed, printed + 1, cmd); eq(w.printed[#w.printed], ns.L.BORDERS_ON, who[1] .. ": what /oly borders says")
+				end
+				eq(w.computed(), n, "nothing worked out again")
+				eq(w.B.SetPreview("gold"), false); eq(w.B.Preview(), nil)
+				eq(w.shown("player"), nil)
+				w.target(w.units.player)
+				eq(w.shown("target"), nil)
+				assert(not ns.StatusText():find("preview", 1, true))
+				local lines = {}
+				w.B.PreviewLines(lines)
+				eq(#lines, 0, "no Workshop lines")
+			end, function(w) w.units.player = who[2]; ns.me = who[1] end)
+		end
+		-- The author's test build (Dev.lua, never published): as Asmon's and the Treasurer's views.
+		local savedDev = ns.devWorkshop
+		local ok, err = pcall(WithBorders, function(w)
+			ns.Borders = w.B
+			w.internal("LOGIN")
+			SlashCmdList.OLYMPUS("borders test silver")
+			eq(w.shown("player"), "silver", "his test character")
+		end, function(w) w.units.player = BorderUnit("Peepyn", "Olympus II", "Member", 3); ns.me = "Peepyn-Realm"; ns.devWorkshop = { Peepyn = true } end)
+		ns.devWorkshop = savedDev
+		if not ok then error(err, 0) end
+	end)
+
+	test("1.0.0 borders preview: on the author's screen alone: nothing sent, nothing saved, gone after a /reload", function()
+		RecordingSends(function(sent)
+			local before
+			WithBorders(function(w)
+				ns.Borders = w.B
+				w.internal("LOGIN")
+				before = Dump(ns.db)
+				for _, t in ipairs(w.B.TIERS) do
+					SlashCmdList.OLYMPUS("borders test " .. t.name)
+					w.target(w.units.player); w.target(BORDER_KING); w.target(nil)
+					w.units.focus = w.units.player
+					w.fire("PLAYER_FOCUS_CHANGED")
+					w.internal("DATA_CHANGED")
+				end
+				local lines = {}
+				w.B.PreviewLines(lines)
+				lines[3].onClick()
+				eq(w.shown("player"), "silver-elite")
+				eq(#sent, 0, "nothing sent: " .. table.concat(sent, ", "))
+				eq(Dump(ns.db), before, "nothing saved")
+			end, AsAuthor)
+			-- The /reload: Borders.lua loaded afresh, on the same saved variables.
+			WithBorders(function(w)
+				ns.Borders = w.B
+				w.internal("LOGIN")
+				eq(w.B.Preview(), nil, "forgotten")
+				eq(w.shown("player"), nil)
+				w.target(w.units.player)
+				eq(w.shown("target"), nil)
+				assert(not ns.StatusText():find("preview", 1, true))
+			end, AsAuthor)
+			eq(#sent, 0, "nothing sent: " .. table.concat(sent, ", "))
+		end)
+	end)
+
+	test("1.0.0 borders preview: none with the gamepad UI (nothing made, no hook), as for a real border; back with mouse and keyboard; none while the borders are off", function()
+		WithBorders(function(w)
+			ns.Borders = w.B
+			w.style = 1
+			w.internal("LOGIN")
+			SlashCmdList.OLYMPUS("borders test gold-elite")
+			eq(w.printed[#w.printed], ns.L.BORDERS_GAMEPAD, "says why")
+			eq(w.B.Preview(), "gold-elite")
+			w.target(w.units.player)
+			eq(#w.log, 0, "nothing made on the game's frames"); eq(#w.hooks, 0, "no hook"); eq(#w.textures, 0)
+			-- To mouse and keyboard: made, and shown.
+			w.style = 0
+			w.fire("INPUT_DEVICE_INTERFACE_TRANSITION", 0, 1)
+			eq(#w.textures, 18); eq(w.shown("player"), "gold-elite"); eq(w.shown("target"), "gold-elite")
+			-- Back to the gamepad UI: hidden at once; a new tier, the hook and the events call nothing.
+			w.style = 1
+			w.fire("INPUT_DEVICE_INTERFACE_TRANSITION", 1, 0)
+			eq(w.shown("player"), nil); eq(w.shown("target"), nil)
+			for _, tex in ipairs(w.textures) do tex.calls = {} end
+			SlashCmdList.OLYMPUS("borders test silver")
+			eq(w.printed[#w.printed], ns.L.BORDERS_GAMEPAD)
+			TargetFrame:CheckClassification()
+			w.fire("PLAYER_TARGET_CHANGED"); w.fire("PLAYER_GUILD_UPDATE", "player")
+			eq(w.shown("player"), nil); eq(w.shown("target"), nil)
+			for _, tex in ipairs(w.textures) do eq(#tex.calls, 0, "no call on our textures") end
+			for _, entry in ipairs(w.log) do assert(entry:find(":CreateTexture$"), entry) end
+			-- Mouse and keyboard again, then the borders off: none, the preview's neither.
+			w.style = 0
+			w.fire("INPUT_DEVICE_INTERFACE_TRANSITION", 0, 1)
+			eq(w.shown("player"), "silver")
+			SlashCmdList.OLYMPUS("borders off")
+			eq(w.shown("player"), nil, "off: no preview either"); eq(w.shown("target"), nil)
+			SlashCmdList.OLYMPUS("borders test gold")
+			eq(w.printed[#w.printed], ns.L.BORDERS_PREVIEW_WHEN_OFF, "says why")
+			eq(w.shown("player"), nil)
+			SlashCmdList.OLYMPUS("borders on")
+			eq(w.shown("player"), "gold", "back with the borders")
+		end, AsAuthor)
+	end)
+
+	test("1.0.0 borders preview: in combat its textures wait for the fight to end, as a real border's; once made, in combat only Show and Hide", function()
+		WithBorders(function(w)
+			ns.Borders = w.B
+			w.combat = true
+			w.internal("LOGIN")
+			SlashCmdList.OLYMPUS("borders test bronze-elite")
+			eq(w.printed[#w.printed], ns.L.BORDERS_PREVIEW_COMBAT, "says when")
+			w.target(w.units.player)
+			eq(#w.log, 0, "nothing made in combat"); eq(#w.hooks, 0); eq(#w.textures, 0)
+			local line = w.B.StatusLine()
+			assert(line:find("set up after combat", 1, true) and line:find("preview bronze-elite", 1, true), line)
+			w.fire("PLAYER_REGEN_ENABLED")
+			eq(#w.textures, 0, "still in combat")
+			w.combat = false
+			w.fire("PLAYER_REGEN_ENABLED")
+			eq(#w.textures, 18); eq(#w.hooks, 2)
+			eq(w.shown("player"), "bronze-elite", "made once combat ended, and shown"); eq(w.shown("target"), "bronze-elite")
+			-- In combat again: tier after tier, only Show and Hide on our own textures.
+			w.combat = true
+			for _, tex in ipairs(w.textures) do tex.calls = {} end
+			for _, t in ipairs(w.B.TIERS) do
+				SlashCmdList.OLYMPUS("borders test " .. t.name)
+				eq(w.shown("player"), t.name, "in combat")
+				w.target(nil); w.target(w.units.player)
+				eq(w.shown("target"), t.name, "in combat")
+			end
+			SlashCmdList.OLYMPUS("borders test off")
+			eq(w.shown("player"), nil); eq(w.shown("target"), nil)
+			local calls = 0
+			for _, tex in ipairs(w.textures) do
+				for _, m in ipairs(tex.calls) do
+					calls = calls + 1
+					assert(m == "Show" or m == "Hide", "in combat: " .. m)
+				end
+			end
+			assert(calls >= 20, "shown and hidden in combat: " .. calls)
+			eq(#w.textures, 18, "nothing more made")
+			for _, entry in ipairs(w.log) do assert(entry:find(":CreateTexture$"), entry) end
+		end, AsAuthor)
+	end)
+
+	test("1.0.0 borders preview: says why nothing shows outside an Olympus guild, on clients without Forever's unit frames or for a tier the client lacks", function()
+		WithBorders(function(w)
+			ns.Borders = w.B
+			w.internal("LOGIN")
+			SlashCmdList.OLYMPUS("borders test gold")
+			eq(w.printed[#w.printed], ns.L.BORDERS_PREVIEW_NOT_MEMBER)
+			eq(w.shown("player"), nil); eq(#w.textures, 0, "nothing made")
+		end, function(w) AsAuthor(w); w.units.player = BorderUnit("Faladoriel Skylance", "Stormwind Traders", "Member", 3, { realm = "ClassicBetaPvP" }) end)
+		-- Classic Era and Anniversary: no such container.
+		WithBorders(function(w)
+			ns.Borders = w.B
+			TargetFrame = setmetatable({ label = "TargetFrame" }, { __index = function(_, k) return function() w.log[#w.log + 1] = "TargetFrame:" .. k end end })
+			FocusFrame, PlayerFrame = nil, setmetatable({ label = "PlayerFrame" }, getmetatable(TargetFrame))
+			w.internal("LOGIN")
+			SlashCmdList.OLYMPUS("borders test gold")
+			eq(w.printed[#w.printed], ns.L.BORDERS_PREVIEW_MISSING)
+			eq(#w.log, 0); eq(#w.textures, 0)
+		end, AsAuthor)
+		-- An atlas the client lacks: that tier alone.
+		WithBorders(function(w)
+			ns.Borders = w.B
+			w.noAtlas["UI-HUD-UnitFrame-Target-PortraitOn-Boss-Gold"] = true
+			w.internal("LOGIN")
+			SlashCmdList.OLYMPUS("borders test gold")
+			eq(w.printed[#w.printed], ns.L.BORDERS_PREVIEW_MISSING); eq(w.shown("player"), nil)
+			SlashCmdList.OLYMPUS("borders test bronze")
+			eq(w.printed[#w.printed], ns.L.BORDERS_PREVIEW_ON:format("bronze")); eq(w.shown("player"), "bronze")
+		end, AsAuthor)
+	end)
+
+	test("1.0.0 borders preview: its lines in English and Portuguese", function()
+		local savedLocale, pt = GetLocale, {}
+		GetLocale = function() return "ptBR" end
+		local ok, err = pcall(function() assert(loadfile(ADDON_DIR .. "Locales.lua"))("Olympus", pt) end)
+		GetLocale = savedLocale
+		if not ok then error(err, 0) end
+		local keys = { "BORDERS_PREVIEW_ON", "BORDERS_PREVIEW_OFF", "BORDERS_PREVIEW_HELP", "BORDERS_PREVIEW_WHEN_OFF",
+			"BORDERS_PREVIEW_NOT_MEMBER", "BORDERS_PREVIEW_COMBAT", "BORDERS_PREVIEW_MISSING", "BORDERS_PREVIEW_TITLE",
+			"BORDERS_PREVIEW_NONE", "BORDERS_PREVIEW_NOW", "BORDERS_PREVIEW_SHOWN", "BORDERS_PREVIEW_TIP" }
+		for name in TIER_LIST:gmatch("[^, ]+") do keys[#keys + 1] = "BORDERS_WHO_" .. name:upper():gsub("%-", "_") end
+		eq(#keys, 18, "the six tiers' too")
+		for _, key in ipairs(keys) do
+			assert(type(ns.L[key]) == "string" and ns.L[key] ~= key, "English " .. key)
+			assert(type(pt.L[key]) == "string" and pt.L[key] ~= ns.L[key], "Portuguese " .. key)
+			local _, en = ns.L[key]:gsub("%%s", ""); local _, pts = pt.L[key]:gsub("%%s", "")
+			eq(pts, en, key .. ": the same %s")
+		end
+		for _, L in ipairs({ ns.L, pt.L }) do
+			assert(L.BORDERS_PREVIEW_ON:find("/oly borders test off", 1, true))
+			assert(L.BORDERS_PREVIEW_HELP:find("/oly borders test", 1, true))
+			assert(L.BORDERS_PREVIEW_WHEN_OFF:find("/oly borders on", 1, true))
+		end
+	end)
+end
+
 -- 1.0.0: Max's bronze frames ship as addon textures (Olympus/media/borders), made by
 -- scripts/make-borders.py from his PNGs (media/borders/src). What the client loads with
 -- SetTexture, like the addon's other textures: 32-bit TGAs with alpha on a power-of-two canvas.

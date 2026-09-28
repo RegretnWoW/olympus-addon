@@ -31,6 +31,16 @@ local L = ns.L
 -- guild reaches the client (UNIT_NAME_UPDATE, PLAYER_GUILD_UPDATE), or when the census report of
 -- its guild (or the High Council's list) changes, and only from lookups: its guild's report by
 -- name, never a walk over every guild.
+--
+-- The author's preview (1.0.0): his character holds no Olympus rank, so his own portrait shows
+-- none of the borders he ships. `/oly borders test <tier>` (a tier's name, as /oly status prints
+-- it) shows that border round his own portrait, turned round as a holder sees his own, and on his
+-- target or focus frame while that is himself; `/oly borders test off` ends it. His alone
+-- (Workshop.Visible: his character, or his test build, as Asmon's and the Treasurer's views):
+-- anyone else's command gets what /oly borders prints, and changes nothing. His screen alone:
+-- nothing is sent, nothing is saved (a /reload forgets it), nobody else's border changes. It goes
+-- through the same Refresh as a real border, so the same rules hold: none while the borders are
+-- off or with the gamepad UI, the textures made once out of combat.
 
 local Borders = {}
 ns.Borders = Borders
@@ -89,6 +99,7 @@ local TRACKED = { target = true, focus = true, player = true }
 local rigs = {}  -- [unit] = { tex = { [tier name] = texture }, shown = tier name or nil }
 local known = {} -- [unit] = { guid, tier, guild, report, rt, council }: the last worked out
 local installed, waiting = false, false
+local preview    -- the author's preview: a tier's name while on (this session only, never saved)
 Borders.stats = { computed = 0 } -- (tests, /oly status)
 
 -- Values the client hides from addons (secret values) count as none.
@@ -276,8 +287,20 @@ local function HideAll()
 	for _, rig in pairs(rigs) do Show(rig, nil) end
 end
 
+-- The unit is us: our own frame, or the target or focus while it is us (by GUID; by UnitIsUnit
+-- where a GUID is hidden).
+local function IsMe(unit, guid)
+	if unit == "player" then return true end
+	local mine = UnitGUID and UnitGUID("player")
+	if guid ~= nil and mine ~= nil and not Secret(mine) then return guid == mine end
+	if type(UnitIsUnit) ~= "function" then return false end
+	local ok, same = pcall(UnitIsUnit, unit, "player")
+	return ok and not Secret(same) and same == true
+end
+
 -- The unit's border again: the one worked out for it while it is the same unit (fresh: work it
--- out again), none while the borders are off.
+-- out again), none while the borders are off. On our own portrait, and on the target or focus
+-- while it is us, the author's preview instead while it is on.
 function Borders.Refresh(unit, fresh)
 	if not Active() then
 		if rigs[unit] then Show(rigs[unit], nil) end
@@ -290,7 +313,7 @@ function Borders.Refresh(unit, fresh)
 	if Secret(guid) then guid = nil end
 	local k = known[unit]
 	if fresh or not k or guid == nil or k.guid ~= guid then k = Compute(unit, guid) end
-	Show(rig, k.tier)
+	Show(rig, preview and UnitExists(unit) and IsMe(unit, guid) and preview or k.tier)
 end
 
 function Borders.RefreshAll(fresh)
@@ -325,6 +348,82 @@ function Borders.SetEnabled(on)
 	Borders.Report()
 end
 
+---------------------------------------------------------------------------
+-- The author's preview (see the top of the file)
+---------------------------------------------------------------------------
+
+local function Grey(s) return "|cff9d9d9d" .. s .. "|r" end
+local function Gold(s) return "|cffffd200" .. s .. "|r" end
+local function Green(s) return "|cff40ff40" .. s .. "|r" end
+
+local function TierNamed(name)
+	for _, t in ipairs(Borders.TIERS) do
+		if t.name == name then return t end
+	end
+	return nil
+end
+
+-- "gold-elite" -> L.BORDERS_WHO_GOLD_ELITE: who holds that border, for the Workshop's lines.
+local function Who(name) return L["BORDERS_WHO_" .. name:upper():gsub("%-", "_")] end
+
+-- The author, or his test build (Dev.lua, never published): whoever sees the Workshop.
+function Borders.PreviewAllowed()
+	local W = ns.Workshop
+	return type(W) == "table" and type(W.Visible) == "function" and W.Visible() == true
+end
+function Borders.Preview() return preview end
+
+-- `/oly borders test <tier>|off` (any case; nothing: which tiers there are). False for anyone
+-- else, with nothing done: the command then answers as /oly borders does.
+function Borders.SetPreview(word)
+	if not Borders.PreviewAllowed() then return false end
+	word = type(word) == "string" and word:lower() or ""
+	if word == "off" then
+		preview = nil
+		ns.Print(L.BORDERS_PREVIEW_OFF)
+	elseif TierNamed(word) then
+		preview = word
+		ns.Print(L.BORDERS_PREVIEW_ON:format(word))
+	else
+		local names = {}
+		for _, t in ipairs(Borders.TIERS) do names[#names + 1] = t.name end
+		ns.Print(L.BORDERS_PREVIEW_HELP:format(table.concat(names, ", ")))
+		return true
+	end
+	Borders.RefreshAll()
+	-- Why it doesn't show yet, if it doesn't: the same rules as a real border.
+	if preview then
+		if not Borders.Enabled() then ns.Print(L.BORDERS_PREVIEW_WHEN_OFF)
+		elseif ns.GamepadUI() then ns.Print(L.BORDERS_GAMEPAD)
+		elseif ns.IsMember() ~= true then ns.Print(L.BORDERS_PREVIEW_NOT_MEMBER)
+		elseif not installed then ns.Print(L.BORDERS_PREVIEW_COMBAT) -- (only combat keeps them from being made)
+		elseif not (rigs.player and rigs.player.tex[preview]) then ns.Print(L.BORDERS_PREVIEW_MISSING) end
+	end
+	ns.Fire("WORKSHOP_CHANGED")
+	return true
+end
+
+-- The Workshop's lines for it (not in its copy for Discord): one per tier, a click shows it, a
+-- click on the one shown ends it.
+function Borders.PreviewLines(lines)
+	if not Borders.PreviewAllowed() then return end
+	lines[#lines + 1] = { header = true, text = L.BORDERS_PREVIEW_TITLE,
+		right = Grey(preview and L.BORDERS_PREVIEW_NOW:format(preview) or L.BORDERS_PREVIEW_NONE) }
+	for _, t in ipairs(Borders.TIERS) do
+		local name, on = t.name, preview == t.name
+		lines[#lines + 1] = {
+			indent = 1, text = (on and Gold(name) or name) .. "  " .. Grey(Who(name)),
+			right = on and Green(L.BORDERS_PREVIEW_SHOWN) or nil,
+			onClick = function() Borders.SetPreview(on and "off" or name) end,
+			tooltip = function(tt)
+				tt:AddLine(L.BORDERS_PREVIEW_TITLE, 1, 0.82, 0)
+				tt:AddLine(L.BORDERS_PREVIEW_TIP, 1, 1, 1, true)
+			end,
+		}
+	end
+	lines[#lines].gapAfter = true
+end
+
 -- The frames that got their textures ("target, focus, player"), for the log and /oly status.
 function Borders.Frames()
 	local out = {}
@@ -348,8 +447,8 @@ function Borders.StatusLine()
 	else
 		where = waiting and "set up after combat" or "not set up yet"
 	end
-	return ("%s  |  %s  |  worked out %d times  |  council gold: %s"):format(state, where, Borders.stats.computed,
-		tostring(ns.BORDERS_COUNCIL_GOLD == true))
+	return ("%s  |  %s  |  worked out %d times  |  council gold: %s%s"):format(state, where, Borders.stats.computed,
+		tostring(ns.BORDERS_COUNCIL_GOLD == true), preview and ("  |  preview " .. preview) or "")
 end
 
 ---------------------------------------------------------------------------

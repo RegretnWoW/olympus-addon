@@ -462,6 +462,10 @@ rollcall off` refuses both. The addon's error catcher keeps only Olympus's own e
 photo`, his character only): on his own screen it fades everything but Olympus and the world
 map to invisible, and gives every frame its look back on the second `/oly photo` or a
 `/reload`. Never in combat, not with the gamepad UI, and nothing is sent to anyone.
+To check the elite borders his own rank doesn't carry, `/oly borders test <tier>` (his
+character only) shows one of the six round his own portrait, and on his target frame when he
+targets himself, on his screen alone until `/oly borders test off` or a `/reload`. It follows
+the borders' own rules (none with the gamepad UI, made out of combat), and nothing is sent.
 
 The addon is plain Lua running on each player's computer, so anyone can edit their own
 copy. No addon can prevent that. What this one does is check what every copy sends; what a
