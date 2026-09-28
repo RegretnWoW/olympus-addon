@@ -19,11 +19,13 @@ looks like Blizzard's Guild window and docks right next to it.
 <table>
 <tr>
 <td><img src="docs/olympus-2.jpg" alt="The Realm: the King, the Treasurer and every Lord and Captain"></td>
-<td><img src="docs/olympus-3.jpg" alt="One click to anyone: whisper, invite or find a Lord or Captain"></td>
+<td><img src="docs/olympus-3.jpg" alt="Every guild in detail: hover a guild for members, online, Lord, free slots, level and classes"></td>
+</tr>
+<tr>
+<td><img src="docs/olympus-4.jpg" alt="One click to anyone: whisper, invite or find a Lord or Captain"></td>
+<td><img src="docs/olympus-5.jpg" alt="Where the army stands: soldiers per zone on the world map"></td>
 </tr>
 </table>
-
-<p align="center"><img src="docs/olympus-4.jpg" alt="Where the army stands: soldiers per zone on the world map"></p>
 
 > **Status:** built for WoW: Forever and running on the Forever beta (1.60.1), where the
 > census already adds up reports from many Olympus guilds. Also tested on Classic Era (1.15)
