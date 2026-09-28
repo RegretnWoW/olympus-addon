@@ -1043,6 +1043,7 @@ StandIn("Acts", { "WritPrompt" })
 StandIn("Dialog", {})
 StandIn("Bank", {})
 StandIn("Link", { "Slash" })
+StandIn("Borders", { "SetEnabled", "Report" })
 
 -- Blizzard's gamepad UI (WoW: Forever's controller mode) is on.
 function ns.GamepadUI()
@@ -1121,7 +1122,7 @@ end
 ns.RegisterEvent("PLAYER_LOGIN", function()
 	ns.CheckFaction()
 	local missing = {}
-	for _, key in ipairs({ "Who", "Channels", "King", "Hop", "Workshop", "Vox", "Court", "Treasury", "Acts", "Dialog", "Bank", "Link" }) do
+	for _, key in ipairs({ "Who", "Channels", "King", "Hop", "Workshop", "Vox", "Court", "Treasury", "Acts", "Dialog", "Bank", "Link", "Borders" }) do
 		if ns[key].missing then missing[#missing + 1] = key .. ".lua" end
 	end
 	if #missing > 0 then
@@ -1154,6 +1155,7 @@ local function Help()
 	print(L.HELP_ROLLCALL)
 	print(L.HELP_TREASURER)
 	print(L.HELP_INSPECTION)
+	print(L.HELP_BORDERS)
 	print(L.HELP_ISSUE)
 	print(L.HELP_COUNCIL)
 	print(L.HELP_DISCORD)
@@ -1255,6 +1257,10 @@ SlashCmdList.OLYMPUS = function(input)
 			local on = rest:lower()
 			if on == "on" or on == "off" then ns.db.royalInspection = on == "on" end
 			ns.Print(ns.db.royalInspection == false and L.INSPECTION_OPT_OFF or L.INSPECTION_OPT_ON)
+		elseif cmd == "borders" then
+			-- The elite borders on the target, focus and your own portrait (Borders.lua): on or off.
+			local on = rest:lower()
+			if on == "on" or on == "off" then ns.Borders.SetEnabled(on == "on") else ns.Borders.Report() end
 		elseif cmd == "treasurer" then
 			-- A keeper's yes to sharing his book and the guild bank (Treasury.lua).
 			local on = rest:lower()
