@@ -29,13 +29,14 @@ CREATE TABLE IF NOT EXISTS keys (
   kind             TEXT NOT NULL CHECK (kind IN ('c', 'p')), -- councillor or drawn player (the certificate's tier)
   bootstrap        INTEGER NOT NULL DEFAULT 0,     -- 1: a councillor key trusted before its owner linked a character
   created          INTEGER NOT NULL,
-  cert_exp         INTEGER,                        -- when its latest certificate expires; NULL: none issued
-  replaced_at      INTEGER,                        -- a newer key of the same owner came: out of the draw, still checks until revoked
+  cert_exp         INTEGER,                        -- when its latest certificate expires; NULL: none issued yet (a player key waits until it counts)
+  replaced_at      INTEGER,                        -- the owner's newer key got its certificate: out of the draw, still checks until revoked
   revoked          INTEGER NOT NULL DEFAULT 0,
   revoked_at       INTEGER
 );
--- One active key per Discord account: rotating replaces it, and revoking ends it.
-CREATE UNIQUE INDEX IF NOT EXISTS keys_one_per_owner ON keys (owner_discord_id) WHERE revoked = 0 AND replaced_at IS NULL;
+-- One certified key per Discord account. A new key may wait for its certificate next to it (a
+-- player key until it counts); its first certificate replaces the older one, and revoking ends a key.
+CREATE UNIQUE INDEX IF NOT EXISTS keys_one_per_owner ON keys (owner_discord_id) WHERE revoked = 0 AND replaced_at IS NULL AND cert_exp IS NOT NULL;
 
 -- Proofs already counted: (code, key) pairs.
 CREATE TABLE IF NOT EXISTS used (

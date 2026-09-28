@@ -8,7 +8,7 @@ import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { handleLink, verifyCertificate } from '../worker/link-worker.js';
+import { handleLink, verifyCertificate, certFrom } from '../worker/link-worker.js';
 import { parseToken, utf8Length } from '../public/core.js';
 import { REPO, makeD1, publicHexOf, sign, verify, vectors } from './helpers.mjs';
 
@@ -26,6 +26,11 @@ function run(args, { input, cwd, env = {} } = {}) {
 }
 
 const seedHex = (b64) => Buffer.from(b64, 'base64url').toString('hex');
+const OLD_OWNER = '100000000000000011'; // a Discord account from 2015
+const P01 = ['--created', '1780000000', '--owner', OLD_OWNER]; // player01 in the vectors: it counts long since
+const nowS = () => Math.floor(Date.now() / 1000);
+// The unix time a refused player certificate names: when the key counts.
+const countsFrom = (r) => Number(/\(unix ([0-9]+)\)/.exec(r.stderr)?.[1]);
 const lineAfter = (out, re) => out.split('\n').find((l) => re.test(l));
 
 // A folder with the backend seed in a file, as an admin would keep it.
@@ -79,23 +84,49 @@ test('cert: signs a key\'s certificate with the backend seed from a file or the 
 		return { c, sql: lineAfter(r.stdout, /^UPDATE keys SET cert_exp/) };
 	};
 	await withSeedFile(async (file, dir) => {
-		const { c, sql } = await check(run(['cert', 'player01', pub, 'p', '30', '--backend-seed-file', file], { cwd: dir }), 'p');
+		const { c, sql } = await check(run(['cert', 'player01', pub, 'p', '30', ...P01, '--backend-seed-file', file], { cwd: dir }), 'p');
 		assert.deepEqual(readdirSync(dir), ['backend.seed']); // nothing else written
-		// The SQL records the certificate's end in D1.
+		// The SQL records the certificate's end in D1, for that key as D1 holds it only.
 		const DB = await makeD1();
 		if (DB) {
-			await DB.prepare('INSERT INTO keys (key_id, public_key, owner_discord_id, kind, created) VALUES (?, ?, ?, ?, ?)').bind('player01', pub, '123456789012345678', 'p', 1).run();
-			await DB.exec(sql);
+			await DB.prepare('INSERT INTO keys (key_id, public_key, owner_discord_id, kind, created) VALUES (?, ?, ?, ?, ?)').bind('player01', pub, OLD_OWNER, 'p', 1780000001).run();
+			assert.equal((await DB.prepare(sql).run()).meta.changes, 0, 'another creation time: nothing recorded');
+			await DB.prepare('UPDATE keys SET created = 1780000000').run();
+			assert.equal((await DB.prepare(sql).run()).meta.changes, 1);
 			assert.equal((await DB.prepare('SELECT cert_exp FROM keys WHERE key_id = ?').bind('player01').first()).cert_exp, c.exp);
 		}
 		await check(run(['cert', 'player01', Buffer.from(pub, 'hex').toString('base64url'), 'c', '30'], { env: { LINK_BACKEND_SEED_FILE: file } }), 'c');
 	});
-	await check(run(['cert', 'player01', pub, 'p', '30'], { env: { LINK_BACKEND_SEED: BACKEND_SEED } }), 'p');
-	// No seed, or a bad one: nothing printed on stdout.
+	await check(run(['cert', 'player01', pub, 'p', '30', ...P01], { env: { LINK_BACKEND_SEED: BACKEND_SEED } }), 'p');
+	// A player key only once the Worker counts it for every open code (the Worker's certFrom): not
+	// a key made 8 days ago, nor one of a Discord account made 29 days ago.
+	const env = { LINK_BACKEND_SEED: BACKEND_SEED };
+	for (const [created, owner] of [
+		[nowS() - 8 * 86400, OLD_OWNER],
+		[nowS() - 20 * 86400, String((BigInt((nowS() - 29 * 86400) * 1000) - 1420070400000n) << 22n)],
+	]) {
+		const early = run(['cert', 'player01', pub, 'p', '30', '--created', String(created), '--owner', owner], { env });
+		assert.notEqual(early.status, 0);
+		assert.equal(early.stdout, '');
+		assert.match(early.stderr, /counts from/);
+		assert.equal(countsFrom(early), certFrom({ kind: 'p', created, owner_discord_id: owner }));
+		assert.ok(countsFrom(early) > nowS());
+	}
+	// From the second the Worker's certFrom names.
+	const lag = certFrom({ kind: 'p', created: nowS(), owner_discord_id: OLD_OWNER }) - nowS(); // 8 days and 5 minutes
+	const counted = nowS() - 5 - lag;
+	assert.equal(certFrom({ kind: 'p', created: counted, owner_discord_id: OLD_OWNER }), nowS() - 5);
+	await check(run(['cert', 'player01', pub, 'p', '30', '--created', String(counted), '--owner', OLD_OWNER], { env }), 'p');
+	// No seed, or a bad one, or a player key without its creation and owner: nothing on stdout.
 	for (const [args, env] of [
-		[['cert', 'player01', pub, 'p', '30'], {}],
-		[['cert', 'player01', pub, 'p', '30'], { LINK_BACKEND_SEED: 'not-a-seed' }],
-		[['cert', 'player01', pub, 'p', '30', '--backend-seed-file', join(tmpdir(), 'no-such-dir-olympus', 'seed')], {}],
+		[['cert', 'player01', pub, 'p', '30', ...P01], {}],
+		[['cert', 'player01', pub, 'p', '30', ...P01], { LINK_BACKEND_SEED: 'not-a-seed' }],
+		[['cert', 'player01', pub, 'p', '30', ...P01, '--backend-seed-file', join(tmpdir(), 'no-such-dir-olympus', 'seed')], {}],
+		[['cert', 'player01', pub, 'p', '30'], { LINK_BACKEND_SEED: BACKEND_SEED }],
+		[['cert', 'player01', pub, 'p', '30', '--created', '1780000000'], { LINK_BACKEND_SEED: BACKEND_SEED }],
+		[['cert', 'player01', pub, 'p', '30', '--created', 'yesterday', '--owner', OLD_OWNER], { LINK_BACKEND_SEED: BACKEND_SEED }],
+		[['cert', 'player01', pub, 'p', '30', '--created', '1780000000', '--owner', 'abc'], { LINK_BACKEND_SEED: BACKEND_SEED }],
+		[['cert', 'player01', pub, 'p', '30', ...P01, '--what'], { LINK_BACKEND_SEED: BACKEND_SEED }],
 		[['cert', 'Bad', pub, 'p', '30'], { LINK_BACKEND_SEED: BACKEND_SEED }],
 		[['cert', 'player01', 'abc', 'p', '30'], { LINK_BACKEND_SEED: BACKEND_SEED }],
 		[['cert', 'player01', pub, 'x', '30'], { LINK_BACKEND_SEED: BACKEND_SEED }],
@@ -110,8 +141,27 @@ test('cert: signs a key\'s certificate with the backend seed from a file or the 
 	}
 });
 
+// The "link-keys.py cert ..." command a player key's output names, and its arguments with another
+// creation time.
+function certCommand(stdout) {
+	const line = lineAfter(stdout, /^python3 scripts\/link-keys.py cert /);
+	const words = line.replace(/^python3 scripts\/link-keys.py /, '').replace(/ --backend-seed-file <file>$/, '').split(' ');
+	const at = words.indexOf('--created') + 1;
+	return { created: Number(words[at]), args: (created) => words.map((w, i) => (i === at ? String(created) : w)) };
+}
+
+// That command nine days later: the key's creation moved 9 days back in D1 and in the command.
+async function certifyAged(DB, keyId, command) {
+	const aged = command.created - 9 * 86400;
+	await DB.prepare('UPDATE keys SET created = ? WHERE key_id = ?').bind(aged, keyId).run();
+	return run(command.args(aged), { env: { LINK_BACKEND_SEED: BACKEND_SEED } });
+}
+
+const certOf = (r) => verifyCertificate(BACKEND_PUB, lineAfter(r.stdout, /^ {2}\/oly discord cert /).trim().slice('/oly discord cert '.length));
+
 test('confirmer: the in-game lines, the public key, the Worker request and the SQL D1 takes', { skip }, async () => {
-	const r = run(['confirmer', 'testkey01', 'p', '--owner', '123456789012345678', '--username', 'some.one']);
+	const OWNER = '123456789012345678';
+	const r = run(['confirmer', 'testkey01', 'p', '--owner', OWNER, '--username', 'some.one']);
 	assert.equal(r.status, 0, r.stderr);
 	const [, id, seed] = r.stdout.match(/\/oly discord key ([a-z0-9]+) ([A-Za-z0-9_-]{43})$/m);
 	assert.equal(id, 'testkey01');
@@ -122,51 +172,80 @@ test('confirmer: the in-game lines, the public key, the Worker request and the S
 	assert.ok(!/\/oly discord cert OLK1/.test(r.stdout), 'no backend seed at hand: the Worker makes the certificate');
 	const DB = await makeD1();
 	if (!DB) return;
-	// The Worker request it prints registers the key and answers the certificate line.
+	// The Worker request it prints registers the key: a player key's certificate comes once it
+	// counts (web/test/worker.test.mjs), at the time the tool names too.
 	const body = JSON.parse(r.stdout.match(/-d '(\{.*\})'$/m)[1]);
-	assert.deepEqual(body, { key_id: 'testkey01', public_key: pub, owner_discord_id: '123456789012345678', kind: 'p', days: 365, owner_username: 'some.one' });
+	assert.deepEqual(body, { key_id: 'testkey01', public_key: pub, owner_discord_id: OWNER, kind: 'p', owner_username: 'some.one' });
 	const admin = 'test-admin-token-0123456789abcdefghijklmnop';
 	const env = { DB, LINK_BACKEND_SEED: BACKEND_SEED, LINK_BACKEND_PUBLIC: BACKEND_PUB, LINK_ADMIN_TOKEN: admin };
 	const res = await handleLink(new Request('https://x.example/api/link/keys', { method: 'POST', headers: { Authorization: `Bearer ${admin}` }, body: JSON.stringify(body) }), env, {});
 	const answer = await res.json();
 	assert.equal(answer.status, 'ok', answer.message);
-	assert.ok(await verifyCertificate(BACKEND_PUB, answer.command.replace('/oly discord cert ', '')));
+	assert.deepEqual([answer.cert, answer.command], [null, null]);
+	assert.match(r.stdout, /"renew": true, "days": 90/);
+	const later = certCommand(r.stdout);
+	assert.ok(Math.abs(answer.cert_from - certFrom({ kind: 'p', created: later.created, owner_discord_id: OWNER })) < 60);
 	await DB.exec('DELETE FROM keys');
-	// Or the SQL, straight into D1.
-	const insert = lineAfter(r.stdout, /^INSERT INTO keys/);
-	const rotate = lineAfter(r.stdout, /^UPDATE keys/);
-	await DB.exec(insert);
+	// Or the SQL, straight into D1: the key waits without a certificate...
+	await DB.exec(lineAfter(r.stdout, /^INSERT INTO keys/));
 	const row = await DB.prepare('SELECT * FROM keys WHERE key_id = ?').bind('testkey01').first();
 	assert.equal(row.public_key, pub);
-	assert.equal(row.owner_discord_id, '123456789012345678');
+	assert.equal(row.owner_discord_id, OWNER);
 	assert.equal(row.owner_username, 'some.one');
 	assert.equal(row.kind, 'p');
 	assert.equal(row.bootstrap, 0);
 	assert.equal(row.revoked, 0);
-	assert.equal(row.cert_exp, null); // until "cert" (or the Worker) makes its certificate
+	assert.equal(row.cert_exp, null);
+	assert.equal(row.created, later.created); // the time its certificate command carries
 	assert.ok(Math.abs(row.created - Date.now() / 1000) < 60);
-	// Rotation: a second key for the same owner needs the old one replaced first; it stays
-	// unrevoked (it checks what it signed) until revoked.
-	const second = run(['confirmer', 'testkey02', 'p', '--owner', '123456789012345678', '--days', '30'], { env: { LINK_BACKEND_SEED: BACKEND_SEED } });
+	// ...and the certificate command it prints refuses until the key counts, then signs it.
+	const early = run(later.args(later.created), { env: { LINK_BACKEND_SEED: BACKEND_SEED } });
+	assert.notEqual(early.status, 0);
+	assert.equal(early.stdout, '');
+	assert.equal(countsFrom(early), certFrom(row));
+	const first = await certifyAged(DB, 'testkey01', later);
+	assert.equal(first.status, 0, first.stderr);
+	await DB.exec(lineAfter(first.stdout, /^UPDATE keys SET cert_exp/));
+	const cert1 = await certOf(first);
+	assert.equal(cert1.keyId, 'testkey01');
+	assert.ok(Math.abs(cert1.exp - (nowS() + 90 * 86400)) < 60);
+	assert.equal((await DB.prepare('SELECT cert_exp FROM keys WHERE key_id = ?').bind('testkey01').first()).cert_exp, cert1.exp);
+	// Rotation: the new key waits next to the old one, which keeps counting (no certificate yet,
+	// even with the backend seed at hand)...
+	const second = run(['confirmer', 'testkey02', 'p', '--owner', OWNER, '--days', '30'], { env: { LINK_BACKEND_SEED: BACKEND_SEED } });
 	assert.equal(second.status, 0, second.stderr);
-	const insert2 = lineAfter(second.stdout, /^INSERT INTO keys/);
-	assert.throws(() => DB.sqlite.exec(insert2), /UNIQUE/);
-	await DB.exec(rotate);
-	await DB.exec(insert2);
-	const active = await DB.prepare('SELECT key_id FROM keys WHERE owner_discord_id = ? AND revoked = 0 AND replaced_at IS NULL').bind('123456789012345678').all();
-	assert.deepEqual(active.results.map((x) => x.key_id), ['testkey02']);
-	assert.equal((await DB.prepare('SELECT revoked FROM keys WHERE key_id = ?').bind('testkey01').first()).revoked, 0);
-	// With the backend seed at hand, both in-game lines and the certificate's end in the SQL.
 	assert.ok(!second.stdout.includes(BACKEND_SEED));
-	const certLine = lineAfter(second.stdout, /^ {2}\/oly discord cert /).trim();
-	const cert = await verifyCertificate(BACKEND_PUB, certLine.slice('/oly discord cert '.length));
-	assert.ok(cert);
-	assert.equal(cert.keyId, 'testkey02');
-	assert.equal((await DB.prepare('SELECT cert_exp FROM keys WHERE key_id = ?').bind('testkey02').first()).cert_exp, cert.exp);
+	assert.ok(!/\/oly discord cert OLK1/.test(second.stdout), 'a new player key does not count yet');
+	await DB.exec(lineAfter(second.stdout, /^INSERT INTO keys/));
+	const certified = async () => (await DB.prepare('SELECT key_id FROM keys WHERE owner_discord_id = ? AND revoked = 0 AND replaced_at IS NULL AND cert_exp IS NOT NULL').bind(OWNER).all()).results.map((x) => x.key_id);
+	assert.deepEqual(await certified(), ['testkey01']);
+	// ...until its first certificate, which replaces it: D1 takes no second certified key, so the
+	// rotation line goes first. The old key stays unrevoked (it checks what it signed) until revoked.
+	const next = await certifyAged(DB, 'testkey02', certCommand(second.stdout));
+	assert.equal(next.status, 0, next.stderr);
+	const certSql = lineAfter(next.stdout, /^UPDATE keys SET cert_exp/);
+	assert.throws(() => DB.sqlite.exec(certSql), /UNIQUE/);
+	await DB.exec(lineAfter(next.stdout, /^UPDATE keys SET replaced_at/));
+	await DB.exec(certSql);
+	assert.deepEqual(await certified(), ['testkey02']);
+	assert.ok(Math.abs((await certOf(next)).exp - (nowS() + 30 * 86400)) < 60);
+	const old = await DB.prepare('SELECT revoked, replaced_at FROM keys WHERE key_id = ?').bind('testkey01').first();
+	assert.equal(old.revoked, 0);
+	assert.ok(old.replaced_at > 0);
 	// Revoking.
 	const revoke = run(['revoke', 'testkey01']);
 	await DB.exec(revoke.stdout);
 	assert.equal((await DB.prepare('SELECT revoked FROM keys WHERE key_id = ?').bind('testkey01').first()).revoked, 1);
+	// A councillor key counts at once: with the backend seed at hand, both lines, and its INSERT
+	// records the certificate's end (365 days).
+	const council = run(['confirmer', 'council0x', 'c', '--owner', '123456789012345699', '--bootstrap'], { env: { LINK_BACKEND_SEED: BACKEND_SEED } });
+	assert.equal(council.status, 0, council.stderr);
+	assert.equal(JSON.parse(council.stdout.match(/-d '(\{.*\})'$/m)[1]).days, 365);
+	const ccert = await certOf(council);
+	assert.deepEqual([ccert.keyId, ccert.tier], ['council0x', 'c']);
+	assert.ok(Math.abs(ccert.exp - (nowS() + 365 * 86400)) < 60);
+	await DB.exec(lineAfter(council.stdout, /^INSERT INTO keys/));
+	assert.equal((await DB.prepare('SELECT cert_exp FROM keys WHERE key_id = ?').bind('council0x').first()).cert_exp, ccert.exp);
 	// A councillor bootstrap key; and the placeholder owner is refused by the table.
 	const boot = run(['confirmer', 'council01', 'c', '--bootstrap']);
 	assert.equal(boot.status, 0, boot.stderr);

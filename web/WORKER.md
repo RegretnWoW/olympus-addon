@@ -77,8 +77,8 @@ It prints a seed and a public key, once, and writes nothing to disk.
 - The public key (64 hex digits) goes into the Worker var `LINK_BACKEND_PUBLIC`, and to Daniel
   for the addon (`ns.LINK_BACKEND_KEYS` in `Olympus/Link.lua`): the addon refuses any code, and
   any confirmer's certificate, whose signature does not check against one of those keys.
-- The same key signs the confirmers' certificates. The Worker does it when you register a key
-  (step 8). To sign them on your own computer instead (`link-keys.py cert`), keep the seed in a
+- The same key signs the confirmers' certificates. The Worker does it when you register a
+  councillor's key, and a player's once it counts (step 8). To sign them on your own computer instead (`link-keys.py cert`), keep the seed in a
   file only you can read and give the tool its path; the tool never prints it.
 - Rotating it: make a new key, have its public key added to `ns.LINK_BACKEND_KEYS` next to the
   old one (the addon takes two for this), wait until that addon version is out, then switch the
@@ -94,7 +94,7 @@ wrangler d1 execute olympus-link --remote --file web/worker/schema.sql
 ```
 
 Five tables: `codes` (every code issued, single use, with its draw threshold), `keys`
-(confirmer public keys, one active per Discord account, with the end of their certificate),
+(confirmer public keys, one certified per Discord account, with the end of their certificate),
 `used` (the proofs that counted), `members` (linked characters, with how their guild was
 checked) and `inbox_uploads` (every bundle received: the audit trail and the page's rate
 limit). The full schema is in "The D1 schema" below.
@@ -251,35 +251,59 @@ python3 scripts/link-keys.py confirmer <id> p --owner <their Discord id> --usern
   you send them privately (a direct message, never a channel); the public key; and two ways to
   register it:
   - **With the Worker** (the backend seed stays in the Worker): the tool prints the `curl`
-    that posts the key to `POST /api/link/keys` with your admin token. The answer's `command`
-    is the second line for the confirmer: `/oly discord cert <certificate>`.
+    that posts the key to `POST /api/link/keys` with your admin token. For a councillor key,
+    the answer's `command` is the second line for the confirmer: `/oly discord cert
+    <certificate>`. For a player key, the answer's `cert_from` says when to ask for it (below).
   - **In D1 directly**: the `INSERT` it prints, then the certificate with
     `python3 scripts/link-keys.py cert <id> <public key> <c|p> <days> --backend-seed-file <file>`
     (or `LINK_BACKEND_SEED_FILE` / `LINK_BACKEND_SEED` in the environment), which prints the
-    `/oly discord cert` line and the `UPDATE` that records the certificate's end in D1. Given
-    the backend seed the same way, `confirmer` prints the certificate at once.
+    `/oly discord cert` line and the `UPDATE` that records the certificate's end in D1. A player
+    key's also takes `--created <its created> --owner <its owner_discord_id>`: `confirmer`
+    prints that command, filled in. Given the backend seed the same way, `confirmer` prints a
+    councillor key's certificate at once.
 - In game, `/oly discord key` shows the id and the public key, to compare with yours; the addon
   checks that the certificate names the public half of the key typed before it. It never
   prints, sends or logs the seed. Both lines fit the game's chat (under 255 characters), and so
   does the announcement that carries the certificate (`DV~1~<certificate>`).
+- **A player key gets its certificate only once it counts.** Every player's addon asks the
+  player keys with a valid certificate that a code's `T` draws, and cannot tell how old a key
+  is. The Worker counts a player key only for codes issued once it was 7 days old and its
+  owner's Discord account 30 days old, and a code stays open for a day. So a player key is
+  certified only when it counts for every code still open: 8 days and 5 minutes after you
+  registered it at the soonest (7 days, a day for the codes already handed out, 5 minutes of
+  clock difference), and 31 days and 5 minutes after the owner's Discord account was made when
+  that is later. Until then it is not in the draw, and nobody asks it. `cert_from` in the
+  Worker's answer is that time: from then on, `{"key_id": "<id>", "renew": true}` answers the
+  certificate line (before, `too-early` with `cert_from`), and you send the confirmer both lines
+  together. `link-keys.py cert` refuses a player certificate before that time too. A
+  councillor's key is certified at once: councillors count without the draw.
 - The certificate is how every player's addon knows, without the bot, that a confirmer's key
   is registered and whether it is a councillor's: it asks only confirmers with a valid,
   unexpired certificate (a `c` one only from a councillor of the signed list), and checks each
-  confirmation's signature with the certified key before it counts it. It lasts 365 days by
-  default (`days` in the request, `--days` for the tool): renew it before it ends
-  (`{"key_id": "<id>", "renew": true}`, or `link-keys.py cert` again), and the confirmer types
-  the new `/oly discord cert` line. A key whose certificate has ended leaves the draw.
-- One active key per Discord account: the database refuses a second. **Rotating** (a new key
-  for the same person): register the new one with `"replace": true` (or run the `UPDATE ...
-  replaced_at` the tool prints before its `INSERT`). The old key leaves the draw at once but
+  confirmation's signature with the certified key before it counts it. It lasts 365 days for a
+  councillor and 90 for a player by default (`days` in the request, `--days` for the tool):
+  renew it before it ends (`{"key_id": "<id>", "renew": true}`, or `link-keys.py cert` again),
+  and the confirmer types the new `/oly discord cert` line. A key whose certificate has ended
+  leaves the draw. A player's is shorter because the addons cannot learn that you revoked a
+  key or replaced it: they keep asking it, when the draw picks it, until its certificate ends,
+  and the Worker refuses what it signs. A replaced or revoked key gets no new certificate.
+- One certified key per Discord account: the database refuses a second. **Rotating** (a new key
+  for the same person): register the new one with `"replace": true`. Its first certificate
+  replaces the old key: a councillor's at once; a player's once it counts (above), so until
+  then the old key keeps counting, and the confirmer keeps using it. In D1, run the `UPDATE ...
+  replaced_at` that `link-keys.py cert` prints before its `UPDATE ... cert_exp` (for a
+  councillor key certified at once, the one `confirmer` prints before its `INSERT`). A
+  replaced key leaves the draw (a player key no longer counts for codes issued after that) but
   still checks the confirmations it signed, so links waiting for the watcher keep counting.
-  Send the confirmer the new lines; once they typed them in game, revoke the old key. In that
-  order: rotate the key in game first, then revoke. **Revoking**: `{"key_id": "<id>",
-  "revoke": true}`, or `python3 scripts/link-keys.py revoke <id>`, and the confirmer types
-  `/oly discord key off`. A revoked key's confirmations stop counting at once, including ones
-  not delivered yet: a leaked key is revoked at once, without waiting. A link carries up to
-  two councillor confirmations, so one revoked councillor key does not sink it.
-  `python3 scripts/link-keys.py public < seed.txt` prints the public key of a seed.
+  Send the confirmer the new lines as soon as you have the certificate: while their addon still
+  announces the old player key, requesters may ask it in vain. Once they typed the new lines in
+  game, revoke the old key. In that order: rotate the key in game first, then revoke.
+  **Revoking**: `{"key_id": "<id>", "revoke": true}`, or `python3 scripts/link-keys.py revoke
+  <id>`, and the confirmer types `/oly discord key off`. A revoked key's confirmations stop
+  counting at once, including ones not delivered yet: a leaked key is revoked at once, without
+  waiting. A link carries up to two councillor confirmations, so one revoked councillor key
+  does not sink it; the Worker counts any three valid player confirmations of the up to four a
+  link carries. `python3 scripts/link-keys.py public < seed.txt` prints the public key of a seed.
 - Keys only confirm: they cannot issue codes, a player key cannot link anyone alone, and the
   addon signs on its own only within its limits (one proof a minute and 5 a day per requesting
   character, 30 a minute in all, never for its own account's characters, never across
@@ -311,8 +335,13 @@ only posts over `https` (or to `localhost`), since the admin token rides along.
 Launch with `LINK_MODE = "c"`: only councillor confirmations count, and every code says so (the
 addon then asks councillors only). When enough verified players have keys, set it to `"a"`:
 new codes also accept three drawn players when no councillor is online, and each carries the
-draw's threshold `T` so the addon asks exactly the players this Worker will count. Codes
-already issued keep the mode and `T` they were signed with.
+draw's threshold `T`, so the addon asks the players this Worker's draw picks. Since a player
+key is certified only once the Worker counts it (step 8), every certified key a code draws
+counts, but for one you revoked or replaced while its certificate runs: the addons cannot learn
+that, may still ask it, and the Worker refuses what it signs, so a link then needs three other
+drawn players, or a councillor. Codes already issued keep the mode and `T` they were signed
+with. Register the first player keys at least 8 days before you switch: a player key gets its
+certificate only then (step 8), and until some have one, only councillors confirm.
 
 ## The guild check
 
@@ -352,7 +381,7 @@ All JSON. The page's calls carry the session cookie; the tools' carry the admin 
 | `POST /api/link/submit` | page | `{"bundle": "OLB4~..."}` | `200 {"status", "reason", "message", "R", "characters"}`; `429` after 10 an hour |
 | `POST /api/link/inbox` | watcher tool | `{"bundles": [{"R", "bundle", "from", "t"}]}` (500 at most) | `200 {"results": [{"R", "status", "reason", "message"}]}` |
 | `POST /api/link/bot-code` | gateway bot | `{"id", "username"}` | `200 {"token", "command", "exp", "mode", "reply"}` |
-| `POST /api/link/keys` | you | `{"key_id", "public_key", "owner_discord_id", "owner_username", "kind", "bootstrap", "days", "replace"}`, or `{"key_id", "renew": true, "days"}`, or `{"key_id", "revoke": true}` | `200 {"status": "ok", "key_id", "kind", "public_key", "cert", "cert_exp", "command", "replaced"}` (`{"status": "ok", "revoked": true}` for a revoke); `409 {"reason": "key-id-used" \| "public-key-used" \| "owner-has-key" \| "revoked"}`, `404 {"reason": "unknown-key"}`, `400 {"reason": "format"}` |
+| `POST /api/link/keys` | you | `{"key_id", "public_key", "owner_discord_id", "owner_username", "kind", "bootstrap", "days", "replace"}`, or `{"key_id", "renew": true, "days"}`, or `{"key_id", "revoke": true}` | `200 {"status": "ok", "key_id", "kind", "public_key", "cert", "cert_exp", "cert_from", "command", "replaced"}`: a new player key's `cert`, `cert_exp` and `command` are `null` (with a `message`) until `cert_from`, when `renew` gives them (`{"status": "ok", "revoked": true}` for a revoke); `409 {"reason": "key-id-used" \| "public-key-used" \| "owner-has-key" \| "revoked" \| "replaced" \| "too-early"}` (`too-early` with `cert_from`), `404 {"reason": "unknown-key"}`, `400 {"reason": "format"}` |
 | `POST /api/discord/interactions` | Discord | an interaction | `PING`, or `/link` answered ephemerally |
 
 `status` is `linked` (reason `linked`, or `already` when that link had already counted),
@@ -381,7 +410,8 @@ The page's four calls live in `web/public/backend.js`: `me()`, `code()`, `submit
   and a Discord account 30 days old) and signs `T`: the prefix at index M, counting from 0, with
   M = max(20, ceil(3% of those keys)), or `ffffffff` when there are M keys or fewer. A key is
   drawn for `R` when its prefix is below `T` (compared as text): the M lowest. The addon asks
-  only drawn, online, certified player keys, lowest first, five at once.
+  only drawn, online, certified player keys, lowest first, five at once; the Worker certifies a
+  player key only once it counts for every open code (step 8).
 - **Key certificate** (the backend signs it, the confirmer types it):
   `OLK1.<keyId>.<public key>.<tier>.<exp>.<sig>`. The public key in base64url (43
   characters), `tier` `c` or `p`, `exp` unix time, `sig` the backend's Ed25519 over the ASCII
@@ -700,13 +730,14 @@ CREATE TABLE IF NOT EXISTS keys (
   kind             TEXT NOT NULL CHECK (kind IN ('c', 'p')), -- councillor or drawn player (the certificate's tier)
   bootstrap        INTEGER NOT NULL DEFAULT 0,     -- 1: a councillor key trusted before its owner linked a character
   created          INTEGER NOT NULL,
-  cert_exp         INTEGER,                        -- when its latest certificate expires; NULL: none issued
-  replaced_at      INTEGER,                        -- a newer key of the same owner came: out of the draw, still checks until revoked
+  cert_exp         INTEGER,                        -- when its latest certificate expires; NULL: none issued yet (a player key waits until it counts)
+  replaced_at      INTEGER,                        -- the owner's newer key got its certificate: out of the draw, still checks until revoked
   revoked          INTEGER NOT NULL DEFAULT 0,
   revoked_at       INTEGER
 );
--- One active key per Discord account: rotating replaces it, and revoking ends it.
-CREATE UNIQUE INDEX IF NOT EXISTS keys_one_per_owner ON keys (owner_discord_id) WHERE revoked = 0 AND replaced_at IS NULL;
+-- One certified key per Discord account. A new key may wait for its certificate next to it (a
+-- player key until it counts); its first certificate replaces the older one, and revoking ends a key.
+CREATE UNIQUE INDEX IF NOT EXISTS keys_one_per_owner ON keys (owner_discord_id) WHERE revoked = 0 AND replaced_at IS NULL AND cert_exp IS NOT NULL;
 
 -- Proofs already counted: (code, key) pairs.
 CREATE TABLE IF NOT EXISTS used (
@@ -786,7 +817,8 @@ export const LINK = {
 	ACCOUNT_MIN_AGE: 30 * 24 * 3600, // ...and its owner's Discord account is 30 days older than the code
 	SUBMITS_PER_HOUR: 10,
 	MAX_BUNDLES: 500,
-	CERT_DAYS: 365, // a key certificate's life, unless the request says otherwise...
+	CERT_DAYS: 365, // a councillor key's certificate life, unless the request says otherwise...
+	CERT_DAYS_PLAYER: 90, // ...a player key's: a revoked or replaced one stays in the addons' draw until it ends...
 	CERT_DAYS_MAX: 3650, // ...up to this
 };
 
@@ -1028,8 +1060,8 @@ function tokenSig(token) {
 // The draw: a player key's prefix for code R is the first 8 hex of SHA-256(R~keyId). At issue,
 // T is the prefix at index M (0-based) of the active player keys' sorted prefixes, with
 // M = max(20, ceil(3% of them)), or "ffffffff" when there are M keys or fewer: the key is drawn
-// when its prefix < T. T is signed into the code and stored with it, so the addon asks the
-// same keys this Worker counts.
+// when its prefix < T. T is signed into the code and stored with it, and the addon asks every
+// certified player key T draws, so a player key is certified only once it counts (certFrom).
 
 export async function drawPrefix(R, keyId) {
 	return (await sha256Hex(`${R}~${keyId}`)).slice(0, 8);
@@ -1069,6 +1101,18 @@ function tooYoung(key, at) {
 
 export function snowflakeTime(id) {
 	return Number((BigInt(id) >> 22n) + 1420070400000n);
+}
+
+// When a key may get its first certificate. The addon asks every player key with a valid
+// certificate that a code's T draws, and cannot tell a key this Worker would refuse as too
+// young: so a player key is certified only once it counts for every code a proof signed from
+// then on can belong to, the oldest one still open included (issued TOKEN_LIFE earlier, and
+// CLOCK_SKEW more for a game clock behind ours): 7 days old and its owner's account 30 days old
+// at that code's issue. A councillor's key counts at once.
+export function certFrom(key) {
+	if (key.kind !== 'p') return key.created;
+	const account = Math.ceil(snowflakeTime(key.owner_discord_id) / 1000) + LINK.ACCOUNT_MIN_AGE;
+	return Math.max(key.created + LINK.KEY_MIN_AGE, account) + LINK.TOKEN_LIFE + LINK.CLOCK_SKEW;
 }
 
 // ---------------------------------------------------------------------------
@@ -1318,8 +1362,9 @@ export async function verifyCertificate(publicHex, text) {
 	return c;
 }
 
-// Your key tool (admin token): register a confirmer's public key and get its certificate,
-// renew a certificate, or revoke a key. The seed never comes here: it stays with the confirmer.
+// Your key tool (admin token): register a confirmer's public key, get its certificate (a
+// player key's once it counts: certFrom), renew it, or revoke a key. The seed never comes here:
+// it stays with the confirmer.
 //   {"key_id", "public_key", "owner_discord_id", "owner_username", "kind", "bootstrap", "days", "replace"}
 //   {"key_id", "renew": true, "days"}
 //   {"key_id", "revoke": true}
@@ -1327,12 +1372,13 @@ async function routeKeys(request, env) {
 	if (!(await adminAuthorized(request, env))) return json({ status: 'error', reason: 'auth' }, 401);
 	const body = await readJson(request, 4 * 1024);
 	const t = now();
-	const fail = (reason, message, status = 400) => json({ status: 'error', reason, message }, status);
+	const fail = (reason, message, status = 400, extra = {}) => json({ status: 'error', reason, message, ...extra }, status);
 	if (!body || typeof body !== 'object' || typeof body.key_id !== 'string' || !KEYID_RE.test(body.key_id)) return fail('format', 'key_id: 6 to 16 of a-z and 0-9.');
 	const keyId = body.key_id;
-	const days = body.days === undefined ? LINK.CERT_DAYS : body.days;
-	if (!Number.isInteger(days) || days < 1 || days > LINK.CERT_DAYS_MAX) return fail('format', `days: a whole number from 1 to ${LINK.CERT_DAYS_MAX}.`);
-	const certExp = t + days * 86400;
+	if (body.days !== undefined && (!Number.isInteger(body.days) || body.days < 1 || body.days > LINK.CERT_DAYS_MAX)) {
+		return fail('format', `days: a whole number from 1 to ${LINK.CERT_DAYS_MAX}.`);
+	}
+	const certExp = (kind) => t + (body.days !== undefined ? body.days : kind === 'p' ? LINK.CERT_DAYS_PLAYER : LINK.CERT_DAYS) * 86400;
 	const existing = await env.DB.prepare('SELECT * FROM keys WHERE key_id = ?').bind(keyId).first();
 
 	if (body.revoke === true) {
@@ -1343,9 +1389,19 @@ async function routeKeys(request, env) {
 	if (body.renew === true) {
 		if (!existing) return fail('unknown-key', 'No such key.', 404);
 		if (existing.revoked) return fail('revoked', 'This key is revoked: make a new one.', 409);
-		const cert = await makeCertificate(env, keyId, existing.public_key, existing.kind, certExp);
-		await env.DB.prepare('UPDATE keys SET cert_exp = ? WHERE key_id = ?').bind(certExp, keyId).run();
-		return json(keyAnswer(existing, cert, certExp, null));
+		if (existing.replaced_at !== null && existing.replaced_at !== undefined) return fail('replaced', 'This key was replaced by a newer one of the same account: certify that one.', 409);
+		const from = certFrom(existing);
+		if (t < from) return fail('too-early', `This player key counts from ${when(from)}: ask for its certificate then.`, 409, { cert_from: from });
+		const exp = certExp(existing.kind);
+		const cert = await makeCertificate(env, keyId, existing.public_key, existing.kind, exp);
+		const first = existing.cert_exp === null || existing.cert_exp === undefined;
+		// A key's first certificate replaces the older key of its owner (a rotation).
+		const older = first ? await activeKeys(env, existing.owner_discord_id, keyId) : [];
+		await env.DB.batch([
+			...older.map((k) => env.DB.prepare('UPDATE keys SET replaced_at = ? WHERE key_id = ?').bind(t, k.key_id)),
+			env.DB.prepare('UPDATE keys SET cert_exp = ? WHERE key_id = ?').bind(exp, keyId),
+		]);
+		return json(keyAnswer(existing, cert, exp, replacedId(older)));
 	}
 
 	const pub = typeof body.public_key === 'string' ? publicKeyHex(body.public_key) : null;
@@ -1360,32 +1416,60 @@ async function routeKeys(request, env) {
 	if (bootstrap && kind !== 'c') return fail('format', 'Only a councillor key can be a bootstrap key.');
 	if (existing) return fail('key-id-used', 'This key id exists already: ids are never reused.', 409);
 	if (await env.DB.prepare('SELECT 1 AS x FROM keys WHERE public_key = ?').bind(pub).first()) return fail('public-key-used', 'This public key is registered already.', 409);
-	const active = await env.DB.prepare('SELECT key_id FROM keys WHERE owner_discord_id = ? AND revoked = 0 AND replaced_at IS NULL').bind(owner).first();
-	if (active && body.replace !== true) {
-		return fail('owner-has-key', `This account's active key is ${active.key_id}: send "replace": true to rotate it.`, 409);
+	const mine = await activeKeys(env, owner, keyId);
+	if (mine.length && body.replace !== true) {
+		return fail('owner-has-key', `This account's key is ${replacedId(mine)}: send "replace": true to rotate it.`, 409);
 	}
-	const cert = await makeCertificate(env, keyId, pub, kind, certExp);
-	const insert = env.DB.prepare(
-		'INSERT INTO keys (key_id, public_key, owner_discord_id, owner_username, kind, bootstrap, created, cert_exp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-	).bind(keyId, pub, owner, username, kind, bootstrap, t, certExp);
-	// Rotating: the old key leaves the draw at once and still checks the proofs it signed until
-	// you revoke it, once the confirmer typed the new key and certificate in game.
-	if (active) await env.DB.batch([env.DB.prepare('UPDATE keys SET replaced_at = ? WHERE key_id = ?').bind(t, active.key_id), insert]);
-	else await insert.run();
-	return json(keyAnswer({ key_id: keyId, kind, public_key: pub }, cert, certExp, active ? active.key_id : null));
+	const key = { key_id: keyId, public_key: pub, owner_discord_id: owner, kind, created: t, cert_exp: null };
+	const ready = t >= certFrom(key);
+	const exp = ready ? certExp(kind) : null;
+	const cert = ready ? await makeCertificate(env, keyId, pub, kind, exp) : null;
+	// Rotating: the older key is replaced when the new one gets its certificate (a councillor's at
+	// once, a player's once it counts): until then the confirmer has only the old one in game, and
+	// it keeps counting. A replaced key leaves the draw and still checks the proofs it signed until
+	// you revoke it, once the confirmer typed the new key and certificate in game. A new key that
+	// never got its certificate is replaced at once.
+	const older = ready ? mine : mine.filter((k) => k.cert_exp === null);
+	await env.DB.batch([
+		...older.map((k) => env.DB.prepare('UPDATE keys SET replaced_at = ? WHERE key_id = ?').bind(t, k.key_id)),
+		env.DB.prepare('INSERT INTO keys (key_id, public_key, owner_discord_id, owner_username, kind, bootstrap, created, cert_exp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+			.bind(keyId, pub, owner, username, kind, bootstrap, t, exp),
+	]);
+	return json(keyAnswer(key, cert, exp, ready ? replacedId(older) : null));
+}
+
+// The owner's keys neither revoked nor replaced, but `except`: the certified one first.
+async function activeKeys(env, owner, except) {
+	const rows = (await env.DB.prepare('SELECT key_id, cert_exp FROM keys WHERE owner_discord_id = ? AND key_id <> ? AND revoked = 0 AND replaced_at IS NULL').bind(owner, except).all()).results || [];
+	return rows.sort((a, b) => (a.cert_exp === null) - (b.cert_exp === null));
+}
+
+function replacedId(keys) {
+	return keys.length ? keys[0].key_id : null;
 }
 
 function keyAnswer(key, cert, certExp, replaced) {
-	return {
+	const from = certFrom(key);
+	const answer = {
 		status: 'ok',
 		key_id: key.key_id,
 		kind: key.kind,
 		public_key: key.public_key,
 		cert,
 		cert_exp: certExp,
-		command: `/oly discord cert ${cert}`,
+		cert_from: from,
+		command: cert ? `/oly discord cert ${cert}` : null,
 		replaced,
 	};
+	if (!cert) {
+		answer.message = `A player key gets its certificate once it counts: from ${when(from)}, send {"key_id": "${key.key_id}", "renew": true} and give the confirmer both lines.`;
+	}
+	return answer;
+}
+
+// A time for people, rounded up to the minute: "2027-01-31 18:05 UTC".
+function when(t) {
+	return `${new Date(Math.ceil(t / 60) * 60000).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
 }
 
 function publicKeyHex(s) {

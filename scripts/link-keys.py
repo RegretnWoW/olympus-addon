@@ -3,7 +3,7 @@
 
   python3 scripts/link-keys.py backend                        # the Worker's signing key
   python3 scripts/link-keys.py confirmer <id> <c|p> [--owner <discord id>] [--username <name>] [--bootstrap] [--days <n>]
-  python3 scripts/link-keys.py cert <id> <public key> <c|p> <days>   # a key's certificate
+  python3 scripts/link-keys.py cert <id> <public key> <c|p> <days> [--created <unix time> --owner <discord id>]
   python3 scripts/link-keys.py public < seed.txt              # the public key of a seed (to compare)
   python3 scripts/link-keys.py revoke <id>                    # the SQL that revokes a key
 
@@ -14,10 +14,14 @@ public key, and how to register it: with the Worker's POST /api/link/keys (it an
 certificate), or the SQL for D1 (web/worker/schema.sql). <id>: 6 to 16 of a-z and 0-9, never
 reused; c: a High Councillor, p: a drawn player. --owner: the confirmer's Discord id (one active
 key per Discord account); --bootstrap: a councillor key trusted before its owner has linked a
-character; --days: how long its certificate lasts (365).
+character; --days: how long its certificate lasts (365 for a councillor, 90 for a player).
 "cert" signs a key's certificate with the backend key: the line the confirmer types in game
 ("/oly discord cert <certificate>") and the SQL that records its end in D1. <public key>: 64 hex
-or 43 base64url. "confirmer" also prints the certificate when the backend seed is at hand.
+or 43 base64url. A player key (p) gets its certificate only once the Worker counts it for every
+code still open (7 days old and its owner's Discord account 30 days old, a day and 5 minutes
+before): --created (the key's "created" in D1) and --owner (its owner_discord_id) say when, and
+"confirmer" prints that command with them. "confirmer" also prints a councillor key's
+certificate at once when the backend seed is at hand.
 The backend seed for these comes from --backend-seed-file <path> (a file holding the seed),
 or the environment: LINK_BACKEND_SEED_FILE (such a path) or LINK_BACKEND_SEED (the seed). It
 is never printed. web/WORKER.md, "Confirmer keys", says how to rotate and revoke.
@@ -43,6 +47,10 @@ SEED = re.compile(r"^[A-Za-z0-9_-]{43}$")
 PUB_HEX = re.compile(r"^[0-9a-fA-F]{64}$")
 CHAT_LINE_MAX = 255  # bytes the game's chat box takes
 DAYS_MAX = 3650
+DAYS = {"c": 365, "p": 90}  # a certificate's life unless --days says otherwise (the Worker's CERT_DAYS)
+# The Worker's LINK: a player key counts for codes issued 7 days after it, from an account 30 days
+# old; a code lives a day, and the game's clock may be 5 minutes behind the Worker's.
+KEY_MIN_AGE, ACCOUNT_MIN_AGE, TOKEN_LIFE, CLOCK_SKEW = 7 * 86400, 30 * 86400, 86400, 300
 
 
 def b64url(b):
@@ -115,6 +123,22 @@ def day(t):
     return time.strftime("%Y-%m-%d", time.gmtime(t))
 
 
+def minute(t):
+    """A time for people, rounded up to the minute (the Worker's words)."""
+    return time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(-(-t // 60) * 60))
+
+
+def cert_from(kind, created, owner):
+    """When a key may get its first certificate: the Worker's certFrom. The addon asks every player
+    key with a certificate that a code's T draws, so a player key is certified only once it counts
+    for every code still open: 7 days old, its owner's account 30 days old (from the Discord id),
+    at the issue of a code signed a day and the clocks' 5 minutes earlier."""
+    if kind != "p":
+        return created
+    account = -(-((int(owner) >> 22) + 1420070400000) // 1000) + ACCOUNT_MIN_AGE
+    return max(created + KEY_MIN_AGE, account) + TOKEN_LIFE + CLOCK_SKEW
+
+
 def backend():
     seed, pub = fresh()
     print("Olympus Link backend key (made just now, shown once)")
@@ -141,7 +165,7 @@ def confirmer(args):
         sys.exit("The id is 6 to 16 characters of a-z and 0-9.")
     if kind not in ("c", "p"):
         sys.exit("The kind is c (a High Councillor) or p (a drawn player).")
-    owner, username, bootstrap, days, seed_file = None, None, 0, 365, None
+    owner, username, bootstrap, days, seed_file = None, None, 0, DAYS[kind], None
     i = 0
     while i < len(rest):
         if rest[i] == "--owner" and i + 1 < len(rest):
@@ -164,8 +188,10 @@ def confirmer(args):
         sys.exit("Only a councillor key (c) can be a bootstrap key.")
     signer = backend_key(seed_file)
     seed, pub = fresh()
-    exp = int(time.time()) + days * 86400
-    cert = certificate(signer, key_id, pub, kind, exp) if signer else None
+    created = int(time.time())
+    exp = created + days * 86400
+    # A player key counts 8 days from now at the soonest: its certificate comes then.
+    cert = certificate(signer, key_id, pub, kind, exp) if signer and kind == "c" else None
     owner_sql = sql_text(owner) if owner else "'REPLACE_WITH_DISCORD_ID'"
     print("Olympus Link confirmer key %s (%s, made just now, shown once)" % (key_id, "councillor" if kind == "c" else "player"))
     print()
@@ -173,44 +199,75 @@ def confirmer(args):
     print("  /oly discord key %s %s" % (key_id, b64url(seed)))
     if cert:
         print("  /oly discord cert %s" % cert)
-    else:
+    elif kind == "c":
         print("  and the \"/oly discord cert ...\" line the Worker answers when you register the key (below).")
+    else:
+        print("  and, once the key counts (below), its \"/oly discord cert ...\" line: send both together then.")
     print()
     print("Public key (\"/oly discord key\" in game shows the same one):")
     print("  " + pub)
     print()
-    body = {"key_id": key_id, "public_key": pub, "owner_discord_id": owner or "REPLACE_WITH_DISCORD_ID", "kind": kind, "days": days}
+    body = {"key_id": key_id, "public_key": pub, "owner_discord_id": owner or "REPLACE_WITH_DISCORD_ID", "kind": kind}
+    if kind == "c":
+        body["days"] = days
     if username:
         body["owner_username"] = username
     if bootstrap:
         body["bootstrap"] = True
-    print("Register it with the Worker (its answer's \"command\" is the certificate line; add \"replace\": true to rotate):")
+    if kind == "c":
+        print("Register it with the Worker (its answer's \"command\" is the certificate line; add \"replace\": true to rotate):")
+    else:
+        print("Register it with the Worker (add \"replace\": true to rotate); its answer's \"cert_from\" says when to ask for")
+        print("the certificate, with {\"key_id\": \"%s\", \"renew\": true, \"days\": %d}, whose \"command\" is the line:" % (key_id, days))
     print("curl -X POST https://<your site>/api/link/keys -H \"Authorization: Bearer $LINK_ADMIN_TOKEN\" -H \"Content-Type: application/json\" -d '%s'"
           % json.dumps(body, separators=(",", ":")))
     print()
     print("Or in D1 (wrangler d1 execute <database> --remote --command \"...\")%s:" % ("" if cert else ", then its certificate with link-keys.py cert"))
     print("INSERT INTO keys (key_id, public_key, owner_discord_id, owner_username, kind, bootstrap, created, cert_exp) VALUES "
-          "(%s, %s, %s, %s, %s, %d, unixepoch(), %s);" % (
+          "(%s, %s, %s, %s, %s, %d, %d, %s);" % (
               sql_text(key_id), sql_text(pub), owner_sql, sql_text(username) if username else "NULL", sql_text(kind), bootstrap,
-              str(exp) if cert else "NULL"))
+              created, str(exp) if cert else "NULL"))
     print()
-    print("Rotating (a new key for the same person): run this first, in the same batch. The old key leaves")
-    print("the draw and still checks what it signed; revoke it (link-keys.py revoke <old id>) once the")
-    print("confirmer typed the new lines in game. A leaked key: revoke it at once instead.")
-    print("UPDATE keys SET replaced_at = unixepoch() WHERE owner_discord_id = %s AND revoked = 0 AND replaced_at IS NULL;" % owner_sql)
+    if kind == "c":
+        print("Rotating (a new key for the same person): run this first, in the same batch. The old key leaves")
+        print("the draw and still checks what it signed; revoke it (link-keys.py revoke <old id>) once the")
+        print("confirmer typed the new lines in game. A leaked key: revoke it at once instead.")
+        print("UPDATE keys SET replaced_at = unixepoch() WHERE owner_discord_id = %s AND revoked = 0 AND replaced_at IS NULL;" % owner_sql)
+    else:
+        start = cert_from(kind, created, owner) if owner else None
+        print("A player key gets its certificate once the Worker counts it for every code still open, %s:" % (
+            "from " + minute(start) if start else "8 days from now (later for a Discord account under 30 days)"))
+        print("python3 scripts/link-keys.py cert %s %s p %d --created %d --owner %s --backend-seed-file <file>" % (
+            key_id, pub, days, created, owner or "REPLACE_WITH_DISCORD_ID"))
+        print("Until then it is not in the draw. Rotating (a new key for the same person): nothing to run now; the")
+        print("old key keeps counting until this one's certificate, whose SQL replaces it.")
     if not owner:
         print()
         print("Replace REPLACE_WITH_DISCORD_ID with the confirmer's Discord id (the table refuses anything else).")
 
 
 def cert(args):
-    usage = "usage: link-keys.py cert <id> <public key> <c|p> <days> [--backend-seed-file <path>]"
-    seed_file = None
-    if len(args) == 6 and args[4] == "--backend-seed-file":
-        seed_file, args = args[5], args[:4]
-    if len(args) != 4:
+    usage = "usage: link-keys.py cert <id> <public key> <c|p> <days> [--created <unix time> --owner <discord id>] [--backend-seed-file <path>]"
+    seed_file, created, owner, pos, i = None, None, None, [], 0
+    while i < len(args):
+        if args[i] in ("--backend-seed-file", "--created", "--owner") and i + 1 < len(args):
+            if args[i] == "--backend-seed-file":
+                seed_file = args[i + 1]
+            elif args[i] == "--created":
+                if not re.match(r"^[1-9][0-9]{0,11}$", args[i + 1]):
+                    sys.exit("--created is the key's creation time in D1, in unix seconds.")
+                created = int(args[i + 1])
+            else:
+                owner = args[i + 1]
+            i += 2
+        elif args[i].startswith("--"):
+            sys.exit(usage)
+        else:
+            pos.append(args[i])
+            i += 1
+    if len(pos) != 4:
         sys.exit(usage)
-    key_id, pub_text, tier, days = args[0], args[1].strip(), args[2], days_arg(args[3])
+    key_id, pub_text, tier, days = pos[0], pos[1].strip(), pos[2], days_arg(pos[3])
     if not KEY_ID.match(key_id):
         sys.exit("The id is 6 to 16 characters of a-z and 0-9.")
     if tier not in ("c", "p"):
@@ -222,19 +279,33 @@ def cert(args):
         if raw is None:
             sys.exit("The public key is 64 hex digits or 43 characters of base64url.")
         pub = raw.hex()
+    t = int(time.time())
+    if tier == "p":
+        if created is None or owner is None or not DISCORD_ID.match(owner):
+            sys.exit("A player key's certificate needs --created <its created in D1> and --owner <its owner_discord_id>:\n"
+                     "SELECT created, owner_discord_id FROM keys WHERE key_id = " + sql_text(key_id) + ";")
+        start = cert_from(tier, created, owner)
+        if t < start:
+            sys.exit("This player key counts from %s (unix %d): sign its certificate then. Before, the addon would\n"
+                     "ask it for codes the Worker does not count it for." % (minute(start), start))
     signer = backend_key(seed_file)
     if signer is None:
         sys.exit("The backend seed is needed: --backend-seed-file <path>, or LINK_BACKEND_SEED_FILE or LINK_BACKEND_SEED.")
-    exp = int(time.time()) + days * 86400
+    exp = t + days * 86400
     c = certificate(signer, key_id, pub, tier, exp)
     print("Olympus Link certificate of key %s (%s, until %s UTC)" % (key_id, "councillor" if tier == "c" else "player", day(exp)))
     print()
     print("For the confirmer (after their \"/oly discord key\" line): type this in the game:")
     print("  /oly discord cert %s" % c)
     print()
-    print("D1 (the draw counts a key while its certificate lasts):")
-    print("UPDATE keys SET cert_exp = %d WHERE key_id = %s AND public_key = %s AND kind = %s AND revoked = 0;" % (
-        exp, sql_text(key_id), sql_text(pub), sql_text(tier)))
+    guard = " AND created = %d AND owner_discord_id = %s" % (created, sql_text(owner)) if tier == "p" else ""
+    print("D1 (the draw counts a key while its certificate lasts). Rotating (the key's first certificate, when")
+    print("it replaces the owner's older key): run the first line too, before the second, in the same batch.")
+    print("UPDATE keys SET replaced_at = unixepoch() WHERE owner_discord_id = (SELECT owner_discord_id FROM keys WHERE key_id = %s) "
+          "AND key_id <> %s AND revoked = 0 AND replaced_at IS NULL;" % (sql_text(key_id), sql_text(key_id)))
+    print("UPDATE keys SET cert_exp = %d WHERE key_id = %s AND public_key = %s AND kind = %s AND revoked = 0 AND replaced_at IS NULL%s;" % (
+        exp, sql_text(key_id), sql_text(pub), sql_text(tier), guard))
+    print("It changes one row; if none, D1 holds another key, time or owner for this id: do not hand the line out.")
     print()
     print("Signed with the backend key %s (it must be the Worker's LINK_BACKEND_PUBLIC)." % public_hex(signer))
 

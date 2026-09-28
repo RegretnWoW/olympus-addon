@@ -7,7 +7,7 @@ import crypto from 'node:crypto';
 import { afterEach, beforeEach, describe, test } from 'node:test';
 import { handleLink, drawThreshold, drawPrefix, drawLimit, verifyCertificate, parseCertificate, LINK } from '../worker/link-worker.js';
 import { parseToken, buildBundle, parseBundle, signedMessage, linkTag, utf8Length } from '../public/core.js';
-import { vectors, makeD1, sign, verify, b64url } from './helpers.mjs';
+import { vectors, makeD1, sign, verify, b64url, publicHexOf } from './helpers.mjs';
 
 const probe = await makeD1();
 const ORIGIN = 'https://link.example.org';
@@ -515,8 +515,12 @@ describe('Worker', { skip: probe ? false : 'node:sqlite is not available in this
 		assert.deepEqual([stored.public_key, stored.kind, stored.bootstrap, stored.cert_exp, stored.owner_username], [pub.toString('hex'), 'c', 1, r.cert_exp, 'new.councillor']);
 		// The same key in base64url; refusals.
 		const p2 = crypto.generateKeyPairSync('ed25519').publicKey.export({ format: 'der', type: 'spki' }).subarray(12);
-		assert.equal((await keys({ key_id: 'newplayer1', public_key: p2.toString('base64url'), owner_discord_id: '400000000000000002', kind: 'p' })).status, 'ok');
+		const player = await keys({ key_id: 'newplayer1', public_key: p2.toString('base64url'), owner_discord_id: '400000000000000002', kind: 'p' });
+		assert.equal(player.status, 'ok');
 		assert.equal((await row('SELECT public_key FROM keys WHERE key_id = ?', 'newplayer1')).public_key, p2.toString('hex'));
+		// A player key's certificate waits until the key counts (the test above).
+		assert.deepEqual([player.cert, player.cert_exp, player.command], [null, null, null]);
+		assert.ok(player.cert_from > clock + LINK.KEY_MIN_AGE);
 		for (const [body, reason, status] of [
 			[{ key_id: 'newcouncil1', public_key: p2.toString('hex'), owner_discord_id: '400000000000000009', kind: 'c' }, 'key-id-used', 409],
 			[{ key_id: 'another01', public_key: pub.toString('hex'), owner_discord_id: '400000000000000009', kind: 'c' }, 'public-key-used', 409],
@@ -533,12 +537,18 @@ describe('Worker', { skip: probe ? false : 'node:sqlite is not available in this
 			assert.equal(x.reason, reason, JSON.stringify(body));
 			assert.equal(x.http, status, JSON.stringify(body));
 		}
-		// Renewing: a new certificate for the same key; revoking.
+		// Renewing: a new certificate for the same key (365 days for a councillor unless "days"
+		// says otherwise; a player key's 90, once it counts); revoking.
 		clock += 100;
-		const renewed = await keys({ key_id: 'newplayer1', renew: true, days: 365 });
+		const renewed = await keys({ key_id: 'newcouncil1', renew: true });
 		assert.equal(renewed.status, 'ok');
-		assert.equal(parseCertificate(renewed.cert).exp, clock + 365 * 86400);
-		assert.equal((await row('SELECT cert_exp FROM keys WHERE key_id = ?', 'newplayer1')).cert_exp, clock + 365 * 86400);
+		assert.equal(renewed.replaced, null);
+		assert.equal(parseCertificate(renewed.cert).exp, clock + LINK.CERT_DAYS * 86400);
+		assert.equal((await row('SELECT cert_exp FROM keys WHERE key_id = ?', 'newcouncil1')).cert_exp, clock + LINK.CERT_DAYS * 86400);
+		assert.equal(parseCertificate((await keys({ key_id: 'newcouncil1', renew: true, days: 10 })).cert).exp, clock + 10 * 86400);
+		assert.equal((await keys({ key_id: 'newplayer1', renew: true })).reason, 'too-early');
+		clock = player.cert_from;
+		assert.equal(parseCertificate((await keys({ key_id: 'newplayer1', renew: true })).cert).exp, clock + LINK.CERT_DAYS_PLAYER * 86400);
 		assert.equal((await keys({ key_id: 'newplayer1', revoke: true })).revoked, true);
 		assert.equal((await row('SELECT revoked FROM keys WHERE key_id = ?', 'newplayer1')).revoked, 1);
 		assert.equal((await keys({ key_id: 'newplayer1', renew: true })).reason, 'revoked');
@@ -573,16 +583,174 @@ describe('Worker', { skip: probe ? false : 'node:sqlite is not available in this
 			assert.equal(after.reason, 'not-enough');
 			assert.match(after.message, /revoked/);
 			assert.equal((await submit(signedNew, USER_C)).status, 'linked');
-			// Still one active key per owner: a third one without "replace" is refused.
+			// Still one active key per owner: a third one without "replace" is refused, and the
+			// database takes no second certified key (a new key without a certificate may wait
+			// next to it: its first certificate replaces the old one).
 			const third = await keys({ key_id: 'council01c', public_key: crypto.randomBytes(32).toString('hex'), owner_discord_id: k.owner_discord_id, kind: 'c' });
 			assert.equal(third.reason, 'owner-has-key');
 			await assert.rejects(
-				env.DB.prepare('INSERT INTO keys (key_id, public_key, owner_discord_id, kind, created) VALUES (?, ?, ?, ?, ?)').bind('council01d', crypto.randomBytes(32).toString('hex'), k.owner_discord_id, 'c', NOW).run(),
+				env.DB.prepare('INSERT INTO keys (key_id, public_key, owner_discord_id, kind, created, cert_exp) VALUES (?, ?, ?, ?, ?, ?)').bind('council01d', crypto.randomBytes(32).toString('hex'), k.owner_discord_id, 'c', NOW, NOW + 86400).run(),
 				/UNIQUE/,
 			);
+			await env.DB.prepare('INSERT INTO keys (key_id, public_key, owner_discord_id, kind, created) VALUES (?, ?, ?, ?, ?)').bind('council01e', crypto.randomBytes(32).toString('hex'), k.owner_discord_id, 'c', NOW).run();
+			await assert.rejects(env.DB.prepare('UPDATE keys SET cert_exp = ? WHERE key_id = ?').bind(NOW + 86400, 'council01e').run(), /UNIQUE/);
 		} finally {
 			delete KEYS.council01b;
 		}
+	});
+
+	// The addon asks every player key that has a valid certificate and that the code's T draws
+	// (Link.lua's Online): so a certificate the Worker hands out must be for a key it counts, or
+	// the same code typed again asks the same refused key every time.
+	test('a player key gets its certificate only once this Worker counts it for every open code', async () => {
+		await setup({ mode: 'a' });
+		const t0 = 1800100000;
+		const seeds = {};
+		const chars = {};
+		const register = async (keyId, owner, extra = {}) => {
+			seeds[keyId] = crypto.randomBytes(32).toString('hex');
+			chars[keyId] = `Conf ${keyId}-ClassicBetaPvP`;
+			await env.DB.prepare('INSERT OR IGNORE INTO members (character, discord_id, guild, gv, faction, r, linked) VALUES (?, ?, ?, ?, ?, ?, ?)')
+				.bind(chars[keyId], owner, 'Olympus Vanguard', 'r', 'Horde', '0000000000', 1780000000)
+				.run();
+			return keys({ key_id: keyId, public_key: publicHexOf(seeds[keyId]), owner_discord_id: owner, kind: 'p', ...extra });
+		};
+		for (const id of ['player01', 'player02', 'player03']) {
+			seeds[id] = KEYS[id].seed_hex;
+			chars[id] = OWN[id];
+		}
+		let users = 0;
+		const newCode = async () => {
+			users += 1;
+			const user = { id: String(500000000000000000n + BigInt(users)), username: `fresh.user${users}` };
+			const res = await call('POST', '/api/link/code', { user });
+			assert.equal(res.status, 200);
+			return { user, token: parseToken((await res.json()).token).token };
+		};
+		// A link on `code` with these keys' proofs, signed from `issued` on, sent now.
+		const link = async (code, ids, issued) => {
+			const b = { requester: 'Fresh Requester-ClassicBetaPvP', guild: 'Olympus Vanguard', faction: 'Horde', nonce: '0011223344556677', R: code.token.R, proofs: [] };
+			b.tag = await linkTag(code.token.sig, b.requester);
+			ids.forEach((keyId, i) => {
+				const p = { issued: issued + i, keyId, confirmer: chars[keyId], gv: 'r' };
+				p.sig = b64url(sign(seeds[keyId], signedMessage(b, p)));
+				b.proofs.push(p);
+			});
+			return submit(buildBundle(b), code.user);
+		};
+		const oldOwner = (n) => String(100000000000000030n + BigInt(n)); // accounts from 2015
+		const ownerBorn = (t) => String((BigInt(t * 1000) - 1420070400000n) << 22n); // an account made at unix time t
+		const expectFrom = (created, account = 0) => Math.max(created + LINK.KEY_MIN_AGE, account + LINK.ACCOUNT_MIN_AGE) + LINK.TOKEN_LIFE + LINK.CLOCK_SKEW;
+		// What the requester's addon does with a certificate: it draws the key for a code when the
+		// certificate is the backend's, for a player key, not ended, and the key's place is below T.
+		const addonDraws = async (cert, code, at) => {
+			const c = await verifyCertificate(vectors.backend.public_hex, cert);
+			return !!c && c.tier === 'p' && c.exp > at && (await drawPrefix(code.token.R, c.keyId)) < code.token.T;
+		};
+
+		// A new player key: registered, but no certificate yet, and not in the draw.
+		clock = t0;
+		const fresh = await register('fresh0001', oldOwner(1));
+		assert.equal(fresh.status, 'ok', fresh.message);
+		assert.equal(fresh.cert, null, 'no certificate for a key that does not count yet');
+		assert.equal(fresh.command, null);
+		assert.equal(fresh.cert_from, expectFrom(t0));
+		assert.match(fresh.message, /renew/);
+		assert.equal((await row('SELECT cert_exp FROM keys WHERE key_id = ?', 'fresh0001')).cert_exp, null);
+		// Two days later (the finding): the pool is small, so T draws every key. Had it a
+		// certificate, the addon would ask it, and this Worker would refuse it on every try.
+		clock = t0 + 2 * 86400;
+		let code = await newCode();
+		assert.equal(code.token.T, 'ffffffff');
+		let r = await link(code, ['fresh0001', 'player01', 'player02'], clock - 60);
+		assert.equal(r.reason, 'not-enough');
+		assert.match(r.message, /fresh0001: key younger than 7 days/);
+		r = await keys({ key_id: 'fresh0001', renew: true });
+		assert.deepEqual([r.http, r.reason, r.cert_from], [409, 'too-early', expectFrom(t0)]);
+		assert.equal(r.cert, undefined);
+		// Seven days old, but a code issued just before is still open and does not count it.
+		clock = t0 + LINK.KEY_MIN_AGE - 60;
+		const before = await newCode();
+		clock = t0 + LINK.KEY_MIN_AGE + 3600;
+		assert.equal((await keys({ key_id: 'fresh0001', renew: true })).reason, 'too-early');
+		r = await link(before, ['fresh0001', 'player01', 'player02'], clock - 60);
+		assert.match(r.message, /fresh0001: key younger than 7 days/);
+		clock = fresh.cert_from - 1;
+		assert.equal((await keys({ key_id: 'fresh0001', renew: true })).reason, 'too-early');
+		// From cert_from on: the certificate (a player's lasts 90 days), and every code a proof
+		// signed from now on can belong to counts the key, even the oldest still open.
+		clock = t0 + LINK.KEY_MIN_AGE;
+		const oldest = await newCode();
+		clock = fresh.cert_from;
+		const certified = await keys({ key_id: 'fresh0001', renew: true });
+		assert.equal(certified.status, 'ok', certified.message);
+		const c = await verifyCertificate(vectors.backend.public_hex, certified.cert);
+		assert.deepEqual([c.keyId, c.tier, c.exp], ['fresh0001', 'p', clock + LINK.CERT_DAYS_PLAYER * 86400]);
+		assert.equal(LINK.CERT_DAYS_PLAYER, 90);
+		assert.equal(certified.command, `/oly discord cert ${certified.cert}`);
+		assert.ok(await addonDraws(certified.cert, oldest, clock));
+		const lastIssued = oldest.token.exp; // a proof signed at the code's end, by a clock 5 minutes behind
+		assert.equal(lastIssued, clock - LINK.CLOCK_SKEW);
+		r = await link(oldest, ['player01', 'player02', 'fresh0001'], lastIssued - 2);
+		assert.equal(r.status, 'linked', r.message);
+
+		// A young Discord account: the key waits for the account's 30 days too.
+		clock = t0;
+		const born = t0 - 10 * 86400;
+		const young = await register('fresh0002', ownerBorn(born));
+		assert.equal(young.cert, null);
+		assert.equal(young.cert_from, expectFrom(t0, born));
+		clock = expectFrom(t0);
+		assert.equal((await keys({ key_id: 'fresh0002', renew: true })).reason, 'too-early');
+		clock = young.cert_from - LINK.TOKEN_LIFE; // the account is 30 days old, but not at the open codes' issue
+		assert.equal((await keys({ key_id: 'fresh0002', renew: true })).reason, 'too-early');
+		clock = born + LINK.ACCOUNT_MIN_AGE;
+		const oldestForYoung = await newCode();
+		clock = young.cert_from;
+		const youngCert = await keys({ key_id: 'fresh0002', renew: true });
+		assert.equal(youngCert.status, 'ok', youngCert.message);
+		assert.ok(await addonDraws(youngCert.cert, oldestForYoung, clock));
+		r = await link(oldestForYoung, ['player01', 'player02', 'fresh0002'], oldestForYoung.token.exp - 2);
+		assert.equal(r.status, 'linked', r.message);
+
+		// Rotating a player key: the new key waits for its certificate like any other, and the old
+		// one keeps counting (the confirmer still has it in game) until then.
+		clock = t0;
+		const owner01 = KEYS.player01.owner_discord_id;
+		const rot = await register('player01r', owner01, { replace: true });
+		assert.equal(rot.status, 'ok', rot.message);
+		assert.deepEqual([rot.cert, rot.replaced], [null, null]);
+		chars.player01r = OWN.player01;
+		assert.equal((await row('SELECT replaced_at FROM keys WHERE key_id = ?', 'player01')).replaced_at, null);
+		clock = t0 + 86400;
+		code = await newCode();
+		r = await link(code, ['player01', 'player02', 'player03'], clock - 60);
+		assert.equal(r.status, 'linked', `the old key still counts: ${r.message}`);
+		clock = rot.cert_from - 1;
+		assert.equal((await keys({ key_id: 'player01r', renew: true })).reason, 'too-early');
+		// Its first certificate replaces the old key, which gets no new certificate after that.
+		clock = rot.cert_from;
+		const rotCert = await keys({ key_id: 'player01r', renew: true });
+		assert.equal(rotCert.status, 'ok', rotCert.message);
+		assert.equal(rotCert.replaced, 'player01');
+		assert.equal((await row('SELECT replaced_at FROM keys WHERE key_id = ?', 'player01')).replaced_at, rot.cert_from);
+		const renewOld = await keys({ key_id: 'player01', renew: true });
+		assert.deepEqual([renewOld.http, renewOld.reason], [409, 'replaced']);
+		clock += 60;
+		code = await newCode();
+		assert.ok(await addonDraws(rotCert.cert, code, clock));
+		r = await link(code, ['player01r', 'player02', 'player03'], clock - 30);
+		assert.equal(r.status, 'linked', `the new key counts at once: ${r.message}`);
+
+		// A second new key for an owner whose first never got a certificate replaces it at once.
+		clock = t0;
+		assert.equal((await register('fresh0003', oldOwner(3))).status, 'ok');
+		assert.equal((await register('fresh0004', oldOwner(3))).reason, 'owner-has-key');
+		assert.equal((await register('fresh0005', oldOwner(3), { replace: true })).status, 'ok');
+		assert.equal((await row('SELECT replaced_at FROM keys WHERE key_id = ?', 'fresh0003')).replaced_at, t0);
+		clock = expectFrom(t0);
+		assert.equal((await keys({ key_id: 'fresh0003', renew: true })).reason, 'replaced');
+		assert.equal((await keys({ key_id: 'fresh0005', renew: true })).status, 'ok');
 	});
 
 	test('Discord: not in the server, or down, leaves the code unused to try again', async () => {
