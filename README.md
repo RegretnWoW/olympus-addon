@@ -308,9 +308,13 @@ shows the army something of it.
 - The round **Olympus** button in the bottom left corner of the map switches markers
   (army per zone, decrees) on and off.
 
-### Olympus Link: your Discord role (0.9.10)
+### Olympus Link: your Discord role (1.0.0)
 Players in game prove to the Olympus bot on Discord that a character is yours, and the bot gives
 you your role. No password, no Battle.net login, and nothing leaves the game before you say yes.
+
+Not open yet: the addon carries it, but `/oly discord` says it is not open until the Olympus bot
+is ready and its key is in the addon. High Councillors' addons already make their own keys and
+get them certified in the meantime.
 
 1. **Get a code** from the Olympus bot on Discord (its `/link` command, or the Olympus Link
    page after "Continue with Discord"). It looks like
@@ -496,7 +500,7 @@ tracking. Your name is on every message (the game adds it). What goes where:
 | Your position as a dot on the map | your guild | only with `/oly share` (off by default) |
 | A treasury keeper's book (balance, gold and items given and who gave them, the ranking) and the guild bank of `<Olympus>` (its gold and items) | everyone on the Olympus channel receives the bytes; the addon shows them to the King, and to the army only with his switches | only after that keeper says yes (each keeper, the King too, is asked once; `/oly treasurer on\|off`), withdrawn at once when he turns it off |
 | The King's crown on the map, and with it his zone and layer | everyone on the Olympus channel | only while the King turns it on (Throne tab), whatever he answered to the question |
-| Olympus Link (0.9.10): a request (your guild, faction, a random number, your code's id and a tag made from your code's signature and your name) | the confirmers asked (a whisper each): a High Councillor, or verified players drawn for your code | only after you press **Accept** on `/oly discord <code>` |
+| Olympus Link (1.0.0): a request (your guild, faction, a random number, your code's id and a tag made from your code's signature and your name) | the confirmers asked (a whisper each): a High Councillor, or verified players drawn for your code | only after you press **Accept** on `/oly discord <code>` |
 | Olympus Link: the finished proof (your character name, realm, guild, faction, the tag, and the confirmers' names, how each knew your guild, their signatures and their keys' certificates) | the Olympus bot, through the page you scan it with, or a watcher (a High Councillor, by whisper) who hands it to the bot | when it is ready, until it is delivered (5 days after your code expired at most) |
 | Olympus Link: "a confirmer's key is online" (its certificate: the key's id, public half, tier, expiry and character), "a watcher is online" | everyone on the Olympus channel | every 5 minutes, only from characters with a key and its certificate, or the watcher on |
 | Olympus Link: a High Councillor's key's public half, and the certificate for it | the author's character, and back (a whisper each) | only from a councillor of the signed list whose addon made its own key, once a session when it hears the author |
@@ -599,7 +603,7 @@ copy. No addon can prevent that. What this one does is make an edited copy usele
   decrees; everyone else can use [Olympus] only. Sent with Blizzard's logged addon-message
   function (lines sent any other way are dropped); rate limited per sender and per channel, and
   no single sender can fill a channel.
-- **Olympus Link** (0.9.10): the bot's codes carry an Ed25519 signature every addon checks
+- **Olympus Link** (1.0.0): the bot's codes carry an Ed25519 signature every addon checks
   against the bot's public key, written in `Olympus/Link.lua` (`ns.LINK_BACKEND_KEYS`), so the
   Discord account the question names is the bot's word. Each proof is an Ed25519 signature by a
   confirmer's own key, which is one character's and certified for that character: by the bot, or

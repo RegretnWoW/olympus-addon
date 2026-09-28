@@ -72,7 +72,7 @@ ns.LINK_BACKEND_KEYS = { "PASTE-THE-BOT-PUBLIC-KEY-HEX-HERE" }
 -- its public keys (64 hex digits each), whose certificates of tier c count for councillors' keys.
 -- Its seed is only in dist/LinkCA.lua (ns.LINK_CA_SEED), copied to the author's own game and never
 -- published. Until a key is pasted here, councillors' addons make no key and ask for nothing.
-ns.LINK_CA_KEYS = { "PASTE-THE-COUNCIL-AUTHORITY-PUBLIC-KEY-HEX-HERE" }
+ns.LINK_CA_KEYS = { "a84125fa433276244fda242a28d2e4208a5d6db26dcb529e3e87af61939e10a7" }
 -- The Olympus Link page (on the bot's site): the QR code and the copy box open it.
 ns.LINK_SITE = "https://olympus.example/link"
 -- Whose watcher the texts name ("<name>'s watcher"); nil: "the bot's watcher".
