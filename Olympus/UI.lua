@@ -1192,14 +1192,16 @@ local function SetButtons(list, defs)
 	if list == main.detailButtons then LayoutDetailButtons() end
 end
 
--- Shows tab `key` in the window in use, and the window if it is closed.
-local function ShowTab(key)
+-- Shows tab `key` in the window in use, and the window if it is closed. `focus`: the id of the
+-- row it opens on (Views.lua: a guild clicked in the Census), in sight (UI.KeepPlace).
+local function ShowTab(key, focus)
 	if key ~= "realm" and ns.Views.CloseChat then ns.Views.CloseChat() end
 	main.tab = key
 	for k, v in pairs(main.views) do v:SetShown(k == key) end
 	main.scroll:SetScrollChild(main.views[key])
 	main.scroll:SetVerticalScroll(0)
-	main.page, main.wantScroll = nil, nil -- a tab opened: its list starts at the top (UI.KeepPlace)
+	-- A tab opened: its list starts at the top, or at the row it opens on (UI.KeepPlace).
+	main.page, main.wantScroll, main.focus = nil, nil, focus
 	-- The Throne is a page of parchment with dark ink (the rows use line.font).
 	if key == "throne" and not main.parchment then
 		local p = main.scroll:CreateTexture(nil, "BACKGROUND")
@@ -1250,10 +1252,10 @@ function UI.Clicked()
 end
 
 -- Opening the window picks its look again, from the guild window in use (UI.Style).
--- Called from clicks and slash commands only (UI.Clicked).
-function UI.SelectTab(key)
+-- Called from clicks and slash commands only (UI.Clicked). `focus`: see ShowTab.
+function UI.SelectTab(key, focus)
 	if not (main and main:IsShown()) then UseStyle(UI.Style()) end
-	ShowTab(key)
+	ShowTab(key, focus)
 	UI.Clicked()
 end
 
@@ -1269,7 +1271,8 @@ end
 -- coming in) leaves the list where it was: the row clicked stays where it was on screen, and
 -- when it opened, its first rows below come into sight if they fell under the list's bottom
 -- edge (the row itself never leaves the top). Only another tab, or another page of one (the
--- Realm's chats, the Throne's pages, the Treasury's book), starts at the top.
+-- Realm's chats, the Throne's pages, the Treasury's book), starts at the top; a tab opened on
+-- a row (a guild clicked in the Census opens in the Realm) starts at that row.
 ---------------------------------------------------------------------------
 
 UI.SHOW_BELOW = 3  -- rows under an opened row brought into sight
@@ -1288,11 +1291,21 @@ end
 
 local function Clamp(v, lo, hi) return math.max(lo, math.min(v, hi)) end
 
+-- The shown row of `content` whose line has id `id`.
+local function RowWithId(content, id)
+	for _, r in ipairs(content.rows or {}) do
+		if r:IsShown() and r.line and r.line.id == id then return r end
+	end
+end
+
 -- The list just drawn in `content` goes back to `offset`, the row clicked (Views.TakeClick) to
--- where it was on screen; on another page, to the top. The scroll range is taken from the
--- heights (the client measures it again only when it next draws: UI.HoldPlace then).
-function UI.KeepPlace(content, offset, click, page)
+-- where it was on screen; on another page, to the top, or to the row `focus` (the id of the
+-- row the tab opened on, ShowTab) when it and its first rows are not in sight there. The scroll
+-- range is taken from the heights (the client measures it again only when it next draws:
+-- UI.HoldPlace then).
+function UI.KeepPlace(content, offset, click, page, focus)
 	local scroll = main.scroll
+	local view = scroll:GetHeight() or 0
 	local want = 0
 	if page == main.page then
 		want = offset
@@ -1304,11 +1317,20 @@ function UI.KeepPlace(content, offset, click, page)
 			-- It opened (the list grew): the rows under it into sight, the row staying in.
 			local n = content.lineCount or 0
 			local last = n > (click.lines or 0) and rows[math.min(click.index + UI.SHOW_BELOW, n)]
-			local view = scroll:GetHeight() or 0
 			if last and last.top and view > 0 then
 				local bottom = last.top + (last:GetHeight() or 0)
 				if bottom > want + view then want = math.min(bottom - view, r.top) end
 			end
+		end
+	elseif focus then
+		-- Opened on a row: at the top of the list, unless it and its first rows are in sight
+		-- from the top already.
+		local r = RowWithId(content, focus)
+		if r and r.top then
+			local rows, n = content.rows or {}, content.lineCount or 0
+			local last = r.index and rows[math.min(r.index + UI.SHOW_BELOW, n)] or r
+			local bottom = (last.top or r.top) + (last:GetHeight() or 0)
+			if bottom > view then want = r.top end
 		end
 	end
 	main.page = page
@@ -1359,9 +1381,10 @@ function UI.Refresh()
 		FitHeader()
 		-- Drawn again where it was (UI.KeepPlace): the offset and the row clicked, taken first.
 		local content = main.views[main.tab]
-		local offset, click = main.scroll:GetVerticalScroll() or 0, ns.Views.TakeClick(content)
+		local offset, click, focus = main.scroll:GetVerticalScroll() or 0, ns.Views.TakeClick(content), main.focus
+		main.focus = nil
 		ns.Views.Render(content, lines, not locked and ns.Views.COLUMNS[main.tab] or nil)
-		UI.KeepPlace(content, offset, click, PageOf(main.tab, locked))
+		UI.KeepPlace(content, offset, click, PageOf(main.tab, locked), focus)
 		main.detailTitle:SetText(title or "")
 		main.detailText:SetText(text or "")
 		SetButtons(main.buttons, locked and RECRUIT_BUTTONS or Shown(BUTTONS[main.tab]))

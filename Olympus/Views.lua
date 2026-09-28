@@ -322,6 +322,9 @@ function Views.TakeClick(content)
 	return click
 end
 
+-- The id of a guild's row in the Realm tree (line.id): a tab opened on it shows it (UI.SelectTab).
+function Views.GuildId(name) return "guild:" .. tostring(name) end
+
 ---------------------------------------------------------------------------
 -- Shared tooltips
 ---------------------------------------------------------------------------
@@ -432,8 +435,9 @@ local function CensusLines(s)
 			dim = not e.fresh,
 			tooltip = GuildTooltip(e),
 			onClick = function()
+				-- Opened in the Realm, and the Realm opens on it (UI.KeepPlace).
 				expanded[e.name] = true
-				ns.UI.SelectTab("realm")
+				ns.UI.SelectTab("realm", Views.GuildId(e.name))
 			end,
 		}
 	end
@@ -808,6 +812,7 @@ local function RealmLines(s)
 		local g = e.g
 		local open = expanded[e.name]
 		lines[#lines + 1] = {
+			id = Views.GuildId(e.name),
 			text = (open and "[-] " or "[+] ") .. Green("<" .. Plain(e.name) .. ">") .. " " .. Plain(g.leader or "?"),
 			right = Presence(g.leaderOnline, g.leaderDays),
 			onClick = function()

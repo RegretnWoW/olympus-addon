@@ -11580,6 +11580,79 @@ test("1.0.0 the list keeps its place in the Treasury too: Show more under the ra
 end)
 
 ---------------------------------------------------------------------------
+-- 1.0.0, after review. A guild clicked in the Census opens in the Realm, but the Realm started
+-- at the top, and a guild low in its tree was out of sight: the player had to scroll to find
+-- the guild he had just opened.
+---------------------------------------------------------------------------
+
+-- The shown Realm row of guild `name` (its "[+]" or "[-]" line).
+local function GuildRow(main, name)
+	for _, r in ipairs(main.views.realm.rows or {}) do
+		if r:IsShown() and type(r.line.text) == "string" and r.line.text:find("^%[[-+]%] ") and r.line.text:find("<" .. name .. ">", 1, true) then return r end
+	end
+end
+-- The shown Census row of guild `name`.
+local function CensusRow(main, name)
+	for _, r in ipairs(main.views.census.rows or {}) do
+		if r:IsShown() and r.line.cols and tostring(r.line.cols[1]):find(name, 1, true) then return r end
+	end
+end
+
+test("1.0.0 a guild clicked in the Census opens in the Realm with that guild in sight, its first rows under it", function()
+	WithUI(function()
+		local w, UI = ForeverWorld(true)
+		CommunitiesFrame:Show(); w.buttons[1]:Click()
+		local main = OlympusFrameHD
+		ns.rdb.guilds = ManyGuilds()
+		ns.Views.ExpandAll(false)
+		UI.SelectTab("census")
+		local scroll = main.scroll
+		scroll:Settle()
+		local view = scroll:GetHeight()
+		-- The Census's last guild (the smallest), scrolled down to and clicked.
+		local row = CensusRow(main, "Olympus 01")
+		assert(row, "Olympus 01 in the Census")
+		scroll:SetVerticalScroll(Top(row) + row:GetHeight() - view)
+		assert(scroll:GetVerticalScroll() > 0, "the Census scrolled down to it")
+		row:Click()
+		DrawJumping(scroll)
+		eq(main.tab, "realm")
+		local opened = GuildRow(main, "Olympus 01")
+		assert(opened and opened.line.text:find("^%[%-%] "), "opened in the Realm")
+		assert(Top(opened) > view, "low in the Realm's tree: out of sight from its top")
+		local at = scroll:GetVerticalScroll()
+		eq(at, math.min(Top(opened), scroll:GetVerticalScrollRange()), "the guild at the top of the list")
+		local below = main.views.realm.rows[Index(opened) + SHOW_BELOW]
+		assert((below.line.indent or 0) >= 1, "its own rows under it: " .. tostring(below.line.text))
+		assert(Top(opened) >= at and Top(below) + below:GetHeight() <= at + view, "the guild and its first rows in sight")
+		-- A guild the Realm shows from its top, first rows and all: the Realm stays at its top.
+		ns.Views.ExpandAll(false)
+		UI.Refresh()
+		local first
+		for _, r in ipairs(main.views.realm.rows) do
+			if r:IsShown() and type(r.line.text) == "string" and r.line.text:find("^%[%+%] ") then first = r break end
+		end
+		assert(Top(first) + (SHOW_BELOW + 1) * first:GetHeight() <= view, "the Realm's first guild and its first rows fit")
+		local name = first.line.text:match("<(Olympus %d+)>")
+		UI.SelectTab("census")
+		scroll:Settle()
+		row = CensusRow(main, name)
+		scroll:SetVerticalScroll(math.max(0, Top(row) - 40))
+		row:Click()
+		DrawJumping(scroll)
+		eq(main.tab, "realm")
+		assert(GuildRow(main, name).line.text:find("^%[%-%] "), "opened")
+		eq(scroll:GetVerticalScroll(), 0, "in sight from the top: the Realm at its top")
+		-- Another tab and back (no guild clicked): the top, as before.
+		scroll:SetVerticalScroll(120)
+		UI.SelectTab("census"); UI.SelectTab("realm")
+		DrawJumping(scroll)
+		eq(scroll:GetVerticalScroll(), 0, "the Realm's tab: its top")
+		ns.Views.ExpandAll(false)
+	end)
+end)
+
+---------------------------------------------------------------------------
 -- 1.0.0: on the world map a decree was a square icon of 34 drawn over the zone circles, and hid
 -- their numbers (a Muster called in Stormwind covered Stormwind's 886 and Elwynn's 438). Now it
 -- is a round icon, smaller, beside the circle; the King's crown too. With mouse and keyboard only.
