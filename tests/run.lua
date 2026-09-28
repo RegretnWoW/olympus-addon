@@ -11582,7 +11582,9 @@ end)
 ---------------------------------------------------------------------------
 -- 1.0.0, after review. A guild clicked in the Census opens in the Realm, but the Realm started
 -- at the top, and a guild low in its tree was out of sight: the player had to scroll to find
--- the guild he had just opened.
+-- the guild he had just opened. And a click that redrew nothing (a Lord's card, a heading) was
+-- kept for the next redraw, a report's, which put the list back where it was at that click and
+-- undid the player's own scrolling since.
 ---------------------------------------------------------------------------
 
 -- The shown Realm row of guild `name` (its "[+]" or "[-]" line).
@@ -11648,6 +11650,63 @@ test("1.0.0 a guild clicked in the Census opens in the Realm with that guild in 
 		UI.SelectTab("census"); UI.SelectTab("realm")
 		DrawJumping(scroll)
 		eq(scroll:GetVerticalScroll(), 0, "the Realm's tab: its top")
+		ns.Views.ExpandAll(false)
+	end)
+end)
+
+test("1.0.0 a click that redraws nothing is not kept: the player's own scrolling stays through the next report", function()
+	WithUI(function()
+		local w, UI = ForeverWorld(true)
+		CommunitiesFrame:Show(); w.buttons[1]:Click()
+		local main = OlympusFrameHD
+		ns.rdb.guilds = ManyGuilds()
+		ns.Views.ExpandAll(false)
+		UI.SelectTab("realm")
+		local scroll, rows = main.scroll, main.views.realm.rows
+		scroll:Settle()
+		-- A guild on screen opened: its Lord (a click opens his card) and its Captains' heading
+		-- (nothing on a click) under it.
+		scroll:SetVerticalScroll(200)
+		local guild
+		for _, r in ipairs(rows) do
+			if r:IsShown() and Top(r) >= 220 and r.line.text:find("^%[%+%] ") then guild = r break end
+		end
+		assert(guild, "a closed guild on screen")
+		guild:Click()
+		DrawJumping(scroll)
+		scroll.scripts.OnScrollRangeChanged = nil
+		local lord, heading = rows[Index(guild) + 1], rows[Index(guild) + 2]
+		assert(lord.line.text:find(ns.L.LORD, 1, true) and lord.line.onClick, "the Lord: " .. lord.line.text)
+		assert(heading.line.text:find(ns.L.CAPTAINS:match("^[^%%(]+"), 1, true) and not heading.line.onClick, "the heading: " .. heading.line.text)
+		local function Report() UI.Refresh(); DrawJumping(scroll) end -- (DATA_CHANGED: UI.RefreshSoon)
+		-- The Lord clicked: his card, no redraw. The scroll bar dragged down, and a report comes in.
+		local at, redraws = scroll:GetVerticalScroll(), UI.lastRedraw
+		lord:Click()
+		eq(UI.lastRedraw, redraws, "the Lord's card redraws nothing")
+		scroll:SetVerticalScroll(at + 150)
+		local mine = scroll:GetVerticalScroll()
+		assert(mine > at, "scrolled down")
+		Report()
+		eq(scroll:GetVerticalScroll(), mine, "the scroll bar's place stays")
+		-- The Lord clicked again, then the wheel (Blizzard's handler: a step a notch) to the top.
+		scroll.scripts.OnMouseWheel = function(self, delta) self:SetVerticalScroll(self:GetVerticalScroll() - 30 * delta) end
+		lord:Click()
+		while scroll:GetVerticalScroll() > 0 do scroll:Fire("OnMouseWheel", 1) end
+		Report()
+		eq(scroll:GetVerticalScroll(), 0, "the wheel's place stays, the top too")
+		-- The heading clicked (nothing to do), then the scroll bar dragged to the top.
+		scroll:SetVerticalScroll(200)
+		heading:Click()
+		scroll:SetVerticalScroll(0)
+		Report()
+		eq(scroll:GetVerticalScroll(), 0, "a click that does nothing leaves the list to the player")
+		-- A click that does redraw still keeps its row in place (the guild closed again).
+		scroll:SetVerticalScroll(200)
+		local onScreen = Top(guild) - 200
+		guild:Click()
+		DrawJumping(scroll)
+		eq(scroll:GetVerticalScroll(), 200, "closed: the list stays")
+		eq(Top(guild) - scroll:GetVerticalScroll(), onScreen)
 		ns.Views.ExpandAll(false)
 	end)
 end)

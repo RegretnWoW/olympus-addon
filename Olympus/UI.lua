@@ -811,6 +811,8 @@ local function CreateMain(style)
 	-- The place a redraw gave the list, once more when the client measures the list again
 	-- (UI.KeepPlace): after Blizzard's own handler, whatever it did with the offset.
 	scroll:HookScript("OnScrollRangeChanged", function(self) ns.SafeCall("list place", UI.HoldPlace, f, self) end)
+	-- The player scrolls with the wheel: the list stays where he puts it (UI.Scrolled).
+	scroll:HookScript("OnMouseWheel", function() ns.SafeCall("list scrolled", UI.Scrolled, f) end)
 	f.views = {}
 	for _, t in ipairs(TABS) do
 		local v = CreateFrame("Frame", nil, scroll)
@@ -1311,6 +1313,10 @@ function UI.KeepPlace(content, offset, click, page, focus)
 		want = offset
 		local rows = content.rows or {}
 		local r = click and GetTime() - (click.t or 0) <= UI.CLICK_KEEP and rows[click.index]
+		-- The list moved since the click, and not to the top (where the client throws it): the
+		-- player scrolled (the scroll bar; the wheel forgets the click, UI.Scrolled), and this is
+		-- not the redraw the click caused. His offset stays.
+		if r and click.offset and offset > 0.5 and math.abs(offset - click.offset) > 0.5 then r = nil end
 		if r and r:IsShown() and r.top then
 			-- Where it was on screen when clicked (whatever the offset did since).
 			want = (click.offset or offset) + (r.top - (click.top or 0))
@@ -1347,6 +1353,13 @@ function UI.HoldPlace(frame, scroll)
 	if not want or GetTime() - (frame.wantAt or 0) > UI.PLACE_HOLD then return end
 	want = Clamp(want, 0, scroll:GetVerticalScrollRange() or 0)
 	if math.abs((scroll:GetVerticalScroll() or 0) - want) > 0.5 then scroll:SetVerticalScroll(want) end
+end
+
+-- The player scrolled the list of `frame` himself (the mouse wheel): no redraw puts it back where
+-- a click, or the last redraw, left it.
+function UI.Scrolled(frame)
+	for _, v in pairs(frame.views or {}) do v.click = nil end
+	frame.wantScroll = nil
 end
 
 function UI.Refresh()

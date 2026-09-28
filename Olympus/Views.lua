@@ -110,11 +110,14 @@ local function Row(content, i)
 		if content.style == "hd" and self.line.key then ns.SafeCall("view select", Views.Select, content, self.line.key) end
 		-- Where the row was clicked, for the redraw its click causes (UI.lua keeps it in place):
 		-- its place in the list, the list's offset then (the list is the scroll frame's child).
-		local scroll = content:GetParent()
-		local offset = scroll and scroll.GetVerticalScroll and scroll:GetVerticalScroll()
-		content.click = { index = self.index, top = self.top or 0, lines = content.lineCount or 0, t = GetTime(),
-			offset = type(offset) == "number" and offset or nil }
-		if self.line.onClick then ns.SafeCall("view click", self.line.onClick) end
+		-- A row with nothing to do on a click (a tooltip, a heading) causes no redraw.
+		if self.line.onClick then
+			local scroll = content:GetParent()
+			local offset = scroll and scroll.GetVerticalScroll and scroll:GetVerticalScroll()
+			content.click = { index = self.index, top = self.top or 0, lines = content.lineCount or 0, t = GetTime(),
+				offset = type(offset) == "number" and offset or nil }
+			ns.SafeCall("view click", self.line.onClick)
+		end
 		if ns.UI.Clicked then ns.UI.Clicked() end
 	end)
 	r:SetScript("OnEnter", function(self)
