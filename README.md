@@ -577,7 +577,9 @@ map to invisible, and gives every frame its look back on the second `/oly photo`
 `/reload`. Never in combat, not with the gamepad UI, and nothing is sent to anyone.
 
 The addon is plain Lua running on each player's computer, so anyone can edit their own
-copy. No addon can prevent that. What this one does is make an edited copy useless:
+copy. No addon can prevent that. What this one does is check what every copy sends; what a
+few characters working together can still reach is said plainly further down
+([What colluding characters can reach](#what-colluding-characters-can-reach)):
 
 - **Guild traffic is verified by Blizzard's servers.** Guild addon messages only reach
   members of that guild, so the realm key and guild elections can't be faked from outside.
@@ -585,12 +587,15 @@ copy. No addon can prevent that. What this one does is make an edited copy usele
   - **The King and the Treasurer are known by name**, not by vote: only their characters can
     send their commands and the treasury (with the characters the King names to the treasury,
     whose books count while his list names them). A report of `<Olympus>` naming anyone else as its
-    leader counts for nothing, not even as a vote, so outsiders can't crown one of their own.
+    leader counts for nothing, not even as a vote: no count of votes makes anyone else its King.
+    Since 1.0.0 the King's decrees and [Lords] lines count by his name too, with no census.
     Their names count on their realm group only (Forever's PvP realms): a namesake anywhere
     else is someone else, and there is no King there.
-  - A decree counts only if the sender really is the Lord or a Captain of that guild,
-    according to that guild's own roster report, or our own roster for our own guild.
-    The rank written inside the message is ignored.
+  - A decree counts only if its sender is the Lord or a Captain of that guild as the census
+    pictures it (below), or as our own roster says for our own guild; the King's by his name.
+    The rank written inside the message is ignored. Since 1.0.0 a sender speaks for one guild
+    in decrees as in the chats, and a decree's words go out with Blizzard's logged
+    addon-message function (a decree that arrives any other way shows without its words).
   - **Ranks come from the picture most senders agree on.** Every report from the last 30
     minutes is its sender's vote on who leads the guild and who its officers are. One sender
     changing or repeating a report can't move the majority. When two pictures have as many
@@ -600,22 +605,26 @@ copy. No addon can prevent that. What this one does is make an edited copy usele
     runner-up of each guild's election also reports every 10 minutes (and answers census
     requests), so a Lord or officer who is the elected reporter is still verified. (An officer
     who is the only one of their guild with the addon is not.)
-  - **The Crown** (any guild master) needs two senders naming them. The officers of
-    `<Olympus>` are of the Crown only on `<Olympus>` members' clients, from their roster (1.0.0),
-    and those the King names his Hands (his word, never a vote): everywhere else they count as
-    Captains, so outsiders' reports can't add one to the Crown.
+  - **The Crown** (any guild master) needs two senders naming them, and one of the two may be
+    that Lord himself (see below). The officers of `<Olympus>` are of the Crown only on
+    `<Olympus>` members' clients, from their roster (1.0.0), and those the King names his Hands
+    (his word, never a vote): everywhere else they count as Captains, so outsiders' reports
+    can't add one to the Crown.
   - A sender speaks for one guild only (a player who changed guilds can speak for the new one
     after 15 quiet minutes). A guild is one whatever the capitals a report spells it with: a
     second spelling is a vote on the same guild, never a second guild.
-  - **The row everyone sees is the majority's**: a report against the picture most senders
-    give is counted as a vote but does not replace what the census shows, so one outsider can't
-    rename a Lord or shrink a guild on everyone's screen. A report claiming more members than a
-    guild can hold is dropped as forged. A guild not heard from for a day leaves the total.
+  - **The row everyone sees is the majority's**: a report whose leader or officers differ from
+    the picture most senders give is counted as a vote but does not replace what the census
+    shows, so one outsider can't rename a Lord. A guild's numbers are not part of that picture
+    (see below). A report claiming more members than a guild can hold is dropped as forged. A
+    guild not heard from for a day leaves the total.
 - **Only our channel counts**: addon messages that arrive on any other chat channel are
   ignored, so the sealed channel really keeps outsiders out.
 - **Sealed channel** (`/oly key`): outsiders can't find the channel or join it.
 - **Validation**: every number is range checked, names are length limited, and malformed
-  messages are dropped. Decrees are rate limited per sender and in total.
+  messages are dropped. Decrees are rate limited per sender (one a minute) and in total (6 a
+  minute from senders only the census vouches for; since 1.0.0 the King's, his Hands' for
+  `<Olympus>` and your own guild's officers' never wait behind that limit).
 - **Admission** (0.9.3): one sender gets 60 messages at once and 2 a second after that, whatever
   they are; past it their messages are dropped unread. Pieces of long messages waiting for the
   rest are capped (4 per sender, 400 in all), so nobody can fill memory with pieces that never
@@ -657,13 +666,59 @@ copy. No addon can prevent that. What this one does is make an edited copy usele
   bot's keeper instead.
 - `/oly block <name>` ignores a player completely.
 
-Limits, stated honestly:
-- Votes are counted per sender name, and nothing the server tells an addon proves which guild
-  a sender belongs to. So cooperating characters can still invent a guild with "Olympus" in
-  its name (two of them naming a third as its leader), and reach [Lords] and the Crown's
-  decrees. So can anyone who really founds such a guild. Against a real guild they need more
-  senders than it has reporting (its reporter and runner-up: two at most). On the public
-  channel anyone can try; **seal it with `/oly key`** and only members of Olympus guilds can.
+### What colluding characters can reach
+
+Votes are counted per sender name, and nothing the server tells an addon proves which guild a
+sender belongs to: a census report is its sender's word. So a few characters working together
+can still reach the following today (1.0.0); each outcome was checked against this version's
+code.
+
+- **Two characters make a Lord.** Two characters, even two alts of one account logged in one
+  after the other (a report counts as a vote for 30 minutes), make one of them the Lord of a
+  made-up Olympus guild on every client. He gets [Lords] lines and the Crown's decrees (a Royal
+  decree, a Tabard inspection) as raid warnings on every screen, for as long as their reports
+  keep coming (15 minutes after the last one). Anyone who really founds such a guild can do
+  the same.
+- **One report makes Captains.** One character's report names others the officers of a
+  made-up guild. On every other client each of them is a Captain, with [Captains] lines, Calls
+  to Arms and Musters. Six of them fill the army's flood guard (6 decrees a minute) with raid
+  warnings, and every other decree that a census rank vouches for is dropped for that minute.
+- **A real guild: two contest it, three take it.** A real guild is pictured by its reporter and
+  runner-up, two votes at most. Two outsiders who send another picture leave it contested: its
+  Lord and officers lose their rank on every other client ([Lords], [Captains], their decrees)
+  while the two keep voting. Three make theirs its picture: their Lord is of the Crown, the
+  real one nobody. Two alts who join a real guild with names that sort first in its election
+  become its reporter and runner-up, and name whom they like.
+- **`<Olympus>`.** Its King counts by his character's name: no count of votes makes anyone else
+  King or silences him. Three outsiders can still add one of their own to its officers in the
+  census. Before 1.0.0 that made him of the Crown on every client outside `<Olympus>`; since
+  1.0.0 the officers of `<Olympus>` are of the Crown on its own members' clients only (their
+  roster), and a census officer of `<Olympus>` is a Captain everywhere else, unless the King
+  names him one of his Hands (his word, never a vote).
+- **Numbers.** A guild's size and online count are not part of the picture. One outsider who
+  copies a guild's leader and officers with other numbers shows his numbers on every screen
+  until its reporter's next report (800 members as 1, the King offline). Each made-up guild
+  adds up to 1,000 soldiers to every client's army total for a day, and one character can
+  start a new one every 15 minutes.
+- **Trust elsewhere.** A made-up Captain who answers a layer-hop ask is a helper the addon
+  vouches for, so his party invite is accepted for the player (never with the gamepad UI). His
+  report on a Royal Inspection can put an innocent player on the King's untabarded list, which
+  the King's share sends to the army.
+
+What 1.0.0 hardened: the King's decrees and [Lords] lines count by his name, with no census at
+all, and his Hands' for `<Olympus>` by his word; those and your own guild's officers' decrees
+never wait behind the flood guard, however many made-up Captains fill it; a decree speaks
+for one guild per sender, as the chats do; a decree's words go out with Blizzard's logged
+addon-message function (one that arrives any other way, from a sender before 1.0.0, still
+shows, without its words); and the officers of `<Olympus>` are of the Crown on its own
+members' clients only, and elsewhere only those the King names his Hands.
+
+On the public channel anyone can try all of the above; **seal it with `/oly key`** and only
+members of Olympus guilds can (any of them still can). The structural fix is **signed
+leadership, planned for 1.1**: ranks that come with a signature every client checks, instead
+of a count of votes.
+
+Other limits:
 - **The Forever beta forgets addon data at every login**: its client saves it but never loads
   it back ([a known beta bug](https://us.forums.blizzard.com/en/wow/t/savedvariables-never-load-in-the-beta-%E2%80%94-all-addon-settings-reset-on-login-69913/2354798)),
   so settings and the realm key reset every session. The census still refills in seconds: a
