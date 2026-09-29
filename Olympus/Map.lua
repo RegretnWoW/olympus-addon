@@ -244,6 +244,10 @@ Map.BADGE_SLOTS = { 45, 135, -45, -135, 0, 180, 90, -90 } -- degrees from the ri
 Map.BADGE_REACH = 0.75 -- a badge's centre this many of its radii past a circle's edge: over its rim at most
 Map.BADGE_RINGS = 3    -- rings of places around a crowded circle
 Map.BADGE_EVERY = 0.1  -- seconds between layouts while a badge is on the map
+-- Laid out at most (1.0.0, Konig's review of 1.0.0: every badge tries every place round its
+-- circle against every other, a few times a second, and enough decrees at once stalled the world
+-- map): the crown first, then the newest decrees (Map.Badge's `since`); the rest stay on their spot.
+Map.BADGE_MAX = 24
 local badges = {}      -- every anchor made (a handful: the crown, the decrees, reused)
 local lastLayout = -math.huge
 
@@ -308,12 +312,40 @@ end
 -- readable: the badge keeps off their numbers).
 function Map.LayoutBadges()
 	if ns.GamepadUI() then return end
-	local list, shown = {}, {}
+	local list, shown, rest = {}, {}, {}
 	for _, a in ipairs(badges) do
 		local c = OnScreen(a, a.reach)
 		if c then list[#list + 1], shown[#shown + 1] = c, a end
 	end
 	if #list == 0 then return end
+	if #shown > Map.BADGE_MAX then
+		-- The crown (no `since`) first, then the newest; past BADGE_MAX, each on its own spot.
+		local order = {}
+		for i = 1, #shown do order[i] = i end
+		table.sort(order, function(x, y)
+			local sx, sy = shown[x].since or math.huge, shown[y].since or math.huge
+			if sx ~= sy then return sx > sy end
+			return x < y
+		end)
+		local keptList, keptShown = {}, {}
+		for rank, i in ipairs(order) do
+			if rank <= Map.BADGE_MAX then
+				keptList[#keptList + 1], keptShown[#keptShown + 1] = list[i], shown[i]
+			else
+				rest[#rest + 1] = shown[i]
+			end
+		end
+		list, shown = keptList, keptShown
+	end
+	for _, a in ipairs(rest) do
+		if a.dx ~= 0 or a.dy ~= 0 then
+			a.dx, a.dy = 0, 0
+			a.badge:ClearAllPoints()
+			a.badge:SetPoint("CENTER", a, "CENTER", 0, 0)
+		end
+		local level = (a:GetFrameLevel() or 0) + 3
+		if a.badge:GetFrameLevel() ~= level then a.badge:SetFrameLevel(level) end
+	end
 	local circles = {}
 	local function Circle(p)
 		local w = p.GetWidth and p:GetWidth()

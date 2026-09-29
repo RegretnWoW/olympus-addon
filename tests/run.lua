@@ -16159,6 +16159,61 @@ test("1.0.0 world map: the Muster and the crown in Stormwind are round, smaller,
 	end)
 end)
 
+-- Konig's review of 1.0.0: every badge on the map tried each place round its circle against every
+-- other badge, a few times a second (Map.LayoutBadges), however many decrees were up: enough of them
+-- stalled the world map. Now BADGE_MAX are laid out, the crown and the newest decrees; the rest stay
+-- on their own spot.
+test("1.0.0 world map: however many decrees are up, BADGE_MAX badges at most are laid out, the crown and the newest first", function()
+	WithMapIcons(function(env)
+		local lib = RecordingPins()
+		WithGamepadUI(false, function()
+			local w = LoadMapModules(lib)
+			MapIconsStart(w) -- (a muster, the King's crown, the zone circles)
+			local g = w.ns
+			local savedNow, clock = ns.Now, ns.Now()
+			local ok, err = pcall(function()
+				ns.Now = function() return clock end
+				for _ = 1, 60 do
+					clock = clock + 1
+					g.Decree.Preview("MUSTER")
+				end
+			end)
+			ns.Now = savedNow
+			if not ok then error(err, 0) end
+			local decrees = g.Decree.Active() -- (the newest first)
+			eq(#decrees, 61)
+			local crown, sw
+			for _, f in ipairs(env.frames) do
+				if f.badge and f.badge.icon.texture == ns.CROWN_ICON then crown = f end
+				if f.key == "m1453" and f.shown then sw = f end
+			end
+			assert(crown and sw, "the crown and Stormwind's circle")
+			local function Place(f, x, y)
+				f.IsVisible = function() return true end
+				f.GetCenter = function() return x, y end
+				f.GetEffectiveScale = function() return 1 end
+			end
+			-- All of them in the middle of Stormwind's circle, over its number.
+			Place(sw, 500, 400); Place(crown, 501, 399)
+			for _, d in ipairs(decrees) do Place(d.pin, 502, 401) end
+			local place, laidOut = g.Map.PlaceBadges, nil
+			g.Map.PlaceBadges = function(list, circles) laidOut = #list return place(list, circles) end
+			local done, lerr = pcall(g.Map.LayoutBadges)
+			g.Map.PlaceBadges = place
+			if not done then error(lerr, 0) end
+			eq(laidOut, g.Map.BADGE_MAX, "no more than BADGE_MAX laid out, whatever the number of decrees")
+			local function Moved(f)
+				local p = f.badge.anchor
+				return p ~= nil and (p[4] ~= 0 or p[5] ~= 0)
+			end
+			assert(Moved(crown), "the crown, first, beside the circle")
+			for i = 1, g.Map.BADGE_MAX - 1 do assert(Moved(decrees[i].pin), "the newest decrees: " .. i) end
+			for i = g.Map.BADGE_MAX, #decrees do eq(Moved(decrees[i].pin), false, "an older one on its spot: " .. i) end
+			for _, d in ipairs(decrees) do eq(d.pin.badge.level, d.pin.level + 3, "over the circles") end
+		end)
+	end)
+end)
+
 ---------------------------------------------------------------------------
 -- 1.0.0: the author's photo mode for the store's screenshots (/oly photo).
 ---------------------------------------------------------------------------
