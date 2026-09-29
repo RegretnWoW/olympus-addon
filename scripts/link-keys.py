@@ -38,7 +38,7 @@ is never printed. web/WORKER.md, "Confirmer keys", says how to rotate and revoke
 Worker's forgetUser() (everything kept about an account deleted: its linked characters, codes,
 the proofs that counted for them, the log lines naming it or them, the record of an authority's
 key for its characters, and the confirmer keys it owns, whose ids stay on the revocation list
-only; take its role away yourself).
+only; its limits, under a keyed hash, stay until their window ends; take its role away yourself).
 
 "ca" makes the council authority, once, on the author's computer: a fresh seed written to
 dist/LinkCA.lua (ns.LINK_CA_SEED; OLYMPUS_LINK_CA_OUT gives another path), readable by its owner

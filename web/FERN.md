@@ -157,7 +157,9 @@ The same route takes `{"forget": true, "discordToken": "..."}`: the page's "Dele
 (Konig's review), for a player who wants his link gone. Checked the same way up to Discord's
 answer, then your `demote(discordId)` takes the role (return `{ ok: false, reason:
 'not-in-server' }` when the member left: nothing to take), and `forgetUser` deletes everything
-kept about the account (`forgotten`). If `demote` fails otherwise, nothing is deleted and the
+kept about the account (`forgotten`) but its limits: its codes today and links this hour stay
+counted, under a keyed hash of its Discord id, until their window ends, so a delete never gives
+a new code or a new draw (Konig's review). If `demote` fails otherwise, nothing is deleted and the
 player tries again. Without `demote`, only the data goes.
 
 The checks, each a few lines in `link-core.mjs`: the proof's tag matches the code's own signature
@@ -177,7 +179,7 @@ key in minutes (step 7), and later how you register player keys (step 9).
 
 `pruneLink`, once a day, deletes what no link can use any more: codes past their delivery grace
 (7 days after they expire), the proofs recorded for codes gone that link nothing now, log lines
-older than 90 days (`LINK.LOG_DAYS`) and the page's limits whose window ended. Links, keys and
+older than 90 days (`LINK.LOG_DAYS`) and the limits whose window ended. Links, keys and
 revocation lists are yours, and stay.
 
 Each `/proof` with a token asks Discord once, and Discord blocks for a while an address that
@@ -397,7 +399,8 @@ when, used or not); the linked characters (name, guild, faction, how the guild w
 Discord id); which confirmer keys counted for which code; confirmer public keys (never a private
 key); the revocation lists; and a log of every proof received (source, code, Discord id,
 character, result). Never a Discord token, never an IP address: the limits before Discord is
-asked (step 6) count a keyed hash of each (HMAC with your bot's seed), in `limits`. With
+asked (step 6) count a keyed hash of each (HMAC with your bot's seed), in `limits`, as do each
+account's codes a day and links an hour (a keyed hash of its Discord id). With
 `pruneLink` on its daily schedule (step 6), a code goes a week after it expires, a log line after
 90 days, a limit when its window ends.
 
@@ -407,8 +410,9 @@ asked (step 6) count a keyed hash of each (HMAC with your bot's seed), in `limit
 its codes and the proofs that counted for them, every log line that names the account, one of
 its codes or one of its characters, the record of a council authority's key for one of its
 characters, and the confirmer keys it owns, whose ids alone stay on the revocation list (never
-counted, never given to another key). Your own revocation lists stay. Without code, the same
-from a checkout of this repository:
+counted, never given to another key). Your own revocation lists stay, and so do its limits (the
+keyed hash and how many codes and links it used) until their window ends, a day at most: a
+delete never gives more codes. Without code, the same from a checkout of this repository:
 
 ```sh
 python3 scripts/link-keys.py forget <their Discord id> > forget.sql

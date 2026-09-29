@@ -182,6 +182,12 @@ export async function issueCode(env, user, source = 'discord') {
 	if (open) return codeSuccess({ token: open.token, exp: open.exp, mode: open.mode });
 	const count = await DB.prepare('SELECT COUNT(*) AS n FROM codes WHERE discord_id = ? AND created > ?').bind(id, t - 86400).first();
 	if (count && count.n >= LINK.CODES_PER_DAY) return codeFailure('limit');
+	// The same limit where forgetUser does not reach (Konig's review: "Delete my link" between two
+	// /verify gave a new code, and a new draw, every time): a keyed hash of the account in limits,
+	// counted for a day from its first code, and gone with pruneLink once that day ends.
+	const perDay = `code:${await limitKey(env, `code~${id}`)}`;
+	const issued = await DB.prepare('SELECT n FROM limits WHERE k = ? AND until > ?').bind(perDay, t).first();
+	if (issued && issued.n >= LINK.CODES_PER_DAY) return codeFailure('limit');
 	const mode = env.LINK_MODE === 'a' ? 'a' : 'c';
 	const exp = t + LINK.TOKEN_LIFE;
 	const pool = mode === 'a' ? await drawPool(env, t) : null;
@@ -191,9 +197,10 @@ export async function issueCode(env, user, source = 'discord') {
 		const payload = `OLC2.${R}.${username}.${exp}.${mode}.${T}`;
 		const token = `${payload}.${await backendSign(env, payload)}`;
 		try {
-			await DB.prepare('INSERT INTO codes (r, discord_id, username, mode, draw_t, created, exp, token, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-				.bind(R, id, username, mode, T, t, exp, token, source)
-				.run();
+			await DB.batch([
+				DB.prepare('INSERT INTO codes (r, discord_id, username, mode, draw_t, created, exp, token, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(R, id, username, mode, T, t, exp, token, source),
+				countOne(DB, perDay, 86400, t),
+			]);
 			return codeSuccess({ token, exp, mode, R, T });
 		} catch (err) {
 			if (!/unique|constraint/i.test(String(err && err.message))) throw err; // an R taken: draw again
@@ -749,16 +756,19 @@ export async function tooManyRequests(env, { ip, discordToken } = {}, t = now())
 	if (typeof discordToken === 'string' && discordToken) buckets.push([`signin:${await limitKey(env, `signin~${discordToken}`)}`, LINK.SIGNIN_PER_HOUR, 3600]);
 	buckets.push(['page', LINK.PAGE_PER_MINUTE, 60]);
 	for (const [k, max, window] of buckets) {
-		const row = await database(env)
-			.prepare(
-				'INSERT INTO limits (k, until, n) VALUES (?, ?, 1) ON CONFLICT(k) DO UPDATE SET ' +
-					'n = CASE WHEN limits.until > ? THEN limits.n + 1 ELSE 1 END, until = CASE WHEN limits.until > ? THEN limits.until ELSE excluded.until END RETURNING n',
-			)
-			.bind(k, t + window, t, t)
-			.first();
+		const row = await countOne(database(env), k, window, t).first();
 		if (row && row.n > max) return true;
 	}
 	return false;
+}
+
+// One more in the limits row k, counted for `window` seconds from its first (then from 1 again):
+// the statement, which returns the count.
+function countOne(DB, k, window, t) {
+	return DB.prepare(
+		'INSERT INTO limits (k, until, n) VALUES (?, ?, 1) ON CONFLICT(k) DO UPDATE SET ' +
+			'n = CASE WHEN limits.until > ? THEN limits.n + 1 ELSE 1 END, until = CASE WHEN limits.until > ? THEN limits.until ELSE excluded.until END RETURNING n',
+	).bind(k, t + window, t, t);
 }
 
 // What an IP address counts as for its limit (Konig's review): an IPv4 address itself, an IPv6
@@ -817,13 +827,19 @@ async function limitKey(env, text) {
 	return bytesToHex(new Uint8Array(await crypto.subtle.sign('HMAC', limitHmac.key, enc.encode(text)))).slice(0, 32);
 }
 
-// The page's limit: SUBMITS_PER_HOUR links an hour per Discord account (counted in inbox_uploads).
+// The page's limit: SUBMITS_PER_HOUR links an hour per Discord account, true when it is reached.
+// Call it once for each link, before acceptProof: it counts that one. Counted in the audit trail's
+// last hour (inbox_uploads), and where forgetUser does not reach (Konig's review: "Delete my link"
+// set the count back to nothing): a keyed hash of the account in limits, for an hour from its
+// first link.
 export async function tooManyProofs(env, discordId, t = now()) {
-	const recent = await database(env)
-		.prepare("SELECT COUNT(*) AS n FROM inbox_uploads WHERE source = 'site' AND discord_id = ? AND uploaded > ?")
+	const DB = database(env);
+	const recent = await DB.prepare("SELECT COUNT(*) AS n FROM inbox_uploads WHERE source = 'site' AND discord_id = ? AND uploaded > ?")
 		.bind(String(discordId), t - 3600)
 		.first();
-	return !!recent && recent.n >= LINK.SUBMITS_PER_HOUR;
+	if (recent && recent.n >= LINK.SUBMITS_PER_HOUR) return true;
+	const row = await countOne(DB, `link:${await limitKey(env, `link~${discordId}`)}`, 3600, t).first();
+	return !!row && row.n > LINK.SUBMITS_PER_HOUR;
 }
 
 // The audit trail: every link received, from the page ('site') or the watcher's inbox ('watcher'),
@@ -904,8 +920,8 @@ export async function discordUser(accessToken, { clientId, fetchImpl = globalThi
 // (when you set LINK_SITE_TOKEN), the body, the link's form, the limits before Discord is asked
 // (tooManyRequests), who the player is (discordUser), 10 links an hour per account, then
 // acceptProof with your promote, and the audit trail. {"forget": true} instead of a link: the
-// signed-in player's own link and everything kept about his account, gone (forgetOwnLink, with
-// your demote to take the role).
+// signed-in player's own link and everything kept about his account but its limits, gone
+// (forgetOwnLink, with your demote to take the role).
 //   if (url.pathname === '/proof') return handleProof(request, env, { promote, demote });
 export async function handleProof(request, env, { promote, demote, fetchImpl } = {}) {
 	const cors = corsHeaders(request, env);
@@ -953,8 +969,9 @@ export async function handleProof(request, env, { promote, demote, fetchImpl } =
 // The page's "delete my link" (Konig's review: players could not delete their own link), for the
 // Discord user the sign-in names: your demote(discordId) takes the role first (resolve, or
 // { ok: false, reason: 'not-in-server' } when there is none to take), then forgetUser deletes
-// everything kept about the account. When demote fails otherwise, nothing is deleted and the
-// player tries again ('discord'). Without demote, only the data goes: take the role yourself.
+// everything kept about the account but its limits. When demote fails otherwise, nothing is
+// deleted and the player tries again ('discord'). Without demote, only the data goes: take the
+// role yourself.
 // { ok: true, status: 'forgotten', reason: 'forgotten', message, discordId, username, characters }
 // (the characters it removed) or an error answer.
 export async function forgetOwnLink(env, user, { demote, t = now() } = {}) {
@@ -966,7 +983,8 @@ export async function forgetOwnLink(env, user, { demote, t = now() } = {}) {
 	}
 	const gone = await forgetUser(env, id, t);
 	if (!gone.ok) return gone;
-	const message = gone.characters.length ? `${gone.characters.join(', ')}: no longer linked, and nothing is kept about this Discord account.` : 'Nothing is kept about this Discord account.';
+	const kept = "Nothing is kept about this Discord account but how many codes and links it used today, until that day's limit ends.";
+	const message = gone.characters.length ? `${gone.characters.join(', ')}: no longer linked. ${kept}` : kept;
 	return { ok: true, status: 'forgotten', reason: 'forgotten', message, discordId: id, username: user.username, characters: gone.characters };
 }
 
@@ -1298,7 +1316,9 @@ function publicKeyHex(s) {
 // trail that names the account, one of its codes or one of its characters, the record of a
 // council authority's key for one of its characters (council_keys), and the confirmer keys it
 // owns, whose ids alone stay, on the revocation list (revoked_keys): never counted, never given to
-// another key. The revocation lists you keep yourself (revoked_keys, revoked_characters) stay.
+// another key. The revocation lists you keep yourself (revoked_keys, revoked_characters) stay, and
+// so do its limits (codes a day, links an hour: in limits, under a keyed hash of the account, never
+// the account itself) until their window ends, so a forget never gives more (Konig's review).
 // Take its role away yourself (the page's own delete does, with your demote). { ok, status,
 // discord_id, characters, keys }. `python3 scripts/link-keys.py forget <id>` prints the same SQL.
 export async function forgetUser(env, discordId, t = now()) {
@@ -1330,7 +1350,7 @@ export async function forgetUser(env, discordId, t = now()) {
 // - the proofs recorded for codes gone that link nothing now (what counted for a character still
 //   linked stays: it is how you see which key linked whom);
 // - the audit trail's lines older than LINK.LOG_DAYS (the page's limit per account reads an hour);
-// - the page's limits whose window ended.
+// - the limits whose window ended (the page's, and each account's codes a day and links an hour).
 // Keys, links, the council authority's keys seen and the revocation lists are yours: they stay.
 // { ok, status, codes, used, logs, limits }: how many rows went from each.
 export async function pruneLink(env, t = now()) {

@@ -50,7 +50,7 @@ const USER_C = { id: TOKEN_C.discord_id, username: TOKEN_C.username };
 const USER_A = { id: TOKEN_A.discord_id, username: TOKEN_A.username };
 const NOW = 1799990400; // a few minutes after the vectors' proofs
 const OWN = { player01: 'Other Player-ClassicBetaPvP', player02: 'Third Player-ClassicBetaPvP2', player03: 'Fourth Player-ClassicBetaPvP', player04: 'Fifth Player-ClassicBetaPvP' };
-const DISCORD_TOKENS = { 'token-of-some-player-0001': USER_C, 'token-of-tester-two-00002': USER_A };
+const DISCORD_TOKENS = { 'token-of-some-player-0001': USER_C, 'token-of-tester-two-00002': USER_A, 'token-of-some-player-0002': USER_C, 'token-of-some-player-0003': USER_C };
 
 let env;
 let realNow;
@@ -846,6 +846,42 @@ describe('with D1', { skip: probe ? false : 'node:sqlite is not available in thi
 			assert.deepEqual([res.status, (await res.json()).reason], [400, 'format'], JSON.stringify(body));
 		}
 		assert.ok(await row('SELECT 1 AS x FROM members WHERE character = ?', B1.requester));
+	});
+
+	test('handleProof: "Delete my link" gives no more codes a day nor links an hour: the limits stay through it (Konig\'s review)', async () => {
+		const forget = async (token) => (await handleProof(page('POST', { body: { forget: true, discordToken: token } }), env, { promote, demote, fetchImpl: discordStub() })).json();
+		await setup({ mode: 'a' });
+		// Konig's case: /verify, then "Delete my link", again and again, for a new code (and a new draw) each time.
+		const codes = new Set();
+		for (let i = 0; i < LINK.CODES_PER_DAY; i++) {
+			const code = await issueCode(env, USER_C);
+			assert.equal(code.ok, true, code.message);
+			codes.add(code.R);
+			assert.equal((await forget('token-of-some-player-0001')).status, 'forgotten');
+		}
+		assert.equal(codes.size, LINK.CODES_PER_DAY);
+		const limited = await issueCode(env, USER_C);
+		assert.deepEqual([limited.ok, limited.reason], [false, 'limit']);
+		assert.equal(await row('SELECT 1 AS x FROM codes WHERE discord_id = ?', USER_C.id), null, 'the codes themselves are gone');
+		const kept = JSON.stringify((await env.DB.prepare('SELECT * FROM limits').all()).results);
+		for (const secret of [USER_C.id, USER_C.username]) assert.equal(kept.includes(secret), false, `${secret} is not kept in limits`);
+		assert.equal((await issueCode(env, USER_A)).ok, true, 'another account is not held back');
+		// Once the day is over, pruneLink drops the count and a code comes again.
+		Date.now = () => (NOW + 86400) * 1000;
+		await pruneLink(env);
+		assert.equal((await issueCode(env, USER_C)).ok, true);
+		// Links: SUBMITS_PER_HOUR in an hour, "Delete my link" (with another sign-in), then no more that hour.
+		await setup();
+		Date.now = () => NOW * 1000;
+		const unknown = B1.bundle.replace(`~${B1.R}~`, '~ZZZZZZZZZZ~');
+		for (let i = 0; i < LINK.SUBMITS_PER_HOUR; i++) assert.equal((await proof(unknown, 'token-of-some-player-0001')).reason, 'unknown-code');
+		assert.equal((await forget('token-of-some-player-0002')).status, 'forgotten');
+		assert.equal(await row('SELECT 1 AS x FROM inbox_uploads WHERE discord_id = ?', USER_C.id), null, 'the audit trail\'s lines are gone');
+		const r = await proof(B1.bundle, 'token-of-some-player-0003');
+		assert.deepEqual([r.http, r.reason], [429, 'limit']);
+		assert.deepEqual(roles.filter((x) => x[0] === 'promote'), []);
+		Date.now = () => (NOW + 3601) * 1000;
+		assert.equal((await proof(unknown, 'token-of-some-player-0003')).reason, 'unknown-code', 'an hour later');
 	});
 
 	test('pruneLink: what no link can use any more goes, on your schedule; the links and what counted for them stay (Konig\'s review)', async () => {

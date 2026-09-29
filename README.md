@@ -446,8 +446,9 @@ request and proof.
 A character linked to one Discord account never moves to another by a new link: the bot refuses
 it. To remove your link, use **Delete my link** at the foot of the Olympus Link page, signed in
 with Discord: the bot takes the role away and deletes everything it keeps about your Discord
-account (your linked characters, codes and their history). You can link again later with a new
-code.
+account (your linked characters, codes and their history) except how many codes and links you
+used today, counted for a day at most. You can link again later with a new code (3 a day, the
+ones before the delete included).
 
 **For confirmers and watchers.** A confirmer's key belongs to one character, and so does its
 certificate, which names it: another character of the same account confirms nothing with it.
