@@ -1258,16 +1258,24 @@ Workshop.CouncilNames = CouncilNames
 -- and a list already found false is not checked again. The author's own file is not limited.
 -- Once a minute per sender and per kind of list (0.9.9): a relay sends the names and the titles
 -- one after the other, and one gap for both would leave the titles unchecked at every relay.
+-- Two budgets (1.0.0, Konig's review of 1.0.0: three strangers sending a forged list of each kind
+-- spent the whole minute's checks, and nothing relayed was checked meanwhile, a councillor's
+-- removal included): lists from our guild (over GUILD, or on the channel from a guildmate our
+-- roster knows: the server names the sender) have VERIFY_MAX checks a minute of their own, which
+-- nobody outside our guild can spend. And a signature that can't be the author's (not 512 hex
+-- digits: Sign.Plausible) is refused before it costs anything, never checked, never asked for.
 Workshop.VERIFY_GAP, Workshop.VERIFY_MAX = 60, 6
-local verifiedFrom, verifyTimes, falseLists, falseCount = {}, {}, {}, 0
-local function MayVerify(sender, kind, blob, now)
+local verifiedFrom, falseLists, falseCount = {}, {}, 0
+local verifyTimes = { channel = {}, guild = {} } -- each budget's checks in the last minute
+local function MayVerify(sender, kind, blob, now, guild)
 	if falseLists[blob] then return false end
 	local key = sender and (sender .. "~" .. kind)
 	if key and now - (verifiedFrom[key] or -math.huge) < Workshop.VERIFY_GAP then return false end
-	for i = #verifyTimes, 1, -1 do if now - verifyTimes[i] >= 60 then table.remove(verifyTimes, i) end end
-	if #verifyTimes >= Workshop.VERIFY_MAX then return false end
+	local times = guild and verifyTimes.guild or verifyTimes.channel
+	for i = #times, 1, -1 do if now - times[i] >= 60 then table.remove(times, i) end end
+	if #times >= Workshop.VERIFY_MAX then return false end
 	if key then verifiedFrom[key] = now end
-	verifyTimes[#verifyTimes + 1] = now
+	times[#times + 1] = now
 	return true
 end
 local function RememberFalse(blob)
@@ -1275,11 +1283,18 @@ local function RememberFalse(blob)
 	falseLists[blob], falseCount = true, falseCount + 1
 end
 function Workshop.ResetVerify() -- tests (the list times heard of go too)
-	wipe(verifiedFrom); wipe(verifyTimes); wipe(falseLists); falseCount = 0
+	wipe(verifiedFrom); wipe(verifyTimes.channel); wipe(verifyTimes.guild); wipe(falseLists); falseCount = 0
 	if Workshop.ResetListAsk then Workshop.ResetListAsk() end
 end
 
-function Workshop.TakeCouncil(blob, sender)
+-- A list heard from our guild (1.0.0, Konig's review): over GUILD, or on the channel from a
+-- guildmate (our roster: the server's word, never the sender's).
+local function FromGuild(dist, sender)
+	return dist == "GUILD" or (sender ~= nil and ns.Roster ~= nil and ns.Roster.RankOf(sender) ~= nil)
+end
+
+-- sender: nil for the author's own file (never limited); guild: charged to our guild's budget.
+function Workshop.TakeCouncil(blob, sender, guild)
 	if type(blob) ~= "string" or #blob > 2000 then return false end
 	local text, at, realm, list, sig = blob:match("^(HS1~(%d+)~([^~]*)~([^~]*))~(%x+)$")
 	at = tonumber(at)
@@ -1288,7 +1303,8 @@ function Workshop.TakeCouncil(blob, sender)
 	-- client a signature check for nothing (0.9.8).
 	local c = ns.rdb.council
 	if type(c) == "table" and (tonumber(c.at) or 0) >= at then return false end
-	if sender and not MayVerify(sender, "HS", blob, ns.Now()) then
+	if not ns.Sign or not ns.Sign.Plausible(sig) then return false end -- (costs nothing: Konig's review)
+	if sender and not MayVerify(sender, "HS", blob, ns.Now(), guild) then
 		if not falseLists[blob] then Advertise("HS", at) end -- (not checked: asked for later)
 		return false
 	end
@@ -1314,7 +1330,8 @@ end
 function Workshop.HandleCouncil(dist, sender, text)
 	if (dist ~= "CHANNEL" and dist ~= "GUILD") or type(text) ~= "string" then return end
 	local blob = text:match("^HS~(HS1~.*)$") or text
-	if Workshop.TakeCouncil(blob, ns.FullName(sender)) and dist == "GUILD" then PassOn("HS", blob) end
+	sender = ns.FullName(sender)
+	if Workshop.TakeCouncil(blob, sender, FromGuild(dist, sender)) and dist == "GUILD" then PassOn("HS", blob) end
 	HeardList("HS", blob, dist)
 end
 ns.Comm.Handle("HS", function(...) Workshop.HandleCouncil(...) end)
@@ -1349,15 +1366,16 @@ local function ReadDepartments(text)
 end
 
 -- A signed titles list, from the author's file or the channel: checked and kept like the names
--- (only a newer one; the same budget of signature checks).
-function Workshop.TakeTitles(blob, sender)
+-- (only a newer one; the same budgets of signature checks).
+function Workshop.TakeTitles(blob, sender, guild)
 	if type(blob) ~= "string" or #blob > Workshop.TITLES_BLOB then return false end
 	local text, at, realm, public, list, sig = blob:match("^(HT1~(%d+)~([^~]*)~([01])~([^~]*))~(%x+)$")
 	at = tonumber(at)
 	if not at then return false end
 	local t = ns.rdb.councilTitles
 	if type(t) == "table" and (tonumber(t.at) or 0) >= at then return false end
-	if sender and not MayVerify(sender, "HT", blob, ns.Now()) then
+	if not ns.Sign or not ns.Sign.Plausible(sig) then return false end
+	if sender and not MayVerify(sender, "HT", blob, ns.Now(), guild) then
 		if not falseLists[blob] then Advertise("HT", at) end
 		return false
 	end
@@ -1395,7 +1413,8 @@ end
 function Workshop.HandleTitles(dist, sender, text)
 	if (dist ~= "CHANNEL" and dist ~= "GUILD") or type(text) ~= "string" then return end
 	local blob = text:match("^HT~(HT1~.*)$") or text
-	if Workshop.TakeTitles(blob, ns.FullName(sender)) and dist == "GUILD" then PassOn("HT", blob) end
+	sender = ns.FullName(sender)
+	if Workshop.TakeTitles(blob, sender, FromGuild(dist, sender)) and dist == "GUILD" then PassOn("HT", blob) end
 	HeardList("HT", blob, dist)
 end
 ns.Comm.Handle("HT", function(...) Workshop.HandleTitles(...) end)

@@ -10581,6 +10581,61 @@ test("0.9.9 the High Council's lists: relayed together, and a relay of both from
 	end)
 end)
 
+-- Konig's review of 1.0.0: since 0.9.9 the gap is per sender and kind of list, so three strangers
+-- each sending a forged names list and a forged titles list spent the VERIFY_MAX checks of the
+-- minute, before Sign.Verify refused a signature of one digit. Meanwhile nothing relayed was
+-- checked, a councillor's removal included. Now a signature that can't be the author's costs
+-- nothing, and our guild's lists (over GUILD, or a guildmate's relay on the channel) have a
+-- budget of their own.
+test("1.0.0 three strangers' forged lists never stall the council's lists: a signature of the wrong length costs nothing, our guild has its own budget", function()
+	WithTestCouncil(function()
+		local W, S = ns.Workshop, ns.Sign
+		local verify, checks, clock = S.Verify, 0, 1000000
+		local savedRoster = ns.Roster.byName
+		local ok, err = pcall(function()
+			ns.Now = function() return clock end
+			ns.After = function() end
+			ns.Comm.SendChunked = function() end
+			S.Verify = function(...) checks = checks + 1 return verify(...) end
+			ns.rdb.council, ns.rdb.councilTitles = nil, nil
+			-- Three strangers, a forged list of each kind each, their signature one digit long.
+			local function Forge(i, sig)
+				W.HandleCouncil("CHANNEL", "Stranger" .. i .. "-Realm", ("HS~HS1~%d~Realm~Fake Name~%s"):format(1900000000 + i, sig))
+				W.HandleTitles("CHANNEL", "Stranger" .. i .. "-Realm", ("HT~HT1~%d~Realm~1~^^Fake Name=Boss~%s"):format(1900000000 + i, sig))
+			end
+			for i = 1, 3 do Forge(i, "1") end
+			eq(checks, 0, "no check spent on a signature that can't be the author's")
+			-- The real lists relayed by a stranger in the same minute: checked and taken.
+			W.HandleCouncil("CHANNEL", "Relay Guy-Realm", "HS~" .. COUNCIL_TEST_NAMES4)
+			W.HandleTitles("CHANNEL", "Relay Guy-Realm", "HT~" .. COUNCIL_TEST_TITLES)
+			eq(checks, 2)
+			eq(ns.rdb.council and ns.rdb.council.blob, COUNCIL_TEST_NAMES4, "the names taken")
+			eq(ns.rdb.councilTitles and ns.rdb.councilTitles.blob, COUNCIL_TEST_TITLES, "the titles taken")
+			eq(W.NeedLists(), false, "nothing to ask for: the forged lists' times were never taken as heard of")
+			-- A minute on, forgeries of the full length from three strangers spend the channel's
+			-- budget: a stranger's relay waits for the next minute...
+			clock = clock + 61
+			for i = 4, 6 do Forge(i, ("ab"):rep(256)) end
+			eq(checks, 2 + W.VERIFY_MAX, "the channel's budget spent")
+			W.HandleCouncil("CHANNEL", "Other Relay-Realm", "HS~" .. COUNCIL_TEST_NAMES2)
+			eq(checks, 2 + W.VERIFY_MAX, "a stranger's relay waits")
+			eq(ns.rdb.council.blob, COUNCIL_TEST_NAMES4)
+			-- ...but a guildmate's relay on the channel (our roster knows him) is checked, the removal
+			-- of two councillors taken at once, and so is a list from our guild over GUILD.
+			ns.Roster.byName = { ["Mate-Realm"] = 3 }
+			W.HandleCouncil("CHANNEL", "Mate-Realm", "HS~" .. COUNCIL_TEST_NAMES2)
+			eq(checks, 3 + W.VERIFY_MAX, "our guild's budget")
+			eq(ns.rdb.council.blob, COUNCIL_TEST_NAMES2, "Third Mod and Fourth Mod removed")
+			eq(ns.IsHighCouncillor("Fourth Mod-Realm"), false)
+			W.HandleTitles("GUILD", "Far Mate-OtherRealm", "HT~" .. COUNCIL_TEST_PUBLIC)
+			eq(checks, 4 + W.VERIFY_MAX)
+			eq(ns.rdb.councilTitles.blob, COUNCIL_TEST_PUBLIC, "from our guild over GUILD")
+		end)
+		ns.Roster.byName, S.Verify = savedRoster, verify
+		if not ok then error(err, 0) end
+	end)
+end)
+
 test("0.9.9 the High Council's titles cross the channel under their own type", function()
 	WithTestCouncil(function()
 		CouncilOnChannel(function(_, Hear)
@@ -18845,7 +18900,7 @@ do
 		end)
 	end)
 
-	test("1.0.0 the High Council's lists from our guild: the same checks as on the channel (a newer list only, one signature budget)", function()
+	test("1.0.0 the High Council's lists from our guild: the same checks as on the channel (a newer list only), on a signature budget of their own", function()
 		WithTestCouncil(function()
 			local W, S = ns.Workshop, ns.Sign
 			local verify, checks, clock, passes = S.Verify, 0, 1000000, 0
@@ -18879,13 +18934,15 @@ do
 			W.HandleTitles("GUILD", "Faker-" .. P2, forged)
 			W.HandleTitles("GUILD", "Other Faker-" .. P2, forged)
 			eq(checks, 4); eq(passes, 3)
-			-- VERIFY_MAX checks a minute in all, from our guild and the channel together.
+			-- VERIFY_MAX checks a minute from our guild, VERIFY_MAX more from the channel's strangers
+			-- (Konig's review of 1.0.0: one budget for both let three strangers stall our guild's
+			-- lists; before, 10 senders on the two lanes got VERIFY_MAX checks in all).
 			clock = clock + 61
-			for i = 1, 10 do
+			for i = 1, 20 do
 				W.HandleCouncil(i % 2 == 0 and "GUILD" or "CHANNEL", "Bot" .. i .. "-Realm",
 					("HS~HS1~%d~Realm~Fake Name~%s"):format(2000000000 + i, ("ab"):rep(256)))
 			end
-			eq(checks, 4 + W.VERIFY_MAX, "a few a minute in all")
+			eq(checks, 4 + 2 * W.VERIFY_MAX, "a few a minute on each lane")
 			-- Nothing but the channel and our guild.
 			ns.rdb.councilTitles = nil
 			clock = clock + 61
