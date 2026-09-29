@@ -9,10 +9,13 @@ local L = ns.L
 -- this character asked: each proof is an Ed25519 signature made by a confirmer's addon with a key
 -- of its own, kept for one character (OlympusDB.discord.keys[Name-Realm]), and certified for that
 -- character: OLK2, a signature on the key's public half, its tier and the character's name, by the
--- bot (/oly discord key and /oly discord cert, typed) or, for a High Councillor, by the council's
--- authority, the author's own client, which answers the councillor's addon by itself (below). The
--- server stamps who whispers whom, so a proof names the character that really asked, and a
--- certificate is honoured only from the character it names.
+-- bot. The bot's keeper makes every key, a High Councillor's too (scripts/link-keys.py confirmer),
+-- typed in game with /oly discord key and /oly discord cert. (The council authority's path, where a
+-- councillor's addon makes its own key and the author's client certifies it by itself, is below,
+-- off unless the author turns it on: ns.LINK_COUNCIL_AUTHORITY, Konig's review.) Nothing of it is
+-- made, typed, announced or used before the bot is ready (Link.BotReady). The server stamps who
+-- whispers whom, so a proof names the character that really asked, and a certificate is honoured
+-- only from the character it names.
 -- Who confirms:
 --   * a High Councillor (the signed list, Workshop.lua) with a certificate of tier c: one proof is
 --     enough; the next councillor online is asked too, and up to two councillors' proofs travel;
@@ -43,8 +46,9 @@ local L = ns.L
 --   DB~<bundle>          a finished proof (WHISPER, requester -> watcher; in Codec.Chunk pieces
 --                        "DB~C<id>:<i>:<n>:<piece>" when longer than one message)
 --   DK~<R>               the watcher kept it (WHISPER, watcher -> requester)
---   DC~1~<public key>    a councillor's addon asks the author's for a certificate (WHISPER)
---   DE~<certificate>     the author's addon answers it (WHISPER)
+--   DC~1~<public key>    a councillor's addon asks the author's for a certificate (WHISPER; only
+--                        with ns.LINK_COUNCIL_AUTHORITY on, off by default)
+--   DE~<certificate>     the author's addon answers it (WHISPER; the same)
 -- Certificate: OLK2.<keyId>.<public key, base64url>.<tier c|p>.<exp>.<Name-Realm>.<sig>, a
 -- signature over all but the last field (UTF-8) by one of the bot's keys, or, tier c only and for a
 -- key whose id is the first 12 hex of SHA-256(<its 32 bytes>), by one of the council authority's
@@ -72,9 +76,21 @@ ns.LINK_BACKEND_KEYS = { "PASTE-THE-BOT-PUBLIC-KEY-HEX-HERE" }
 -- The High Council's certificate authority (scripts/link-keys.py ca, on the author's computer):
 -- its public keys (64 hex digits each), whose certificates of tier c count for councillors' keys.
 -- Its seed is only in dist/LinkCA.lua (ns.LINK_CA_SEED), copied to the author's own game and never
--- published. Until a key is pasted here and the bot's is too, councillors' addons make no key and
--- ask for nothing.
+-- published. Its certificates count, and councillors' addons make a key and ask for one, only
+-- with the author's switch below on and the bot's key pasted above.
 ns.LINK_CA_KEYS = { "a84125fa433276244fda242a28d2e4208a5d6db26dcb529e3e87af61939e10a7" }
+-- The author's switch for the council authority's path (Konig's review): off. Off, every
+-- confirmer's key, a High Councillor's too, is one the bot's keeper makes (scripts/link-keys.py
+-- confirmer) and the bot certifies, typed in game with /oly discord key <id> <key> and
+-- /oly discord cert <certificate>: no addon makes a key of its own, asks the author's client for a
+-- certificate or signs one, and no addon takes the authority's certificates (the key that signs
+-- them stays listed above, for the day it is turned on). Why: a key made in game draws on tens of
+-- bits the client can't hide (Link.EntropySample says which), sits in plain text in the
+-- SavedVariables, and its certificate lasts a year. On (true), the path below ("High Councillors'
+-- keys, certified by the author's client") runs as it was written, once the bot is ready
+-- (Link.BotReady); the bot's keeper then sets LINK_CA_PUBLIC in the Worker too (web/WORKER.md,
+-- step 1b). Keys it made are dropped at login while it is off (Link.Resume).
+ns.LINK_COUNCIL_AUTHORITY = false
 -- The Olympus Link page, a static page on this repository's GitHub Pages (web/public/, its address
 -- also in web/public/config.js as PAGE_URL): the QR code and the copy box open it with the link in
 -- the #fragment only, which no server ever gets. The page sends the link to the bot's Worker.
@@ -262,17 +278,21 @@ function Link.CAKeys() return KeyList(ns.LINK_CA_KEYS, caKeys) end
 -- key is made, typed, announced or used, and no certificate is asked for, signed or typed: a key
 -- would only wait in the SavedVariables for the launch.
 function Link.BotReady() return #Link.BackendKeys() > 0 end
+-- The council authority's path runs: the author's switch on (ns.LINK_COUNCIL_AUTHORITY), the
+-- authority's key known and the bot ready. Else councillors' keys, like everyone's, come from the
+-- bot's keeper.
+function Link.CouncilAuthority() return ns.LINK_COUNCIL_AUTHORITY == true and #Link.CAKeys() > 0 and Link.BotReady() end
 
 -- Who signed a parsed code or certificate (its `signed` and `sig`): "bot" (one of the bot's
 -- keys), "ca" (the council authority's: a certificate of tier c only, for a key whose id is its
--- hash), or false. Heavy: run inside Ed.Run.
+-- hash, and only while its path runs: Link.CouncilAuthority), or false. Heavy: run inside Ed.Run.
 local function SignedBy(t, certificate)
 	local sig = type(t) == "table" and Ed.FromB64(t.sig)
 	if not sig then return false end
 	for _, pk in ipairs(Link.BackendKeys()) do
 		if Ed.Verify(pk, t.signed, sig) then return "bot" end
 	end
-	if certificate and t.tier == "c" then
+	if certificate and t.tier == "c" and Link.CouncilAuthority() then
 		local pub = Ed.FromB64(t.pub)
 		if pub and t.id == KeyIdOf(pub) then
 			for _, pk in ipairs(Link.CAKeys()) do
@@ -1451,14 +1471,16 @@ function Link.SetKey(args)
 	if verb == "off" then
 		local had = DropKey()
 		d.nokey[ns.me] = true -- (a councillor's addon makes no new key by itself)
-		ns.Print(ns.IsHighCouncillor(ns.me) and L.LINK_KEY_OFF_COUNCIL or L.LINK_KEY_OFF)
+		ns.Print(Link.CouncilAuthority() and ns.IsHighCouncillor(ns.me) and L.LINK_KEY_OFF_COUNCIL or L.LINK_KEY_OFF)
 		return SayOldKey(had)
 	end
 	if verb == "new" then
 		-- A councillor's new key (a lost or leaked one, or one a year old): made here, and the
-		-- author's client certifies it the next time it is heard.
+		-- author's client certifies it the next time it is heard; only while that path runs. Off
+		-- (the default), a new key is one the bot's keeper makes, as everyone's.
+		if not Link.BotReady() then return ns.Print(L.LINK_NOT_OPEN) end
+		if not Link.CouncilAuthority() then return ns.Print(L.LINK_KEY_FROM_KEEPER) end
 		if not ns.IsHighCouncillor(ns.me) then return ns.Print(L.LINK_KEY_NEW_ONLY) end
-		if #Link.CAKeys() == 0 or not Link.BotReady() then return ns.Print(L.LINK_NOT_OPEN) end
 		local had = DropKey()
 		d.nokey[ns.me] = nil
 		Link.MakeCouncilKey()
@@ -1533,7 +1555,10 @@ end
 ---------------------------------------------------------------------------
 -- High Councillors' keys, certified by the author's client (the council authority)
 --
--- A councillor pastes nothing: its addon makes a key of its own in the game, the first time it
+-- Off by default (ns.LINK_COUNCIL_AUTHORITY, Konig's review): councillors then type the key and
+-- certificate the bot's keeper made them, as every confirmer does, and none of this runs. Only
+-- with the author's switch on, and once the bot is ready (Link.CouncilAuthority):
+-- a councillor pastes nothing: its addon makes a key of its own in the game, the first time it
 -- finds the signed list naming its character, and asks the author's client for a certificate
 -- (DC, a whisper, once it hears the author: any message of his). The author's client, holding the
 -- council authority's seed (dist/LinkCA.lua, on his computer only), certifies a councillor of the
@@ -1551,12 +1576,14 @@ end
 -- watches; math.random is the game's generator, whose state is not secret by design; the table
 -- addresses depend on the heap. What an attacker can't know is the sub-millisecond readings of
 -- debugprofilestop and GetTimePreciseSec over eight frames on this computer (the frame-to-frame
--- jitter), and the exact second the key was made: tens of bits, not 256. That is enough for a key
--- that only confirms Discord links, whose certificate lasts a year, that the bot's keeper can
--- revoke at once (the Worker's revocation lists, by key or by character) and that /oly discord key
--- new replaces in game (it prints the old key's id: the keeper revokes that one at the bot). A
--- councillor who wants a key made from a real random source asks the bot's keeper for one
--- (scripts/link-keys.py confirmer, on a computer) and types it with /oly discord key <id> <key>.
+-- jitter), and the exact second the key was made: tens of bits, not 256. That is why this path is
+-- off by default (Konig's review): a key made so is kept in plain text in the SavedVariables, its
+-- public half goes on the channel every 5 minutes, and its certificate lasts a year. Turned on, it
+-- makes a key that only confirms Discord links, that the bot's keeper can revoke at once (the
+-- Worker's revocation lists, by key or by character) and that /oly discord key new replaces in
+-- game (it prints the old key's id: the keeper revokes that one at the bot). By default every
+-- councillor's key is made from a real random source by the bot's keeper (scripts/link-keys.py
+-- confirmer, on a computer) and typed with /oly discord key <id> <key>.
 function Link.EntropySample()
 	local parts = {}
 	local function Add(fn, ...)
@@ -1587,7 +1614,7 @@ end
 -- A new key for this councillor: the pool stirred over ENTROPY_FRAMES frames, then its seed and
 -- public half in a job; kept for this character (auto: its certificate comes by itself).
 function Link.MakeCouncilKey()
-	if making or #Link.CAKeys() == 0 or not Link.BotReady() then return false end
+	if making or not Link.CouncilAuthority() then return false end
 	local m = { samples = {}, me = ns.me }
 	making = m
 	local function Frame()
@@ -1620,9 +1647,10 @@ end
 -- Every tick: a councillor of the signed list with no key gets one (unless its key was turned
 -- off: /oly discord key off); with its own key made here and no certificate, it listens for the
 -- author (Comm.senderHook). An ask unanswered for CA_WAIT counts as refused. Nothing happens
--- until this version knows the council authority's key and the bot's (Link.BotReady).
+-- unless the council authority's path runs (Link.CouncilAuthority: the author's switch, off by
+-- default, the authority's key and the bot's).
 function Link.CouncilKeyStep(now)
-	if #Link.CAKeys() == 0 or not Link.BotReady() or not ns.IsHighCouncillor(ns.me) or not Link.ValidName(ns.me) then return end
+	if not Link.CouncilAuthority() or not ns.IsHighCouncillor(ns.me) or not Link.ValidName(ns.me) then return end
 	local k = Link.Key()
 	if not k then
 		local d = ns.db and ns.db.discord
@@ -1642,7 +1670,7 @@ function Link.HeardFrom(sender)
 	local W = ns.Workshop
 	if not W or not W.IsAuthorName(sender) then return end
 	local k = Link.Key()
-	if not k or not k.auto or MyCert(k) or not ns.IsHighCouncillor(ns.me) or #Link.CAKeys() == 0 or not Link.BotReady() then
+	if not k or not k.auto or MyCert(k) or not ns.IsHighCouncillor(ns.me) or not Link.CouncilAuthority() then
 		if ns.Comm.senderHook == Link.HeardFrom then ns.Comm.senderHook = nil end
 		return
 	end
@@ -1668,7 +1696,7 @@ end
 -- council authority's signature, our key's id and public half, this character, tier c, the
 -- expiry) before it is kept; then our addon says it is online. Anything else counts as a refusal.
 function Link.HandleCertificate(dist, sender, text)
-	if dist ~= "WHISPER" or type(text) ~= "string" or not ns.Workshop or not ns.Workshop.IsAuthorName(sender) or not Link.BotReady() then return end
+	if dist ~= "WHISPER" or type(text) ~= "string" or not ns.Workshop or not ns.Workshop.IsAuthorName(sender) or not Link.CouncilAuthority() then return end
 	local k, seed = Link.Key()
 	if not k or not k.auto or not auto.askedAt or MyCert(k) then return end
 	local c = Link.ParseCert(text:match("^DE~(OLK2%.[^~]+)$"))
@@ -1759,7 +1787,7 @@ end
 -- signed in a job, and recorded. Nothing is said to anyone else. The authority's key must be one
 -- this version knows (ns.LINK_CA_KEYS): else it certifies nothing (a line in the log, once).
 function Link.HandleCertRequest(dist, sender, text)
-	if dist ~= "WHISPER" or type(text) ~= "string" or caPub == false or not Link.IsCA() or not Link.BotReady() then return end
+	if dist ~= "WHISPER" or type(text) ~= "string" or caPub == false or not Link.IsCA() or not Link.CouncilAuthority() then return end
 	local seed = CASeed()
 	local name, now = ns.FullName(sender), ns.Now()
 	local pubB64 = text:match("^DC~1~([%w_%-]+)$")
@@ -2161,7 +2189,8 @@ function Link.StatusLine()
 			ownCert and ownCert.cert == cert.text and (ownCert.ok and "checked" or "wrong") or "not checked yet") or ", no certificate")
 		if not cert and key.auto then keyText = keyText .. (auto.askedAt and (auto.refusedAt and ", refused" or ", asked") or ", not asked yet") end
 	end
-	local caText = Link.IsCA() and ("  |  council authority %s, %d certified"):format(caPub == false and "not in LINK_CA_KEYS" or "on", stats.certified) or ""
+	local caText = Link.IsCA() and ("  |  council authority %s, %d certified"):format(caPub == false and "not in LINK_CA_KEYS"
+		or (Link.CouncilAuthority() and "on" or "off"), stats.certified) or ""
 	return ("key %s  |  this character %s  |  confirmers online c=%d p=%d  |  watchers online %d  |  watcher %s, inbox %d  |  confirmed %d, refused %d, bad proofs %d, bad certificates %d, bad links %d  |  jobs %d%s"):format(
 		keyText, state, c, p, #OnlineWatchers(now), Link.Watching() and "on" or "off",
 		inbox, stats.confirmed, stats.refused, stats.badProofs, stats.badCerts, stats.badBundles, Ed.Busy(), caText)
