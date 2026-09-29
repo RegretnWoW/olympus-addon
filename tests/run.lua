@@ -18797,6 +18797,46 @@ do
 		end)
 	end)
 
+	-- Konig's second look at the test above: the server's stamp counted only when the hello named
+	-- a realm. A guildmate the server places on PvP 2 whose hello names none ("H1~1.0.0"), or one we
+	-- can't read, was stored as "old", and "old" peers were electable on every realm: he won our
+	-- realm's election, was never heard on our channel, and our guild was off our realm's census
+	-- for GUARD_AFTER, then again with his next alt. The server's stamp counts, whatever the hello.
+	test("1.0.0 a guildmate the server places on another realm is never our realm's reporter, whether his hello names no realm or one we can't read", function()
+		for _, hello in ipairs({ "H1~1.0.0", "H1~1.0.0~x y~p", "H1~0.7.10" }) do
+			Guarded(function(Open)
+				local cns, Deliver, Report = Open()
+				local C = cns.Comm
+				local ours = { guild = MY_GUILD, total = 1000, online = 300, zones = {} }
+				local alts = { "Aaa", "Aab", "Aac" }
+				local function Tick(seconds)
+					cns.clock = cns.clock + (seconds or 0)
+					for _, n in ipairs(alts) do Deliver("GUILD", n .. "-" .. P2, hello) end
+					C.MaybeBroadcast(ours)
+				end
+				Tick()
+				eq(C.isReporter, true, hello .. ": the server places them on PvP 2")
+				for _ = 1, 6 do
+					Tick(200)
+					eq(C.isReporter, true, hello .. ": we keep reporting our guild on our realm")
+				end
+				eq(#C.Stats().benched, 0, hello .. ": nobody of PvP 2 elected, nobody left out")
+				-- A guildmate of our realm with the same hello (the server sends his name without a
+				-- realm) who sorts first is still elected: his realm is ours.
+				Deliver("GUILD", "Abe", hello)
+				C.MaybeBroadcast(ours)
+				eq(C.isReporter, false); eq(C.reporterName, "Abe", hello .. ": a guildmate of our realm")
+				-- While the channel is shared (our guild's report from a guildmate the server places on
+				-- PvP 2 heard on it), one reporter for all realms, as before: Aaa sorts first.
+				Deliver("GUILD", "Ac-" .. P2, "H1~1.0.0~" .. P2 .. "~p")
+				Report("Ac-" .. P2, { guild = MY_GUILD, total = 1000, online = 300, zones = {}, from = P2 })
+				eq(C.ElectsAcrossRealms(), true)
+				Tick()
+				eq(C.reporterName, "Aaa-" .. P2, hello .. ": the channel shared, every realm's peers count")
+			end)
+		end
+	end)
+
 	test("1.0.0 the hello quiet rule counts our realm: 10 guildmates before us on one realm, 5 on each of two, 3 at least", function()
 		Guarded(function(Open)
 			local cns, Deliver, Report = Open()

@@ -727,9 +727,10 @@ end
 -- channel, and a guild that elected a single reporter was missing from the other realm's
 -- census (older versions left that reporter out after GUARD_AFTER unheard, one name at a time).
 -- So each realm elects its own reporter among the peers whose hello names that realm, and
--- those whose realm we don't know (versions before 0.7.11). While our guild's report, sent by a
--- guildmate of another realm, reaches our channel (the channel is shared:
--- Comm.ElectsAcrossRealms), one reporter for all, as before.
+-- those whose realm we don't know (versions before 0.7.11), unless the server stamps another
+-- realm on their name (see Electable). While our guild's report, sent by a guildmate of another
+-- realm, reaches our channel (the channel is shared: Comm.ElectsAcrossRealms), one reporter for
+-- all, as before.
 ---------------------------------------------------------------------------
 
 -- A realm's code in our report (field 27): three letters or digits.
@@ -848,13 +849,21 @@ function Comm.SharesZone(name)
 end
 
 -- The peers that may be elected (1.0.0): those on our realm and those of a realm we don't know
--- (a hello without one: "old"), or every realm's while the channel is shared (see Realms,
--- above); never one left out by the guard below. The runner-up is drawn from the same pool.
+-- (a hello without one: "old", on no other realm by the server's stamp), or every realm's while
+-- the channel is shared (see Realms, above); never one left out by the guard below. The
+-- runner-up is drawn from the same pool.
+-- The server's stamp on a peer's name counts first, whatever its hello says (1.0.0, Konig's
+-- review of 1.0.0): a guildmate the server places on PvP 2 whose hello named no realm, or one
+-- we can't read ("old"), was elected on ours, never heard on our channel, and our guild was off
+-- our realm's census while the guard left him out (GUARD_AFTER), then his next alt. A peer of
+-- another realm by the server's stamp is left out here unless the channel is shared; "old"
+-- stays what the runner-up's pick reads it as (a version that sends no runner-up report).
 local function Electable(now)
 	local all, pool = Comm.ElectsAcrossRealms(now), {}
 	for name, t in pairs(peers) do
-		local realm = peerRealm[name]
-		if (benched[name] or 0) <= now and (all or realm == nil or realm == "old" or realm == ns.realm) then pool[name] = t end
+		local realm, stamped = peerRealm[name], ns.RealmOf(name)
+		local ours = (realm == nil or realm == "old" or realm == ns.realm) and (stamped == nil or stamped == ns.realm)
+		if (benched[name] or 0) <= now and (all or ours) then pool[name] = t end
 	end
 	return pool
 end
