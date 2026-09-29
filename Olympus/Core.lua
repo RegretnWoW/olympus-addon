@@ -692,6 +692,88 @@ function ns.CouncilTitle(name)
 	return nil
 end
 
+-- The King's Steward (1.0.0): a character the author marks in the signed titles list, who names
+-- Hands of his own beside the King's, sets up for the King what only the King could set up before
+-- (the treasury's keepers and switches) and sends the Crown's decrees on every client (King.lua,
+-- Treasury.lua, Decree.lua).
+-- The titles list names him in an entry of its own among the departments, one per faction:
+--   ^steward^<Alliance|Horde>^<First Surname-Realm>,...
+-- Three "^": a client of 0.9.9 reads a department as two (<name>^<icon>^<members>), leaves this
+-- entry out unread, and still takes, shows and passes on the rest (the signature covers every
+-- byte, the entry too). A Steward acts for the King of his own faction, where a King is named
+-- (ns.KingCharacter): the Alliance's, and on the Horde only when the list names one there.
+-- Nobody else is ever a Steward: no name is written in this code, no census vote counts, and a
+-- newer signed list without him ends it at once.
+ns.STEWARDS_MAX = 3
+local STEWARD_FACTIONS = { Alliance = true, Horde = true }
+
+-- A Steward's name as the entry gives it and the addon keeps it: "First Surname-Realm" (that
+-- realm's group), or "First Surname" (any realm of the list's group); nil for anything else.
+local function StewardName(s)
+	s = tostring(s or ""):gsub("^%s+", ""):gsub("%s+$", "")
+	local short, realm = s:match("^([^%-]+)%-([^%-]+)$")
+	short = short or s
+	if #short > 48 or not short:match("^[%a\128-\255]+ ?[%a\128-\255]*$") then return nil end
+	if realm and (#realm > 40 or not realm:match("^[%w\128-\255]+$")) then return nil end
+	return realm and (short .. "-" .. realm) or short
+end
+
+-- The Stewards a titles list names (its departments' field, as signed): { Alliance = { name,
+-- ... }, Horde = { ... } }, a faction left out when it names none (ns.STEWARDS_MAX each).
+function ns.ReadStewards(text)
+	local out = {}
+	for entry in tostring(text or ""):gmatch("[^;]+") do
+		local faction, list = entry:match("^%^steward%^(%a+)%^([^%^]*)$")
+		if faction and STEWARD_FACTIONS[faction] then
+			local names = out[faction] or {}
+			for n in list:gmatch("[^,]+") do
+				local name = StewardName(n)
+				if name and #names < ns.STEWARDS_MAX then names[#names + 1] = name end
+			end
+			out[faction] = names
+		end
+	end
+	return out
+end
+
+-- The Stewards of the titles list we hold, for our faction, where a King is named: { name, ... }.
+-- Read when the list was taken; a list taken by a version before 1.0.0 (which left the entry
+-- out) is read again from its signed text, which this client checked then.
+function ns.Stewards()
+	local t = ns.CouncilTitles()
+	if not t or not ns.KingCharacter() then return {} end
+	if type(t.stewards) ~= "table" then
+		t.stewards = ns.ReadStewards(type(t.blob) == "string" and t.blob:match("^HT1~%d+~[^~]*~[01]~([^~]*)~%x+$") or "")
+	end
+	local list = t.stewards[ns.faction or "Alliance"]
+	return type(list) == "table" and list or {}
+end
+
+-- Is this character (a sender's name, which the server sets) a Steward of our King?
+function ns.IsSteward(name)
+	if type(name) ~= "string" or name == "" then return false end
+	local t = ns.CouncilTitles()
+	if not t then return false end
+	local full = ns.FullName(name)
+	if not OfListGroup(full, t.realm) then return false end
+	local short = ns.ShortName(full):lower()
+	for _, s in ipairs(ns.Stewards()) do
+		if type(s) == "string" and ns.ShortName(s):lower() == short then
+			local realm = ns.RealmOf(s)
+			if realm == nil or OfGroup(full, realm) then return true end
+		end
+	end
+	return false
+end
+
+-- The King's guild as a Steward's decree names it: ours when we are in it, else its own name.
+function ns.KingGuildName()
+	local mine = GetGuildInfo and GetGuildInfo("player")
+	if ns.IsKingGuild(mine) then return mine end
+	local want = ns.KING_GUILD[ns.faction or "Alliance"] or ""
+	return want:sub(1, 1):upper() .. want:sub(2)
+end
+
 -- The King's own screen (0.9.9, the author's, for Asmon's stream): the King's client, or the
 -- author's "Asmon's view" (King.Preview) so he can try it. Nobody else's.
 function ns.KingsScreen()
@@ -769,8 +851,9 @@ end
 -- from it, never from the census). Anywhere else the census alone could name them, and three
 -- outsiders' reports were enough to add one of their own: there they are Captains like any
 -- guild's officers, and the Crown of the King's guild is the King himself (his pinned name) and
--- the Hands his list names (King.IsHandName: his word, never a vote), who speak for his guild
--- with his Crown there (Decree.lua, Channels.VerifiedLevel) besides his tools (King.Authorized).
+-- the Hands his list or a Steward's own names (King.IsHandName: their word, never a vote), who
+-- speak for his guild with his Crown there (Decree.lua, Channels.VerifiedLevel) besides his
+-- tools (King.Authorized).
 function ns.IsCrownRank(guild, rankIndex)
 	if not guild or not rankIndex then return false end
 	if rankIndex == 0 then return true end
@@ -1237,7 +1320,7 @@ SlashCmdList.OLYMPUS = function(input)
 			ns.UI.SelectTab("decrees")
 		elseif cmd == "arms" or cmd == "muster" then
 			local kind = cmd == "arms" and "ARMS" or "MUSTER"
-			if rest == "test" or not ns.Roster.IsOfficer() then ns.Decree.Preview(kind) else ns.Decree.Send(kind, rest) end
+			if rest == "test" or not ns.Decree.CanSend(kind) then ns.Decree.Preview(kind) else ns.Decree.Send(kind, rest) end
 		elseif cmd == "mates" then
 			ns.Positions.SetEnabled(not ns.db.showMates)
 		elseif cmd == "share" then

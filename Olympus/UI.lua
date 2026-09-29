@@ -146,13 +146,17 @@ local RECRUIT_BUTTONS = {
 
 -- Small extra buttons inside the detail box (only where needed).
 local function KingOnly() return ns.King.IsKing() or ns.King.Preview() end
+-- The King and his Steward (1.0.0): the Hands (each his own list) and the treasury's switches,
+-- which the Steward sets in the King's name; never the King's own buttons (his crown on the map,
+-- the court, writs).
+local function KingOrSteward() return ns.King.SetsLists() or ns.King.Preview() end
 
 -- One of the King's treasury switches: its label says whether the army sees that part, its
 -- tooltip who sees it now (hidden: only he and the Treasurer) and what a click does.
 local function TreasuryFlag(what)
 	local key = what:upper()
 	local function shown() return ns.Treasury.Shows(what) end
-	return { "TREASURY_FLAG_" .. key, function() ns.Treasury.SetFlag(what, not shown()) end, refresh = true, shown = KingOnly,
+	return { "TREASURY_FLAG_" .. key, function() ns.Treasury.SetFlag(what, not shown()) end, refresh = true, shown = KingOrSteward,
 		label = function() return L["TREASURY_FLAG_" .. key .. (shown() and "_SHOWN" or "_HIDDEN")] end,
 		tooltip = function(tt)
 			tt:AddLine(L["TREASURY_FLAG_" .. key .. (shown() and "_SHOWN" or "_HIDDEN")], 1, 0.82, 0)
@@ -162,8 +166,8 @@ local function TreasuryFlag(what)
 end
 local DETAIL_BUTTONS = {
 	throne = {
-		-- His Hands: the page to name them.
-		{ "HANDS_BTN", function() ns.King.Show("hands") end, refresh = true, shown = KingOnly },
+		-- His Hands: the page to name them (his; a Steward's own, 1.0.0).
+		{ "HANDS_BTN", function() ns.King.Show("hands") end, refresh = true, shown = KingOrSteward },
 		-- His own button: the crown the army sees, what it does and whether it is on now.
 		{ "THRONE_LOCATION", function() ns.King.ToggleLocation() end, refresh = true, shown = KingOnly,
 			label = function()

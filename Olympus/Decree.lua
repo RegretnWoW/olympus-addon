@@ -4,9 +4,10 @@ local L = ns.L
 -- Royal decrees sent to every Olympus guild over OlympusNet:
 --   ARMS   "Call to Arms!"  (Horde attacking here) - raid warning + sound, marker for 5 min
 --   MUSTER "Muster here"    (gather point)          - softer alert, marker for 30 min
--- Only Captains (rank <= ns.CAPTAIN_RANK) can send. Receivers rate-limit per sender and, for
--- senders only the census vouches for, the whole army (the flood guard). A decree's words are
--- its sender's own text: sent with the logged API (1.0.0), like a chat line.
+-- Only Captains (rank <= ns.CAPTAIN_RANK) can send, and the King's Steward (1.0.0). Receivers
+-- rate-limit per sender and, for senders only the census vouches for, the whole army (the
+-- flood guard). A decree's words are its sender's own text: sent with the logged API (1.0.0),
+-- like a chat line.
 
 local Decree = {}
 ns.Decree = Decree
@@ -107,21 +108,28 @@ function Decree.RefreshPins()
 	ns.SafeCall("decree pins", RefreshPinsNow)
 end
 
+-- The King's Steward (1.0.0, King.IsSteward: the signed titles list marks him) sends the Crown's
+-- decrees for the King's guild, whatever his own rank or guild; every client takes them by his
+-- name, as the King's (below).
+local function Steward() return ns.King ~= nil and ns.King.IsSteward ~= nil and ns.King.IsSteward() end
+
 function Decree.CanSend(kind)
+	if Steward() then return true end
 	if CROWN_ONLY[kind] then return ns.IsCrown() end
 	return ns.Roster.IsOfficer()
 end
 
 function Decree.Send(kind, text)
-	if not ns.IsMember() then
+	local steward = Steward()
+	if not steward and not ns.IsMember() then
 		ns.Print(L.MEMBERS_ONLY)
 		return
 	end
-	if CROWN_ONLY[kind] and not ns.IsCrown() then
+	if not steward and CROWN_ONLY[kind] and not ns.IsCrown() then
 		ns.Print(L.CROWN_ONLY)
 		return
 	end
-	if not ns.Roster.IsOfficer() then
+	if not steward and not ns.Roster.IsOfficer() then
 		ns.Print(L.DECREE_OFFICERS_ONLY)
 		return
 	end
@@ -136,10 +144,11 @@ function Decree.Send(kind, text)
 		return
 	end
 	lastSent = now
-	local guild = GetGuildInfo("player") or ""
+	local guild = steward and ns.KingGuildName() or GetGuildInfo("player") or ""
+	local rank = steward and 0 or ns.Roster.MyRank()
 	-- Logged (1.0.0): the server keeps its words, so abuse can be reported (Comm.Send).
-	ns.Comm.Send("CHANNEL", ns.Codec.EncodeDecree(kind, mapID, x, y, guild, ns.Roster.MyRank(), text), nil, nil, true)
-	Show({ kind = kind, mapID = mapID, x = x, y = y, guild = guild, rank = ns.Roster.MyRank(), text = text or "", sender = ns.DisplayName(ns.me), t = now })
+	ns.Comm.Send("CHANNEL", ns.Codec.EncodeDecree(kind, mapID, x, y, guild, rank, text), nil, nil, true)
+	Show({ kind = kind, mapID = mapID, x = x, y = y, guild = guild, rank = rank, text = text or "", sender = ns.DisplayName(ns.me), t = now })
 end
 
 -- Local-only preview so anyone can see what a decree looks like (nothing is sent).
@@ -179,15 +188,17 @@ ns.Comm.Handle("D1", function(dist, sender, text)
 	local d = ns.Codec.DecodeDecree(text)
 	if not d or not ns.IsFederation(d.guild) then return end
 	-- The King by his pinned name (the server stamps it), never by a vote: his decree needs no
-	-- census. So do his Hands' for his guild (the list he last sent, King.IsHandName), on every
+	-- census. So do his Hands' for his guild (his list or a Steward's, King.IsHandName), on every
 	-- client outside it: there they are of his Crown on his word (1.0.0); on its own members'
-	-- clients its roster says who speaks for it. Everyone else: the rank we can verify, never
-	-- the rank written in the message.
+	-- clients its roster says who speaks for it. His Steward's (1.0.0: the signed titles list
+	-- names him, King.IsStewardName) on every client, as the King's. Everyone else: the rank we
+	-- can verify, never the rank written in the message.
 	local mine = GetGuildInfo("player")
 	local kings = ns.IsKingGuild(d.guild)
 	local king = kings and ns.IsKingCharacter(sender)
-	local hand = kings and not king and not ns.IsKingGuild(mine) and ns.King ~= nil and ns.King.IsHandName(sender)
-	local rank = (king or hand) and 0 or ns.Data.KnownRank(sender, d.guild)
+	local steward = kings and not king and ns.King ~= nil and ns.King.IsStewardName(sender)
+	local hand = kings and not king and not steward and not ns.IsKingGuild(mine) and ns.King ~= nil and ns.King.IsHandName(sender)
+	local rank = (king or steward or hand) and 0 or ns.Data.KnownRank(sender, d.guild)
 	if not rank then
 		ns.Log("decree from %s ignored: rank in %s not verified", sender, d.guild)
 		return
@@ -198,10 +209,10 @@ ns.Comm.Handle("D1", function(dist, sender, text)
 	elseif rank > ns.CAPTAIN_RANK then
 		return
 	end
-	-- The King, his Hands and our own guild's officers (our roster: the server's word) never wait
-	-- behind the flood guard, which census ranks (anyone's votes) can fill. Anyone else speaks for
-	-- one guild only, as in the chats (Data.ClaimGuild).
-	local sure = king or hand or (mine ~= nil and d.guild == mine and ns.Roster.RankOf(sender) ~= nil)
+	-- The King, his Steward, his Hands and our own guild's officers (our roster: the server's
+	-- word) never wait behind the flood guard, which census ranks (anyone's votes) can fill.
+	-- Anyone else speaks for one guild only, as in the chats (Data.ClaimGuild).
+	local sure = king or steward or hand or (mine ~= nil and d.guild == mine and ns.Roster.RankOf(sender) ~= nil)
 	if not sure and not ns.Data.ClaimGuild(sender, d.guild) then
 		ns.Log("decree from %s ignored: speaks for another guild than %s", sender, d.guild)
 		return

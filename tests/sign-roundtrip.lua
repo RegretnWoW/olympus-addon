@@ -2,7 +2,9 @@
 -- this): each loads as the addon loads it, its signature holds with that key, each is newer
 -- than the one before, and any change to one is refused. The councils (0.9.9: names, and the
 -- departments and titles) are also taken by the addon's own code, as a client takes them.
---   luajit tests/sign-roundtrip.lua <repo root> <key file> <a time ahead of the clock> <list.lua> x3 <council.lua> x2
+-- Councils 3 and 4 (1.0.0) are council 1 with the King's Steward marked ("steward"), then with
+-- him removed ("steward --remove"): the addon's own code makes him the Steward, then no longer.
+--   luajit tests/sign-roundtrip.lua <repo root> <key file> <a time ahead of the clock> <list.lua> x3 <council.lua> x4
 local root, keyPath, future = arg[1], arg[2], tonumber(arg[3])
 
 -- The addon's files that read the lists, with the few game functions they touch while loading
@@ -44,7 +46,7 @@ for i = 4, #arg do
 		councils[#councils + 1] = { names = lns.COUNCIL_SIGNED, titles = lns.COUNCIL_TITLES }
 	end
 end
-assert(#lists == 3 and #councils == 2, "three lists and two councils")
+assert(#lists == 3 and #councils == 4, "three lists and four councils")
 local function Parts(blob)
 	local text, at, realm, names, sig = blob:match("^(HS1~(%d+)~([^~]*)~([^~]*))~(%x+)$")
 	return text, tonumber(at), realm, names, sig
@@ -141,12 +143,37 @@ Sign.WithKey(n, mu, k, function()
 		"8 departments, names of 40 bytes, an icon's highest file number")
 	loose, depts = W.CouncilTree()
 	check(#loose == 2 and #depts == W.DEPTS_MAX, "all of it in the census")
+
+	-- The King's Steward (1.0.0): council 1 again with him marked, then without him, each newer.
+	ns.realm, ns.me, ns.rdb, ns.faction = "ClassicBetaPvP", "Tester-ClassicBetaPvP", {}, "Alliance"
+	local c3, c4 = councils[3], councils[4]
+	local _, at3t = TitleParts(c3.titles)
+	local _, at4t = TitleParts(c4.titles)
+	check(at4t > at3t, "council 4 newer than council 3")
+	check(c3.titles:find(";^steward^Alliance^Test Steward-ClassicBetaPvP2~", 1, true) ~= nil, "the Steward's entry, trimmed, last")
+	-- Changed (another name for the Steward): refused by its signature (a client holding none).
+	check(not W.TakeTitles((c3.titles:gsub("Test Steward", "Fake Steward", 1))), "a changed Steward is refused")
+	check(not ns.IsSteward("Fake Steward-ClassicBetaPvP2") and ns.rdb.councilTitles == nil, "nobody is the Steward")
+	check(W.TakeCouncil(c3.names) and W.TakeTitles(c3.titles, "Relay3-ClassicBetaPvP"), "council 3: taken")
+	check(ns.IsSteward("Test Steward-ClassicBetaPvP2"), "the Steward, on his realm")
+	check(ns.IsSteward("Test Steward-ClassicBetaPvP") and ns.IsSteward("test steward"), "and on the other realm of the group, whatever the case")
+	check(not ns.IsSteward("Test Steward-Elsewhere"), "a namesake on another realm group is nobody")
+	check(not ns.IsSteward("Test Councillor-ClassicBetaPvP"), "a councillor is not the Steward")
+	ns.faction = "Horde"
+	check(not ns.IsSteward("Test Steward-ClassicBetaPvP2"), "the Horde's King: none, the list names none for him")
+	ns.faction = "Alliance"
+	loose, depts = W.CouncilTree()
+	check(#loose == 1 and #depts == 2, "the census shows the same departments, no entry for the Steward")
+	check(W.TakeTitles(c4.titles, "Relay4-ClassicBetaPvP"), "council 4: taken")
+	check(not ns.IsSteward("Test Steward-ClassicBetaPvP2"), "removed in a newer list: no longer the Steward")
 end)
 -- Back to the author's key: the test key's lists are nobody's.
 local text1, _, _, _, sig1 = Parts(lists[1])
 check(not Sign.Verify(text1, sig1), "the author's key refuses a list of the test key")
 local text, _, _, _, _, sig = TitleParts(councils[1].titles)
 check(not Sign.Verify(text, sig), "the author's key refuses a titles list of the test key")
+text, _, _, _, _, sig = TitleParts(councils[3].titles)
+check(not Sign.Verify(text, sig), "the author's key refuses a Steward marked with the test key")
 
 if failed > 0 then
 	print(("%d signing round trip check(s) failed"):format(failed))
