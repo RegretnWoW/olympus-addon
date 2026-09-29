@@ -1137,6 +1137,18 @@ local function FlagsWord()
 	return type(f) == "table" and tonumber(f.at) and (FlagDigits(f) .. "@" .. math.floor(f.at)) or "-"
 end
 
+-- A date as a book sends it (Konig's review of 1.0.0). The lines are dated by this PC's clock
+-- (ns.Now), and every client refuses a book with a date before FIRST_DAY or more than
+-- DATE_SLACK ahead of the server's clock (ReadBook): so a date past the server's clock goes out
+-- as the server's now, and one before FIRST_DAY as FIRST_DAY. A keeper whose PC clock is wrong,
+-- or was when a line was written, still has his book taken; his own screen keeps his dates. An
+-- item's 0 (`unknown`: its donor's line gone) stays 0.
+local function SentDate(t, unknown)
+	t = math.floor(tonumber(t) or 0)
+	if unknown and t == 0 then return 0 end
+	return math.max(Treasury.FIRST_DAY, math.min(t, math.floor(Clock())))
+end
+
 -- This keeper's book as it goes out (TB), each list cut until it fits Treasury.ROOM.
 function Treasury.Message(b)
 	b = b or BookOf(ns.me, true)
@@ -1158,7 +1170,7 @@ function Treasury.Message(b)
 			local e = b.lines[i]
 			-- Counted lines and transfers; what he said was his (a sale, his own) stays home.
 			if not e.excluded then
-				local line = ("%s:%d:%s:%s:%d"):format(LineCode(e), U(e.money), Clean(e.name), e.how == "mail" and "m" or "t", math.floor(tonumber(e.t) or 0))
+				local line = ("%s:%d:%s:%s:%d"):format(LineCode(e), U(e.money), Clean(e.name), e.how == "mail" and "m" or "t", SentDate(e.t))
 				if e.item then line = line .. (":%d:%d"):format(e.item, math.min(tonumber(e.count) or 1, Treasury.MAX_COUNT)) end
 				lines[#lines + 1] = line
 			end
@@ -1166,7 +1178,7 @@ function Treasury.Message(b)
 		for i = 1, math.min(caps.items, #t.items) do
 			local it = t.items[i]
 			local last = it.donors[1]
-			items[i] = ("%d:%d:%d:%s"):format(it.id, math.min(it.n, Treasury.MAX_COUNT), math.floor(tonumber(it.t) or 0), Clean(last and last.name or ""))
+			items[i] = ("%d:%d:%d:%s"):format(it.id, math.min(it.n, Treasury.MAX_COUNT), SentDate(it.t, true), Clean(last and last.name or ""))
 		end
 		return ("TB~%s~%s~%d~%d~%d~%d~%d~%d~%s~%s~%s~%s~%s~%s~%d:%d"):format(Treasury.EPOCH, Clean(GetGuildInfo("player")), U(Treasury.Opening(b)),
 			S(Treasury.Balance(b)), U(t.allIn), U(t.allOut), U(t.weekIn), math.min(#t.givers, 9999), table.concat(week, ","), flags, keepers,
@@ -1242,7 +1254,7 @@ end
 -- so a mail character in another guild or none never sends its own. That character's own yes
 -- counts: kept private, its book is withdrawn instead (TX with its name), repeated as often,
 -- whether the Treasurer shares his own book or not (1.0.0). The time is when that book last
--- changed: a copy as new (its own TB, heard when it came) stays.
+-- changed (as a book sends a date: SentDate): a copy as new (its own TB, heard when it came) stays.
 function Treasury.Relay(force)
 	if not RealKeeper() or not ns.IsTreasurer(ns.me, GetGuildInfo("player")) then return end
 	local now = ns.Now()
@@ -1254,7 +1266,7 @@ function Treasury.Relay(force)
 			and ns.IsTreasurerMail(b.name) and Treasury.IsOwnCharacter(b.name) then
 			-- Its book with his yes too (his client sends it); its no with or without his.
 			if shares[key] == true and CanSend() then
-				Send(("TR~%s~%d~"):format(Clean(b.name), BookTime(b)) .. Treasury.Message(b))
+				Send(("TR~%s~%d~"):format(Clean(b.name), SentDate(BookTime(b))) .. Treasury.Message(b))
 			elseif shares[key] == false then
 				ns.Comm.Send("CHANNEL", ("TX~%s~%s"):format(Clean(GetGuildInfo("player")), Clean(b.name)), "treasuryx " .. key)
 			end
@@ -1279,8 +1291,8 @@ end
 
 -- A book (TB) as it came, of this era, as of `t`, checked (Konig's review of 1.0.0: it was
 -- taken as it came, its numbers clamped and its lists cut). An honest client never sends one
--- that fails, so one that fails is refused whole (nil and why; our copy of that keeper's book
--- stays):
+-- that fails (its dates too, whatever his PC's clock says: SentDate), so one that fails is
+-- refused whole (nil and why; our copy of that keeper's book stays):
 --   its shape: 16 fields, digits where the numbers go, each entry of its list's shape;
 --   its sizes: Treasury.ROOM in all, each list no longer than a book sends, amounts within
 --     MAX_COPPER and items within MAX_COUNT;

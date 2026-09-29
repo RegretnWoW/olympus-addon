@@ -18456,6 +18456,119 @@ test("1.0.0 Konig's review: a keeper's book is checked when it comes (shape, siz
 	end)
 end)
 
+-- Konig's review of 1.0.0: a keeper's lines are dated by his PC's clock, and every client refuses
+-- a book with a date more than a day ahead of the server's clock, or before 2026. An honest keeper
+-- whose PC clock ran fast, or was set back, had his whole book refused by every client, silently,
+-- and it stayed refused after he set his clock right, until 15 newer lines pushed the bad-dated one
+-- out of what a book sends; the Treasurer's relay of his mail character's book too. His addon now
+-- sends its dates within the server's clock (and none before 2026).
+test("1.0.0 Konig's review: a keeper whose PC clock is wrong still has his book taken (its dates go out within the server's clock)", function()
+	WithThrone(function(w, K)
+		local T = ns.Treasury
+		local savedST, savedLog = GetServerTime, ns.Log
+		local logs = {}
+		local ok, err = pcall(function()
+			ns.Log = function(fmt, ...) logs[#logs + 1] = tostring(fmt):format(...) end
+			-- The server's clock is right; the keepers' PC clocks (ns.Now, time()) are not.
+			local real = w.clock
+			GetServerTime = function() return real end
+			local function Fields(msg)
+				local f = {}
+				for field in (msg .. "~"):gmatch("([^~]*)~") do f[#f + 1] = field end
+				return f
+			end
+			local function Dates(msg)
+				local f, out = Fields(msg), {}
+				for when in f[14]:gmatch(":[mt]:(%d+)") do out[#out + 1] = tonumber(when) end
+				for item in f[15]:gmatch("[^,]+") do out[#out + 1] = tonumber(item:match("^%d+:%d+:(%d+):")) end
+				return out
+			end
+			-- A soldier whose clock is right hears the Treasurer's book.
+			local function Taken(msg)
+				local was = w.clock
+				w.clock = real
+				AsSoldier()
+				ns.rdb.treasuryReports = nil
+				local before = #logs
+				T.HandleReport("CHANNEL", "Pyralis Ashandar-Realm", msg)
+				w.clock = was
+				local r = ns.rdb.treasuryReports and ns.rdb.treasuryReports["Pyralis Ashandar-Realm"] or nil
+				return r, logs[before + 1]
+			end
+			-- His PC clock runs 2 days fast: a gift and an item recorded then.
+			AsTreasurer()
+			w.clock = real + 2 * 86400
+			T.Record("Giver One", 30000, "trade", nil, { quiet = true })
+			T.Record("Giver One", 0, "mail", nil, { quiet = true, item = 2589, count = 20 })
+			local msg = T.Message()
+			local dates = Dates(msg)
+			eq(#dates, 3, "two lines and an item")
+			for _, d in ipairs(dates) do eq(d, real, "sent as the server's now, no later") end
+			local r, why = Taken(msg)
+			assert(r, "a clock 2 days fast: his book taken (" .. tostring(why) .. ")")
+			eq(r.balance, 30000); eq(#r.book, 2); eq(#r.items, 1)
+			-- He sets his clock right: his book is taken at once, the fast-dated lines still in it.
+			w.clock = real + 60
+			AsTreasurer()
+			T.Record("Giver Two", 100, "mail", nil, { quiet = true })
+			r, why = Taken(T.Message())
+			assert(r, "his clock set right: taken at once (" .. tostring(why) .. ")")
+			eq(#r.book, 3); eq(r.balance, 30100)
+			-- His PC clock set back to 2025: his lines go out dated 2026-01-01, and are taken.
+			T.Reset()
+			AsTreasurer()
+			w.clock = 1748736000 -- 2025-06-01
+			T.Record("Giver One", 30000, "trade", nil, { quiet = true })
+			T.Record("Giver One", 0, "mail", nil, { quiet = true, item = 2589, count = 20 })
+			msg = T.Message()
+			dates = Dates(msg)
+			eq(#dates, 3, "two lines and an item")
+			for _, d in ipairs(dates) do eq(d, T.FIRST_DAY, "sent as 2026-01-01, no earlier") end
+			r, why = Taken(msg)
+			assert(r, "a clock in 2025: his book taken (" .. tostring(why) .. ")")
+			eq(r.balance, 30000); eq(#r.book, 2); eq(#r.items, 1)
+			-- An item whose donor's line is gone keeps its date of 0 (nothing known).
+			T.Reset()
+			AsTreasurer()
+			w.clock = real
+			T.Record("Giver One", 0, "mail", nil, { quiet = true, item = 2589, count = 20 })
+			table.remove(T.Book().lines, 1)
+			msg = T.Message()
+			eq(Fields(msg)[15]:match("^%d+:%d+:(%d+):"), "0", "an item of no date")
+			r = Taken(msg)
+			assert(r, "an item of no date: taken"); eq(r.items[1].t, 0)
+			-- The Treasurer's client passes on his mail character's book with his clock 2 days fast:
+			-- its date and its lines' go out within the server's clock, and it is taken.
+			T.Reset()
+			ns.db.myCharacters = { [TREASURER_KEY] = true, [ANDARAI_KEY] = true }
+			AsTreasurer()
+			ns.db.keeperShares = { [TREASURER_KEY] = true, [ANDARAI_KEY] = true }
+			w.clock = real + 2 * 86400
+			local mailBook = T.BookOf(ANDARAI, true)
+			mailBook.opening = 0
+			T.Record("Mail Giver", 900, "mail", nil, { quiet = true, book = mailBook })
+			w.sent = {}
+			T.Relay(true)
+			local tr
+			for _, s in ipairs(w.sent) do if s.msg:find("^TR~") then tr = s.msg end end
+			assert(tr, "relayed")
+			eq(tonumber(tr:match("^TR~[^~]+~(%d+)~")), real, "its date: the server's now, no later")
+			ns.db.myCharacters = nil
+			w.clock = real
+			AsSoldier()
+			ns.rdb.treasuryReports = nil
+			local before = #logs
+			T.HandleRelay("CHANNEL", "Pyralis Ashandar-Realm", tr)
+			r = ns.rdb.treasuryReports and ns.rdb.treasuryReports[ANDARAI] or nil
+			assert(r, "the relay is taken (" .. tostring(logs[before + 1]) .. ")")
+			eq(r.balance, 900)
+		end)
+		GetServerTime, ns.Log = savedST, savedLog
+		ns.db.myCharacters = nil
+		if not ok then error(err, 0) end
+	end)
+end)
+
 -- Konig's review of 1.0.0: a keeper's no (TX) went out once, when he said it. A client offline
 -- then kept his book (books never run out while he is a keeper) and showed it for good.
 test("1.0.0 Konig's review: a keeper's no is kept and repeated like his book, so a client offline when he said it drops his book too", function()

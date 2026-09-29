@@ -345,7 +345,8 @@ shows the army something of it.
   channel. Every client checks it comes from a keeper himself, and that it holds together (its
   shape and sizes, a balance its totals add up to, no list longer than a book sends, no date
   before 2026 or more than a day ahead of the server's clock): one that doesn't is refused whole,
-  and the copy it had of that keeper's book stays.
+  and the copy it had of that keeper's book stays. A keeper's own addon never sends such a date,
+  even when his computer's clock is wrong: it sends his dates within the server's clock.
 - **The King chooses what the army sees** (his Steward too, in his name), with three buttons:
   the balance, the ranking, the book. Until he does, only the keepers, the King and his Steward
   see them (a keeper's tab says so, and so does the question each keeper answers before sharing).
