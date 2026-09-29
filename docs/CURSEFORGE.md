@@ -381,6 +381,51 @@ shows the army something of it.
 - The round **Olympus** button in the bottom left corner of the map switches markers
   (army per zone, decrees) on and off.
 
+### Olympus Link: your Discord role (1.0.0, optional)
+Prove to the Olympus bot on Discord that a character is yours, and the bot gives you your role.
+It is the one part of Olympus that goes outside the game, and only if you choose to link a
+character (or to confirm other players' links, below): no password, no Battle.net login, and
+nothing is sent before you say yes.
+
+Not open yet: the addon carries it, but `/oly discord` says it is not open until the Olympus bot
+is ready and its key is in the addon. Until then no addon makes, keeps, announces or uses a
+confirmer key.
+
+1. **Get a code** from the Olympus bot on Discord (its `/verify` command, in the Olympus server:
+   only you see the reply). It is good for 24 hours. Keep it to yourself, and don't show it (or
+   the Olympus Link window) on a stream.
+2. **Type `/oly discord <code>`** in the game's chat. The addon checks the bot's signature on the
+   code, then asks whether to link this character to the Discord account the code names (the
+   bot's word: nobody can change it). **Cancel** sends nothing.
+3. **Players confirm in game**, by addon whisper, that this character asked: a High Councillor
+   online, or, when none is, verified players drawn for your code (three of them must confirm).
+   Each signs with a key of its own, for its character, which the bot certified. Every confirmer,
+   High Councillors included, gets a key from the bot's keeper, made on a computer, and types it
+   in the game with `/oly discord key <id> <key>`, then its certificate with
+   `/oly discord cert <certificate>`; no addon makes a key of its own (the author's council
+   authority, which could certify keys made in game, is off). Once the bot is ready, a
+   confirmer's addon says so on the Olympus channel every 5 minutes and signs other players'
+   requests by itself (`/oly discord key off` stops it).
+4. **The proof reaches the bot.** The **Olympus Link** window shows a QR code and the same link
+   in a copy box. Open the Olympus Link page, https://dnl-gentile.github.io/olympus-addon/ (a
+   static page on the project's GitHub Pages): point your phone's camera at the code, share the
+   game's window with the page, or paste the link, then sign in with Discord there (Discord's own
+   sign-in page, which tells the bot who you are on Discord) and the page sends the proof to the
+   bot. Or, later, the addon hands it to a High Councillor's watcher the next time you are both
+   online, and the bot's keeper uploads it.
+
+The page reads the code in your browser: the camera and the shared window never leave it, and
+the proof rides after the `#` of the link, which a browser never sends to any server. The page
+loads its fonts from Google Fonts. The bot keeps which character (name, realm, guild and
+faction) is linked to which Discord account, and a record of each proof it received (for 90
+days). A linked character never moves to another Discord account by a new link: the bot refuses
+it. **Delete my link**, at the foot of the Olympus Link page (signed in with Discord), takes the
+role away and deletes what the bot keeps about your account, except how many codes and links you
+used today, counted for a day at most. The Olympus bot is Fernmelder's; how it checks a proof
+is on [GitHub](https://github.com/dnl-gentile/olympus-addon) (the README and `web/FERN.md`).
+`/oly discord show` opens the window again, `/oly discord status` lists every character of your
+account, `/oly discord forget` drops this character's request and proof.
+
 ### Everywhere
 - **Copy**: every tab produces a ready-to-paste text for Discord.
 - **Search**: a box on top of the Census (a guild or its Lord), the Realm (guilds, Lords, Captains,
@@ -456,7 +501,12 @@ find or join it. Share the same secret with the officers of the other Olympus gu
 3. The reporter sends a compact summary of its guild about every 3 minutes on the hidden Olympus channel.
 4. Every client adds up all the summaries: that is the census.
 
-Nothing leaves the game. There is no server, no website, no account and no tracking.
+The addon itself talks only in game, through the game's own addon messages: it has no server of
+its own, and nothing it sends leaves the game. The one exception is Olympus Link (above), and
+only when you choose to link a character: it uses a website (the Olympus Link page, on the
+project's GitHub Pages) and the Olympus bot on Discord. A confirmer (a key from the bot's keeper)
+signs other players' requests by itself once the bot is ready, and those signatures reach the bot
+in their proofs.
 
 **Realms vs layers.** A realm (ClassicBetaPvP, ClassicBetaPvP2...) is a separate world
 with its own guilds; layers are copies of a zone *inside* one realm. Guilds on the same
@@ -470,12 +520,21 @@ window shows which realms you are counting.
 
 ## Privacy
 
-The addon talks only through the game's own addon messages: no server, no website, no
-tracking. Your name is on every message (the game adds it). What goes where:
+The addon itself talks only through the game's own addon messages: it has no server of its own,
+and what it sends stays in the game. The one exception is Olympus Link, and only when you choose
+to link a character, or to confirm other players' links: a link's proof goes to the Olympus bot
+on Discord, through the Olympus Link page on GitHub Pages (where you sign in with Discord) or a
+High Councillor's watcher. A confirmer, a High Councillor too, is someone who typed in a key the
+bot's keeper made them (no addon makes or announces a key by itself, and the author's council
+authority is off): once the bot is ready, their addon says so on the Olympus channel every 5
+minutes and signs other players' requests by itself, and their character's name and signature
+reach the bot in those players' proofs, until `/oly discord key off`. Your name is on every
+message (the game adds it). What goes where:
 
 | What | Who receives it | When |
 |---|---|---|
-| Your guild's census: size, online count, classes, levels, rank names, the leader and officers (name, online, days away, class, level), the top levels, addon versions | everyone on the Olympus channel | from one elected member per guild (and a runner-up), every few minutes |
+| Your guild's census: size, online count, classes, levels, rank names, the leader and officers (name, online, days away, class, level), addon versions | everyone on the Olympus channel | from one elected member per guild (and a runner-up), every few minutes |
+| The census names people: your guild's leader and officers (above) and its five highest-level members (name, level and class), online or not, with the addon or not; the Realm's level race shows them | everyone on the Olympus channel | in every census report of your guild, from the member it elects: nobody named is asked |
 | Zones in that census: members per zone (numbers only), a leader's or officer's zone | everyone on the Olympus channel | only if the member sending it shares their zone and layer; a leader's or officer's zone only if they share theirs too |
 | Your zone, layer, guild rank and guild (layer announcements) | everyone on the Olympus channel | only if you share: officers and one member in eight announce, every 10 minutes and when their layer changes |
 | A layer hop ask: the zone you are in and the layer you want | everyone on the Olympus channel | when you ask to hop |
@@ -484,10 +543,28 @@ tracking. Your name is on every message (the game adds it). What goes where:
 | Hello: addon version, realm, public or sealed channel, whether you share your zone | your guild | every minute or so |
 | Your position as a dot on the map | your guild | only with `/oly share` (off by default) |
 | A treasury keeper's book (balance, gold and items given and who gave them, the ranking) and the guild bank of `<Olympus>` (its gold and items) | everyone on the Olympus channel receives the bytes; the addon shows them to the King and his Steward, and to the army only with the King's switches | only after that keeper says yes (each keeper, the King too, is asked once; `/oly treasurer on\|off`), withdrawn at once when he turns it off, and again every 5 minutes while he plays, for clients that were offline |
+| Your character's name and what you gave, when you give gold or items to a treasury keeper (by trade or mail): in the ranking of donors (the top 100, with each one's total), the week's donors, the items donated (with who gave each last) and the book's latest lines | everyone on the Olympus channel receives the bytes; the addon shows them to the keepers, the King and his Steward, and to the army with the King's ranking or book switch | while that keeper shares his book: his yes, and a donor is not asked |
+| Your character's name, if you gave to the treasury before 1.0 (the early supporters): names only, no amounts, in alphabetical order | everyone on the Olympus channel receives the bytes; the addon shows them under the ranking, to whoever may see it | from the Treasurer's addon once he said yes to 1.0's question, which says their names go to everyone on the channel (his 0.9.3 yes is not enough), after his login and when a client asks: a donor is not asked |
 | The King's crown on the map, and with it his zone and layer | everyone on the Olympus channel | only while the King turns it on (Throne tab), whatever he answered to the question |
+| A Royal Inspection's report (on by default): when the King, his Steward or a Hand calls one and your addon is in the sample, it patrols for 2 minutes, inspecting the Olympus players of your faction around you, level 15 and up, with the game's own inspect, and records whether each wears the guild tabard, another one or none (kept in your saved variables); then it reports your guild, how many it found in each case (your own tabard counted) and up to 6 names, with their guild, of players caught without the colors | whoever called it, alone (a whisper); the King can show the names to the army on his untabarded list | each Royal Inspection you are sampled for (one every 30 minutes at most, for the whole realm) until you say no with `/oly inspection off`; you still get its raid warning |
+| Other players' lines in the Olympus chats as your addon accepted them (channel, sender and text; [Captains] and [Lords] only if your rank reads them), and the High Council list | other addons in your own game, through `OlympusBridge` (made for OfficerSpy, the moderators' companion addon, but any addon you install can read it) | always, while such an addon is loaded: Olympus sends nothing through it and never learns what that addon does with what it read |
+| Olympus Link (1.0.0): a request (your guild, faction, a random number, your code's id and a tag made from your code's signature and your name) | the confirmers asked (a whisper each): a High Councillor, or verified players drawn for your code | only after you press **Accept** on `/oly discord <code>` |
+| Olympus Link: the finished proof (your character name, realm, guild, faction, the tag, and the confirmers' names, how each knew your guild, their signatures and their keys' certificates) | the Olympus bot, through the page you scan it with, or a watcher (a High Councillor, by whisper) who hands it to the bot | when it is ready, until it is delivered (5 days after your code expired at most) |
+| Olympus Link, if you confirm (a key and its certificate from the bot's keeper, High Councillors' too): your proof for another player's request (its time, your key's id, how you know their guild, your signature), and in their finished proof your character's name and your key's certificate | that player alone (a whisper), then the Olympus bot in their finished proof | by itself, without asking you each time, once the bot is ready: only for players of an Olympus guild of your faction, never your own account's characters, one a minute and five a day per character, thirty a minute in all, until `/oly discord key off` |
+| Olympus Link: "a confirmer's key is online" (its certificate: the key's id, public half, tier, expiry and character), "a watcher is online" | everyone on the Olympus channel | every 5 minutes, only from characters with a key from the bot's keeper and its certificate, once the bot is ready (no addon makes or announces a key by itself), or a High Councillor's watcher on (`/oly discord watcher on`) |
+| Olympus Link: a High Councillor's key's public half, and the certificate for it | the author's character, and back (a whisper each) | never while the council authority is off (as it ships: only the author turns it on, and only once the bot is ready); then only from a councillor of the signed list whose addon made its own key, once a session when it hears the author |
 
 Decrees and the King's calls go out when someone sends one (a decree carries its sender's
 position on the map).
+
+**What waits for your yes.** Your zone and layer (below), your dot on your guild's map, a
+treasury keeper's book and Olympus Link (your **Accept**, or a confirmer's typing in the key the
+bot's keeper made them) wait for your yes. The rest of the table goes out while
+you are in an Olympus guild, with no question first: your guild's census (from the member it
+elects, with the names above), the hello, a Royal Inspection's report when you are sampled
+(`/oly inspection off`), your answers to the author's roll calls (`/oly rollcall off`), and what
+other addons read through the bridge. A first-start screen that shows what the addon shares and
+asks you before any of it goes out comes in 1.1.
 
 **Zone and layer: off until you choose.** Once after login (never in combat or in an
 instance) the addon asks whether to share your zone and layer, saying what goes out and who
@@ -717,6 +794,8 @@ Other limits:
 | `/oly helpme [text]` (or **Ask a High Councillor** on the Realm tab) | ask the High Council (the moderators) for help: it goes by whisper to up to three of them online who take requests |
 | `/oly council list` · `/oly council help on\|off` | the High Council as your addon knows it; moderators: take help requests or not. The list is signed by the author on his own computer and checked by every client: no name is written in the addon's code, and nobody can forge or change it. An addon without the list (`High Council: -`) asks the channel for it a minute or so after login, and again until it has it (two and a half minutes later when nobody answered, up to 3 times). Since 1.0.0 the list also crosses realms through guild chat: guildmates on another realm answer the ask and pass the list on, and it goes on to your realm's channel |
 | `/oly council icon` (or **My council icon** on the Realm tab, councillors only) | moderators: a councillor's name in the Olympus chats always carries the High Council's mark (the game's target-frame skull), which nobody can change. An icon of your own after it is optional: pick it from the game's icons, like a macro's. Your addon announces it on the channel (at once, then every 20 minutes), and other clients take it only from a councillor and only as a game icon |
+| `/oly discord <code>` · `/oly discord` | Olympus Link: link this character to your Discord account with the bot's code (or paste it in a box) |
+| `/oly discord show` · `status` · `forget` | the Olympus Link window (QR code and link) again; every character's request or proof; drop this character's |
 | `/oly hop` | ask for an invite to the King's layer (while he is online) |
 | `/oly vox off` · `/oly vox on` | Vox Populi questions in chat only, or in a window |
 | `/oly layerhelp on` · `/oly layerhelp off` | get (or not) requests to invite players to your layer |

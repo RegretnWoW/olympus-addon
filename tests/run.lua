@@ -13498,7 +13498,8 @@ local function WithLink(fn)
 		Guild = GetGuildInfo, Print = ns.Print, print = print, faction = ns.faction, council = ns.rdb.council,
 		discord = ns.db.discord, mine = ns.db.myCharacters, keys = ns.LINK_BACKEND_KEYS, after = Ed.after, slice = Ed.SLICE_MS,
 		owner = ns.LINK_WATCHER_OWNER, byName = ns.Roster.byName, rosterGuild = ns.Roster.guild, caKeys = ns.LINK_CA_KEYS,
-		caSeed = ns.LINK_CA_SEED, nextFrame = Link.nextFrame, sample = Link.EntropySample, hook = ns.Comm.senderHook }
+		caSeed = ns.LINK_CA_SEED, nextFrame = Link.nextFrame, sample = Link.EntropySample, hook = ns.Comm.senderHook,
+		caOn = ns.LINK_COUNCIL_AUTHORITY }
 	local w = { sent = {}, whispered = {}, popups = {}, printed = {}, frames = {}, clock = 1799990000 }
 	local ok, err = pcall(function()
 		Link.Reset(); Ed.Reset(); ns.Who.Reset()
@@ -13515,8 +13516,10 @@ local function WithLink(fn)
 		ns.rdb.council = { names = { ["test councillor"] = true, ["other councillor"] = true } }
 		ns.db.discord, ns.db.myCharacters = nil, nil
 		ns.LINK_BACKEND_KEYS = { SAMPLE.backend_pub }
-		-- No council authority unless a test gives it (councillors' addons then make no key).
+		-- No council authority unless a test gives it (councillors' addons then make no key), and
+		-- its path off, as the addon ships (Konig's review): a test of that path turns it on.
 		ns.LINK_CA_KEYS, ns.LINK_CA_SEED = { "PASTE-THE-COUNCIL-AUTHORITY-PUBLIC-KEY-HEX-HERE" }, nil
+		ns.LINK_COUNCIL_AUTHORITY = false
 		ns.LINK_WATCHER_OWNER = nil
 		ns.Roster.byName, ns.Roster.guild = nil, nil
 		ns.me = "Some Player-Realm"
@@ -13528,6 +13531,7 @@ local function WithLink(fn)
 	ns.db.discord, ns.db.myCharacters, ns.LINK_BACKEND_KEYS, Ed.after, Ed.SLICE_MS = saved.discord, saved.mine, saved.keys, saved.after, saved.slice
 	ns.LINK_WATCHER_OWNER, ns.Roster.byName, ns.Roster.guild = saved.owner, saved.byName, saved.rosterGuild
 	ns.LINK_CA_KEYS, ns.LINK_CA_SEED, Link.nextFrame, Link.EntropySample = saved.caKeys, saved.caSeed, saved.nextFrame, saved.sample
+	ns.LINK_COUNCIL_AUTHORITY = saved.caOn
 	Link.Reset(); Ed.Reset(); ns.Who.Reset()
 	ns.Comm.senderHook = saved.hook
 	if not ok then error(err, 0) end
@@ -13947,6 +13951,8 @@ test("Olympus Link: confirmers' certificates: the bot's (or the council authorit
 		eq(Link.KeyIdOf(Ed.FromB64(ca.pub)), "60d7d2f2c939")
 		eq(Link.VerifyCert(ca), false, "not before ns.LINK_CA_KEYS names the authority")
 		ns.LINK_CA_KEYS = { SAMPLE.ca_pub }
+		eq(Link.VerifyCert(ca), false, "nor while the author's switch is off (Konig's review)")
+		ns.LINK_COUNCIL_AUTHORITY = true
 		eq(Link.VerifyCert(ca), true, "Python's council authority certificate checks in Lua")
 		eq(Link.CertSigner(ca), "ca")
 		local c3 = ns.Sign.SHA256("olympus-link-test:council03")
@@ -14773,12 +14779,21 @@ test("Olympus Link: key and certificate, one character's: checked before the add
 			SlashCmdList.OLYMPUS("discord key off")
 			eq(w.sent[#w.sent].msg, "DV~0")
 			eq(Link.Store().keys[me], nil)
-			-- A new key made in the game: councillors only.
+			-- A new key made in the game: none while the council authority's path is off, as the
+			-- addon ships (Konig's review: keys come from the bot's keeper); with the author's
+			-- switch on, councillors only.
 			ns.me = "Player One-Realm"
+			w.printed = {}
+			SlashCmdList.OLYMPUS("discord key new")
+			assert(Said(w, ns.L.LINK_KEY_FROM_KEEPER))
+			eq(Link.Store().keys["Player One-Realm"], nil)
+			local caKeys = ns.LINK_CA_KEYS
+			ns.LINK_CA_KEYS, ns.LINK_COUNCIL_AUTHORITY = { SAMPLE.ca_pub }, true
 			w.printed = {}
 			SlashCmdList.OLYMPUS("discord key new")
 			assert(Said(w, ns.L.LINK_KEY_NEW_ONLY))
 			eq(Link.Store().keys["Player One-Realm"], nil)
+			ns.LINK_CA_KEYS, ns.LINK_COUNCIL_AUTHORITY = caKeys, false
 			-- The key 0.9.10's first builds kept for the whole account: gone at login, said once; it
 			-- never confirms for any character again.
 			ns.me = me
@@ -15037,6 +15052,10 @@ test("Olympus Link: a High Councillor's key made in game and certified by the au
 			Link.Tick(); RunFrames(w)
 			eq(Link.Key(), nil); eq(samples, 0)
 			ns.LINK_CA_KEYS = { SAMPLE.ca_pub }
+			-- Nor with it while the author's switch is off (Konig's review): then it is turned on.
+			Link.Tick(); RunFrames(w)
+			eq(Link.Key(), nil); eq(samples, 0)
+			ns.LINK_COUNCIL_AUTHORITY = true
 			-- A player who is not a councillor: nothing either.
 			ns.me = "Plain Player-" .. ns.AUTHOR_REALM
 			Link.Tick(); RunFrames(w)
@@ -15156,6 +15175,7 @@ end)
 test("Olympus Link: the author's client certifies High Councillors of the signed list on its realm group only, within its limits, never saying anything of its seed", function()
 	WithLink(function(w)
 		ns.LINK_CA_KEYS, ns.LINK_CA_SEED = { SAMPLE.ca_pub }, SAMPLE.ca_seed
+		ns.LINK_COUNCIL_AUTHORITY = true
 		local names = { ["test councillor"] = true, ["other councillor"] = true }
 		for i = 1, Link.CA_HOUR + 1 do names["councillor " .. i] = true end
 		ns.rdb.council = { names = names }
@@ -15226,6 +15246,7 @@ end)
 test("Olympus Link: the author's client certifies a public key for one councillor only (another who sends it, read off its DV, gets nothing), and records what it signed", function()
 	WithLink(function(w)
 		ns.LINK_CA_KEYS, ns.LINK_CA_SEED = { SAMPLE.ca_pub }, SAMPLE.ca_seed
+		ns.LINK_COUNCIL_AUTHORITY = true
 		ns.rdb.council = { names = { ["test councillor"] = true, ["other councillor"] = true, ["third councillor"] = true } }
 		ns.me = AUTHOR_CHAR
 		local realm = ns.AUTHOR_REALM
@@ -15279,7 +15300,7 @@ end)
 
 test("Olympus Link: a councillor's key rotated (/oly discord key new), asked for again after a refusal only 10 minutes later, off when the list drops it or it is turned off", function()
 	WithLink(function(w)
-		ns.LINK_CA_KEYS = { SAMPLE.ca_pub }
+		ns.LINK_CA_KEYS, ns.LINK_COUNCIL_AUTHORITY = { SAMPLE.ca_pub }, true
 		local realm = ns.AUTHOR_REALM
 		local me = "Test Councillor-" .. realm
 		local samples = 0
@@ -15363,7 +15384,7 @@ end)
 
 test("Olympus Link: a councillor key rotated or removed in game still counts at the bot until revoked: /oly discord key new and key off say its id; /oly discord certified lists what the author's client signed", function()
 	WithLink(function(w)
-		ns.LINK_CA_KEYS = { SAMPLE.ca_pub }
+		ns.LINK_CA_KEYS, ns.LINK_COUNCIL_AUTHORITY = { SAMPLE.ca_pub }, true
 		local me = "Test Councillor-" .. ns.AUTHOR_REALM
 		local samples = 0
 		Link.EntropySample = function() samples = samples + 1 return "retired " .. samples end
@@ -15419,6 +15440,7 @@ end)
 test("Olympus Link: the council authority's certificate the addon makes is lua-ca-cert of tests/fixtures/ed25519-vectors.txt, byte for byte (Python and node check it there)", function()
 	WithLink(function(w)
 		ns.LINK_CA_KEYS, ns.LINK_CA_SEED = { SAMPLE.ca_pub }, SAMPLE.ca_seed
+		ns.LINK_COUNCIL_AUTHORITY = true
 		ns.rdb.council = { names = { ["fourth councillor"] = true } }
 		ns.me = AUTHOR_CHAR
 		w.clock = CERT_EXP - Link.CA_DAYS * 86400
@@ -15433,6 +15455,256 @@ test("Olympus Link: the council authority's certificate the addon makes is lua-c
 		eq(Hex(want.seed), Hex(CA_SEED)); eq(Hex(want.pk), SAMPLE.ca_pub)
 		eq(want.msg, c.signed, "the text it signs")
 		eq(Hex(want.sig), Hex(Ed.FromB64(c.sig)), "its signature")
+	end)
+end)
+
+-- Konig's review of 1.0.0 (3): councillors' keys were made at login from tens of bits, kept in
+-- plain text, announced every 5 minutes and certified for a year, all before the bot was ready.
+test("Olympus Link (Konig's review): while the bot is not ready (no bot key in ns.LINK_BACKEND_KEYS), no councillor key is made, no key is typed, announced or used, and no certificate is asked for or signed", function()
+	WithLink(function(w)
+		local realm = ns.AUTHOR_REALM
+		local me = "Test Councillor-" .. realm
+		local samples = 0
+		Link.EntropySample = function() samples = samples + 1 return "not ready " .. samples end
+		-- As this release ships: the council authority's key known, the bot's not yet; and even
+		-- with the author's switch on, the bot not being ready holds it all back.
+		ns.LINK_BACKEND_KEYS = { "PASTE-THE-BOT-PUBLIC-KEY-HEX-HERE" }
+		ns.LINK_CA_KEYS = { SAMPLE.ca_pub }
+		ns.LINK_COUNCIL_AUTHORITY = true
+		ns.me = me
+		local function Ticks()
+			for _ = 1, 3 do
+				Link.Tick(); RunFrames(w)
+				w.clock = w.clock + Link.ANNOUNCE_EVERY
+			end
+		end
+		-- A High Councillor of the signed list: no key made, nothing said.
+		Ticks()
+		eq(Link.Key(), nil, "no key made")
+		eq(samples, 0, "nothing sampled")
+		eq(#w.sent + #w.whispered, 0, "nothing sent")
+		-- A key an earlier build made in game, which the author's client certified (in the
+		-- SavedVariables): not announced, and it signs no request.
+		local seed = ns.Sign.SHA256("olympus-link-test:not-ready")
+		local pub = Ed.PublicKey(seed)
+		local id = Link.KeyIdOf(pub)
+		local cert = Cert(id, Ed.ToB64(pub), "c", CERT_EXP, CA_SEED, me)
+		Link.Store().keys[me] = { id = id, seed = Ed.ToB64(seed), cert = cert, auto = true }
+		Ticks()
+		eq(#w.sent, 0, "no DV")
+		Link.HandleRequest("WHISPER", "Some Player-" .. realm, "DR~0123456789abcdef~Olympus II~Alliance~7K3M9QX2TB~0011223344556677")
+		RunFrames(w)
+		eq(#Whispers(w, "DA~"), 0, "no request signed")
+		-- The same key without its certificate: the author's client is never asked for one.
+		Link.Store().keys[me].cert = nil
+		Ticks()
+		assert(ns.Comm.senderHook ~= Link.HeardFrom, "not listening for the author")
+		Link.HeardFrom(AUTHOR_CHAR)
+		RunFrames(w)
+		eq(#Whispers(w, "DC~"), 0, "no DC")
+		-- /oly discord key new, a key typed, a certificate typed: not open yet, nothing kept.
+		Link.Store().keys[me] = nil
+		w.printed = {}
+		SlashCmdList.OLYMPUS("discord key new")
+		RunFrames(w)
+		eq(Link.Key(), nil); eq(samples, 0)
+		assert(Said(w, ns.L.LINK_NOT_OPEN))
+		local k = TestKey("council01", "c")
+		w.printed = {}
+		SlashCmdList.OLYMPUS("discord key " .. k.id .. " " .. k.seed)
+		eq(Link.Key(), nil, "a key typed is not kept")
+		assert(Said(w, ns.L.LINK_NOT_OPEN))
+		Link.Store().keys[me] = { id = k.id, seed = k.seed }
+		w.printed = {}
+		SlashCmdList.OLYMPUS("discord cert " .. k.CertFor(me))
+		RunFrames(w)
+		eq(Link.Key().cert, nil, "a certificate typed is not kept")
+		assert(Said(w, ns.L.LINK_NOT_OPEN))
+		-- The author's client certifies nothing: no job, no DE.
+		ns.me, ns.LINK_CA_SEED = AUTHOR_CHAR, SAMPLE.ca_seed
+		Link.HandleCertRequest("WHISPER", me, "DC~1~" .. Ed.ToB64(pub))
+		eq(Ed.Busy(), 0, "no job")
+		RunFrames(w)
+		eq(#Whispers(w, "DE~"), 0, "no certificate signed")
+		ns.me, ns.LINK_CA_SEED = me, nil
+		eq(#w.sent, 0, "still no DV")
+		-- Once this version knows the bot's key: the key and certificate its keeper made are typed,
+		-- kept and announced.
+		ns.LINK_BACKEND_KEYS = { SAMPLE.backend_pub }
+		Link.Store().keys[me] = nil
+		SlashCmdList.OLYMPUS("discord key " .. k.id .. " " .. k.seed)
+		SlashCmdList.OLYMPUS("discord cert " .. k.CertFor(me))
+		RunFrames(w)
+		eq(Link.Key().cert, k.CertFor(me))
+		eq(w.sent[#w.sent].msg, "DV~1~" .. k.CertFor(me))
+	end)
+end)
+
+test("Olympus Link (Konig's review): the council authority's path is off unless the author turns it on: councillors' keys come from the bot's keeper, no addon makes one or asks for or signs a certificate, and the authority's certificates count nowhere", function()
+	eq(ns.LINK_COUNCIL_AUTHORITY, false, "the author's switch ships off")
+	-- The line that says where keys come from, in both languages.
+	local savedLocale, pt = GetLocale, {}
+	GetLocale = function() return "ptBR" end
+	local okPt, errPt = pcall(function() assert(loadfile(ADDON_DIR .. "Locales.lua"))("Olympus", pt) end)
+	GetLocale = savedLocale
+	if not okPt then error(errPt, 0) end
+	assert(type(ns.L.LINK_KEY_FROM_KEEPER) == "string", "English")
+	assert(type(pt.L.LINK_KEY_FROM_KEEPER) == "string" and pt.L.LINK_KEY_FROM_KEEPER ~= ns.L.LINK_KEY_FROM_KEEPER, "Portuguese")
+	WithLink(function(w)
+		local realm = ns.AUTHOR_REALM
+		local me = "Test Councillor-" .. realm
+		local samples = 0
+		Link.EntropySample = function() samples = samples + 1 return "switch " .. samples end
+		-- The bot ready, the authority's key known, the switch off.
+		ns.LINK_CA_KEYS = { SAMPLE.ca_pub }
+		ns.me = me
+		local function Ticks(n)
+			for _ = 1, n or 3 do
+				Link.Tick(); RunFrames(w)
+				w.clock = w.clock + Link.ANNOUNCE_EVERY
+			end
+		end
+		-- A High Councillor of the signed list: no key made in game, nothing said.
+		Ticks()
+		eq(Link.Key(), nil, "no key made"); eq(samples, 0, "nothing sampled")
+		eq(#w.sent + #w.whispered, 0, "nothing sent")
+		-- /oly discord key new: keys come from the bot's keeper.
+		w.printed = {}
+		SlashCmdList.OLYMPUS("discord key new")
+		RunFrames(w)
+		eq(Link.Key(), nil); eq(samples, 0)
+		assert(Said(w, ns.L.LINK_KEY_FROM_KEEPER))
+		-- A key an earlier build made in game, and the authority's certificate for it: not a
+		-- councillor's anywhere.
+		local seed = ns.Sign.SHA256("olympus-link-test:switch-off")
+		local pub = Ed.PublicKey(seed)
+		local id = Link.KeyIdOf(pub)
+		local caCert = Cert(id, Ed.ToB64(pub), "c", CERT_EXP, CA_SEED, me)
+		eq(Link.VerifyCert(Link.ParseCert(caCert)), false, "the authority's certificate")
+		eq(Link.VerifyCert(Link.ParseCert(SAMPLE.confirmer_60d7d2f2c939_cert)), false, "Python's too")
+		-- Typed: refused, not kept.
+		Link.Store().keys[me] = { id = id, seed = Ed.ToB64(seed) }
+		w.printed = {}
+		SlashCmdList.OLYMPUS("discord cert " .. caCert)
+		RunFrames(w)
+		eq(Link.Key().cert, nil, "not kept")
+		assert(Said(w, ns.L.LINK_CERT_BAD))
+		-- Kept by an earlier build: not announced.
+		Link.Store().keys[me].cert = caCert
+		Ticks()
+		eq(#w.sent, 0, "no DV with it")
+		-- Made in game and not certified yet: the author's client is never asked.
+		Link.Store().keys[me] = { id = id, seed = Ed.ToB64(seed), auto = true }
+		Ticks(1)
+		assert(ns.Comm.senderHook ~= Link.HeardFrom, "not listening for the author")
+		Link.HeardFrom(AUTHOR_CHAR)
+		RunFrames(w)
+		eq(#Whispers(w, "DC~"), 0, "no DC")
+		-- The author's client, holding the authority's seed: signs nothing.
+		ns.me, ns.LINK_CA_SEED = AUTHOR_CHAR, SAMPLE.ca_seed
+		eq(Link.IsCA(), true)
+		Link.HandleCertRequest("WHISPER", me, "DC~1~" .. Ed.ToB64(pub))
+		eq(Ed.Busy(), 0, "no job")
+		RunFrames(w)
+		eq(#Whispers(w, "DE~"), 0, "no certificate signed")
+		eq(Link.Certified(), nil, "nothing recorded")
+		assert(ns.StatusText():find("council authority off", 1, true), "its status says so")
+		ns.LINK_CA_SEED = nil
+		-- A requester never asks that key, even announced from the character it names.
+		local requester = "Some Player-" .. realm
+		AsRequester(requester)
+		Link.HandleAnnounce("CHANNEL", me, "DV~1~" .. caCert)
+		Link.Start(Link.ParseToken(SAMPLE.token_c))
+		RunFrames(w)
+		Link.Tick(); RunFrames(w)
+		eq(#Whispers(w, "DR~"), 0, "nobody asks a key the authority certified")
+		Link.Forget()
+		-- A watcher keeps no link that counts on it.
+		local b = { requester = requester, guild = "Olympus II", faction = "Alliance", nonce = "0123456789abcdef", R = "7K3M9QX2TB", tag = "0011223344556677" }
+		local made = { id = id, seed = Ed.ToB64(seed), CertFor = function() return caCert end }
+		local bundle = Link.Build(b, { SignedProof(b, made, me, "w", w.clock) })
+		assert(bundle, "a link")
+		ns.me = "Other Councillor-" .. realm
+		Link.Store().watch[ns.me] = true
+		for _, piece in ipairs(ns.Codec.Chunk(bundle, "L3")) do Link.HandleBundle("WHISPER", requester, "DB~" .. piece) end
+		RunFrames(w)
+		eq(Link.Store().inbox[b.R], nil, "not kept")
+		eq(#Whispers(w, "DK~"), 0, "and not acknowledged")
+		-- Councillors' keys come from the bot's keeper: typed on the councillor's character,
+		-- certified by the bot, announced.
+		ns.me = me
+		Link.Store().keys[me] = nil
+		local k = TestKey("council01", "c")
+		w.sent = {}
+		SlashCmdList.OLYMPUS("discord key " .. k.id .. " " .. k.seed)
+		SlashCmdList.OLYMPUS("discord cert " .. k.CertFor(me))
+		RunFrames(w)
+		eq(Link.Key().cert, k.CertFor(me))
+		eq(w.sent[#w.sent].msg, "DV~1~" .. k.CertFor(me))
+		-- The author's switch on: the path is still there (its own tests run it).
+		ns.LINK_COUNCIL_AUTHORITY = true
+		eq(Link.VerifyCert(Link.ParseCert(caCert)), true)
+		SlashCmdList.OLYMPUS("discord key off")
+		Link.Store().nokey[me] = nil
+		Ticks(1)
+		assert(Link.Key() and Link.Key().auto, "a key made in game")
+		ns.LINK_COUNCIL_AUTHORITY = false
+	end)
+end)
+
+test("Olympus Link (Konig's review): keys an earlier build made in game are dropped at login, every character's of the account, with one line; keys from the bot's keeper stay", function()
+	local savedLocale, pt = GetLocale, {}
+	GetLocale = function() return "ptBR" end
+	local okPt, errPt = pcall(function() assert(loadfile(ADDON_DIR .. "Locales.lua"))("Olympus", pt) end)
+	GetLocale = savedLocale
+	if not okPt then error(errPt, 0) end
+	assert(type(ns.L.LINK_KEY_AUTO_GONE) == "string", "English")
+	assert(type(pt.L.LINK_KEY_AUTO_GONE) == "string" and pt.L.LINK_KEY_AUTO_GONE ~= ns.L.LINK_KEY_AUTO_GONE, "Portuguese")
+	WithLink(function(w)
+		local realm = ns.AUTHOR_REALM
+		local me, alt, player = "Test Councillor-" .. realm, "Other Councillor-" .. realm, "Some Player-" .. realm
+		ns.LINK_CA_KEYS = { SAMPLE.ca_pub }
+		ns.me = me
+		-- A key made in game (auto) with the authority's certificate, as an earlier build kept it.
+		local function Made(label, name)
+			local seed = ns.Sign.SHA256("olympus-link-test:" .. label)
+			local pub = Ed.PublicKey(seed)
+			local id = Link.KeyIdOf(pub)
+			return { id = id, seed = Ed.ToB64(seed), cert = Cert(id, Ed.ToB64(pub), "c", CERT_EXP, CA_SEED, name), auto = true }
+		end
+		local keeper = TestKey("council01", "c")
+		local d = Link.Store()
+		d.keys[me] = Made("auto-me", me)
+		d.keys[alt] = { id = Made("auto-alt", alt).id, seed = Made("auto-alt", alt).seed, auto = true } -- (not certified yet)
+		local kept = { id = keeper.id, seed = keeper.seed, cert = keeper.CertFor(player) }
+		d.keys[player] = kept
+		w.printed = {}
+		Link.Resume()
+		eq(d.keys[me], nil, "this character's key made in game: gone")
+		eq(d.keys[alt], nil, "and the one of the account's other character")
+		eq(d.keys[player], kept, "a key from the bot's keeper stays")
+		eq(#w.printed, 1, "one line")
+		eq(w.printed[1], ns.L.LINK_KEY_AUTO_GONE)
+		eq(Link.Key(), nil)
+		-- Nothing of it is announced or asked about after, and it is said once.
+		Link.Tick(); RunFrames(w)
+		eq(#w.sent + #w.whispered, 0)
+		w.printed = {}
+		Link.Resume()
+		eq(#w.printed, 0, "said once")
+		-- The author's switch on, the bot not ready yet: still dropped (no key waits for the launch).
+		ns.LINK_COUNCIL_AUTHORITY = true
+		ns.LINK_BACKEND_KEYS = { "PASTE-THE-BOT-PUBLIC-KEY-HEX-HERE" }
+		d.keys[me] = Made("auto-me", me)
+		Link.Resume()
+		eq(d.keys[me], nil, "dropped while the bot is not ready")
+		-- The switch on and the bot ready: a key made in game is that path's own, and stays.
+		ns.LINK_BACKEND_KEYS = { SAMPLE.backend_pub }
+		d.keys[me] = Made("auto-me", me)
+		w.printed = {}
+		Link.Resume()
+		assert(d.keys[me] and d.keys[me].auto, "kept")
+		eq(#w.printed, 0, "nothing said")
 	end)
 end)
 
@@ -22255,6 +22527,236 @@ test("1.0.0 nameplates: the member's star ships as a 32 x 32 32-bit TGA with alp
 		assert(text:find("\n| `/oly nameplates on` · `/oly nameplates off` |", 1, true), doc .. ": a row for /oly nameplates")
 	end
 end)
+
+-- 1.0.0, Konig's review: what the README and the CurseForge page (docs/CURSEFORGE.md) tell players
+-- about what leaves their game must be what the addon does. Both are checked here against the
+-- code: the addon itself talks only in game; Olympus Link, when a player chooses to link a
+-- character, uses a website (GitHub Pages) and the Olympus bot on Discord.
+do
+	local DOCS = { "README.md", "docs/CURSEFORGE.md" }
+	local function Doc(path) return assert(ReadFile(ROOT .. path), "missing " .. path) end
+	local function Flat(s) return (s:gsub("%s+", " ")) end
+	-- A "## <title>" section, up to the next "## " heading (its "### " subsections included).
+	local function Section(doc, title)
+		local from = doc:find("\n## " .. title .. "\n", 1, true)
+		if not from then return nil end
+		local body = doc:sub(from + #title + 5)
+		local stop = body:find("\n## ", 1, true)
+		return stop and body:sub(1, stop) or body
+	end
+	-- A "### <title...>" subsection, up to the next heading of level 2 or 3.
+	local function Subsection(doc, title)
+		local from = doc:find("\n### " .. title, 1, true)
+		if not from then return nil end
+		local body = doc:sub(doc:find("\n", from + 1, true) + 1)
+		local stop = body:find("\n##", 1, true)
+		return stop and body:sub(1, stop) or body
+	end
+	local function Has(text, what, msg) assert(text:find(what, 1, true), msg .. ": " .. what) end
+
+	test("1.0.0 docs (Konig's review): no page says there is no server, website or account; Olympus Link, the one part outside the game, has a section on the CurseForge page too", function()
+		local config = Doc("web/public/config.js")
+		local page, verify = config:match("PAGE_URL: '([^']+)'"), config:match("VERIFY_COMMAND: '([^']+)'")
+		eq(page, ns.LINK_SITE, "the page the addon's QR code opens is the Olympus Link page's own address")
+		assert(verify, "the bot's command in the page's settings")
+		assert(ns.LINK_SITE:find("^https://[%w%-]+%.github%.io/"), "the page is on GitHub Pages: " .. ns.LINK_SITE)
+		local open = #ns.Link.BackendKeys() > 0
+		for _, path in ipairs(DOCS) do
+			local doc = Doc(path)
+			local flat = Flat(doc)
+			for _, claim in ipairs({ "no server, no website", "There is no server", "no website", "no account" }) do
+				assert(not flat:find(claim, 1, true), path .. " still says: " .. claim)
+			end
+			-- How it works, and the words above the privacy table: the addon itself talks only in
+			-- game, and Olympus Link is the exception, only when a player links a character.
+			local how = Flat(assert(Section(doc, "How it works"), path .. ": How it works"))
+			Has(how, "Olympus Link", path .. ": How it works names the exception")
+			local privacy = assert(Section(doc, "Privacy"), path .. ": a Privacy section")
+			local intro = Flat(privacy:sub(1, (privacy:find("\n|", 1, true))))
+			for _, must in ipairs({ "addon messages", "Olympus Link", "GitHub Pages", "Discord" }) do Has(intro, must, path .. ": the privacy section's first words") end
+			-- The Olympus Link section: the page the addon opens, where it is, the bot and its command,
+			-- and whether it is open yet, as this version of the addon has it.
+			local link = Flat(assert(Subsection(doc, "Olympus Link"), path .. ": a section for Olympus Link"))
+			for _, must in ipairs({ ns.LINK_SITE, "GitHub Pages", "the Olympus bot on Discord", "`/oly discord <code>`", "`" .. verify .. "`" }) do
+				Has(link, must, path .. ": the Olympus Link section")
+			end
+			eq(link:find("Not open yet", 1, true) ~= nil, not open,
+				path .. ": says Olympus Link is not open yet exactly while this addon knows no key of the bot")
+		end
+	end)
+
+	-- The privacy table's rows (under "## Privacy"), each flattened to one line.
+	local function PrivacyRows(path)
+		local privacy = assert(Section(Doc(path), "Privacy"), path .. ": a Privacy section")
+		local rows = {}
+		for line in privacy:gmatch("[^\n]+") do
+			if line:sub(1, 2) == "| " and not line:find("^| What |") then rows[#rows + 1] = line end
+		end
+		return rows, Flat(privacy)
+	end
+	local function Row(rows, path, what)
+		for _, r in ipairs(rows) do if r:find(what, 1, true) then return r end end
+		error(path .. ": no privacy row with " .. what, 2)
+	end
+	local WORDS = { "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten" }
+
+	test("1.0.0 docs (Konig's review): both privacy tables name the Royal Inspection (on by default), the census's top players, the donors and early supporters, OfficerSpy's bridge and Olympus Link, as the addon does them", function()
+		local K, T = ns.King, ns.Treasury
+		-- The addon, first. A player who never answered takes part in a Royal Inspection when
+		-- sampled (on by default): a 2-minute patrol, then a report to whoever called it, alone.
+		WithThrone(function(w, K)
+			local saved = { random = K.random, opt = ns.db.royalInspection, after = ns.After }
+			local timers = {}
+			local ok, err = pcall(function()
+				AsSoldier("Never Asked")
+				if ns.Inspect.IsPatrolling() then ns.Inspect.SetPatrol(false) end
+				K.random = function() return 0 end -- in the sample
+				ns.db.royalInspection = nil -- a fresh install: never answered
+				ns.After = function(seconds, _, fn) timers[#timers + 1] = { seconds = seconds, fn = fn } end
+				K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", "T1~I~23~Olympus")
+				eq(ns.Inspect.IsPatrolling(), true, "never asked: a sampled player patrols")
+				eq(#timers, 1); eq(timers[1].seconds, K.INSPECT_TIME)
+				timers[1].fn()
+				eq(ns.Inspect.IsPatrolling(), false, "the patrol ends with the inspection")
+				eq(#w.whispered, 1, "one report"); eq(w.whispered[1].to, "Asmongold Asmongler-Realm", "to whoever called it")
+				assert(w.whispered[1].msg:find("^T3~23~Olympus II~"), w.whispered[1].msg)
+				for _, s in ipairs(w.sent) do assert(not s.msg:find("^T3~"), "never on the channel") end
+			end)
+			K.random, ns.db.royalInspection, ns.After = saved.random, saved.opt, saved.after
+			if ns.Inspect.IsPatrolling() then ns.Inspect.SetPatrol(false) end
+			ns.Inspect.SetPace(nil)
+			if not ok then error(err, 0) end
+		end)
+		-- The census names a guild's highest-level members, online or not (the roster's word, not theirs).
+		local saved = { count = GetNumGuildMembers, info = GetGuildRosterInfo }
+		local ok, err = pcall(function()
+			local roster = { { "Leader", 0, 20, true }, { "Offline Sixty", 3, 60, false }, { "Low", 3, 5, true } }
+			for i = 1, 6 do roster[#roster + 1] = { "Mid" .. i, 3, 30 + i, i % 2 == 0 } end
+			GetNumGuildMembers = function() return #roster, 4 end
+			GetGuildRosterInfo = function(i)
+				local m = roster[i]
+				return m[1] .. "-Realm", "rank", m[2], m[3], "class", m[4] and "Stormwind City" or nil, "", "", m[4], 0, "MAGE"
+			end
+			local r = ns.Roster.Scan()
+			r.users = 1
+			local top = Codec.DecodeReport(Codec.EncodeReport(r)).top
+			eq(#top, Codec.MAX_TOP, "the census names this many")
+			eq(top[1].name, "Offline Sixty", "offline, and named first"); eq(top[1].level, 60)
+		end)
+		GetNumGuildMembers, GetGuildRosterInfo = saved.count, saved.info
+		ns.Roster.Scan() -- (the harness's roster again, for the tests after this one)
+		if not ok then error(err, 0) end
+		-- OfficerSpy's bridge is a global: any addon loaded in this game can read it.
+		local bridge = rawget(_G, "OlympusBridge")
+		assert(type(bridge) == "table", "OlympusBridge is a global")
+		for _, fn in ipairs({ "RegisterChatObserver", "GetCouncil", "IsHighCouncillor" }) do eq(type(bridge[fn]), "function", fn) end
+
+		-- Then each page's privacy table says so.
+		for _, path in ipairs(DOCS) do
+			local rows, privacy = PrivacyRows(path)
+			local inspection = Row(rows, path, "Royal Inspection")
+			for _, must in ipairs({ "on by default", "`/oly inspection off`", ("%d minutes"):format(K.INSPECT_TIME / 60),
+				("level %d and up"):format(ns.Inspect.MIN_LEVEL), ("up to %d names"):format(K.MAX_NAMES),
+				("one every %d minutes"):format(K.INSPECT_GAP / 60), "whoever called it" }) do
+				Has(inspection, must, path .. ": the Royal Inspection's row")
+			end
+			local census = Row(rows, path, "highest-level")
+			for _, must in ipairs({ WORDS[Codec.MAX_TOP] .. " highest-level", "online or not", "nobody named is asked" }) do
+				Has(census, must, path .. ": the census's row of named players")
+			end
+			local donors = Row(rows, path, "ranking of donors")
+			for _, must in ipairs({ ("top %d"):format(T.RANK_SENT), "a donor is not asked" }) do Has(donors, must, path .. ": the donors' row") end
+			local early = Row(rows, path, "early supporters")
+			-- (Konig's review of the treasury: the Treasurer's yes to 1.0's question, not his 0.9.3 one.)
+			for _, must in ipairs({ "names only", "a donor is not asked", "yes to 1.0's question", "0.9.3 yes is not enough" }) do Has(early, must, path .. ": the early supporters' row") end
+			local bridgeRow = Row(rows, path, "`OlympusBridge`")
+			for _, must in ipairs({ "OfficerSpy", "any addon", "High Council list" }) do Has(bridgeRow, must, path .. ": the bridge's row") end
+			local links = 0
+			for _, r in ipairs(rows) do if r:find("^| Olympus Link") then links = links + 1 end end
+			assert(links >= 4, path .. ": Olympus Link's rows (" .. links .. ")")
+			-- A confirmer's addon goes on by itself once it holds a key from the bot's keeper: the words
+			-- above the table say so next to "only when you choose to link", and a row says what it sends.
+			local section = assert(Section(Doc(path), "Privacy"))
+			local intro = Flat(section:sub(1, (section:find("\n|", 1, true))))
+			for _, must in ipairs({ "only when you choose to link a character, or to confirm other players' links",
+				"a key the bot's keeper made them", ("every %d minutes"):format(ns.Link.ANNOUNCE_EVERY / 60),
+				"signs other players' requests by itself", "`/oly discord key off`" }) do
+				Has(intro, must, path .. ": the privacy section's first words on confirmers")
+			end
+			local confirm = Row(rows, path, "if you confirm")
+			for _, must in ipairs({ "from the bot's keeper", "once the bot is ready",
+				("%s a day per character"):format(WORDS[ns.Link.GIVE_DAY]), "never your own account's characters" }) do
+				Has(confirm, must, path .. ": the confirmer's row")
+			end
+			-- What goes out without a yes today, and the screen that will ask first.
+			Has(privacy, "first-start screen", path .. ": the privacy section")
+			Has(privacy, "comes in 1.1", path .. ": the privacy section")
+		end
+	end)
+
+	-- Konig's review of the merged docs: the council authority's switch (ns.LINK_COUNCIL_AUTHORITY)
+	-- ships off, so no High Councillor's addon makes a key in the game; the CurseForge page's copy of
+	-- the README's Olympus Link rows still said one did, and the test above only counted the rows.
+	test("1.0.0 docs (Konig's review): as the author's council-authority switch ships, both pages say every confirmer's key, a High Councillor's too, comes from the bot's keeper, and both privacy tables say a councillor's key made in game never goes out while it is off", function()
+		local shipped = ns.LINK_COUNCIL_AUTHORITY
+		local off = shipped ~= true
+		-- The addon first, with the switch as it ships: for a High Councillor of the signed list, with
+		-- the bot ready (the sample's throwaway key) and the authority's key as it ships, the council
+		-- authority's path runs exactly while the switch is on; off, no key is made in the game and
+		-- /oly discord key new sends them to the bot's keeper.
+		local Link = ns.Link
+		local sample = assert(ReadFile(ROOT .. "tests/fixtures/link-sample.txt"), "the Link sample")
+		local botKey = assert(sample:match("\nbackend_pub=(%x+)"), "the sample's bot key")
+		local saved = { keys = ns.LINK_BACKEND_KEYS, me = ns.me, council = ns.rdb.council, discord = ns.db.discord, Print = ns.Print }
+		local printed = {}
+		local ok, err = pcall(function()
+			Link.Reset()
+			ns.LINK_BACKEND_KEYS = { botKey }
+			ns.rdb.council = { names = { ["docs councillor"] = true } }
+			ns.me, ns.db.discord = "Docs Councillor-" .. ns.AUTHOR_REALM, nil
+			ns.Print = function(m) printed[#printed + 1] = tostring(m) end
+			assert(Link.BotReady() and #Link.CAKeys() > 0 and ns.IsHighCouncillor(ns.me), "the bot ready, the authority known, a councillor")
+			eq(Link.CouncilAuthority(), not off, "the council authority's path runs exactly while the switch is on")
+			if off then
+				eq(Link.MakeCouncilKey(), false, "no key made in the game")
+				Link.CouncilKeyStep(ns.Now())
+				eq(Link.Key(), nil, "none at the councillor's tick either")
+				SlashCmdList.OLYMPUS("discord key new")
+				eq(Link.Key(), nil, "key new makes none")
+				eq(printed[#printed], ns.L.LINK_KEY_FROM_KEEPER, "key new says keys come from the bot's keeper")
+			end
+		end)
+		ns.LINK_BACKEND_KEYS, ns.me, ns.rdb.council, ns.db.discord, ns.Print = saved.keys, saved.me, saved.council, saved.discord, saved.Print
+		Link.Reset()
+		if not ok then error(err, 0) end
+		-- Then both pages, tied to the same switch.
+		local linkRows = {}
+		for _, path in ipairs(DOCS) do
+			local doc = Doc(path)
+			local rows = PrivacyRows(path)
+			local mine = {}
+			for _, r in ipairs(rows) do if r:find("^| Olympus Link") then mine[#mine + 1] = r end end
+			linkRows[path] = table.concat(mine, "\n")
+			local row = Row(rows, path, "High Councillor's key's public half")
+			local when = assert(row:match("|%s*([^|]-)%s*|%s*$"), path .. ": the row's When")
+			eq(when:find("^never while the council authority is off") ~= nil, off,
+				path .. ": the row of a councillor's key made in game says it never goes out exactly while the author's switch is off: " .. when)
+			local link = Flat(assert(Subsection(doc, "Olympus Link"), path .. ": a section for Olympus Link"))
+			eq(link:find("Every confirmer, High Councillors included, gets a key from the bot's keeper", 1, true) ~= nil, off,
+				path .. ": the Olympus Link section says every confirmer's key, a High Councillor's too, comes from the bot's keeper exactly while the switch is off")
+			for _, must in ipairs({ "`/oly discord key <id> <key>`", "`/oly discord cert <certificate>`" }) do
+				Has(link, must, path .. ": how a confirmer types the key and certificate the keeper made")
+			end
+			if off then
+				assert(not Flat(doc):find("paste nothing", 1, true), path .. " still says High Councillors paste nothing")
+			end
+		end
+		-- The README names the switch as it ships, and the CurseForge page's Olympus Link rows are
+		-- the README's, word for word.
+		Has(Flat(Doc("README.md")), ("`ns.LINK_COUNCIL_AUTHORITY = %s`"):format(tostring(shipped)), "README.md: the author's switch")
+		eq(linkRows["docs/CURSEFORGE.md"], linkRows["README.md"], "the CurseForge page's Olympus Link rows are the README's")
+	end)
+end
 ---------------------------------------------------------------------------
 -- OfficerSpy's bridge (Bridge.lua): what a companion addon the mods run may read, and that it
 -- can change nothing. The signed list is the 0.9.7 test's, checked by the real signature code.
