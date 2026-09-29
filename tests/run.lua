@@ -15337,6 +15337,62 @@ test("Olympus Link (Konig's review): the council authority's path is off unless 
 	end)
 end)
 
+test("Olympus Link (Konig's review): keys an earlier build made in game are dropped at login, every character's of the account, with one line; keys from the bot's keeper stay", function()
+	local savedLocale, pt = GetLocale, {}
+	GetLocale = function() return "ptBR" end
+	local okPt, errPt = pcall(function() assert(loadfile(ADDON_DIR .. "Locales.lua"))("Olympus", pt) end)
+	GetLocale = savedLocale
+	if not okPt then error(errPt, 0) end
+	assert(type(ns.L.LINK_KEY_AUTO_GONE) == "string", "English")
+	assert(type(pt.L.LINK_KEY_AUTO_GONE) == "string" and pt.L.LINK_KEY_AUTO_GONE ~= ns.L.LINK_KEY_AUTO_GONE, "Portuguese")
+	WithLink(function(w)
+		local realm = ns.AUTHOR_REALM
+		local me, alt, player = "Test Councillor-" .. realm, "Other Councillor-" .. realm, "Some Player-" .. realm
+		ns.LINK_CA_KEYS = { SAMPLE.ca_pub }
+		ns.me = me
+		-- A key made in game (auto) with the authority's certificate, as an earlier build kept it.
+		local function Made(label, name)
+			local seed = ns.Sign.SHA256("olympus-link-test:" .. label)
+			local pub = Ed.PublicKey(seed)
+			local id = Link.KeyIdOf(pub)
+			return { id = id, seed = Ed.ToB64(seed), cert = Cert(id, Ed.ToB64(pub), "c", CERT_EXP, CA_SEED, name), auto = true }
+		end
+		local keeper = TestKey("council01", "c")
+		local d = Link.Store()
+		d.keys[me] = Made("auto-me", me)
+		d.keys[alt] = { id = Made("auto-alt", alt).id, seed = Made("auto-alt", alt).seed, auto = true } -- (not certified yet)
+		local kept = { id = keeper.id, seed = keeper.seed, cert = keeper.CertFor(player) }
+		d.keys[player] = kept
+		w.printed = {}
+		Link.Resume()
+		eq(d.keys[me], nil, "this character's key made in game: gone")
+		eq(d.keys[alt], nil, "and the one of the account's other character")
+		eq(d.keys[player], kept, "a key from the bot's keeper stays")
+		eq(#w.printed, 1, "one line")
+		eq(w.printed[1], ns.L.LINK_KEY_AUTO_GONE)
+		eq(Link.Key(), nil)
+		-- Nothing of it is announced or asked about after, and it is said once.
+		Link.Tick(); RunFrames(w)
+		eq(#w.sent + #w.whispered, 0)
+		w.printed = {}
+		Link.Resume()
+		eq(#w.printed, 0, "said once")
+		-- The author's switch on, the bot not ready yet: still dropped (no key waits for the launch).
+		ns.LINK_COUNCIL_AUTHORITY = true
+		ns.LINK_BACKEND_KEYS = { "PASTE-THE-BOT-PUBLIC-KEY-HEX-HERE" }
+		d.keys[me] = Made("auto-me", me)
+		Link.Resume()
+		eq(d.keys[me], nil, "dropped while the bot is not ready")
+		-- The switch on and the bot ready: a key made in game is that path's own, and stays.
+		ns.LINK_BACKEND_KEYS = { SAMPLE.backend_pub }
+		d.keys[me] = Made("auto-me", me)
+		w.printed = {}
+		Link.Resume()
+		assert(d.keys[me] and d.keys[me].auto, "kept")
+		eq(#w.printed, 0, "nothing said")
+	end)
+end)
+
 test("Olympus Link: the requester hands its proof to a watcher, waits for its word, tries again when a watcher is heard", function()
 	WithLink(function(w)
 		local sample = Link.Parse(SAMPLE.bundle_players)

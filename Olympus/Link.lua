@@ -2296,13 +2296,29 @@ end
 
 -- At login: this character's request waiting comes back; what expired goes (a proof waiting
 -- for a watcher once the bot can't take it any more: GRACE after its code's expiry). The confirmer
--- key 0.9.10's first builds kept for the whole account goes: a key is one character's now.
+-- key 0.9.10's first builds kept for the whole account goes: a key is one character's now. Keys
+-- made in game go too while the council authority's path is off (Link.CouncilAuthority).
 function Link.Resume()
 	if type(ns.db.discord) ~= "table" then return end -- never used on this account
 	local d, server = Store(), ServerTime()
 	if d.key ~= nil or d.cert ~= nil then
 		d.key, d.cert = nil, nil
 		ns.Print(L.LINK_KEY_PER_CHARACTER)
+	end
+	-- Keys an addon made in game for a High Councillor (auto) go, every character's of the account,
+	-- while the council authority's path does not run (Konig's review: made from tens of bits,
+	-- kept in plain text, certified for a year): said in one line. Keys from the bot's keeper stay.
+	if not Link.CouncilAuthority() then
+		local gone = false
+		for name, k in pairs(d.keys) do
+			if type(k) == "table" and k.auto then d.keys[name], gone = nil, true end
+		end
+		if gone then
+			pubCache, ownCert, ownChecking, toldCert, making, auto = nil, nil, nil, false, nil, {}
+			if ns.Comm.senderHook == Link.HeardFrom then ns.Comm.senderHook = nil end
+			ns.Print(L.LINK_KEY_AUTO_GONE)
+			ns.Log("discord link: keys made in game removed (the council authority's path is off)")
+		end
 	end
 	local expired = false
 	for name, rec in pairs(d.chars) do
