@@ -19803,6 +19803,38 @@ test("1.0.1 borders: a census report never gives its own sender a Lord's or a Ca
 	end)
 end)
 
+-- Konig's review of 1.0.0: the borders read the census softly (Data.KnownRank, soft), so one other
+-- character's report naming a player an officer (or the guild master) of a guild nobody else
+-- reports gave him a Captain's silver (or a Lord's gold) on every screen. Now, as the Crown asks
+-- it: two senders naming him, for a guild master and for a Captain alike.
+test("1.0.0 borders: one other character's report never gives a Captain's silver or a Lord's gold: two senders must name him", function()
+	WithBorders(function(w)
+		local D, LEVELS = ns.Data, "~0,0,0,0,0,0,0~~"
+		local function Report(guild, leader, officers, sender)
+			return D.Receive(Codec.DecodeReport("R2~" .. guild .. "~40~9~" .. leader .. "~1~1~~" .. LEVELS .. officers), sender)
+		end
+		w.internal("LOGIN")
+		local function Tier(unit) w.target(unit) return w.shown("target") end
+		-- A guild nobody reports: one character's report names Victim its officer and Boss its master.
+		local victim = BorderUnit("Victim", "Olympus Quill", "Peasant", 6)
+		local boss = BorderUnit("Quillboss", "Olympus Quill", "Guild Master", 0)
+		eq(Report("Olympus Quill", "Quillboss", "Victim:1:0", "Stranger-Realm"), true, "taken: nobody else reports it")
+		eq(Tier(victim), nil, "one other character's report: no Captain's silver")
+		eq(Tier(boss), nil, "nor a Lord's gold")
+		-- A second sender names them the same: the borders show.
+		eq(Report("Olympus Quill", "Quillboss", "Victim:1:0", "Second-Realm"), true)
+		w.target(nil)
+		eq(Tier(victim), "silver", "two senders name him an officer")
+		eq(Tier(boss), "gold", "and him its master")
+		-- An officer on his own report and one other's: two senders, as the Crown counts them.
+		eq(Report("Olympus Quill2", "Quillboss2", "Quillcapt:1:0", "Quillcapt-Realm"), true)
+		eq(Tier(BorderUnit("Quillcapt", "Olympus Quill2", "Titan", 1)), nil, "his own word alone")
+		eq(Report("Olympus Quill2", "Quillboss2", "Quillcapt:1:0", "Quillrunner-Realm"), true)
+		w.internal("DATA_CHANGED")
+		eq(w.shown("target"), "silver", "named by his runner-up too")
+	end)
+end)
+
 -- 1.0.0: the author's preview (/oly borders test <tier>|off, Borders.SetPreview). His character
 -- holds no Olympus rank (a Member of <Olympus II> here), so his own portrait showed none of the
 -- six borders and he could not check them in game.
