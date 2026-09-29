@@ -10689,6 +10689,86 @@ test("1.0.0 three strangers' forged lists never stall the council's lists: a sig
 	end)
 end)
 
+-- Konig's second look at the fix above: he asked to "exempt your own relays from the shared
+-- cap", and the fix exempted our guildmates' relays instead. On a client whose roster doesn't
+-- know the author, three strangers' full-length forgeries still spent the channel's checks every
+-- minute, and the author's relay removing two councillors (or his answer to an ask, which comes
+-- the same way) was never checked. His relays are outside the cap now (his name: the server's
+-- word); the gap per kind of list and the lists found false still hold for them.
+test("1.0.0 the author's own relays are outside the shared cap: three strangers' full-length forgeries never hold back his names or titles", function()
+	WithTestCouncil(function()
+		local W, S = ns.Workshop, ns.Sign
+		local verify, checks, clock = S.Verify, 0, 1000000
+		local savedRoster = ns.Roster.byName
+		local ok, err = pcall(function()
+			ns.Now = function() return clock end
+			ns.After = function() end
+			ns.Comm.SendChunked = function() end
+			S.Verify = function(...) checks = checks + 1 return verify(...) end
+			ns.Roster.byName = {} -- our guild is not the author's: our roster doesn't know him
+			eq(W.TakeCouncil(COUNCIL_TEST_NAMES4), true, "four councillors held")
+			eq(W.TakeTitles(COUNCIL_TEST_TITLES), true, "their titles held, not public yet")
+			local author = ns.AUTHOR .. "-" .. ns.AUTHOR_REALM
+			eq(W.IsAuthorName(author), true)
+			local function Forge(minute)
+				for i = 1, 3 do
+					local sig = ("%02x"):format(minute * 10 + i):rep(256)
+					W.HandleCouncil("CHANNEL", "Stranger" .. i .. "-Realm", ("HS~HS1~%d~Realm~Fake Name~%s"):format(1900000000 + minute * 10 + i, sig))
+					W.HandleTitles("CHANNEL", "Stranger" .. i .. "-Realm", ("HT~HT1~%d~Realm~1~^^Fake Name=Boss~%s"):format(1900000000 + minute * 10 + i, sig))
+				end
+			end
+			-- Every minute the strangers spend the channel's budget first.
+			clock = clock + 61
+			local before = checks
+			Forge(1)
+			eq(checks - before, W.VERIFY_MAX, "the channel's budget spent")
+			W.HandleCouncil("CHANNEL", "Other Relay-Realm", "HS~" .. COUNCIL_TEST_NAMES2)
+			eq(checks - before, W.VERIFY_MAX, "a stranger's relay still waits")
+			eq(ns.IsHighCouncillor("Fourth Mod-Realm"), true)
+			-- The author's relay of the list removing Third Mod and Fourth Mod: checked and taken.
+			W.HandleCouncil("CHANNEL", author, "HS~" .. COUNCIL_TEST_NAMES2)
+			eq(checks - before, W.VERIFY_MAX + 1, "the author's relay checked")
+			eq(ns.rdb.council.blob, COUNCIL_TEST_NAMES2)
+			eq(ns.IsHighCouncillor("Fourth Mod-Realm"), false, "Fourth Mod is no longer a councillor")
+			eq(ns.IsHighCouncillor("Third Mod-Realm"), false)
+			-- And his titles list (the council made public), right after it.
+			W.HandleTitles("CHANNEL", author, "HT~" .. COUNCIL_TEST_PUBLIC)
+			eq(checks - before, W.VERIFY_MAX + 2, "the author's titles checked")
+			eq(ns.rdb.councilTitles.blob, COUNCIL_TEST_PUBLIC, "his titles taken")
+			eq(ns.rdb.councilTitles.public, true)
+			-- His checks never come out of the strangers' budget: it is spent, and stays spent.
+			W.HandleCouncil("CHANNEL", "Other Relay-Realm", ("HS~HS1~1950000000~Realm~Fake Name~%s"):format(("cd"):rep(256)))
+			eq(checks - before, W.VERIFY_MAX + 2)
+			-- Only the author's name as the server stamps it: the same name on a realm outside his
+			-- realm group is a stranger's, and waits.
+			local elsewhere = ns.AUTHOR .. "-Elsewhere"
+			eq(W.IsAuthorName(elsewhere), false)
+			W.HandleCouncil("CHANNEL", elsewhere, ("HS~HS1~1950000001~Realm~Fake Name~%s"):format(("ce"):rep(256)))
+			eq(checks - before, W.VERIFY_MAX + 2, "not the author: the channel's budget")
+			-- The next minutes the same: forgeries spend the channel's checks, the author's own lists
+			-- are checked. A list under his name found false is never checked again, and his names
+			-- are checked once a minute at most (the gap per kind of list).
+			clock = clock + 61
+			before = checks
+			Forge(2)
+			eq(checks - before, W.VERIFY_MAX)
+			local forged = ("HS~HS1~1960000000~Realm~Fake Name~%s"):format(("ef"):rep(256))
+			W.HandleCouncil("CHANNEL", author, forged)
+			eq(checks - before, W.VERIFY_MAX + 1, "a list under his name is checked")
+			eq(ns.rdb.council.blob, COUNCIL_TEST_NAMES2, "and refused")
+			W.HandleCouncil("CHANNEL", author, ("HS~HS1~1960000001~Realm~Fake Name~%s"):format(("f0"):rep(256)))
+			eq(checks - before, W.VERIFY_MAX + 1, "his names once a minute at most")
+			clock = clock + 61
+			before = checks
+			Forge(3)
+			W.HandleCouncil("CHANNEL", author, forged)
+			eq(checks - before, W.VERIFY_MAX, "a list found false is never checked again")
+		end)
+		ns.Roster.byName, S.Verify = savedRoster, verify
+		if not ok then error(err, 0) end
+	end)
+end)
+
 test("0.9.9 the High Council's titles cross the channel under their own type", function()
 	WithTestCouncil(function()
 		CouncilOnChannel(function(_, Hear)

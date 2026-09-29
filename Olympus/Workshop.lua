@@ -1274,6 +1274,13 @@ Workshop.CouncilNames = CouncilNames
 -- roster knows: the server names the sender) have VERIFY_MAX checks a minute of their own, which
 -- nobody outside our guild can spend. And a signature that can't be the author's (not 512 hex
 -- digits: Sign.Plausible) is refused before it costs anything, never checked, never asked for.
+-- The author's own relays and answers (1.0.0, Konig's second look: "exempt your own relays from
+-- the shared cap") are outside both budgets: on a realm where no guildmate our roster knows is
+-- his, full-length forgeries from three strangers still spent the channel's checks every minute,
+-- and the author's relay removing a councillor waited behind them. His name is the server's word
+-- (IsAuthorName), never the sender's. His lists still keep the gap per kind of list (two checks a
+-- minute at most: his client relays each 10 minutes and answers an ask once per
+-- AUTHOR_ANSWER_GAP) and a list found false is never checked again.
 Workshop.VERIFY_GAP, Workshop.VERIFY_MAX = 60, 6
 local verifiedFrom, falseLists, falseCount = {}, {}, 0
 local verifyTimes = { channel = {}, guild = {} } -- each budget's checks in the last minute
@@ -1281,11 +1288,13 @@ local function MayVerify(sender, kind, blob, now, guild)
 	if falseLists[blob] then return false end
 	local key = sender and (sender .. "~" .. kind)
 	if key and now - (verifiedFrom[key] or -math.huge) < Workshop.VERIFY_GAP then return false end
-	local times = guild and verifyTimes.guild or verifyTimes.channel
-	for i = #times, 1, -1 do if now - times[i] >= 60 then table.remove(times, i) end end
-	if #times >= Workshop.VERIFY_MAX then return false end
+	if not IsAuthorName(sender) then
+		local times = guild and verifyTimes.guild or verifyTimes.channel
+		for i = #times, 1, -1 do if now - times[i] >= 60 then table.remove(times, i) end end
+		if #times >= Workshop.VERIFY_MAX then return false end
+		times[#times + 1] = now
+	end
 	if key then verifiedFrom[key] = now end
-	times[#times + 1] = now
 	return true
 end
 local function RememberFalse(blob)
@@ -1303,7 +1312,8 @@ local function FromGuild(dist, sender)
 	return dist == "GUILD" or (sender ~= nil and ns.Roster ~= nil and ns.Roster.RankOf(sender) ~= nil)
 end
 
--- sender: nil for the author's own file (never limited); guild: charged to our guild's budget.
+-- sender: nil for the author's own file (never limited); the author's name (a relay from his
+-- client) outside both budgets; guild: charged to our guild's budget.
 function Workshop.TakeCouncil(blob, sender, guild)
 	if type(blob) ~= "string" or #blob > 2000 then return false end
 	local text, at, realm, list, sig = blob:match("^(HS1~(%d+)~([^~]*)~([^~]*))~(%x+)$")
