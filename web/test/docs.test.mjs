@@ -192,7 +192,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url) && process.argv.includes(
 		assert.match(/\*\*Your bot's key\*\*[\s\S]*?\n- \*\*/.exec(fern)[0], /"renew": true[\s\S]*\/oly discord cert/);
 	});
 
-	test('FERN.md: the admin route is in the required steps, and step 6\'s Worker revokes a key with it', async () => {
+	test('FERN.md: the admin route is in the required steps, step 6\'s Worker revokes a key with it, and prunes on its schedule', async () => {
 		const required = fern.slice(fern.indexOf('### 1. '), fern.indexOf('### 8. '));
 		assert.ok(required.includes('### 7. Revoking, from day one'));
 		assert.match(required, /python3 scripts\/link-keys\.py revoke <id> > revoke\.sql/);
@@ -202,7 +202,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url) && process.argv.includes(
 		for (const [, cmd] of fern.matchAll(/scripts\/link-keys\.py (\w+)/g)) assert.ok(usage.includes(`\n  python3 scripts/link-keys.py ${cmd} `), cmd);
 		// Step 6's fetch, as FERN.md prints it, with the core's handlers.
 		const code = /### 6\.[\s\S]*?```js\n([\s\S]*?)```/.exec(fern)[1].replace('export default', 'return');
-		const worker = new Function('handleProof', 'handleKeys', 'promote', 'demote', code)(core.handleProof, core.handleKeys, async () => {}, async () => {});
+		const worker = new Function('handleProof', 'handleKeys', 'pruneLink', 'promote', 'demote', code)(core.handleProof, core.handleKeys, core.pruneLink, async () => {}, async () => {});
 		const DB = await makeD1();
 		if (!DB) return; // node:sqlite missing: the rest is the Worker tests'
 		const ADMIN = 'test-admin-token-0123456789abcdefghijklmnop';
@@ -214,6 +214,12 @@ if (process.argv[1] === fileURLToPath(import.meta.url) && process.argv.includes(
 		const res = await post({ Authorization: `Bearer ${ADMIN}`, 'Content-Type': 'application/json' });
 		assert.deepEqual([res.status, (await res.json()).revoked], [200, true]);
 		assert.ok(await DB.prepare('SELECT 1 AS x FROM revoked_keys WHERE key_id = ?').bind(CK.key_id).first());
+		// Its scheduled() prunes (FERN.md's cron trigger runs it daily).
+		await DB.prepare('INSERT INTO limits (k, until, n) VALUES (?, ?, ?)').bind('page', 1, 1).run();
+		const waiting = [];
+		await worker.scheduled({ cron: '17 4 * * *' }, env, { waitUntil: (p) => waiting.push(p) });
+		assert.equal((await waiting[0]).limits, 1);
+		assert.equal(await DB.prepare('SELECT 1 AS x FROM limits').first(), null);
 	});
 
 	test('FERN.md: the SQL it gives runs against the schema', async () => {

@@ -86,6 +86,7 @@ const state = {
 	elsewhere: false,
 	copied: null,
 	demoPreview: false,
+	forget: null, // "Delete my link": { phase: 'ask' | 'sending' | 'done', result }
 };
 
 const scanner = new Scanner({
@@ -141,6 +142,8 @@ async function start() {
 	if (answer.kind === 'token') store.set('sessionStorage', 'auth', { token: answer.token, exp: answer.exp });
 	const failed = answer.kind === 'none' || answer.kind === 'token' ? null : T.signInFailed[answer.kind] || T.signInFailed.error;
 	state.auth = currentAuth();
+	// Back from a sign-in started on "Delete my link": that page again, the button now at hand.
+	if (RETURNING && RETURNING.forget) state.forget = { phase: 'ask' };
 	const pending = store.get('sessionStorage', 'pending');
 	const savedTab = store.get('localStorage', 'tab');
 	state.tab = tabs().some((t) => t.id === savedTab) ? savedTab : tabs()[0].id;
@@ -180,7 +183,7 @@ function signIn() {
 		return;
 	}
 	const s = newState();
-	store.set('sessionStorage', 'signin', { state: s, search: location.search });
+	store.set('sessionStorage', 'signin', { state: s, search: location.search, forget: !!state.forget });
 	if ((store.get('sessionStorage', 'signin') || {}).state !== s) {
 		note('error', T.signInFailed.storage);
 		return render();
@@ -331,6 +334,44 @@ async function startScan(kind) {
 	}
 }
 
+// "Delete my link" (Konig's review): the signed-in player's own link, and everything the bot keeps
+// about the account, deleted by the bot (its POST /proof with {"forget": true}).
+function openForget() {
+	stopScan();
+	state.forget = { phase: 'ask' };
+	render({ focusStep: true });
+}
+
+function closeForget() {
+	const done = state.forget && state.forget.phase === 'done';
+	state.forget = null;
+	if (done) codeAgain();
+	else render({ focusStep: true });
+}
+
+async function forgetLink() {
+	if (!state.auth || (state.forget && state.forget.phase === 'sending')) return;
+	state.forget = { phase: 'sending' };
+	render({ focus: 'forget-sending' });
+	let result;
+	try {
+		result = await backend.forget(state.auth.token);
+	} catch {
+		result = { status: 'error', reason: 'server' };
+	}
+	if (result.status === 'forgotten') {
+		state.forget = { phase: 'done', result };
+		state.username = null;
+		return render({ focusStep: true });
+	}
+	if (result.reason === 'login') {
+		store.set('sessionStorage', 'auth', null);
+		state.auth = null;
+	}
+	state.forget = { phase: 'ask', result };
+	render({ focus: 'forget-result' });
+}
+
 // ---------------------------------------------------------------------------
 // Demo states (?demo=...): the page as it looks at each step, with made-up data.
 
@@ -339,6 +380,12 @@ function demo(which) {
 	switch (which) {
 		case 'closed':
 			state.closed = true;
+			break;
+		case 'forget':
+			state.forget = { phase: 'ask' };
+			break;
+		case 'forgotten':
+			state.forget = { phase: 'done', result: { status: 'forgotten', characters: ['Some Player-ClassicBetaPvP', 'Some Alt-ClassicBetaPvP'] } };
 			break;
 		case 'code':
 			state.step = 'code';
@@ -852,7 +899,9 @@ function errorView() {
 	const reason = T.errors[r.reason] ? r.reason : 'server';
 	let action;
 	const readAgain = ['not-enough', 'format', 'guild-unverified'].includes(reason);
+	const elsewhere = reason === 'linked-elsewhere'; // nothing to retry: another character, or the other account
 	if (reason === 'login') action = discordButton(T.loginButton);
+	else if (elsewhere) action = button(T.readAnother, { kind: 'primary', onclick: readAnother, 'data-key': 'retry' });
 	else if (['unknown-code', 'other-user', 'code-used', 'expired', 'tag'].includes(reason)) action = button(T.newCode, { kind: 'primary', onclick: codeAgain, 'data-key': 'retry' });
 	else if (readAgain) action = button(T.readAgain, { kind: 'primary', onclick: readAnother, 'data-key': 'retry' });
 	else action = button(T.retry, { kind: 'primary', onclick: () => (state.found ? send() : location.reload()), 'data-key': 'retry' });
@@ -861,7 +910,7 @@ function errorView() {
 		{ class: 'result result-error', role: 'alert', 'data-key': 'result', tabindex: '-1' },
 		h('div', { class: 'result-head' }, icon('alert', 'result-icon'), h('p', { class: 'result-title', text: T.errorTitle })),
 		h('p', { text: T.errors[reason] }),
-		h('div', { class: 'actions' }, action, state.found && !readAgain ? button(T.readAnother, { kind: 'ghost', onclick: readAnother }) : null),
+		h('div', { class: 'actions' }, action, state.found && !readAgain && !elsewhere ? button(T.readAnother, { kind: 'ghost', onclick: readAnother }) : null),
 	);
 }
 
@@ -877,6 +926,46 @@ function viewDone() {
 			: null,
 		h('p', { class: 'fine center', text: T.doneNote }),
 	];
+}
+
+function viewForget() {
+	const f = state.forget;
+	if (f.phase === 'done') {
+		const chars = (f.result.characters || []).map((c) => splitCharacter(c));
+		return [
+			h('div', { class: 'done-mark', 'aria-hidden': 'true' }, icon('check', 'done-check')),
+			h('h2', { class: 'card-title center', tabindex: '-1', text: T.forgetDoneTitle }),
+			h('p', { class: 'lead center', text: chars.length ? T.forgetDoneText : T.forgetDoneNone }),
+			chars.length
+				? h('div', { class: 'linked' }, h('p', { class: 'field-label center', text: T.forgetDoneCharacters }), h('ul', { class: 'chips' }, chars.map((c) => h('li', { class: 'chip' }, h('strong', { text: c.name }), h('span', { text: c.realm })))))
+				: null,
+			h('div', { class: 'actions actions-center' }, button(T.forgetBack, { kind: 'ghost', onclick: closeForget, 'data-key': 'forget-back' })),
+		];
+	}
+	const out = [h('h2', { class: 'card-title', tabindex: '-1', text: T.forgetTitle }), h('p', { class: 'lead', text: T.forgetText })];
+	if (f.phase === 'sending') {
+		out.push(h('p', { class: 'sending', role: 'status', 'data-key': 'forget-sending', tabindex: '-1' }, h('span', { class: 'spinner', 'aria-hidden': 'true' }), h('span', { text: T.forgetSending })));
+		return out;
+	}
+	if (f.result) {
+		const r = f.result;
+		const why = r.reason === 'login' ? T.forgetLogin : r.reason === 'discord' || r.reason === 'limit' ? T.errors[r.reason] : T.forgetServer;
+		out.push(
+			h(
+				'div',
+				{ class: 'result result-error', role: 'alert', 'data-key': 'forget-result', tabindex: '-1' },
+				h('div', { class: 'result-head' }, icon('alert', 'result-icon'), h('p', { class: 'result-title', text: T.forgetFailed })),
+				h('p', { text: why }),
+			),
+		);
+	}
+	const cancel = button(T.forgetCancel, { kind: 'ghost', onclick: closeForget, 'data-key': 'forget-cancel' });
+	if (!state.auth) {
+		out.push(h('p', { text: T.forgetWho }), h('div', { class: 'actions' }, discordButton(T.forgetSignIn), cancel), noticeView());
+	} else {
+		out.push(h('div', { class: 'actions' }, button(T.forgetButton, { kind: 'danger', onclick: forgetLink, 'data-key': 'forget' }), cancel), noticeView());
+	}
+	return out;
 }
 
 // config.js does not name the bot yet: nothing to send to.
@@ -897,6 +986,7 @@ function viewFramed() {
 
 const app = document.getElementById('app');
 const who = document.getElementById('who');
+const forgetLine = document.getElementById('forget-line');
 
 function render({ focus = null, focusStep = false } = {}) {
 	if (!state.ready) return;
@@ -904,11 +994,26 @@ function render({ focus = null, focusStep = false } = {}) {
 	if (state.framed || state.closed) {
 		document.body.dataset.step = 'closed';
 		who.replaceChildren();
+		forgetLine.replaceChildren();
 		app.replaceChildren(h('section', { class: 'card card-closed', 'aria-live': 'off' }, state.framed ? viewFramed() : viewClosed()));
 		return;
 	}
-	document.body.dataset.step = state.step;
 	who.replaceChildren(...[userChip()].filter(Boolean));
+	// "Delete my link", at the foot of every step (not on its own page).
+	forgetLine.replaceChildren(...(state.forget ? [] : [h('button', { type: 'button', class: 'foot-link', onclick: openForget, 'data-key': 'forget-open', text: T.forgetOpen })]));
+	if (state.forget) {
+		document.body.dataset.step = 'forget';
+		const card = h('section', { class: `card card-forget${state.forget.phase === 'done' ? ' card-done' : ''}`, 'aria-live': 'off' }, viewForget());
+		app.replaceChildren(card);
+		const title = card.querySelector('.card-title');
+		if (focusStep && title) title.focus({ preventScroll: false });
+		else if (keep) {
+			const el = app.querySelector(`[data-key="${CSS.escape(keep)}"]`);
+			if (el) el.focus({ preventScroll: true });
+		}
+		return;
+	}
+	document.body.dataset.step = state.step;
 	let body;
 	if (state.step === 'code') body = viewCode();
 	else if (state.step === 'wait') body = viewWait();

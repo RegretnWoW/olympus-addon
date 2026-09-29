@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { afterEach, beforeEach, describe, test } from 'node:test';
-import { handleLink, drawThreshold, drawPrefix, drawLimit, verifyCertificate, parseCertificate, councilKeyId, LINK } from '../worker/link-worker.js';
+import worker, { handleLink, drawThreshold, drawPrefix, drawLimit, verifyCertificate, parseCertificate, councilKeyId, LINK } from '../worker/link-worker.js';
 import { parseToken, buildBundle, parseBundle, signedMessage, linkTag, utf8Length } from '../public/core.js';
 import { vectors, makeD1, sign, verify, b64url, publicHexOf } from './helpers.mjs';
 
@@ -46,6 +46,7 @@ async function setup({ mode = 'c', policy } = {}) {
 		LINK_BACKEND_SEED: vectors.backend.seed_b64url,
 		LINK_BACKEND_PUBLIC: vectors.backend.public_hex,
 		LINK_CA_PUBLIC: CA.public_hex,
+		LINK_COUNCIL_CHARACTERS: CK.character, // closed by default: the vectors' councillor of the authority, listed
 		LINK_MODE: mode,
 		LINK_ORIGIN: ORIGIN,
 		LINK_ADMIN_TOKEN: ADMIN,
@@ -402,6 +403,7 @@ describe('Worker', { skip: probe ? false : 'node:sqlite is not available in this
 		assert.equal((await row('SELECT cert_exp FROM council_keys WHERE key_id = ?', CK.key_id)).cert_exp, CK.cert_exp + 86400);
 		await setup();
 		await submit(B5.bundle, USER_C);
+		env.LINK_COUNCIL_CHARACTERS = `${CK.character}, Someone Else-ClassicBetaPvP`; // both listed
 		const moved = await makeBundle({ ...B3, requester: 'Another Requester-ClassicBetaPvP' }, [[1799990200, CK.key_id, 'Someone Else-ClassicBetaPvP', 'w']]);
 		await env.DB.prepare('UPDATE codes SET discord_id = ? WHERE r = ?').bind(USER_C.id, B3.R).run();
 		const x = await submit(moved, USER_C);
@@ -415,6 +417,7 @@ describe('Worker', { skip: probe ? false : 'node:sqlite is not available in this
 		// carries 86 characters of junk in a link for his alt, with a code of his own account.
 		await setup();
 		const EVIL = 'Evil Councillor-ClassicBetaPvP';
+		env.LINK_COUNCIL_CHARACTERS = `${CK.character}, ${EVIL}`; // both on the High Council
 		const pub = Buffer.from(CK.public_hex, 'hex').toString('base64url');
 		const exp = NOW + 365 * 86400;
 		const payload = `OLK2.${CK.key_id}.${pub}.c.${exp}.${EVIL}`;
@@ -459,17 +462,19 @@ describe('Worker', { skip: probe ? false : 'node:sqlite is not available in this
 					await env.DB.prepare('INSERT INTO members (character, discord_id, guild, faction, r, linked) VALUES (?, ?, ?, ?, ?, ?)').bind(CK.character, USER_C.id, 'Olympus I', 'Alliance', '0000000000', 1780000000).run();
 					return B5.bundle;
 				}, /own key/],
+				// (A character of the councillor's account is that account's: refused before any proof is
+				// looked at since Konig's review, since a character never moves to another account.)
 				['a character of the councillor\'s account', async () => {
 					for (const c of [CK.character, B5.requester]) {
 						await env.DB.prepare('INSERT INTO members (character, discord_id, guild, faction, r, linked) VALUES (?, ?, ?, ?, ?, ?)').bind(c, '500000000000000077', 'Olympus I', 'Alliance', '0000000000', 1780000000).run();
 					}
 					return B5.bundle;
-				}, /own character/],
+				}, /linked to another Discord account/, 'linked-elsewhere'],
 			];
-			for (const [name, prepare, why] of cases) {
+			for (const [name, prepare, why, reason = 'not-enough'] of cases) {
 				await setup();
 				const r = await submit(await prepare(), USER_C);
-				assert.equal(r.reason, 'not-enough', `${name}: ${r.message}`);
+				assert.equal(r.reason, reason, `${name}: ${r.message}`);
 				assert.match(r.message, why, name);
 				assert.equal(discord.calls.length, 0, name);
 			}
@@ -554,6 +559,40 @@ describe('Worker', { skip: probe ? false : 'node:sqlite is not available in this
 		assert.equal((await keys({ character: CK.character })).reason, 'format', 'without "revoke": true it is not a revocation');
 	});
 
+	test('a registered key counts only with a certificate this Worker\'s backend key signed, while it and the latest one D1 recorded last (Konig\'s review, Codex on #39)', async () => {
+		// Throwaway keys: someone with a registered key's seed forging its certificate, and the bot's
+		// key before a rotation.
+		const forger = crypto.createHash('sha256').update('olympus-link-test:forger').digest('hex');
+		const previous = crypto.createHash('sha256').update('olympus-link-test:backend-previous').digest('hex');
+		const year = NOW + 365 * 86400;
+		const cases = [
+			['a certificate the backend never signed', null, { signer: forger, exp: year }, /not signed by the backend key/],
+			['a key whose certificate ended, with a made-up later one', NOW - 3600, { signer: forger, exp: year }, /not signed by the backend key/],
+			['a key that never got a certificate, with a made-up one', 'none', { signer: forger, exp: year }, /no certificate was issued/],
+			['a key that never got a certificate, with a real one for another life', 'none', { exp: year }, /no certificate was issued/],
+			["the backend's certificate, ended before the proof", null, { exp: NOW - 61 }, /after its certificate ended/],
+			["the backend's certificate, but the latest D1 recorded ended before the proof", NOW - 3600, { exp: year }, /after its certificate ended/],
+			['a certificate of the previous backend key, not named', null, { signer: previous, exp: year }, /not signed by the backend key/],
+		];
+		for (const [name, certExp, cert, why] of cases) {
+			await setup();
+			if (certExp !== null) await env.DB.prepare('UPDATE keys SET cert_exp = ? WHERE key_id = ?').bind(certExp === 'none' ? null : certExp, 'council01').run();
+			const r = await submit(await makeBundle(B1, [[NOW - 60, 'council01', COUNCILLOR, 'w', cert]]), USER_C);
+			assert.deepEqual([r.status, r.reason], ['rejected', 'not-enough'], `${name}: ${r.message}`);
+			assert.match(r.message, why, name);
+			assert.equal(discord.calls.length, 0, name);
+			assert.equal((await row('SELECT used FROM codes WHERE r = ?', B1.R)).used, null, name);
+		}
+		// The backend's own certificate, valid when signed: counts.
+		await setup();
+		assert.equal((await submit(await makeBundle(B1, [[NOW - 60, 'council01', COUNCILLOR, 'w', { exp: year }]]), USER_C)).status, 'linked');
+		// Rotating the bot's key: a certificate the old key signed counts while LINK_BACKEND_PREVIOUS names it.
+		await setup();
+		env.LINK_BACKEND_PREVIOUS = publicHexOf(previous);
+		const r = await submit(await makeBundle(B1, [[NOW - 60, 'council01', COUNCILLOR, 'w', { signer: previous, exp: year }]]), USER_C);
+		assert.equal(r.status, 'linked', r.message);
+	});
+
 	test('mode a refusals: window, key age, account age, replaced, revoked, own key, unlinked confirmer', async () => {
 		const three = [
 			[1799990200, 'player01', OWN.player01, 'r'],
@@ -589,12 +628,14 @@ describe('Worker', { skip: probe ? false : 'node:sqlite is not available in this
 				await env.DB.prepare('DELETE FROM members WHERE character = ?').bind(OWN.player02).run();
 				return B3.bundle;
 			}, /not a linked character/],
+			// (Refused before any proof is looked at since Konig's review: that character is the key
+			// owner's, and a character never moves to another account.)
 			['the requester is a character of a key owner', async () => {
 				await env.DB.prepare('INSERT INTO members (character, discord_id, guild, faction, r, linked) VALUES (?, ?, ?, ?, ?, ?)')
 					.bind(B3.requester, KEYS.player01.owner_discord_id, 'Olympus Vanguard', 'Horde', '0000000000', 1780000000)
 					.run();
 				return B3.bundle;
-			}, /own character/],
+			}, /linked to another Discord account/, undefined, 'linked-elsewhere'],
 			['a signature that does not match', async () => {
 				const p = parseBundle(B3.bundle).bundle;
 				p.proofs[1].sig = p.proofs[0].sig;
@@ -608,12 +649,12 @@ describe('Worker', { skip: probe ? false : 'node:sqlite is not available in this
 			['signed before the code existed', async () => makeBundle(B3, [[TOKEN_A.created - LINK.CLOCK_SKEW - 1, 'player01', OWN.player01], three[1], three[2]]), /outside the code/],
 			['signed in the future', async () => makeBundle(B3, [three[0], three[1], [NOW + LINK.CLOCK_SKEW + 60, 'player03', OWN.player03]]), /in the future/],
 		];
-		for (const [name, prepare, why, user] of cases) {
+		for (const [name, prepare, why, user, reason = 'not-enough'] of cases) {
 			await setup();
 			const bundle = await prepare();
 			const r = await submit(bundle, user || USER_A);
 			assert.equal(r.status, 'rejected', `${name}: ${r.message}`);
-			assert.equal(r.reason, 'not-enough', name);
+			assert.equal(r.reason, reason, name);
 			assert.match(r.message, why, name);
 			assert.equal(discord.calls.length, 0, name);
 			assert.equal((await row('SELECT used FROM codes WHERE r = ?', B3.R)).used, null, name);
@@ -843,11 +884,12 @@ describe('Worker', { skip: probe ? false : 'node:sqlite is not available in this
 			const user = { id: String(500000000000000000n + BigInt(users)), username: `fresh.user${users}` };
 			const res = await call('POST', '/api/link/code', { user });
 			assert.equal(res.status, 200);
-			return { user, token: parseToken((await res.json()).token).token };
+			// Each code's own requester: a character linked to one account never moves to another.
+			return { user, token: parseToken((await res.json()).token).token, requester: `Fresh Requester ${users}-ClassicBetaPvP` };
 		};
 		// A link on `code` with these keys' proofs, signed from `issued` on, sent now.
 		const link = async (code, ids, issued) => {
-			const b = { requester: 'Fresh Requester-ClassicBetaPvP', guild: 'Olympus Vanguard', faction: 'Horde', nonce: '0011223344556677', R: code.token.R, proofs: [] };
+			const b = { requester: code.requester, guild: 'Olympus Vanguard', faction: 'Horde', nonce: '0011223344556677', R: code.token.R, proofs: [] };
 			b.tag = await linkTag(code.token.sig, b.requester);
 			ids.forEach((keyId, i) => {
 				const p = { issued: issued + i, keyId, confirmer: chars[keyId], gv: 'r' };
@@ -880,9 +922,11 @@ describe('Worker', { skip: probe ? false : 'node:sqlite is not available in this
 		clock = t0 + 2 * 86400;
 		let code = await newCode();
 		assert.equal(code.token.T, 'ffffffff');
+		// (Since Konig's review a key D1 holds no certificate for counts for nothing, whatever
+		// certificate its proof carries: that is said before its age.)
 		let r = await link(code, ['fresh0001', 'player01', 'player02'], clock - 60);
 		assert.equal(r.reason, 'not-enough');
-		assert.match(r.message, /fresh0001: key younger than 7 days/);
+		assert.match(r.message, /fresh0001: no certificate was issued for this key/);
 		r = await keys({ key_id: 'fresh0001', renew: true });
 		assert.deepEqual([r.http, r.reason, r.cert_from], [409, 'too-early', expectFrom(t0)]);
 		assert.equal(r.cert, undefined);
@@ -892,7 +936,7 @@ describe('Worker', { skip: probe ? false : 'node:sqlite is not available in this
 		clock = t0 + LINK.KEY_MIN_AGE + 3600;
 		assert.equal((await keys({ key_id: 'fresh0001', renew: true })).reason, 'too-early');
 		r = await link(before, ['fresh0001', 'player01', 'player02'], clock - 60);
-		assert.match(r.message, /fresh0001: key younger than 7 days/);
+		assert.match(r.message, /fresh0001: no certificate was issued for this key/);
 		clock = fresh.cert_from - 1;
 		assert.equal((await keys({ key_id: 'fresh0001', renew: true })).reason, 'too-early');
 		// From cert_from on: the certificate (a player's lasts 90 days), and every code a proof
@@ -1025,15 +1069,28 @@ describe('Worker', { skip: probe ? false : 'node:sqlite is not available in this
 		assert.equal((await row('SELECT discord_id FROM members WHERE character = ?', B1.requester)).discord_id, USER_C.id);
 	});
 
-	test('a character linked again moves to the new account; the old one loses the role if it has no other', async () => {
+	test('a character linked to another account stays with it: no role given, none taken (Konig\'s review)', async () => {
 		await setup();
 		await env.DB.prepare('INSERT INTO members (character, discord_id, guild, faction, r, linked) VALUES (?, ?, ?, ?, ?, ?)')
 			.bind(B1.requester, '500000000000000001', 'Olympus II', 'Alliance', '1111111111', 1780000000)
 			.run();
-		assert.equal((await submit(B1.bundle, USER_C)).status, 'linked');
-		assert.equal((await row('SELECT discord_id FROM members WHERE character = ?', B1.requester)).discord_id, USER_C.id);
-		assert.deepEqual(discord.calls.map((c) => c.method), ['PUT', 'DELETE']);
-		assert.match(discord.calls[1].url, /members\/500000000000000001\/roles\//);
+		const r = await submit(B1.bundle, USER_C);
+		assert.deepEqual([r.status, r.reason], ['rejected', 'linked-elsewhere'], r.message);
+		assert.equal((await row('SELECT discord_id FROM members WHERE character = ?', B1.requester)).discord_id, '500000000000000001');
+		assert.deepEqual(discord.calls, [], 'no PUT, no DELETE');
+		assert.equal((await row('SELECT used FROM codes WHERE r = ?', B1.R)).used, null);
+	});
+
+	test('scheduled(): the reference Worker prunes what no link can use any more (Konig\'s review)', async () => {
+		await setup();
+		clock = TOKEN_C.exp + LINK.DELIVERY_GRACE + 1; // every vector code past its delivery grace
+		const waiting = [];
+		await worker.scheduled({ cron: '17 4 * * *', scheduledTime: clock * 1000 }, env, { waitUntil: (p) => waiting.push(p) });
+		assert.equal(waiting.length, 1);
+		const r = await waiting[0];
+		assert.deepEqual([r.status, r.codes], ['ok', vectors.backend.tokens.length]);
+		assert.equal((await row('SELECT COUNT(*) AS n FROM codes')).n, 0);
+		assert.equal((await row('SELECT COUNT(*) AS n FROM members')).n, Object.keys(OWN).length, 'links stay');
 	});
 
 	test('the page may submit 10 times an hour per account', async () => {
@@ -1145,5 +1202,12 @@ describe('Worker', { skip: probe ? false : 'node:sqlite is not available in this
 		const r = await res.json();
 		assert.deepEqual([r.status, r.reason, r.character, r.username], ['linked', 'linked', B1.requester, USER_C.username]);
 		assert.deepEqual(discord.calls.map((c) => [c.method, c.url]), [['PUT', `https://discord.com/api/v10/guilds/${env.GUILD_ID}/members/${USER_C.id}/roles/${env.ROLE_ID}`]]);
+		// The player deletes his own link on the page: the role goes (DELETE), then everything kept.
+		res = await at('POST', { headers: { Origin: env.LINK_ORIGIN, 'Content-Type': 'application/json' }, body: JSON.stringify({ forget: true, discordToken: 'token-of-some-player-0001' }) });
+		const gone = await res.json();
+		assert.deepEqual([res.status, gone.status, gone.characters], [200, 'forgotten', [B1.requester]]);
+		assert.deepEqual(discord.calls.map((c) => c.method), ['PUT', 'DELETE']);
+		assert.match(discord.calls[1].url, new RegExp(`members/${USER_C.id}/roles/${env.ROLE_ID}$`));
+		assert.equal(await row('SELECT 1 AS x FROM members WHERE discord_id = ?', USER_C.id), null);
 	});
 });

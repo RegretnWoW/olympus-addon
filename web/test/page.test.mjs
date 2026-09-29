@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { CONFIG } from '../public/config.js';
-import { createBackend, isConfigured, proofRequest, authorizeUrl, redirectUri, newState, readSignIn, hasSignIn, DEMO_STATES, DEMO_DATA, TOKEN_LIFE_MAX } from '../public/backend.js';
+import { createBackend, isConfigured, proofRequest, forgetRequest, authorizeUrl, redirectUri, newState, readSignIn, hasSignIn, DEMO_STATES, DEMO_DATA, TOKEN_LIFE_MAX } from '../public/backend.js';
 import { strings, pickLang, fill } from '../public/i18n.js';
 import { checkBundle } from '../public/core.js';
 import { PROOF_REASONS } from '../worker/link-core.mjs';
@@ -113,6 +113,34 @@ test('submit(): sends that request and returns the bot\'s answer; a network or b
 	assert.equal(createBackend({ config: { ...READY, PROOF_URL: '' }, fetchImpl: s.fetchImpl }).configured, false);
 });
 
+test('"Delete my link": the same request to the same address, with {"forget": true} and the sign-in only (Konig\'s review)', async () => {
+	const { url, init } = forgetRequest(READY, TOKEN);
+	assert.equal(url, READY.PROOF_URL, 'the bot\'s /proof: nothing new to allow in connect-src');
+	assert.deepEqual([init.method, init.mode, init.credentials, init.referrerPolicy, init.cache], ['POST', 'cors', 'omit', 'no-referrer', 'no-store']);
+	assert.deepEqual(JSON.parse(init.body), { forget: true, discordToken: TOKEN });
+	assert.equal(forgetRequest({ ...READY, SITE_TOKEN: 'page-token-123' }, TOKEN).init.headers.Authorization, 'Bearer page-token-123');
+	const answer = { status: 'forgotten', reason: 'forgotten', message: 'm', username: 'some.player', characters: ['Some Player-ClassicBetaPvP'] };
+	let s = stubFetch({ body: answer });
+	assert.deepEqual(await createBackend({ config: READY, fetchImpl: s.fetchImpl }).forget(TOKEN), answer);
+	assert.deepEqual(s.calls, [forgetRequest(READY, TOKEN)]);
+	for (const [status, reason] of [[401, 'login'], [429, 'limit'], [502, 'server']]) {
+		s = stubFetch({ status });
+		assert.equal((await createBackend({ config: READY, fetchImpl: s.fetchImpl }).forget(TOKEN)).reason, reason, String(status));
+	}
+	s = stubFetch(null);
+	assert.deepEqual(await createBackend({ config: READY, fetchImpl: s.fetchImpl }).forget(TOKEN), { status: 'error', reason: 'server', message: '', characters: [] });
+	// The demo answers without the network.
+	const demo = createBackend({ demo: 'forget', fetchImpl: () => { throw new Error('no network in the demo'); } });
+	assert.equal((await demo.forget('demo')).status, 'forgotten');
+	// Its words, in both languages; a character linked elsewhere is told about it.
+	for (const lang of ['en', 'pt']) {
+		for (const k of ['forgetOpen', 'forgetTitle', 'forgetText', 'forgetWho', 'forgetSignIn', 'forgetButton', 'forgetCancel', 'forgetSending', 'forgetFailed', 'forgetLogin', 'forgetServer', 'forgetDoneTitle', 'forgetDoneText', 'forgetDoneNone', 'forgetDoneCharacters', 'forgetBack']) {
+			assert.ok(typeof strings[lang][k] === 'string' && strings[lang][k].trim(), `${lang}.${k}`);
+		}
+		assert.ok(strings[lang].errors['linked-elsewhere'].includes(strings[lang].forgetOpen), `${lang}: linked-elsewhere names the page's "${strings[lang].forgetOpen}"`);
+	}
+});
+
 test('the sign-in: Discord\'s own page, the implicit grant, identify only, back to the page\'s folder with this tab\'s state', () => {
 	const u = new URL(authorizeUrl(READY, { state: STATE, redirect: PAGE }));
 	assert.equal(`${u.origin}${u.pathname}`, 'https://discord.com/oauth2/authorize');
@@ -205,7 +233,7 @@ test('the code step warns about streams, in both languages', () => {
 
 test('every answer the bot\'s /proof can give has its words, in both languages', () => {
 	for (const r of PROOF_REASONS) {
-		if (r === 'linked' || r === 'already') continue; // success: the done step
+		if (r === 'linked' || r === 'already' || r === 'forgotten') continue; // success: the done step (the deleted one for forgotten)
 		assert.ok(strings.en.errors[r], `en: ${r}`);
 		assert.ok(strings.pt.errors[r], `pt: ${r}`);
 	}

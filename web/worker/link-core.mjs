@@ -9,12 +9,13 @@
 //   LINK_DB              the D1 database with web/worker/schema.sql (DB when there is no LINK_DB)
 //   LINK_BACKEND_SEED    secret: your bot's Ed25519 seed, base64url (scripts/link-keys.py backend)
 //   LINK_BACKEND_PUBLIC  its public key, 64 hex: the addon holds the same one (ns.LINK_BACKEND_KEYS)
+//   LINK_BACKEND_PREVIOUS  optional, while you rotate the backend key: the old public key, 64 hex. The
+//                        certificates it signed still count until their confirmers type the renewed ones
 //   LINK_CA_PUBLIC       the council authority's public key, 64 hex (two, comma-separated, while it
 //                        changes): the addon author's client certifies High Councillors' keys with it
-//   LINK_COUNCIL_CHARACTERS  optional: the High Councillors' characters you accept ("Name-Realm",
-//                        comma-separated). Set, a council authority certificate for any other
-//                        character counts for nothing (set but empty: none counts); unset, every
-//                        character the authority certifies is a councillor here
+//   LINK_COUNCIL_CHARACTERS  the High Councillors' characters you accept from the council authority
+//                        ("Name-Realm", comma-separated): its certificate for any other character
+//                        counts for nothing. Closed by default: left out or empty, none counts
 //   LINK_MODE            "c" councillors only (launch), "a" one councillor or three drawn players
 //   LINK_GUILD_POLICY    "verified" (the default) or "claimed" (web/WORKER.md, "The guild check")
 //   LINK_ORIGIN          the page's origin, "https://dnl-gentile.github.io" (CORS of POST /proof)
@@ -25,13 +26,15 @@
 // The functions, by what they are for:
 //   codes      issueCode(env, user) -> { ok, token, command, reply }        (your /verify)
 //   proofs     checkProof(env, text, { discordId })   reads only: the verdict
-//              acceptProof(env, text, { discordId, promote, demote })   checks, claims the code,
-//              calls your promote(discordId), records the link (and frees the code if promote fails)
+//              acceptProof(env, text, { discordId, promote })   checks, claims the code, records the
+//              link, calls your promote(discordId) (and takes it all back if promote fails)
 //              handleProof(request, env, { promote, demote })   the whole POST /proof, CORS included
+//              (and a player's own "delete my link": forgetOwnLink)
 //   watcher    acceptInbox(env, body, { promote }) / handleInbox(request, env, { promote })
 //   keys       manageKeys(env, body) / handleKeys(request, env), registerKey, renewKey, revokeKey,
 //              revokeCharacter, councilCharacters(env)
-//   people     discordUser(accessToken, { clientId }), forgetUser(env, discordId)
+//   people     discordUser(accessToken, { clientId }), tooManyRequests(env, { ip, discordToken }),
+//              forgetUser(env, discordId), pruneLink(env) (daily, from your Worker's scheduled())
 //   answers    httpStatus(answer), respond(answer, headers), corsHeaders(request, env)
 
 export const LINK = {
@@ -46,7 +49,14 @@ export const LINK = {
 	KEY_MIN_AGE: 7 * 24 * 3600, // a player key counts for codes issued 7 days after it...
 	ACCOUNT_MIN_AGE: 30 * 24 * 3600, // ...and its owner's Discord account is 30 days older than the code
 	SUBMITS_PER_HOUR: 10,
+	// POST /proof, before Discord is asked who a sign-in is (Konig's review: Discord shuts out an
+	// address that sends it too many bad sign-ins, and yours is the bot's): so many a minute per IP
+	// address (an IPv6 one by its /64), an hour per sign-in, and a minute for the whole page.
+	IP_PER_MINUTE: 20,
+	SIGNIN_PER_HOUR: 10,
+	PAGE_PER_MINUTE: 300,
 	MAX_BUNDLES: 500,
+	LOG_DAYS: 90, // the audit trail (inbox_uploads) keeps a line this long: pruneLink, on your schedule
 	CERT_DAYS: 365, // a councillor key's certificate life, unless the request says otherwise...
 	CERT_DAYS_PLAYER: 90, // ...a player key's: a revoked or replaced one stays in the addons' draw until it ends...
 	CERT_DAYS_MAX: 3650, // ...up to this
@@ -58,6 +68,7 @@ export const LINK = {
 export const PROOF_REASONS = [
 	'linked', // status "linked": done
 	'already', // status "linked": that link had counted before, nothing new
+	'forgotten', // status "forgotten": the player deleted his own link on the page ({"forget": true})
 	'format', // "rejected" from here on: the code stays unused
 	'unknown-code',
 	'other-user',
@@ -66,6 +77,7 @@ export const PROOF_REASONS = [
 	'expired',
 	'not-enough',
 	'guild-unverified',
+	'linked-elsewhere',
 	'not-in-server',
 	'login', // "error" from here on: nothing was used, the same link works again
 	'origin',
@@ -170,6 +182,12 @@ export async function issueCode(env, user, source = 'discord') {
 	if (open) return codeSuccess({ token: open.token, exp: open.exp, mode: open.mode });
 	const count = await DB.prepare('SELECT COUNT(*) AS n FROM codes WHERE discord_id = ? AND created > ?').bind(id, t - 86400).first();
 	if (count && count.n >= LINK.CODES_PER_DAY) return codeFailure('limit');
+	// The same limit where forgetUser does not reach (Konig's review: "Delete my link" between two
+	// /verify gave a new code, and a new draw, every time): a keyed hash of the account in limits,
+	// counted for a day from its first code, and gone with pruneLink once that day ends.
+	const perDay = `code:${await limitKey(env, `code~${id}`)}`;
+	const issued = await DB.prepare('SELECT n FROM limits WHERE k = ? AND until > ?').bind(perDay, t).first();
+	if (issued && issued.n >= LINK.CODES_PER_DAY) return codeFailure('limit');
 	const mode = env.LINK_MODE === 'a' ? 'a' : 'c';
 	const exp = t + LINK.TOKEN_LIFE;
 	const pool = mode === 'a' ? await drawPool(env, t) : null;
@@ -179,9 +197,10 @@ export async function issueCode(env, user, source = 'discord') {
 		const payload = `OLC2.${R}.${username}.${exp}.${mode}.${T}`;
 		const token = `${payload}.${await backendSign(env, payload)}`;
 		try {
-			await DB.prepare('INSERT INTO codes (r, discord_id, username, mode, draw_t, created, exp, token, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-				.bind(R, id, username, mode, T, t, exp, token, source)
-				.run();
+			await DB.batch([
+				DB.prepare('INSERT INTO codes (r, discord_id, username, mode, draw_t, created, exp, token, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(R, id, username, mode, T, t, exp, token, source),
+				countOne(DB, perDay, 86400, t),
+			]);
 			return codeSuccess({ token, exp, mode, R, T });
 		} catch (err) {
 			if (!/unique|constraint/i.test(String(err && err.message))) throw err; // an R taken: draw again
@@ -414,6 +433,11 @@ async function examine(env, input, opts = {}) {
 		return { verdict: reject('code-used', 'This code was already used.', b.R) };
 	}
 	if (t > code.exp + LINK.DELIVERY_GRACE) return { verdict: reject('expired', 'This code expired more than 7 days ago.', b.R) };
+	// A character linked to one account never moves to another on a link (Konig's review: one
+	// councillor's proof, or a leaked councillor seed, would take anyone's link and role). Its owner
+	// removes the link first, or you do.
+	const owner = await DB.prepare('SELECT * FROM members WHERE character = ?').bind(b.requester).first();
+	if (owner && owner.discord_id !== code.discord_id) return { verdict: linkedElsewhere(b) };
 
 	const checks = [];
 	for (const p of b.proofs) checks.push(await checkConfirmation(env, b, p, code, t));
@@ -444,7 +468,11 @@ async function examine(env, input, opts = {}) {
 		};
 	}
 	const verdict = linkVerdict(code, b, gv, counted, `${b.requester} can be linked to @${code.username}.`);
-	return { verdict, b, code, counted, valid, gv };
+	return { verdict, b, code, counted, valid, gv, owned: owner || null };
+}
+
+function linkedElsewhere(b) {
+	return reject('linked-elsewhere', `${b.requester} is linked to another Discord account: that account removes its link first, or the bot's keeper does.`, b.R);
 }
 
 function linkVerdict(code, b, gv, counted, message) {
@@ -466,18 +494,18 @@ function linkVerdict(code, b, gv, counted, message) {
 	};
 }
 
-// The check, then the link: claims the code (two deliveries of the same link may race), calls
-// promote(discordId, verdict) to give the role, then records the character. When promote fails,
-// or the record does, the code is freed again, so the same link works on the next try.
+// The check, then the link: claims the code (two deliveries of the same link may race), records
+// the character, then calls promote(discordId, verdict) to give the role. When promote fails, the
+// record is undone and the code freed again, so the same link works on the next try.
 //   promote(discordId, verdict): yours. Resolve (with nothing, true or { ok: true }) when the role is
 //     given; throw, or return false or { ok: false }, when it is not ({ ok: false, reason:
 //     'not-in-server' } when the member is not in the server: the player is told to join first).
-//   demote(discordId): optional. Called when the character was linked to another account that has
-//     no other linked character left: take that account's role away. Its errors are only logged.
+// A link never takes a character from another account, nor anyone's role (linked-elsewhere), and
+// an account is given the role only once the character is recorded as its own.
 // Answers { ok, status: 'linked' | 'rejected' | 'error', reason, message, R, and for a link:
 // discordId, username, character, guild, faction, guildCheck, guildKnown, characters }.
 export async function acceptProof(env, text, opts = {}) {
-	const { promote, demote } = opts;
+	const { promote } = opts;
 	if (typeof promote !== 'function') throw new TypeError('Olympus Link: acceptProof needs promote(discordId), your function that gives the role');
 	const t = opts.t || now();
 	const DB = database(env);
@@ -489,52 +517,76 @@ export async function acceptProof(env, text, opts = {}) {
 		return { ...linkedAnswer(v, 'already', v.message), characters: await charactersOf(env, code.discord_id) };
 	}
 
-	// Claim the code first (two deliveries of the same link may race), then the role. Anything
-	// that fails after the claim releases it, so the same link works on the next try.
+	// Claim the code first (two deliveries of the same link may race), then record the link, and
+	// only then give the role (Konig's review: two accounts linking the same character at the same
+	// moment each got the role, though only one got the character). Anything that fails after the
+	// claim undoes the record and releases the code, so the same link works on the next try.
 	const claim = await DB.prepare('UPDATE codes SET used = ? WHERE r = ? AND used IS NULL').bind(t, b.R).run();
 	if (!claim.meta || claim.meta.changes !== 1) return reject('code-used', 'This code was already used.', b.R);
-	const release = async () => {
+	const council = x.valid.filter((c) => c.key.council);
+	let wrote;
+	try {
+		wrote = await DB.batch([
+			...x.counted.map((c) => DB.prepare('INSERT OR IGNORE INTO used (r, key_id, t) VALUES (?, ?, ?)').bind(b.R, c.proof.keyId, t)),
+			// The council authority's keys whose proofs checked in this link: recorded now, not before.
+			...council.flatMap((c) => recordCouncilKey(DB, c, t)),
+			// Last: the account's own character again (a new code) is updated, and one another account
+			// holds now is left as it is (nothing changes: refused below); a new one is inserted, and
+			// one another account linked since the check fails the whole batch: nothing is written.
+			x.owned
+				? DB.prepare(
+						'INSERT INTO members (character, discord_id, guild, gv, faction, r, linked) VALUES (?, ?, ?, ?, ?, ?, ?) ' +
+							'ON CONFLICT(character) DO UPDATE SET guild = excluded.guild, gv = excluded.gv, faction = excluded.faction, r = excluded.r, linked = excluded.linked WHERE members.discord_id = excluded.discord_id',
+					).bind(b.requester, code.discord_id, b.guild, x.gv, b.faction, b.R, t)
+				: DB.prepare('INSERT INTO members (character, discord_id, guild, gv, faction, r, linked) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(b.requester, code.discord_id, b.guild, x.gv, b.faction, b.R, t),
+		]);
+	} catch (err) {
+		// Nothing was written (a batch is all or nothing): the code only is released.
 		try {
 			await DB.prepare('UPDATE codes SET used = NULL WHERE r = ? AND used = ?').bind(b.R, t).run();
-		} catch (err) {
-			console.error('olympus-link: could not release code', b.R, err && err.stack ? err.stack : err);
+		} catch (e) {
+			console.error('olympus-link: could not release code', b.R, e && e.stack ? e.stack : e);
 		}
-	};
+		const holder = await DB.prepare('SELECT discord_id FROM members WHERE character = ?').bind(b.requester).first();
+		if (holder && holder.discord_id !== code.discord_id) return linkedElsewhere(b);
+		console.error('olympus-link: could not record the link', b.R, err && err.stack ? err.stack : err);
+		return failure('server', 'The link could not be recorded: send it again in a minute.', { R: b.R });
+	}
+	// The council authority's keys this link recorded first (each one's INSERT OR IGNORE wrote a row).
+	const first = council.filter((c, i) => changed(wrote[x.counted.length + 2 * i]));
+	if (!changed(wrote[wrote.length - 1])) {
+		await undo(DB, x, t, first);
+		return linkedElsewhere(b);
+	}
 	const role = await promoted(promote, code.discord_id, v);
 	if (!role.ok) {
-		await release();
+		await undo(DB, x, t, first);
 		if (role.reason === 'not-in-server') return reject('not-in-server', 'Join the Olympus Discord server first, then send the link again.', b.R);
 		return failure('discord', 'Discord did not take the role change: try again in a minute.', { R: b.R });
 	}
-	let previous;
+	return { ...linkedAnswer(v, 'linked', `${b.requester} is now linked to @${code.username}.`), characters: await charactersOf(env, code.discord_id) };
+}
+
+const changed = (r) => !!(r && r.meta && Number(r.meta.changes) > 0);
+
+// A link's record taken back, when the role was not given or the character is another account's:
+// the character as it was before (the account's own again: its earlier link; a new one: gone),
+// the proofs that counted, the council authority's keys it recorded first, and the code's claim.
+// Each only if this link wrote it, so nothing another link wrote meanwhile goes.
+async function undo(DB, x, t, first) {
+	const { b, code, owned } = x;
 	try {
-		previous = await DB.prepare('SELECT discord_id FROM members WHERE character = ?').bind(b.requester).first();
 		await DB.batch([
-			...x.counted.map((c) => DB.prepare('INSERT OR IGNORE INTO used (r, key_id, t) VALUES (?, ?, ?)').bind(b.R, c.proof.keyId, t)),
-			// The council authority's keys whose proofs checked in this link: recorded now, not before.
-			...x.valid.filter((c) => c.key.council).map((c) => recordCouncilKey(DB, c, t)),
-			DB.prepare(
-				'INSERT INTO members (character, discord_id, guild, gv, faction, r, linked) VALUES (?, ?, ?, ?, ?, ?, ?) ' +
-					'ON CONFLICT(character) DO UPDATE SET discord_id = excluded.discord_id, guild = excluded.guild, gv = excluded.gv, faction = excluded.faction, r = excluded.r, linked = excluded.linked',
-			).bind(b.requester, code.discord_id, b.guild, x.gv, b.faction, b.R, t),
+			owned
+				? DB.prepare('UPDATE members SET guild = ?, gv = ?, faction = ?, r = ?, linked = ? WHERE character = ? AND discord_id = ? AND r = ?').bind(owned.guild, owned.gv, owned.faction, owned.r, owned.linked, b.requester, code.discord_id, b.R)
+				: DB.prepare('DELETE FROM members WHERE character = ? AND discord_id = ? AND r = ?').bind(b.requester, code.discord_id, b.R),
+			DB.prepare('DELETE FROM used WHERE r = ? AND t = ?').bind(b.R, t),
+			...first.map((c) => DB.prepare('DELETE FROM council_keys WHERE public_key = ? AND character = ? AND first_seen = ?').bind(c.key.public_key, c.key.character, t)),
+			DB.prepare('UPDATE codes SET used = NULL WHERE r = ? AND used = ?').bind(b.R, t),
 		]);
 	} catch (err) {
-		console.error('olympus-link: could not record the link', b.R, err && err.stack ? err.stack : err);
-		await release();
-		return failure('server', 'The link could not be recorded: send it again in a minute.', { R: b.R });
+		console.error('olympus-link: could not undo the link', b.R, err && err.stack ? err.stack : err);
 	}
-	if (previous && previous.discord_id !== code.discord_id && typeof demote === 'function') {
-		const left = await DB.prepare('SELECT COUNT(*) AS n FROM members WHERE discord_id = ?').bind(previous.discord_id).first();
-		if (!left || left.n === 0) {
-			// The character moved away, and the old account has no other.
-			try {
-				await demote(previous.discord_id);
-			} catch (err) {
-				console.error('olympus-link: demote failed for', previous.discord_id, err && err.stack ? err.stack : err);
-			}
-		}
-	}
-	return { ...linkedAnswer(v, 'linked', `${b.requester} is now linked to @${code.username}.`), characters: await charactersOf(env, code.discord_id) };
 }
 
 function linkedAnswer(v, reason, message) {
@@ -585,12 +637,14 @@ async function checkConfirmation(env, b, p, code, t) {
 
 // The key a proof is checked with: { key } or { why }. It only reads: nothing about a proof is
 // written before the whole link is accepted (acceptProof). A key registered here (keys) is D1's:
-// the certificate the proof carries must name its public key, tier and character, and D1 says
-// whether it is revoked. A key this Worker never registered counts only as a High Councillor's
+// the certificate the proof carries must name its public key, tier and character, be signed by
+// the backend key (LINK_BACKEND_PUBLIC, or LINK_BACKEND_PREVIOUS while it changes) and still run
+// when the proof was signed, as must the latest certificate D1 recorded for the key (none: the key
+// never got one, and counts for nothing); D1 says whether it is revoked. A key this Worker never registered counts only as a High Councillor's
 // certified by the council authority (the author's client, LINK_CA_PUBLIC): the certificate the
 // proof carries is then checked here (tier c, the key's id the first 12 hex of SHA-256 of it,
-// valid when the proof was signed), its character on LINK_COUNCIL_CHARACTERS when you set that
-// list, the revocation lists can end it (revoked_keys by its id, revoked_characters every
+// valid when the proof was signed), its character on LINK_COUNCIL_CHARACTERS (none when that list
+// is left out), the revocation lists can end it (revoked_keys by its id, revoked_characters every
 // certificate of a character signed before its revocation), and a key already recorded for
 // another character (council_keys, by the key itself) is refused. The record is written with the
 // first link it confirmed, once its signature checked: a certificate for someone else's public
@@ -605,15 +659,21 @@ async function proofKey(env, p) {
 		if (row.public_key !== cert.publicHex || row.kind !== cert.tier || row.character !== cert.character) {
 			return { why: "its certificate is not the one registered for this key (public key, tier and character)" };
 		}
+		// Checked as the council authority's are (Konig's review, Codex on #39): whoever holds a
+		// registered key's seed cannot make up its certificate, nor outlive the one it had.
+		if (row.cert_exp === null || row.cert_exp === undefined) return { why: 'no certificate was issued for this key' };
+		if (!(await backendCertificate(env, cert))) return { why: 'its certificate is not signed by the backend key' };
+		if (p.issued >= cert.exp || p.issued >= row.cert_exp) return { why: 'signed after its certificate ended' };
 		return { key: row };
 	}
-	if (!CA_KEYID_RE.test(p.keyId)) return { why: 'unknown key' };
+	// The revocation list: the council authority's keys you revoked, and the ids of keys forgotten
+	// with their owner (forgetUser).
 	if (await DB.prepare('SELECT 1 AS x FROM revoked_keys WHERE key_id = ?').bind(p.keyId).first()) return { why: 'revoked key' };
+	if (!CA_KEYID_RE.test(p.keyId)) return { why: 'unknown key' };
 	if (!(await councilCertificate(env, cert))) return { why: 'unknown key (not certified by the council authority)' };
 	if (p.issued >= cert.exp) return { why: 'signed after its certificate ended' };
-	// Your say over who is a councillor here: when you list them, the authority certifies no one else.
-	const listed = councilCharacters(env);
-	if (listed && !listed.has(cert.character)) return { why: 'its character is not on LINK_COUNCIL_CHARACTERS' };
+	// Your say over who is a councillor here: only the ones you list, whatever the authority signs.
+	if (!councilCharacters(env).has(cert.character)) return { why: 'its character is not on LINK_COUNCIL_CHARACTERS' };
 	// Its character revoked (a councillor off the list, or keys of theirs you can't name): every
 	// certificate for it signed before then, whatever key it names.
 	const gone = await DB.prepare('SELECT revoked_at FROM revoked_characters WHERE character = ?').bind(cert.character).first();
@@ -638,12 +698,13 @@ async function proofKey(env, p) {
 
 // The record of a council authority's key whose proof checked, written with the link it helped
 // accept: its character the first time, a later end of its certificate after (never another
-// character's: that stays the first one's).
+// character's: that stays the first one's). Two statements: the first writes a row only when the
+// key is new (acceptProof reads that, to take back only its own record).
 function recordCouncilKey(DB, c, t) {
-	return DB.prepare(
-		'INSERT INTO council_keys (public_key, key_id, character, cert_exp, first_seen) VALUES (?, ?, ?, ?, ?) ' +
-			'ON CONFLICT(public_key) DO UPDATE SET cert_exp = MAX(council_keys.cert_exp, excluded.cert_exp) WHERE council_keys.character = excluded.character',
-	).bind(c.key.public_key, c.key.key_id, c.key.character, c.key.cert_exp, t);
+	return [
+		DB.prepare('INSERT OR IGNORE INTO council_keys (public_key, key_id, character, cert_exp, first_seen) VALUES (?, ?, ?, ?, ?)').bind(c.key.public_key, c.key.key_id, c.key.character, c.key.cert_exp, t),
+		DB.prepare('UPDATE council_keys SET cert_exp = MAX(cert_exp, ?) WHERE public_key = ? AND character = ?').bind(c.key.cert_exp, c.key.public_key, c.key.character),
+	];
 }
 
 // Mode "a": three drawn players from three owners, signed within 5 minutes of each other. A
@@ -680,13 +741,105 @@ export async function charactersOf(env, discordId) {
 	return rows.map((r) => r.character);
 }
 
-// The page's limit: SUBMITS_PER_HOUR links an hour per Discord account (counted in inbox_uploads).
+// The page's limits before Discord is asked who a sign-in is: IP_PER_MINUTE per IP address (on
+// Cloudflare, the CF-Connecting-IP header; an IPv6 address counts by its /64, limitAddress below),
+// SIGNIN_PER_HOUR per sign-in, PAGE_PER_MINUTE for the whole page, in that order (an address over
+// its limit spends nothing of the others'). True when one is reached. When the whole page already
+// is, nothing is counted or written (Konig's review: a flood past it adds no rows). Each is counted
+// in limits under a keyed hash (HMAC-SHA-256 with your backend seed): never an address or a
+// sign-in itself.
+export async function tooManyRequests(env, { ip, discordToken } = {}, t = now()) {
+	const full = await database(env).prepare("SELECT n FROM limits WHERE k = 'page' AND until > ?").bind(t).first();
+	if (full && full.n >= LINK.PAGE_PER_MINUTE) return true;
+	const buckets = [];
+	if (typeof ip === 'string' && ip) buckets.push([`ip:${await limitKey(env, `ip~${limitAddress(ip)}`)}`, LINK.IP_PER_MINUTE, 60]);
+	if (typeof discordToken === 'string' && discordToken) buckets.push([`signin:${await limitKey(env, `signin~${discordToken}`)}`, LINK.SIGNIN_PER_HOUR, 3600]);
+	buckets.push(['page', LINK.PAGE_PER_MINUTE, 60]);
+	for (const [k, max, window] of buckets) {
+		const row = await countOne(database(env), k, window, t).first();
+		if (row && row.n > max) return true;
+	}
+	return false;
+}
+
+// One more in the limits row k, counted for `window` seconds from its first (then from 1 again):
+// the statement, which returns the count.
+function countOne(DB, k, window, t) {
+	return DB.prepare(
+		'INSERT INTO limits (k, until, n) VALUES (?, ?, 1) ON CONFLICT(k) DO UPDATE SET ' +
+			'n = CASE WHEN limits.until > ? THEN limits.n + 1 ELSE 1 END, until = CASE WHEN limits.until > ? THEN limits.until ELSE excluded.until END RETURNING n',
+	).bind(k, t + window, t, t);
+}
+
+// What an IP address counts as for its limit (Konig's review): an IPv4 address itself, an IPv6
+// address its /64 (one host is routinely given a whole /64, so counting each address would give
+// it 2^64 limits of its own). ::ffff:a.b.c.d is the IPv4 address a.b.c.d. Anything that is
+// neither counts as it is written.
+function limitAddress(ip) {
+	const v4 = ipv4Bytes(ip);
+	if (v4) return v4.join('.');
+	const h = ipv6Groups(ip);
+	if (!h) return `?${ip}`;
+	if (h.slice(0, 5).every((x) => x === 0) && h[5] === 0xffff) return [h[6] >> 8, h[6] & 255, h[7] >> 8, h[7] & 255].join('.');
+	return `${h.slice(0, 4).map((x) => x.toString(16)).join(':')}::/64`;
+}
+
+// a.b.c.d as its four numbers, or null.
+function ipv4Bytes(s) {
+	const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(s);
+	if (!m) return null;
+	const bytes = m.slice(1).map(Number);
+	return bytes.every((b) => b <= 255) ? bytes : null;
+}
+
+// An IPv6 address (any case, :: anywhere once, a dotted IPv4 address at its end) as its eight
+// 16-bit groups, or null.
+function ipv6Groups(s) {
+	const halves = s.toLowerCase().split('::');
+	if (halves.length > 2) return null;
+	const groups = (text, last) => {
+		if (text === '') return [];
+		const out = [];
+		const parts = text.split(':');
+		for (let i = 0; i < parts.length; i++) {
+			const v4 = last && i === parts.length - 1 && ipv4Bytes(parts[i]);
+			if (v4) out.push((v4[0] << 8) | v4[1], (v4[2] << 8) | v4[3]);
+			else if (/^[0-9a-f]{1,4}$/.test(parts[i])) out.push(parseInt(parts[i], 16));
+			else return null;
+		}
+		return out;
+	};
+	const left = groups(halves[0], halves.length === 1);
+	const right = halves.length === 2 ? groups(halves[1], true) : [];
+	if (!left || !right) return null;
+	if (halves.length === 1) return left.length === 8 ? left : null;
+	const fill = 8 - left.length - right.length;
+	return fill >= 1 ? [...left, ...new Array(fill).fill(0), ...right] : null;
+}
+
+let limitHmac = null;
+
+async function limitKey(env, text) {
+	const secret = `olympus-link-limits~${(env && (env.LINK_BACKEND_SEED || env.LINK_ADMIN_TOKEN)) || ''}`;
+	if (!limitHmac || limitHmac.secret !== secret) {
+		limitHmac = { secret, key: await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']) };
+	}
+	return bytesToHex(new Uint8Array(await crypto.subtle.sign('HMAC', limitHmac.key, enc.encode(text)))).slice(0, 32);
+}
+
+// The page's limit: SUBMITS_PER_HOUR links an hour per Discord account, true when it is reached.
+// Call it once for each link, before acceptProof: it counts that one. Counted in the audit trail's
+// last hour (inbox_uploads), and where forgetUser does not reach (Konig's review: "Delete my link"
+// set the count back to nothing): a keyed hash of the account in limits, for an hour from its
+// first link.
 export async function tooManyProofs(env, discordId, t = now()) {
-	const recent = await database(env)
-		.prepare("SELECT COUNT(*) AS n FROM inbox_uploads WHERE source = 'site' AND discord_id = ? AND uploaded > ?")
+	const DB = database(env);
+	const recent = await DB.prepare("SELECT COUNT(*) AS n FROM inbox_uploads WHERE source = 'site' AND discord_id = ? AND uploaded > ?")
 		.bind(String(discordId), t - 3600)
 		.first();
-	return !!recent && recent.n >= LINK.SUBMITS_PER_HOUR;
+	if (recent && recent.n >= LINK.SUBMITS_PER_HOUR) return true;
+	const row = await countOne(DB, `link:${await limitKey(env, `link~${discordId}`)}`, 3600, t).first();
+	return !!row && row.n > LINK.SUBMITS_PER_HOUR;
 }
 
 // The audit trail: every link received, from the page ('site') or the watcher's inbox ('watcher'),
@@ -707,9 +860,10 @@ export async function logProof(env, source, text, result, extra = {}) {
 // The page: POST /proof, from the static page on GitHub Pages
 //
 // Body {"text": "<the link: OLB5~... or its address>", "discordToken": "<the player's Discord
-// access token>"}; the page sends "Authorization: Bearer <LINK_SITE_TOKEN>" when you gave it one.
-// The token is only shown to Discord (GET /oauth2/@me), never stored: it must be for your
-// application (DISCORD_CLIENT_ID) with the identify scope, and it says who the player is.
+// access token>"}, or {"forget": true, "discordToken"} when the player deletes his own link; the
+// page sends "Authorization: Bearer <LINK_SITE_TOKEN>" when you gave it one. The token is only
+// shown to Discord (GET /oauth2/@me), never stored: it must be for your application
+// (DISCORD_CLIENT_ID) with the identify scope, and it says who the player is.
 
 // The CORS headers for a request from the page's origin (LINK_ORIGIN, exactly; several may be
 // listed, comma-separated, while a new address comes in), or null for any other origin.
@@ -763,8 +917,11 @@ export async function discordUser(accessToken, { clientId, fetchImpl = globalThi
 }
 
 // The whole POST /proof, CORS preflight included, as a Response: the origin, your site token
-// (when you set LINK_SITE_TOKEN), the body, the link's form, who the player is (discordUser), 10
-// links an hour per account, then acceptProof with your promote, and the audit trail.
+// (when you set LINK_SITE_TOKEN), the body, the link's form, the limits before Discord is asked
+// (tooManyRequests), who the player is (discordUser), 10 links an hour per account, then
+// acceptProof with your promote, and the audit trail. {"forget": true} instead of a link: the
+// signed-in player's own link and everything kept about his account but its limits, gone
+// (forgetOwnLink, with your demote to take the role).
 //   if (url.pathname === '/proof') return handleProof(request, env, { promote, demote });
 export async function handleProof(request, env, { promote, demote, fetchImpl } = {}) {
 	const cors = corsHeaders(request, env);
@@ -779,19 +936,24 @@ export async function handleProof(request, env, { promote, demote, fetchImpl } =
 			return reply(failure('site', 'This page is not allowed to send links right now.'));
 		}
 		const body = await readJson(request, 8 * 1024);
-		if (!body || typeof body.text !== 'string' || typeof body.discordToken !== 'string') {
-			return reply(failure('format', 'Send {"text": "<the link>", "discordToken": "<the Discord sign-in>"}.'));
+		const forget = !!body && body.forget === true;
+		if (!body || typeof body.discordToken !== 'string' || (forget ? body.text !== undefined : typeof body.text !== 'string')) {
+			return reply(failure('format', 'Send {"text": "<the link>", "discordToken": "<the Discord sign-in>"}, or {"forget": true, "discordToken"}.'));
 		}
-		const text = proofText(body.text);
-		if (!text || !parseBundle(text).ok) {
+		const text = forget ? null : proofText(body.text);
+		if (!forget && (!text || !parseBundle(text).ok)) {
 			const why = text ? parseBundle(text).error : 'prefix';
 			return reply(reject('format', `This is not a complete Olympus link (${why}).`));
 		}
+		const t = now();
+		if (await tooManyRequests(env, { ip: request.headers.get('CF-Connecting-IP'), discordToken: body.discordToken }, t)) {
+			return reply(failure('limit', 'Too many tries: wait a while and send it again.'));
+		}
 		const who = await discordUser(body.discordToken, { clientId: env.DISCORD_CLIENT_ID, fetchImpl });
 		if (!who.ok) return reply(who);
-		const t = now();
+		if (forget) return reply(pageAnswer(await forgetOwnLink(env, who.user, { demote, t })));
 		if (await tooManyProofs(env, who.user.id, t)) return reply(failure('limit', 'Too many tries: wait a while and send it again.'));
-		const result = await acceptProof(env, text, { discordId: who.user.id, promote, demote, t });
+		const result = await acceptProof(env, text, { discordId: who.user.id, promote, t });
 		try {
 			await logProof(env, 'site', text, result, { discordId: who.user.id, uploaded: t });
 		} catch (err) {
@@ -802,6 +964,28 @@ export async function handleProof(request, env, { promote, demote, fetchImpl } =
 		console.error('olympus-link: /proof', err && err.stack ? err.stack : err);
 		return reply(failure('server', 'Something went wrong on our side.'));
 	}
+}
+
+// The page's "delete my link" (Konig's review: players could not delete their own link), for the
+// Discord user the sign-in names: your demote(discordId) takes the role first (resolve, or
+// { ok: false, reason: 'not-in-server' } when there is none to take), then forgetUser deletes
+// everything kept about the account but its limits. When demote fails otherwise, nothing is
+// deleted and the player tries again ('discord'). Without demote, only the data goes: take the
+// role yourself.
+// { ok: true, status: 'forgotten', reason: 'forgotten', message, discordId, username, characters }
+// (the characters it removed) or an error answer.
+export async function forgetOwnLink(env, user, { demote, t = now() } = {}) {
+	const id = String(user && user.id);
+	if (!DISCORD_ID_RE.test(id)) return failure('login', 'Sign in with Discord first.');
+	if (typeof demote === 'function') {
+		const role = await promoted(demote, id);
+		if (!role.ok && role.reason !== 'not-in-server') return failure('discord', 'Discord did not take the role change: try again in a minute.');
+	}
+	const gone = await forgetUser(env, id, t);
+	if (!gone.ok) return gone;
+	const kept = "Nothing is kept about this Discord account but how many codes and links it used today, until that day's limit ends.";
+	const message = gone.characters.length ? `${gone.characters.join(', ')}: no longer linked. ${kept}` : kept;
+	return { ok: true, status: 'forgotten', reason: 'forgotten', message, discordId: id, username: user.username, characters: gone.characters };
 }
 
 // What the page gets back: the answer without the Discord id.
@@ -815,7 +999,7 @@ function pageAnswer(r) {
 // web/tools/read-inbox.mjs with your admin token. The Discord account is each code's owner.
 //   body: {"bundles": [{"R", "bundle", "from", "t"}, ...]} (500 at most; a bare string is a bundle)
 // { ok: true, status: 'ok', results: [{ R, status, reason, message }] } or a format error.
-export async function acceptInbox(env, body, { promote, demote } = {}) {
+export async function acceptInbox(env, body, { promote } = {}) {
 	if (typeof promote !== 'function') throw new TypeError('Olympus Link: acceptInbox needs promote(discordId), your function that gives the role');
 	const list = body && Array.isArray(body.bundles) ? body.bundles : null;
 	if (!list || list.length > LINK.MAX_BUNDLES) return failure('format', `Send {"bundles": [...]} with at most ${LINK.MAX_BUNDLES}.`);
@@ -830,7 +1014,7 @@ export async function acceptInbox(env, body, { promote, demote } = {}) {
 			result =
 				parsed.ok && typeof entry.R === 'string' && entry.R !== parsed.bundle.R
 					? reject('format', 'The inbox key does not match the link.', parsed.bundle.R)
-					: await acceptProof(env, text, { t, promote, demote });
+					: await acceptProof(env, text, { t, promote });
 		} catch (err) {
 			// One link that fails on our side does not stop the others: this one is sent again later.
 			console.error('olympus-link: inbox entry', err && err.stack ? err.stack : err);
@@ -851,10 +1035,10 @@ export async function acceptInbox(env, body, { promote, demote } = {}) {
 }
 
 // POST <your inbox route> for read-inbox.mjs --post: the admin token, then acceptInbox.
-export async function handleInbox(request, env, { promote, demote } = {}) {
+export async function handleInbox(request, env, { promote } = {}) {
 	if (!(await adminAuthorized(request, env))) return respond(failure('auth', 'Wrong admin token.'));
 	const body = await readJson(request, 2 * 1024 * 1024);
-	return respond(await acceptInbox(env, body, { promote, demote }));
+	return respond(await acceptInbox(env, body, { promote }));
 }
 
 // ---------------------------------------------------------------------------
@@ -892,6 +1076,22 @@ export async function verifyCertificate(publicHex, text) {
 	return c;
 }
 
+// A parsed certificate the backend key signed (LINK_BACKEND_PUBLIC, or the previous key while it
+// changes: LINK_BACKEND_PREVIOUS), else null.
+export async function backendCertificate(env, c) {
+	for (const pk of backendKeys(env)) {
+		if (await verifyCertificate(pk, c)) return c;
+	}
+	return null;
+}
+
+export function backendKeys(env) {
+	return [env && env.LINK_BACKEND_PUBLIC, env && env.LINK_BACKEND_PREVIOUS]
+		.flatMap((k) => String(k || '').split(/[\s,]+/))
+		.map((k) => k.toLowerCase())
+		.filter((k) => PUBLIC_HEX_RE.test(k));
+}
+
 // The council authority's public keys (LINK_CA_PUBLIC: one, or two while it changes).
 export function councilAuthorityKeys(env) {
 	return String((env && env.LINK_CA_PUBLIC) || '')
@@ -901,14 +1101,13 @@ export function councilAuthorityKeys(env) {
 }
 
 // The High Councillors' characters you accept from the council authority (LINK_COUNCIL_CHARACTERS:
-// "Name-Realm" as the game writes it, comma-separated), as a Set, or null when the setting is
-// absent: then every character the authority certifies counts. Set but empty, none does. Keys you
-// register yourself (keys) are yours already: the list does not apply to them.
+// "Name-Realm" as the game writes it, comma-separated), as a Set. Closed by default (Konig's review):
+// left out or empty, the Set is empty and no certificate of the authority counts. Keys you register
+// yourself (keys) are yours already: the list does not apply to them.
 export function councilCharacters(env) {
 	const list = env ? env.LINK_COUNCIL_CHARACTERS : undefined;
-	if (list === undefined || list === null) return null;
 	return new Set(
-		String(list)
+		String(list ?? '')
 			.split(/[,\n]/)
 			.map((c) => c.trim())
 			.filter((c) => c !== ''),
@@ -956,6 +1155,8 @@ export async function manageKeys(env, body, t = now()) {
 
 	if (body.revoke === true) {
 		if (!existing) {
+			// A key forgotten with its owner: its id is on the revocation list already.
+			if (await DB.prepare('SELECT 1 AS x FROM revoked_keys WHERE key_id = ?').bind(keyId).first()) return { ok: true, status: 'ok', key_id: keyId, revoked: true };
 			// A councillor's key the council authority certified (never registered here): on the
 			// revocation list at once, whether a link has used it yet or not.
 			if (!CA_KEYID_RE.test(keyId)) return fail('unknown-key', 'No such key.');
@@ -997,7 +1198,9 @@ export async function manageKeys(env, body, t = now()) {
 	if (!validCharacter(character)) return fail('format', 'character: the one character that confirms with this key, "Name-Realm" as the game writes it.');
 	if (kind !== 'c' && kind !== 'p') return fail('format', 'kind: "c" (a High Councillor) or "p" (a drawn player).');
 	if (bootstrap && kind !== 'c') return fail('format', 'Only a councillor key can be a bootstrap key.');
-	if (existing) return fail('key-id-used', 'This key id exists already: ids are never reused.');
+	if (existing || (await DB.prepare('SELECT 1 AS x FROM revoked_keys WHERE key_id = ?').bind(keyId).first())) {
+		return fail('key-id-used', 'This key id exists already: ids are never reused.');
+	}
 	if (await DB.prepare('SELECT 1 AS x FROM keys WHERE public_key = ?').bind(pub).first()) return fail('public-key-used', 'This public key is registered already.');
 	// The character confirms for its owner: one of the owner's linked characters (a bootstrap
 	// councillor key excepted: at launch nobody has linked one yet).
@@ -1108,23 +1311,58 @@ function publicKeyHex(s) {
 // ---------------------------------------------------------------------------
 // People
 
-// Everything kept about one Discord account, gone: its linked characters, its codes and its lines
-// in the audit trail; the confirmer keys it owns are revoked (their rows stay, with no username,
-// so an id is never used twice). Take its role away yourself. { ok, status, discord_id,
-// characters, keys }. `python3 scripts/link-keys.py forget <id>` prints the same as SQL.
+// Everything kept about one Discord account, gone (Konig's review: rows were left behind): its
+// linked characters, its codes, the proofs that counted for them (used), every line of the audit
+// trail that names the account, one of its codes or one of its characters, the record of a
+// council authority's key for one of its characters (council_keys), and the confirmer keys it
+// owns, whose ids alone stay, on the revocation list (revoked_keys): never counted, never given to
+// another key. The revocation lists you keep yourself (revoked_keys, revoked_characters) stay, and
+// so do its limits (codes a day, links an hour: in limits, under a keyed hash of the account, never
+// the account itself) until their window ends, so a forget never gives more (Konig's review).
+// Take its role away yourself (the page's own delete does, with your demote). { ok, status,
+// discord_id, characters, keys }. `python3 scripts/link-keys.py forget <id>` prints the same SQL.
 export async function forgetUser(env, discordId, t = now()) {
 	const id = String(discordId);
 	if (!DISCORD_ID_RE.test(id)) return failure('format', 'A Discord id: digits only.');
 	const DB = database(env);
 	const characters = await charactersOf(env, id);
 	const keys = (await DB.prepare('SELECT key_id FROM keys WHERE owner_discord_id = ? AND revoked = 0').bind(id).all()).results || [];
+	const codes = 'SELECT r FROM codes WHERE discord_id = ?';
+	const links = 'SELECT r FROM members WHERE discord_id = ?';
+	const mine = 'SELECT character FROM members WHERE discord_id = ?';
+	// In this order: each reads what the next ones delete (link-keys.py forget prints the same).
 	await DB.batch([
+		DB.prepare(`DELETE FROM used WHERE r IN (${codes}) OR r IN (${links})`).bind(id, id),
+		DB.prepare(`DELETE FROM inbox_uploads WHERE discord_id = ? OR r IN (${codes}) OR requester IN (${mine}) OR from_character IN (${mine})`).bind(id, id, id, id),
+		DB.prepare(`DELETE FROM council_keys WHERE character IN (${mine})`).bind(id),
+		DB.prepare('INSERT OR IGNORE INTO revoked_keys (key_id, revoked_at) SELECT key_id, COALESCE(revoked_at, ?) FROM keys WHERE owner_discord_id = ?').bind(t, id),
+		DB.prepare('DELETE FROM keys WHERE owner_discord_id = ?').bind(id),
 		DB.prepare('DELETE FROM members WHERE discord_id = ?').bind(id),
 		DB.prepare('DELETE FROM codes WHERE discord_id = ?').bind(id),
-		DB.prepare('DELETE FROM inbox_uploads WHERE discord_id = ?').bind(id),
-		DB.prepare('UPDATE keys SET revoked = 1, revoked_at = COALESCE(revoked_at, ?), owner_username = NULL WHERE owner_discord_id = ?').bind(t, id),
 	]);
 	return { ok: true, status: 'ok', discord_id: id, characters, keys: keys.map((k) => k.key_id) };
+}
+
+// What no link can use any more, gone (Konig's review: nothing was pruned). Run it on a schedule,
+// once a day (your Worker's scheduled(), with a cron trigger):
+//   async scheduled(event, env, ctx) { ctx.waitUntil(pruneLink(env)); }
+// - codes past their delivery grace (a link on one is refused as expired, and none waits anywhere);
+// - the proofs recorded for codes gone that link nothing now (what counted for a character still
+//   linked stays: it is how you see which key linked whom);
+// - the audit trail's lines older than LINK.LOG_DAYS (the page's limit per account reads an hour);
+// - the limits whose window ended (the page's, and each account's codes a day and links an hour).
+// Keys, links, the council authority's keys seen and the revocation lists are yours: they stay.
+// { ok, status, codes, used, logs, limits }: how many rows went from each.
+export async function pruneLink(env, t = now()) {
+	const DB = database(env);
+	const [codes, used, logs, limits] = await DB.batch([
+		DB.prepare('DELETE FROM codes WHERE exp < ?').bind(t - LINK.DELIVERY_GRACE),
+		DB.prepare('DELETE FROM used WHERE r NOT IN (SELECT r FROM codes) AND r NOT IN (SELECT r FROM members)'),
+		DB.prepare('DELETE FROM inbox_uploads WHERE uploaded < ?').bind(t - LINK.LOG_DAYS * 86400),
+		DB.prepare('DELETE FROM limits WHERE until <= ?').bind(t),
+	]);
+	const n = (r) => (r && r.meta && Number(r.meta.changes)) || 0;
+	return { ok: true, status: 'ok', codes: n(codes), used: n(used), logs: n(logs), limits: n(limits) };
 }
 
 // ---------------------------------------------------------------------------

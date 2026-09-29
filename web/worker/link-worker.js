@@ -16,6 +16,7 @@
 //   GET /api/link/me, POST /api/link/code, POST /api/link/submit: only for a page served from
 //   this Worker's own site behind your own login (sessionUser); the GitHub Pages page uses /proof.
 // Anything else returns null from handleLink, so it can sit in front of an existing router.
+// scheduled(): pruneLink once a day, with a cron trigger in wrangler.toml ([triggers] crons).
 
 import {
 	acceptProof,
@@ -26,6 +27,7 @@ import {
 	handleProof,
 	issueCode,
 	logProof,
+	pruneLink,
 	readJson,
 	adminAuthorized,
 	allowedOrigins,
@@ -62,6 +64,8 @@ export {
 	councilKeyId,
 	councilCertificate,
 	manageKeys,
+	forgetUser,
+	pruneLink,
 	ed25519Verify,
 } from './link-core.mjs';
 
@@ -75,6 +79,10 @@ export default {
 	async fetch(request, env, ctx) {
 		return (await handleLink(request, env, ctx)) || new Response('Not found', { status: 404 });
 	},
+	// What no link can use any more, gone once a day (wrangler.toml: [triggers] crons = ["17 4 * * *"]).
+	async scheduled(event, env, ctx) {
+		ctx.waitUntil(pruneLink(env));
+	},
 };
 
 // ADAPT (only for the same-site routes /me, /code and /submit): the signed-in Discord user of this
@@ -85,7 +93,7 @@ export async function sessionUser(request, env) {
 	throw new Error('Olympus Link: connect sessionUser() to your Discord login (web/WORKER.md, "Who is sending")');
 }
 
-// The role, given and taken by the bot (your promote() and demote(), in the terms of acceptProof).
+// The role, given and taken by the bot (your promote() and demote() in the terms of handleProof).
 export const giveRole = (env) => (discordId) => discordRole(env, 'PUT', discordId);
 export const takeRole = (env) => (discordId) => discordRole(env, 'DELETE', discordId);
 
@@ -124,7 +132,7 @@ export async function handleLink(request, env, ctx, { getUser = sessionUser } = 
 // acceptProof with this Worker's role: the old name, kept for the tests and tools that use it.
 // opts.userId: the signed-in user, who must own the code (the page); absent for the watcher.
 export function acceptBundle(env, text, opts = {}) {
-	return acceptProof(env, text, { discordId: opts.userId, t: opts.t, promote: giveRole(env), demote: takeRole(env) });
+	return acceptProof(env, text, { discordId: opts.userId, t: opts.t, promote: giveRole(env) });
 }
 
 // ---------------------------------------------------------------------------

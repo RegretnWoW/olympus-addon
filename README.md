@@ -448,6 +448,13 @@ sends it to the bot. The bot's side is in [`web/FERN.md`](web/FERN.md), every de
 account (waiting for confirmers, ready, delivered), `/oly discord forget` drops this character's
 request and proof.
 
+A character linked to one Discord account never moves to another by a new link: the bot refuses
+it. To remove your link, use **Delete my link** at the foot of the Olympus Link page, signed in
+with Discord: the bot takes the role away and deletes everything it keeps about your Discord
+account (your linked characters, codes and their history) except how many codes and links you
+used today, counted for a day at most. You can link again later with a new code (3 a day, the
+ones before the delete included).
+
 **For confirmers and watchers.** A confirmer's key belongs to one character, and so does its
 certificate, which names it: another character of the same account confirms nothing with it.
 **High Councillors paste nothing**: the first time the signed High Council list names your
@@ -920,6 +927,7 @@ scripts/lint-globals.sh                   # catches locals used before they are 
 bash tests/check-scripts.sh               # verify check-script failure handling (also run in CI)
 bash tests/sign-roundtrip.sh              # the High Council signing script end to end (needs python3)
 python3 tests/fixtures/make-link-vectors.py --check  # Olympus Link's shared vectors, sample, draw and inbox (needs "cryptography")
+node --test web/test/*.test.mjs          # Olympus Link's page, core, Worker and tools (Node 22.13 or newer; also run in CI)
 python3 scripts/make-borders.py [--check] # the border textures from media/borders/src (needs Pillow)
 python3 scripts/link-keys.py ca           # the author, once: Olympus Link's council authority (see below)
 python3 scripts/council-sign.py sign "First Surname,..." [realm group]  # the author: sign the High Council list

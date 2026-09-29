@@ -35,8 +35,10 @@ or the environment: LINK_BACKEND_SEED_FILE (such a path) or LINK_BACKEND_SEED (t
 is never printed. web/WORKER.md, "Confirmer keys", says how to rotate and revoke.
 "revoke" and "forget" print SQL only, for "wrangler d1 execute <database> --remote --file <it>":
 "revoke" as POST /api/link/keys {"key_id" | "character", "revoke": true} does it, "forget" as the
-Worker's forgetUser() (an account's linked characters, codes and log lines deleted, the confirmer
-keys it owns revoked: take its role away yourself).
+Worker's forgetUser() (everything kept about an account deleted: its linked characters, codes,
+the proofs that counted for them, the log lines naming it or them, the record of an authority's
+key for its characters, and the confirmer keys it owns, whose ids stay on the revocation list
+only; its limits, under a keyed hash, stay until their window ends; take its role away yourself).
 
 "ca" makes the council authority, once, on the author's computer: a fresh seed written to
 dist/LinkCA.lua (ns.LINK_CA_SEED; OLYMPUS_LINK_CA_OUT gives another path), readable by its owner
@@ -432,15 +434,22 @@ def revoke(args):
 
 
 def forget(args):
-    # Everything kept about one Discord account, as link-core.mjs forgetUser() does it.
+    # Everything kept about one Discord account, as link-core.mjs forgetUser() does it, in its order
+    # (each statement reads what the next ones delete). Its keys' ids alone stay, on the revocation list.
     if len(args) != 1 or not DISCORD_ID.match(args[0]):
         sys.exit("usage: link-keys.py forget <discord id> (digits; Discord: Copy User ID)")
     who = sql_text(args[0])
+    codes = "SELECT r FROM codes WHERE discord_id = %s" % who
+    links = "SELECT r FROM members WHERE discord_id = %s" % who
+    mine = "SELECT character FROM members WHERE discord_id = %s" % who
+    print("DELETE FROM used WHERE r IN (%s) OR r IN (%s);" % (codes, links))
+    print("DELETE FROM inbox_uploads WHERE discord_id = %s OR r IN (%s) OR requester IN (%s) OR from_character IN (%s);" % (who, codes, mine, mine))
+    print("DELETE FROM council_keys WHERE character IN (%s);" % mine)
+    print("INSERT OR IGNORE INTO revoked_keys (key_id, revoked_at) SELECT key_id, COALESCE(revoked_at, unixepoch()) "
+          "FROM keys WHERE owner_discord_id = %s;" % who)
+    print("DELETE FROM keys WHERE owner_discord_id = %s;" % who)
     print("DELETE FROM members WHERE discord_id = %s;" % who)
     print("DELETE FROM codes WHERE discord_id = %s;" % who)
-    print("DELETE FROM inbox_uploads WHERE discord_id = %s;" % who)
-    print("UPDATE keys SET revoked = 1, revoked_at = COALESCE(revoked_at, unixepoch()), owner_username = NULL "
-          "WHERE owner_discord_id = %s;" % who)
 
 
 def main(argv):

@@ -57,8 +57,9 @@ CREATE TABLE IF NOT EXISTS council_keys (
 CREATE INDEX IF NOT EXISTS council_keys_by_id ON council_keys (key_id);
 CREATE INDEX IF NOT EXISTS council_keys_by_character ON council_keys (character);
 
--- The revocation list of the council authority's keys: a key id here counts no more, whether a
--- link carried it before or not (POST /api/link/keys {"key_id", "revoke": true}).
+-- The revocation list: a key id here counts no more, whether a link carried it before or not. The
+-- council authority's keys you revoked (POST /api/link/keys {"key_id", "revoke": true}), and the
+-- ids of keys forgotten with their owner (forgetUser): never counted, never given to another key.
 CREATE TABLE IF NOT EXISTS revoked_keys (
   key_id     TEXT PRIMARY KEY,
   revoked_at INTEGER NOT NULL
@@ -108,3 +109,14 @@ CREATE TABLE IF NOT EXISTS inbox_uploads (
   reason         TEXT
 );
 CREATE INDEX IF NOT EXISTS uploads_by_user ON inbox_uploads (discord_id, uploaded);
+
+-- The limits: one row a key, counted until its window ends. The page's (POST /proof), counted
+-- before Discord is asked who a sign-in is: a keyed hash (HMAC-SHA-256 with the backend seed) of
+-- an IP address (an IPv6 one's /64) or of a Discord sign-in, or the page as a whole. And each
+-- Discord account's codes a day and links an hour, under a keyed hash of its id, which a forget
+-- leaves (so "Delete my link" gives no more). Never an address, a sign-in or an id itself.
+CREATE TABLE IF NOT EXISTS limits (
+  k     TEXT PRIMARY KEY,                          -- 'ip:<hash>', 'signin:<hash>', 'page', 'code:<hash>' or 'link:<hash>'
+  until INTEGER NOT NULL,                          -- the end of its window
+  n     INTEGER NOT NULL                           -- requests in it
+);

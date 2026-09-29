@@ -36,7 +36,8 @@ database_id = "<the id wrangler d1 create printed>"
 ```
 
 A database of its own, bound as `LINK_DB`: the tables have plain names (`codes`, `keys`,
-`members`...) that could meet yours in your bot's database.
+`members`...) that could meet yours in your bot's database. Run the same command again after an
+update of `schema.sql`: it only adds what is missing.
 
 ### 2. Your bot's key: send us only the public half
 
@@ -69,16 +70,16 @@ wrangler secret put LINK_ADMIN_TOKEN    # your admin route (steps 6 to 9): pytho
 
 - `LINK_CA_PUBLIC` is the council authority, Daniel's client: it certifies the High Councillors'
   keys, so you never mint or paste theirs. It is also trust you give: with it, a key the
-  authority certifies counts as a councillor's, and one councillor's confirmation links a
-  player ([FAQ](#can-the-page-or-daniel-give-anyone-a-role)).
+  authority certifies for a councillor you list (next) counts as a councillor's, and one
+  councillor's confirmation links a player ([FAQ](#can-the-page-or-daniel-give-anyone-a-role)).
 - `LINK_COUNCIL_CHARACTERS` keeps the say over that with you: the High Councillors' characters
   you accept, as the game writes them (`Name-Realm`, comma-separated). A certificate for any
-  other character then counts for nothing, whatever the authority signs; set but empty, none
-  counts. Left out, every character the authority certifies counts. We suggest you set it: it is
-  a handful of names, Daniel sends them to you, and it keeps the authority (or a leaked copy of
-  its seed) from making councillors of anyone else. When the High Council changes, change the
-  list too: a councillor who is not on it still confirms in game, and your Worker refuses those
-  links (`not-enough`).
+  other character counts for nothing, whatever the authority signs. It is closed by default:
+  left out or empty, no certificate of the authority counts at all. It is a handful of names,
+  Daniel sends them to you, and it keeps the authority (or a leaked copy of its seed) from
+  making councillors of anyone else. When the High Council changes, change the list too: a
+  councillor who is not on it still confirms in game, and your Worker refuses those links
+  (`not-enough`).
 - `LINK_ORIGIN` is our page's origin: the only one browsers let call your `/proof` (CORS). CORS
   binds browsers only: a script sends any origin it likes.
 - In the Developer Portal, OAuth2, add our page as a redirect, exactly:
@@ -90,7 +91,7 @@ wrangler secret put LINK_ADMIN_TOKEN    # your admin route (steps 6 to 9): pytho
 ### 4. Import the core
 
 ```js
-import { issueCode, handleProof, handleInbox, handleKeys } from './link-core.mjs';
+import { issueCode, handleProof, handleInbox, handleKeys, pruneLink } from './link-core.mjs';
 ```
 
 ### 5. `/verify` gives a code
@@ -118,32 +119,57 @@ export default {
 		const url = new URL(request.url);
 		const roles = {
 			promote: (discordId) => promote(env, discordId), // your grant: throw if Discord refuses
-			demote: (discordId) => demote(env, discordId), // optional: a character moved to another account
+			demote: (discordId) => demote(env, discordId), // takes the role when a player deletes his own link
 		};
 		if (url.pathname === '/proof') return handleProof(request, env, roles);
 		if (url.pathname === '/api/link/keys') return handleKeys(request, env); // LINK_ADMIN_TOKEN: revoking (step 7), player keys (step 9)
 		// ...your routes
 	},
+	// Once a day: what no link can use any more goes (the cron trigger below).
+	async scheduled(event, env, ctx) {
+		ctx.waitUntil(pruneLink(env));
+	},
 };
+```
+
+```toml
+# wrangler.toml
+[triggers]
+crons = ["17 4 * * *"]   # pruneLink, daily (add the call to your scheduled() if you have one)
 ```
 
 `handleProof` answers the browser's preflight (`OPTIONS`) and the `POST`, and does, in order:
 our origin only (never `*`); your site token, if you set one; the body
 `{"text": "<the proof>", "discordToken": "<the player's Discord sign-in>"}`; the proof's form;
-who the player is, asked of Discord (`GET /oauth2/@me`: your application, scope `identify`, not
+the limits before Discord is asked anything (20 a minute per IP address, an IPv6 one by its
+/64, 10 an hour per sign-in, 300 a minute for the whole page); who the player is, asked of Discord (`GET /oauth2/@me`: your application, scope `identify`, not
 expired; the token is stored nowhere); 10 tries an hour per account; then the checks you
-already do plus the new ones (below), then it claims the code, calls your `promote(discordId)`,
-and records the character. When `promote` throws (or returns `false`), the code is freed again
-and the player can send the same proof a minute later; return `{ ok: false, reason:
-'not-in-server' }` when the member is not in the server, and the page tells them to join first.
+already do plus the new ones (below), then it claims the code, records the character, and only
+then calls your `promote(discordId)`, so no account gets the role for a character another one
+holds (Konig's review). When `promote` throws (or returns `false`), the record is taken back, the
+code is freed again and the player can send the same proof a minute later; return `{ ok: false,
+reason: 'not-in-server' }` when the member is not in the server, and the page tells them to join
+first.
 The answer is JSON with a `status` (`linked`, `rejected`, `error`) and a `reason` the page
 explains in English or Portuguese.
 
+The same route takes `{"forget": true, "discordToken": "..."}`: the page's "Delete my link"
+(Konig's review), for a player who wants his link gone. Checked the same way up to Discord's
+answer, then your `demote(discordId)` takes the role (return `{ ok: false, reason:
+'not-in-server' }` when the member left: nothing to take), and `forgetUser` deletes everything
+kept about the account (`forgotten`) but its limits: its codes today and links this hour stay
+counted, under a keyed hash of its Discord id, until their window ends, so a delete never gives
+a new code or a new draw (Konig's review). If `demote` fails otherwise, nothing is deleted and the
+player tries again. Without `demote`, only the data goes.
+
 The checks, each a few lines in `link-core.mjs`: the proof's tag matches the code's own signature
 and the player who typed it (someone who saw the code on a stream gets nothing); the code is
-yours, known, unused and not expired, and used once; every confirmation's Ed25519 signature,
-with a key you registered or one the council authority certified (for a character on
-`LINK_COUNCIL_CHARACTERS`, when you set it), not revoked, signed within the code's life; the
+yours, known, unused and not expired, and used once; the character is not linked to another
+Discord account (`linked-elsewhere`: a link never moves one, nor takes anyone's role); every
+confirmation's Ed25519 signature,
+with a key you registered (its certificate your bot's key's, still running when the proof was
+signed) or one the council authority certified (for a character on
+`LINK_COUNCIL_CHARACTERS`), not revoked, signed within the code's life; the
 confirmer is neither the player nor one of the key owner's characters; a key counts once per
 code; one councillor, or in mode `"a"` three drawn players (the draw is [not 3 of
 5](#why-these-changes-to-your-plan)); the guild check.
@@ -151,14 +177,26 @@ code; one councillor, or in mode `"a"` three drawn players (the draw is [not 3 o
 `handleKeys` is your admin route from day one, behind `LINK_ADMIN_TOKEN`: it is how you revoke a
 key in minutes (step 7), and later how you register player keys (step 9).
 
-One thing worth adding in Cloudflare's dashboard: a rate-limiting rule on `/proof` (say 20
-requests a minute per IP). Each `/proof` with a token asks Discord once, and Discord blocks for a
-while an address that sends it too many bad tokens; the rule keeps a flood of made-up tokens from
-reaching Discord from your Worker.
+`pruneLink`, once a day, deletes what no link can use any more: codes past their delivery grace
+(7 days after they expire), the proofs recorded for codes gone that link nothing now, log lines
+older than 90 days (`LINK.LOG_DAYS`) and the limits whose window ended. Links, keys and
+revocation lists are yours, and stay.
+
+Each `/proof` with a token asks Discord once, and Discord blocks for a while an address that
+sends it too many bad tokens: your Worker's, and your bot's with it. So `handleProof` counts
+before it asks (Konig's review): 20 a minute per IP address (Cloudflare's `CF-Connecting-IP`;
+an IPv6 address counts by its /64, since one host usually has a whole /64), 10 an hour per
+sign-in, 300 a minute for the whole page, then `429 limit` without a word to Discord
+(`LINK.IP_PER_MINUTE`, `LINK.SIGNIN_PER_HOUR`, `LINK.PAGE_PER_MINUTE` in `link-core.mjs`). It
+counts in D1 (`limits`), under a keyed hash of each address and sign-in, and once the whole page
+is at its limit a request writes nothing more there. A
+rate-limiting rule on `/proof` in Cloudflare's dashboard is still a good outer wall: it stops a
+flood before your Worker runs at all.
 
 Rather write the route yourself? `checkProof(env, text, { discordId })` gives the verdict and
-writes nothing; `acceptProof(env, text, { discordId, promote, demote })` does the whole link;
-`discordUser`, `corsHeaders`, `tooManyProofs` and `logProof` are the rest of `handleProof`.
+writes nothing; `acceptProof(env, text, { discordId, promote })` does the whole link;
+`corsHeaders`, `tooManyRequests` (before Discord), `discordUser`, `tooManyProofs` and `logProof`
+are the rest of `handleProof`.
 
 ### 7. Revoking, from day one
 
@@ -221,9 +259,9 @@ answers the second line, `/oly discord cert OLK2...`. Both fit the game's chat l
   game, and Daniel's client certifies each one when they meet (the council authority,
   `LINK_CA_PUBLIC`). Your Worker takes a councillor's key from the certificate the proof carries
   and records it the first time it helps accept a link. The price: your Worker trusts what the
-  authority certifies, and one councillor's confirmation links a player. Left alone, that is any
-  character name the authority puts in a certificate. `LINK_COUNCIL_CHARACTERS` (step 3) gives
-  you the say back: only the councillors you list count. You can also revoke a key, or every key
+  authority certifies, and one councillor's confirmation links a player. `LINK_COUNCIL_CHARACTERS`
+  (step 3) keeps the say with you: only the councillors you list count (none until you list
+  them), whatever character name the authority puts in a certificate. You can also revoke a key, or every key
   of a character (step 7). `/oly discord key <id> <key>` exists exactly as you wrote it, for the
   keys you do mint (player keys in step 9), followed by one `/oly discord cert` line.
 - **`keyId` to public key, not to a secret.** The same table (`keys`, with `revoked` and
@@ -308,23 +346,26 @@ Every revocation goes through your admin route or the tool's SQL (step 7).
 - **A councillor's key** (leaked, or replaced with `/oly discord key new`, which prints the old id
   for them to send you): `{"key_id": "<12 hex>", "revoke": true}`, or
   `revokeKey(env, '<12 hex>')`. It stops counting at once, seen before or not.
-- **A councillor off the High Council**: take their character off `LINK_COUNCIL_CHARACTERS` (if
-  you set it), and send `{"character": "<Name-Realm>", "revoke": true}`, or
+- **A councillor off the High Council**: take their character off `LINK_COUNCIL_CHARACTERS`, and
+  send `{"character": "<Name-Realm>", "revoke": true}`, or
   `revokeCharacter(env, 'Name-Realm')`:
   every certificate the council authority signed for that character until now stops counting,
   whatever key it names. A certificate the authority signs for it later counts again (a
-  councillor back on the council, with a new key), unless the character is off your list. In
+  councillor back on the council, with a new key) only while the character is on your list. In
   Daniel's game, `/oly discord certified` lists what his client certified (key id, character,
   end).
 - **A player key**: revoke it the same way; rotate with a new key and `"replace": true`.
 - **Your bot's key**: make a new one and send us its public key (the addon takes two while it
-  changes). Once that release is out, switch `LINK_BACKEND_SEED` and `LINK_BACKEND_PUBLIC`, then
-  renew every key you registered: `{"key_id": "<id>", "renew": true}` to `/api/link/keys` signs
-  its certificate with the new key, and you send that confirmer the new `/oly discord cert` line.
+  changes). Once that release is out, switch `LINK_BACKEND_SEED` and `LINK_BACKEND_PUBLIC`, put
+  the old public key in `LINK_BACKEND_PREVIOUS` (your Worker checks every registered key's
+  certificate, so without it the ones the old key signed stop counting at once), then renew
+  every key you registered: `{"key_id": "<id>", "renew": true}` to `/api/link/keys` signs its
+  certificate with the new key, and you send that confirmer the new `/oly discord cert` line.
   The keys to renew:
   `wrangler d1 execute olympus-link --remote --command "SELECT key_id, character FROM keys WHERE revoked = 0 AND replaced_at IS NULL AND cert_exp IS NOT NULL"`.
-  Tell us when they have their new lines: only then do we take the old key out of the addon,
-  since a certificate the old key signed stops checking in players' addons once it is gone.
+  Once they have their new lines, remove `LINK_BACKEND_PREVIOUS` and tell us: only then do we
+  take the old key out of the addon, since a certificate the old key signed stops checking in
+  players' addons once it is gone.
   High Councillors' certificates are the authority's and do not change. Codes already handed
   out stay good until they expire.
 - **The council authority's key**: `LINK_CA_PUBLIC` takes two, comma-separated, while it changes.
@@ -349,7 +390,7 @@ we put the new one in the page). CORS does not tell them apart either: it binds 
 and a script sends whatever `Origin` it likes (the `curl` in [Testing](#testing) does). What
 protects `/proof` is the rest: the player's Discord sign-in checked with Discord (only your
 application's, which Discord hands only to the redirect you registered), the signatures in the
-proof, one use per code, and 10 tries an hour per account.
+proof, one use per code, 10 tries an hour per account, and the limits before Discord is asked.
 
 ### What data is stored, and where?
 
@@ -357,39 +398,67 @@ Only in your D1 (the page stores nothing on any server): the codes (Discord id a
 when, used or not); the linked characters (name, guild, faction, how the guild was checked, the
 Discord id); which confirmer keys counted for which code; confirmer public keys (never a private
 key); the revocation lists; and a log of every proof received (source, code, Discord id,
-character, result). Never a Discord token, never an IP address.
+character, result). Never a Discord token, never an IP address: the limits before Discord is
+asked (step 6) count a keyed hash of each (HMAC with your bot's seed), in `limits`, as do each
+account's codes a day and links an hour (a keyed hash of its Discord id). With
+`pruneLink` on its daily schedule (step 6), a code goes a week after it expires, a log line after
+90 days, a limit when its window ends.
 
 ### How is someone's data deleted?
 
-`forgetUser(env, discordId)` removes that account's linked characters, codes and log lines, and
-revokes the confirmer keys it owns. Without code, the same from a checkout of this repository:
+`forgetUser(env, discordId)` removes everything kept about that account: its linked characters,
+its codes and the proofs that counted for them, every log line that names the account, one of
+its codes or one of its characters, the record of a council authority's key for one of its
+characters, and the confirmer keys it owns, whose ids alone stay on the revocation list (never
+counted, never given to another key). Your own revocation lists stay, and so do its limits (the
+keyed hash and how many codes and links it used) until their window ends, a day at most: a
+delete never gives more codes. Without code, the same from a checkout of this repository:
 
 ```sh
 python3 scripts/link-keys.py forget <their Discord id> > forget.sql
 wrangler d1 execute olympus-link --remote --file forget.sql
 ```
 
-Take the role away with your own `demote`. Dropping the `olympus-link` database removes
-everything.
+Take the role away with your own `demote`. Players do it themselves on the page: "Delete my
+link", at the foot of every step, signs them in with Discord, and your Worker takes the role
+(`demote`) and runs `forgetUser` for that account (step 6). Dropping the `olympus-link` database
+removes everything.
+
+### A character is linked to the wrong Discord account?
+
+A link never moves a character from one account to another: a link for a character already
+linked elsewhere is refused (`linked-elsewhere`, the code stays unused), and nobody's role
+changes. So one councillor's confirmation, or a leaked councillor key, never takes a member's
+link. The account that holds the character removes its link ("Delete my link" on the page), or
+you do:
+
+```sh
+wrangler d1 execute olympus-link --remote --command "DELETE FROM members WHERE character = '<Name-Realm>'"
+```
+
+Then the right account links it with a new code. Take the role from the old account yourself if
+it has no other character left.
 
 ### Can the page, or Daniel, give anyone a role?
 
 The page, no. It only forwards what the game signed, your Worker checks all of it, and the addon
 never sees your key's secret half.
 
-Daniel, yes, and so could anyone who copied his council authority's seed
-(`LinkCA.lua`, which only his own game loads). With `LINK_CA_PUBLIC` set, a key the authority
-certifies counts as a High Councillor's, and in mode `"c"` one councillor's confirmation links.
-Without `LINK_COUNCIL_CHARACTERS`, whoever holds that seed can certify a key for a character name
-you never heard of, confirm any character with it, and link it to any Discord account whose
-`/verify` code they have (their own, an alt's, a friend's); your `promote()` then gives the role.
-Without the list, revoking that character does not stick either: a certificate the authority
-signs after the revocation counts again. That is the trust `LINK_CA_PUBLIC` asks of you. What
-keeps it with you:
+Daniel, for the councillors you list, and so could anyone who copied his council authority's
+seed (`LinkCA.lua`, which only his own game loads). With `LINK_CA_PUBLIC` set, a key the
+authority certifies for a character on `LINK_COUNCIL_CHARACTERS` counts as a High Councillor's,
+and in mode `"c"` one councillor's confirmation links. Whoever holds that seed can certify a new
+key for one of those characters, confirm any character with it, and link it to any Discord
+account whose `/verify` code they have (their own, an alt's, a friend's); your `promote()` then
+gives the role. A character already linked to another account stays with it
+(`linked-elsewhere`). For a character name you never listed, the authority's certificate counts
+for nothing: the list is closed by default (left out or empty, none counts). That is the trust
+`LINK_CA_PUBLIC` asks of you. What keeps it with you:
 
 - **Limit it**: `LINK_COUNCIL_CHARACTERS` (step 3). Only the councillors you list count, whatever
-  the authority signs, now or later. The authority can still certify a new key for one of them
-  (that is how a councillor's `/oly discord key new` works), so watch for keys you don't expect.
+  the authority signs, now or later, and revoking a character you took off the list sticks. The
+  authority can still certify a new key for one of them (that is how a councillor's
+  `/oly discord key new` works), so watch for keys you don't expect.
 - **See it**: each key the authority certified is recorded with the first link it helped accept,
   and every link records the keys that counted for it:
 
