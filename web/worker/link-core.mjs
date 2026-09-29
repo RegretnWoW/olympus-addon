@@ -624,8 +624,10 @@ async function proofKey(env, p) {
 		if (p.issued >= cert.exp || p.issued >= row.cert_exp) return { why: 'signed after its certificate ended' };
 		return { key: row };
 	}
-	if (!CA_KEYID_RE.test(p.keyId)) return { why: 'unknown key' };
+	// The revocation list: the council authority's keys you revoked, and the ids of keys forgotten
+	// with their owner (forgetUser).
 	if (await DB.prepare('SELECT 1 AS x FROM revoked_keys WHERE key_id = ?').bind(p.keyId).first()) return { why: 'revoked key' };
+	if (!CA_KEYID_RE.test(p.keyId)) return { why: 'unknown key' };
 	if (!(await councilCertificate(env, cert))) return { why: 'unknown key (not certified by the council authority)' };
 	if (p.issued >= cert.exp) return { why: 'signed after its certificate ended' };
 	// Your say over who is a councillor here: only the ones you list, whatever the authority signs.
@@ -1024,6 +1026,8 @@ export async function manageKeys(env, body, t = now()) {
 
 	if (body.revoke === true) {
 		if (!existing) {
+			// A key forgotten with its owner: its id is on the revocation list already.
+			if (await DB.prepare('SELECT 1 AS x FROM revoked_keys WHERE key_id = ?').bind(keyId).first()) return { ok: true, status: 'ok', key_id: keyId, revoked: true };
 			// A councillor's key the council authority certified (never registered here): on the
 			// revocation list at once, whether a link has used it yet or not.
 			if (!CA_KEYID_RE.test(keyId)) return fail('unknown-key', 'No such key.');
@@ -1065,7 +1069,9 @@ export async function manageKeys(env, body, t = now()) {
 	if (!validCharacter(character)) return fail('format', 'character: the one character that confirms with this key, "Name-Realm" as the game writes it.');
 	if (kind !== 'c' && kind !== 'p') return fail('format', 'kind: "c" (a High Councillor) or "p" (a drawn player).');
 	if (bootstrap && kind !== 'c') return fail('format', 'Only a councillor key can be a bootstrap key.');
-	if (existing) return fail('key-id-used', 'This key id exists already: ids are never reused.');
+	if (existing || (await DB.prepare('SELECT 1 AS x FROM revoked_keys WHERE key_id = ?').bind(keyId).first())) {
+		return fail('key-id-used', 'This key id exists already: ids are never reused.');
+	}
 	if (await DB.prepare('SELECT 1 AS x FROM keys WHERE public_key = ?').bind(pub).first()) return fail('public-key-used', 'This public key is registered already.');
 	// The character confirms for its owner: one of the owner's linked characters (a bootstrap
 	// councillor key excepted: at launch nobody has linked one yet).
@@ -1176,21 +1182,32 @@ function publicKeyHex(s) {
 // ---------------------------------------------------------------------------
 // People
 
-// Everything kept about one Discord account, gone: its linked characters, its codes and its lines
-// in the audit trail; the confirmer keys it owns are revoked (their rows stay, with no username,
-// so an id is never used twice). Take its role away yourself. { ok, status, discord_id,
-// characters, keys }. `python3 scripts/link-keys.py forget <id>` prints the same as SQL.
+// Everything kept about one Discord account, gone (Konig's review: rows were left behind): its
+// linked characters, its codes, the proofs that counted for them (used), every line of the audit
+// trail that names the account, one of its codes or one of its characters, the record of a
+// council authority's key for one of its characters (council_keys), and the confirmer keys it
+// owns, whose ids alone stay, on the revocation list (revoked_keys): never counted, never given to
+// another key. The revocation lists you keep yourself (revoked_keys, revoked_characters) stay.
+// Take its role away yourself (the page's own delete does, with your demote). { ok, status,
+// discord_id, characters, keys }. `python3 scripts/link-keys.py forget <id>` prints the same SQL.
 export async function forgetUser(env, discordId, t = now()) {
 	const id = String(discordId);
 	if (!DISCORD_ID_RE.test(id)) return failure('format', 'A Discord id: digits only.');
 	const DB = database(env);
 	const characters = await charactersOf(env, id);
 	const keys = (await DB.prepare('SELECT key_id FROM keys WHERE owner_discord_id = ? AND revoked = 0').bind(id).all()).results || [];
+	const codes = 'SELECT r FROM codes WHERE discord_id = ?';
+	const links = 'SELECT r FROM members WHERE discord_id = ?';
+	const mine = 'SELECT character FROM members WHERE discord_id = ?';
+	// In this order: each reads what the next ones delete (link-keys.py forget prints the same).
 	await DB.batch([
+		DB.prepare(`DELETE FROM used WHERE r IN (${codes}) OR r IN (${links})`).bind(id, id),
+		DB.prepare(`DELETE FROM inbox_uploads WHERE discord_id = ? OR r IN (${codes}) OR requester IN (${mine}) OR from_character IN (${mine})`).bind(id, id, id, id),
+		DB.prepare(`DELETE FROM council_keys WHERE character IN (${mine})`).bind(id),
+		DB.prepare('INSERT OR IGNORE INTO revoked_keys (key_id, revoked_at) SELECT key_id, COALESCE(revoked_at, ?) FROM keys WHERE owner_discord_id = ?').bind(t, id),
+		DB.prepare('DELETE FROM keys WHERE owner_discord_id = ?').bind(id),
 		DB.prepare('DELETE FROM members WHERE discord_id = ?').bind(id),
 		DB.prepare('DELETE FROM codes WHERE discord_id = ?').bind(id),
-		DB.prepare('DELETE FROM inbox_uploads WHERE discord_id = ?').bind(id),
-		DB.prepare('UPDATE keys SET revoked = 1, revoked_at = COALESCE(revoked_at, ?), owner_username = NULL WHERE owner_discord_id = ?').bind(t, id),
 	]);
 	return { ok: true, status: 'ok', discord_id: id, characters, keys: keys.map((k) => k.key_id) };
 }

@@ -375,8 +375,12 @@ asked (step 6) count a keyed hash of each (HMAC with your bot's seed), in `limit
 
 ### How is someone's data deleted?
 
-`forgetUser(env, discordId)` removes that account's linked characters, codes and log lines, and
-revokes the confirmer keys it owns. Without code, the same from a checkout of this repository:
+`forgetUser(env, discordId)` removes everything kept about that account: its linked characters,
+its codes and the proofs that counted for them, every log line that names the account, one of
+its codes or one of its characters, the record of a council authority's key for one of its
+characters, and the confirmer keys it owns, whose ids alone stay on the revocation list (never
+counted, never given to another key). Your own revocation lists stay. Without code, the same
+from a checkout of this repository:
 
 ```sh
 python3 scripts/link-keys.py forget <their Discord id> > forget.sql

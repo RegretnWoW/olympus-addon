@@ -608,20 +608,45 @@ describe('with D1', { skip: probe ? false : 'node:sqlite is not available in thi
 		assert.equal((await acceptProof(env, B5.bundle, { discordId: USER_C.id, promote })).status, 'linked');
 	});
 
-	test('forgetUser: a Discord account\'s characters, codes and log lines gone, its keys revoked', async () => {
+	test('forgetUser: nothing tied to a Discord account is left, its keys\' ids only on the revocation list (Konig\'s review)', async () => {
+		const COUNCILLOR_OWNER = '500000000000000077'; // the account of the authority's councillor, CK
+		const everything = async () => {
+			const out = {};
+			for (const { name } of (await env.DB.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all()).results) {
+				out[name] = (await env.DB.prepare(`SELECT * FROM ${name}`).all()).results;
+			}
+			return JSON.stringify(out);
+		};
 		await setup();
-		await acceptProof(env, B1.bundle, { discordId: USER_C.id, promote });
-		await core.logProof(env, 'site', B1.bundle, { status: 'linked', reason: 'linked' }, { discordId: USER_C.id });
-		const owner = KEYS.council01.owner_discord_id;
+		await env.DB.prepare('INSERT INTO members (character, discord_id, guild, gv, faction, r, linked) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(CK.character, COUNCILLOR_OWNER, 'Olympus I', 'r', 'Alliance', '0000000000', 1780000000).run();
+		// USER_C links a character with the authority's councillor, through the page (its log line).
+		assert.equal((await proof(B5.bundle, 'token-of-some-player-0001')).status, 'linked');
+		// Someone else tried the same character: that log line names it too.
+		await core.logProof(env, 'site', B5.bundle, { status: 'rejected', reason: 'linked-elsewhere' }, { discordId: USER_A.id });
+		for (const x of [USER_C.id, B5.requester, B5.R]) assert.ok((await everything()).includes(x), `${x} is there before`);
 		const gone = await forgetUser(env, USER_C.id);
-		assert.deepEqual([gone.status, gone.characters, gone.keys], ['ok', [B1.requester], []]);
-		for (const table of ['members', 'codes', 'inbox_uploads']) {
-			assert.equal((await row(`SELECT COUNT(*) AS n FROM ${table} WHERE discord_id = ?`, USER_C.id)).n, 0, table);
-		}
-		assert.equal((await checkProof(env, B1.bundle)).reason, 'unknown-code');
-		const confirmer = await forgetUser(env, owner);
+		assert.deepEqual([gone.status, gone.characters, gone.keys], ['ok', [B5.requester], []]);
+		const left = await everything();
+		for (const x of [USER_C.id, USER_C.username, B5.requester, B5.R]) assert.equal(left.includes(x), false, `${x} is left`);
+		assert.equal((await checkProof(env, B5.bundle)).reason, 'unknown-code');
+		// The councillor's account: its character and the record of its key, gone.
+		await forgetUser(env, COUNCILLOR_OWNER);
+		assert.equal((await everything()).includes(CK.character), false);
+		// A confirmer's account: its keys gone, their ids on the revocation list only: never counted
+		// again, never given to another key.
+		const owner = KEYS.council01.owner_discord_id;
+		const confirmer = await forgetUser(env, owner, NOW + 5);
 		assert.deepEqual(confirmer.keys, ['council01']);
-		assert.deepEqual({ ...(await row('SELECT revoked, owner_username FROM keys WHERE key_id = ?', 'council01')) }, { revoked: 1, owner_username: null });
+		assert.equal((await everything()).includes(owner), false);
+		assert.equal(await row('SELECT 1 AS x FROM keys WHERE key_id = ?', 'council01'), null);
+		assert.deepEqual({ ...(await row('SELECT * FROM revoked_keys WHERE key_id = ?', 'council01')) }, { key_id: 'council01', revoked_at: NOW + 5 });
+		await env.DB.prepare('INSERT INTO codes (r, discord_id, username, mode, draw_t, created, exp, token, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+			.bind(TOKEN_C.R, TOKEN_C.discord_id, TOKEN_C.username, TOKEN_C.mode, TOKEN_C.T, TOKEN_C.created, TOKEN_C.exp, TOKEN_C.token, 'discord')
+			.run();
+		assert.match((await checkProof(env, B1.bundle)).message, /council01: revoked key/);
+		const again = await registerKey(env, { key_id: 'council01', public_key: KEYS.council01.public_hex.replace(/^../, '00'), owner_discord_id: '400000000000000009', character: 'Other Name-ClassicBetaPvP', kind: 'c', bootstrap: true });
+		assert.deepEqual([httpStatus(again), again.reason], [409, 'key-id-used']);
+		assert.deepEqual([(await revokeKey(env, 'council01')).revoked, httpStatus(await renewKey(env, 'council01'))], [true, 404]);
 		assert.equal((await forgetUser(env, 'someone')).reason, 'format');
 	});
 

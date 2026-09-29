@@ -57,8 +57,9 @@ CREATE TABLE IF NOT EXISTS council_keys (
 CREATE INDEX IF NOT EXISTS council_keys_by_id ON council_keys (key_id);
 CREATE INDEX IF NOT EXISTS council_keys_by_character ON council_keys (character);
 
--- The revocation list of the council authority's keys: a key id here counts no more, whether a
--- link carried it before or not (POST /api/link/keys {"key_id", "revoke": true}).
+-- The revocation list: a key id here counts no more, whether a link carried it before or not. The
+-- council authority's keys you revoked (POST /api/link/keys {"key_id", "revoke": true}), and the
+-- ids of keys forgotten with their owner (forgetUser): never counted, never given to another key.
 CREATE TABLE IF NOT EXISTS revoked_keys (
   key_id     TEXT PRIMARY KEY,
   revoked_at INTEGER NOT NULL

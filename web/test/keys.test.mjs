@@ -340,7 +340,16 @@ test('forget: the SQL that deletes an account\'s data, as forgetUser() does it, 
 			await DB.prepare('INSERT INTO inbox_uploads (source, r, discord_id, requester, uploaded, status, reason) VALUES (?, ?, ?, ?, ?, ?, ?)')
 				.bind('site', r, who, `${name}-ClassicBetaPvP`, 1780000100, 'linked', 'linked')
 				.run();
+			// The proof that counted for its link, and the record of an authority's key for its character.
+			await DB.prepare('INSERT INTO used (r, key_id, t) VALUES (?, ?, ?)').bind(r, 'council01', 1780000100).run();
+			await DB.prepare('INSERT INTO council_keys (public_key, key_id, character, cert_exp, first_seen) VALUES (?, ?, ?, ?, ?)')
+				.bind(publicHexOf(r.charCodeAt(0).toString(16).repeat(32)), r.charCodeAt(0).toString(16).repeat(6), `${name}-ClassicBetaPvP`, 1790000000, 1780000100)
+				.run();
 		}
+		// Another account's try at the forgotten account's character: that log line names it too.
+		await DB.prepare('INSERT INTO inbox_uploads (source, r, discord_id, requester, uploaded, status, reason) VALUES (?, ?, ?, ?, ?, ?, ?)')
+			.bind('site', 'CCCCCCCCCC', KEPT, 'Gone One-ClassicBetaPvP', 1780000200, 'rejected', 'linked-elsewhere')
+			.run();
 		for (const [id, seed, who, revokedAt] of [['goneold1', '21', GONE, 1771000000], ['gonenew1', '22', GONE, null], ['keptkey1', '23', KEPT, null]]) {
 			await DB.prepare('INSERT INTO keys (key_id, public_key, owner_discord_id, owner_username, character, kind, bootstrap, created, cert_exp, revoked, revoked_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
 				.bind(id, publicHexOf(seed.repeat(32)), who, 'some.one', `${id}-ClassicBetaPvP`, 'p', 0, 1770000000, 1790000000, revokedAt ? 1 : 0, revokedAt)
@@ -355,7 +364,7 @@ test('forget: the SQL that deletes an account\'s data, as forgetUser() does it, 
 	// "now" is unixepoch() in the SQL and t in forgetUser: the same minute.
 	const dump = async (DB) => {
 		const out = {};
-		for (const table of ['members', 'codes', 'inbox_uploads', 'keys']) {
+		for (const table of ['members', 'codes', 'inbox_uploads', 'keys', 'used', 'council_keys', 'revoked_keys']) {
 			const rows = (await DB.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()).results;
 			out[table] = rows.map((x) => (x.revoked_at && Math.abs(x.revoked_at - t) < 60 ? { ...x, revoked_at: 'now' } : x));
 		}
@@ -364,11 +373,13 @@ test('forget: the SQL that deletes an account\'s data, as forgetUser() does it, 
 	const [sql, core] = [await dump(viaSql), await dump(viaCore)];
 	assert.deepEqual(sql, core);
 	for (const table of ['members', 'codes', 'inbox_uploads']) assert.deepEqual(sql[table].map((x) => x.discord_id), [KEPT], table);
-	assert.deepEqual(sql.keys.map((k) => [k.key_id, k.revoked, k.revoked_at, k.owner_username]), [
-		['goneold1', 1, 1771000000, null],
-		['gonenew1', 1, 'now', null],
-		['keptkey1', 0, null, 'some.one'],
-	]);
+	assert.deepEqual(sql.inbox_uploads.map((x) => x.requester), ['Kept One-ClassicBetaPvP']);
+	assert.deepEqual(sql.used.map((x) => x.r), ['BBBBBBBBBB']);
+	assert.deepEqual(sql.council_keys.map((x) => x.character), ['Kept One-ClassicBetaPvP']);
+	// Its keys: gone, their ids on the revocation list only (Konig's review: rows were left behind).
+	assert.deepEqual(sql.keys.map((k) => [k.key_id, k.revoked, k.revoked_at, k.owner_username]), [['keptkey1', 0, null, 'some.one']]);
+	assert.deepEqual(sql.revoked_keys.map((k) => [k.key_id, k.revoked_at]), [['goneold1', 1771000000], ['gonenew1', 'now']]);
+	assert.equal(JSON.stringify(sql).includes(GONE), false, 'the forgotten account is named nowhere');
 });
 
 test('public: the public key of a seed on stdin', { skip }, () => {
