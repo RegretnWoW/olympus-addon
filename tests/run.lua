@@ -20540,6 +20540,69 @@ do
 			Has(privacy, "comes in 1.1", path .. ": the privacy section")
 		end
 	end)
+
+	-- Konig's review of the merged docs: the council authority's switch (ns.LINK_COUNCIL_AUTHORITY)
+	-- ships off, so no High Councillor's addon makes a key in the game; the CurseForge page's copy of
+	-- the README's Olympus Link rows still said one did, and the test above only counted the rows.
+	test("1.0.0 docs (Konig's review): as the author's council-authority switch ships, both pages say every confirmer's key, a High Councillor's too, comes from the bot's keeper, and both privacy tables say a councillor's key made in game never goes out while it is off", function()
+		local shipped = ns.LINK_COUNCIL_AUTHORITY
+		local off = shipped ~= true
+		-- The addon first, with the switch as it ships: for a High Councillor of the signed list, with
+		-- the bot ready (the sample's throwaway key) and the authority's key as it ships, the council
+		-- authority's path runs exactly while the switch is on; off, no key is made in the game and
+		-- /oly discord key new sends them to the bot's keeper.
+		local Link = ns.Link
+		local sample = assert(ReadFile(ROOT .. "tests/fixtures/link-sample.txt"), "the Link sample")
+		local botKey = assert(sample:match("\nbackend_pub=(%x+)"), "the sample's bot key")
+		local saved = { keys = ns.LINK_BACKEND_KEYS, me = ns.me, council = ns.rdb.council, discord = ns.db.discord, Print = ns.Print }
+		local printed = {}
+		local ok, err = pcall(function()
+			Link.Reset()
+			ns.LINK_BACKEND_KEYS = { botKey }
+			ns.rdb.council = { names = { ["docs councillor"] = true } }
+			ns.me, ns.db.discord = "Docs Councillor-" .. ns.AUTHOR_REALM, nil
+			ns.Print = function(m) printed[#printed + 1] = tostring(m) end
+			assert(Link.BotReady() and #Link.CAKeys() > 0 and ns.IsHighCouncillor(ns.me), "the bot ready, the authority known, a councillor")
+			eq(Link.CouncilAuthority(), not off, "the council authority's path runs exactly while the switch is on")
+			if off then
+				eq(Link.MakeCouncilKey(), false, "no key made in the game")
+				Link.CouncilKeyStep(ns.Now())
+				eq(Link.Key(), nil, "none at the councillor's tick either")
+				SlashCmdList.OLYMPUS("discord key new")
+				eq(Link.Key(), nil, "key new makes none")
+				eq(printed[#printed], ns.L.LINK_KEY_FROM_KEEPER, "key new says keys come from the bot's keeper")
+			end
+		end)
+		ns.LINK_BACKEND_KEYS, ns.me, ns.rdb.council, ns.db.discord, ns.Print = saved.keys, saved.me, saved.council, saved.discord, saved.Print
+		Link.Reset()
+		if not ok then error(err, 0) end
+		-- Then both pages, tied to the same switch.
+		local linkRows = {}
+		for _, path in ipairs(DOCS) do
+			local doc = Doc(path)
+			local rows = PrivacyRows(path)
+			local mine = {}
+			for _, r in ipairs(rows) do if r:find("^| Olympus Link") then mine[#mine + 1] = r end end
+			linkRows[path] = table.concat(mine, "\n")
+			local row = Row(rows, path, "High Councillor's key's public half")
+			local when = assert(row:match("|%s*([^|]-)%s*|%s*$"), path .. ": the row's When")
+			eq(when:find("^never while the council authority is off") ~= nil, off,
+				path .. ": the row of a councillor's key made in game says it never goes out exactly while the author's switch is off: " .. when)
+			local link = Flat(assert(Subsection(doc, "Olympus Link"), path .. ": a section for Olympus Link"))
+			eq(link:find("Every confirmer, High Councillors included, gets a key from the bot's keeper", 1, true) ~= nil, off,
+				path .. ": the Olympus Link section says every confirmer's key, a High Councillor's too, comes from the bot's keeper exactly while the switch is off")
+			for _, must in ipairs({ "`/oly discord key <id> <key>`", "`/oly discord cert <certificate>`" }) do
+				Has(link, must, path .. ": how a confirmer types the key and certificate the keeper made")
+			end
+			if off then
+				assert(not Flat(doc):find("paste nothing", 1, true), path .. " still says High Councillors paste nothing")
+			end
+		end
+		-- The README names the switch as it ships, and the CurseForge page's Olympus Link rows are
+		-- the README's, word for word.
+		Has(Flat(Doc("README.md")), ("`ns.LINK_COUNCIL_AUTHORITY = %s`"):format(tostring(shipped)), "README.md: the author's switch")
+		eq(linkRows["docs/CURSEFORGE.md"], linkRows["README.md"], "the CurseForge page's Olympus Link rows are the README's")
+	end)
 end
 ---------------------------------------------------------------------------
 -- OfficerSpy's bridge (Bridge.lua): what a companion addon the mods run may read, and that it

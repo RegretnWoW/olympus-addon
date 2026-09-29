@@ -392,7 +392,10 @@ is ready and its key is in the addon.
    bot's word: nobody can change it). **Cancel** sends nothing.
 3. **Players confirm in game**, by addon whisper, that this character asked: a High Councillor
    online, or, when none is, verified players drawn for your code (three of them must confirm).
-   Each signs with a key of its own, certified for its character.
+   Each signs with a key of its own, for its character, which the bot certified. Every confirmer,
+   High Councillors included, gets a key from the bot's keeper, made on a computer, and types it
+   in the game with `/oly discord key <id> <key>`, then its certificate with
+   `/oly discord cert <certificate>`.
 4. **The proof reaches the bot.** The **Olympus Link** window shows a QR code and the same link
    in a copy box. Open the Olympus Link page, https://dnl-gentile.github.io/olympus-addon/ (a
    static page on the project's GitHub Pages): point your phone's camera at the code, share the
@@ -527,8 +530,8 @@ on every message (the game adds it). What goes where:
 | Other players' lines in the Olympus chats as your addon accepted them (channel, sender and text; [Captains] and [Lords] only if your rank reads them), and the High Council list | other addons in your own game, through `OlympusBridge` (made for OfficerSpy, the moderators' companion addon, but any addon you install can read it) | always, while such an addon is loaded: Olympus sends nothing through it and never learns what that addon does with what it read |
 | Olympus Link (1.0.0): a request (your guild, faction, a random number, your code's id and a tag made from your code's signature and your name) | the confirmers asked (a whisper each): a High Councillor, or verified players drawn for your code | only after you press **Accept** on `/oly discord <code>` |
 | Olympus Link: the finished proof (your character name, realm, guild, faction, the tag, and the confirmers' names, how each knew your guild, their signatures and their keys' certificates) | the Olympus bot, through the page you scan it with, or a watcher (a High Councillor, by whisper) who hands it to the bot | when it is ready, until it is delivered (5 days after your code expired at most) |
-| Olympus Link: "a confirmer's key is online" (its certificate: the key's id, public half, tier, expiry and character), "a watcher is online" | everyone on the Olympus channel | every 5 minutes, only from characters with a key and its certificate, or the watcher on |
-| Olympus Link: a High Councillor's key's public half, and the certificate for it | the author's character, and back (a whisper each) | only from a councillor of the signed list whose addon made its own key, once a session when it hears the author |
+| Olympus Link: "a confirmer's key is online" (its certificate: the key's id, public half, tier, expiry and character), "a watcher is online" | everyone on the Olympus channel | every 5 minutes, only from characters with a key and its certificate once the bot is ready, or the watcher on |
+| Olympus Link: a High Councillor's key's public half, and the certificate for it | the author's character, and back (a whisper each) | never while the council authority is off (as it ships: only the author turns it on, and only once the bot is ready); then only from a councillor of the signed list whose addon made its own key, once a session when it hears the author |
 
 Decrees and the King's calls go out when someone sends one (a decree carries its sender's
 position on the map).
