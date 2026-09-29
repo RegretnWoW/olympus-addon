@@ -45,14 +45,18 @@ until you turn it on.
   signed by the author's key like the council, can mark a character the Steward of his
   faction's King (on the list's realm group). Every client takes from him, by his name, a list
   of Hands of his own beside the King's (sent by his client alone; nobody changes anyone else's
-  list), what the King alone set before: the treasury's keepers and what the army sees of it
+  list; his Hands have the same Crown for `<Olympus>` on the other guilds' clients as the
+  King's, and the King can't take them back: he does, or the author by removing him), what the
+  King alone set before: the treasury's keepers and what the army sees of it
   (dated; the newest wins and the King's newer word always wins), and the Crown's decrees for
   `<Olympus>` on every client. He sees the whole treasury as the King does (the balance, the
   ranking, every keeper's shared book and the guild bank, whatever the switches), and every
   keeper is told so before sharing. Never the King's own list of Hands, his crown on the map,
   his court, writs, pardons, the untabarded list, or his own book of the treasury and his yes to
   share it. No name is written in the code and no census vote makes one; a newer signed list
-  without him ends it at once, and the Hands he named with it on every client. A word of the
+  without him ends it at once, and the Hands he named with it on every client (named again
+  later, he starts from none, as long as his addon saw the list without him on any of his
+  characters there: it forgets what it kept of his list then). A word of the
   treasury dated more than a minute ahead of the server's clock is not taken. The trust this
   adds is in the author's key: whoever holds it can make a character act for the King in these,
   as it can name the High Council.
@@ -74,13 +78,16 @@ until you turn it on.
   - have a made-up Captain's party invite accepted for a player who asked for a layer hop, and
     put an innocent player on the King's untabarded list with his inspection report.
 
-  What 1.0.0 hardened: the King's decrees and [Lords] lines need no census, nor his Hands'
-  for `<Olympus>` (his word); those and your own guild's officers' decrees never wait behind
+  What 1.0.0 hardened: the King's decrees and [Lords] lines need no census, nor the Hands'
+  for `<Olympus>` (the word of the King, or of the Steward whose own list names them); those,
+  the Steward's and your own guild's officers' decrees never wait behind
   the flood guard; a decree speaks for one guild per sender, as the chats do, and its
   words go out with Blizzard's logged addon-message function; and the officers of `<Olympus>`,
   whom three outsiders' reports could add to the Crown on every client outside `<Olympus>`
   before 1.0.0, are of the Crown only on its own members' clients (their roster), and
-  elsewhere only those the King names his Hands. The README's
+  elsewhere only the Hands the King's list or a Steward's own list names (their word, never a
+  vote; the King can't take back a Steward's Hand: that Steward does, or the author by
+  removing him). The README's
   [What colluding characters can reach](README.md#what-colluding-characters-can-reach) has
   each outcome. The structural fix is **signed leadership, planned for 1.1**: ranks that come
   with a signature every client checks, instead of a count of votes. Meanwhile seal your

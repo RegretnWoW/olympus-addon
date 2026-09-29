@@ -20329,7 +20329,7 @@ do
 					assert(add and add.onClick, "his button to name one")
 					assert(Texts(lines):find(L.HANDS_HINT_STEWARD:sub(1, 30), 1, true), Texts(lines))
 					K.AddHand("Helper")
-					eq(K.Hands()[1], "Helper-Realm"); eq(ns.rdb.stewardHands[1], "Helper-Realm", "kept for his next session")
+					eq(K.Hands()[1], "Helper-Realm"); eq(ns.rdb.stewardHands[STEWARD][1], "Helper-Realm", "kept for his next session, under his name")
 					eq(ns.rdb.kingHands, nil, "never as the King's list")
 					local before = #w.sent
 					K.SendHands(true)
@@ -20560,7 +20560,7 @@ do
 				local n = #w.sent
 				K.SendHands(true)
 				eq(#w.sent, n, "never a list of the King's")
-				eq(table.concat(ns.rdb.stewardHands, ","), "Helper-Realm"); eq(ns.rdb.kingHands, nil)
+				eq(table.concat(ns.rdb.stewardHands[STEWARD], ","), "Helper-Realm"); eq(ns.rdb.kingHands, nil)
 			end, Signed2)
 		end)
 	end)
@@ -20685,7 +20685,7 @@ do
 				eq(#w.sent, n + 2)
 				-- A soldier's client sends none, whatever it kept.
 				Fresh(AsSoldier, "Other")
-				ns.rdb.kingHands, ns.rdb.stewardHands = { "Kingsman-Realm" }, { "Helper-Realm" }
+				ns.rdb.kingHands, ns.rdb.stewardHands = { "Kingsman-Realm" }, { [ns.me] = { "Helper-Realm" } }
 				K.LoadHands()
 				K.SendStewardHands(true); K.SendHands(true)
 				eq(#w.sent, n + 2, "nothing from a soldier's client")
@@ -20717,10 +20717,11 @@ do
 				eq(K.IsHandName("Helper-Realm"), false, "at once")
 				eq(K.Authorized("A", "Helper-Realm", "Olympus II"), false, "no tool of a Hand left")
 				eq(K.IsHandName("Kingsman-Realm"), true, "the King's list stands"); eq(K.IsHandName("Aide-Realm"), true, "and the other Steward's")
-				-- His client repeating it (its titles list older): nobody's word.
+				-- His client repeating it (its titles list older): nobody's word, and nothing of it kept
+				-- here (/oly status no longer lists it).
 				K.HandleCommand("CHANNEL", STEWARD, "T1~N~24~Olympus II~Helper-Realm")
 				eq(K.IsHandName("Helper-Realm"), false)
-				assert(K.StewardStatusLine():find("ended: no longer a Steward", 1, true), K.StewardStatusLine())
+				eq(K.StewardStatusLine():find(K.StewardLabel(STEWARD), 1, true), nil, K.StewardStatusLine())
 				-- The King's client: the same, and his Hands page no longer shows that Steward's list.
 				Again(STEWARD_E)
 				Fresh(AsKing); K.AddHand("Kingsman"); Hears()
@@ -20747,6 +20748,109 @@ do
 				K.SendStewardHands(); K.SendStewardHands(true); K.AddHand("Another")
 				eq(#w.sent, n + 1, "his client sends his list no more")
 				eq(K.IsHandName("Helper-Realm"), false, "nor counts it")
+			end, Signed2)
+		end)
+	end)
+
+	test("1.0.0 the Hands: a Steward the author removes and later names again starts from no Hands: his old list comes back on no client, his own included, nor from what his account kept, until he names them again", function()
+		WithThrone(function(w, K)
+			WithStewardList(STEWARD_E, function()
+				local L = ns.L
+				-- This client holding `blob` alone (a newer list naming him again: STEWARD_A, signed
+				-- with the first test key, is newer than STEWARD_E and STEWARD_F).
+				local function Again(blob)
+					ns.rdb.councilTitles = nil
+					ns.Workshop.ResetVerify()
+					Signed2(function() eq(ns.Workshop.TakeTitles(blob), true) end)
+				end
+				local function Renamed()
+					ns.Workshop.ResetVerify()
+					Signed(function() eq(ns.Workshop.TakeTitles(STEWARD_A), true) end)
+					eq(ns.IsSteward(STEWARD), true, "named again")
+				end
+				local function SentHelper(from)
+					for i = from + 1, #w.sent do if tostring(w.sent[i].msg):find("Helper", 1, true) then return w.sent[i].msg end end
+				end
+				-- A soldier's client: his list heard, the removal, then the list naming him again an
+				-- hour later, with no new list of Hands from him.
+				Fresh(AsSoldier, "Other")
+				K.HandleCommand("CHANNEL", STEWARD, "T1~N~51~Olympus II~Helper-Realm")
+				eq(K.IsHandName("Helper-Realm"), true)
+				Signed2(function() eq(ns.Workshop.TakeTitles(STEWARD_F), true) end)
+				eq(K.IsHandName("Helper-Realm"), false, "ended with him")
+				w.clock = w.clock + 60
+				Renamed()
+				eq(K.IsHandName("Helper-Realm"), false, "his old list does not come back with him")
+				eq(K.Authorized("A", "Helper-Realm", "Olympus II"), false, "no tool of a Hand")
+				-- Until his client names him again.
+				K.HandleCommand("CHANNEL", STEWARD, "T1~N~52~Olympus II~Helper-Realm")
+				eq(K.IsHandName("Helper-Realm"), true, "his word again, once he sends it")
+				-- The King's client: not back on his Hands page either.
+				Again(STEWARD_E)
+				Fresh(AsKing)
+				K.HandleCommand("CHANNEL", STEWARD, "T1~N~53~Olympus II~Helper-Realm")
+				Signed2(function() ns.Workshop.TakeTitles(STEWARD_F) end)
+				Renamed()
+				eq(K.IsHandName("Helper-Realm"), false)
+				eq(#K.OthersHands(), 0, "no Steward's list on the King's page")
+				-- A newer list that still names him changes nothing of his (the other Steward's the same).
+				Again(STEWARD_E)
+				Fresh(AsSoldier, "Other")
+				K.HandleCommand("CHANNEL", STEWARD, "T1~N~54~Olympus II~Helper-Realm")
+				Renamed()
+				eq(K.IsHandName("Helper-Realm"), true, "still named: his list stands")
+				-- His own client: told his list ended, and it did, as kept for his next session too.
+				Again(STEWARD_E)
+				Fresh(AsSteward); K.AddHand("Helper")
+				K.SendStewardHands(true)
+				eq(table.concat(ns.rdb.stewardHands[STEWARD], ","), "Helper-Realm")
+				Signed2(function() ns.Workshop.TakeTitles(STEWARD_F) end)
+				assert(Printed(w, L.STEWARD_NO_LONGER), "he is told")
+				eq(ns.rdb.stewardHands, nil, "nothing kept for his next session")
+				-- Named again an hour later, in the same session: no Hands, and nothing goes out.
+				w.clock = w.clock + 3600
+				Renamed()
+				eq(K.IsSteward(), true); eq(#K.Hands(), 0, "he starts from none")
+				local n = #w.sent
+				K.SendStewardHands(); K.SendStewardHands(true)
+				eq(SentHelper(n), nil, "his old list goes out no more")
+				-- A week later, a new session: the same.
+				w.clock = w.clock + 7 * 86400
+				K.Reset(); K.LoadHands()
+				eq(#K.Hands(), 0)
+				K.SendStewardHands()
+				eq(SentHelper(n), nil)
+				-- His list is his own again from what he names.
+				K.AddHand("Aide")
+				eq(table.concat(K.Hands(), ","), "Aide-Realm")
+				-- A newer list that still names him keeps his list, and what his account kept of it.
+				Again(STEWARD_E)
+				Fresh(AsSteward); K.AddHand("Helper")
+				Renamed()
+				eq(table.concat(K.Hands(), ","), "Helper-Realm", "still named: his list stands")
+				eq(table.concat(ns.rdb.stewardHands[STEWARD], ","), "Helper-Realm")
+				-- An alt of his account on the same realm group (the saved lists are theirs together)
+				-- takes the list without him: what the account kept of his list ends there too; he logs
+				-- in after the list naming him again, and his old list does not come back.
+				Again(STEWARD_E)
+				Fresh(AsSteward); K.AddHand("Helper")
+				AsSoldier("Steward Alt"); K.Reset(); K.LoadHands()
+				eq(#K.Hands(), 0, "the alt's own list: none")
+				Signed2(function() ns.Workshop.TakeTitles(STEWARD_F) end)
+				eq(ns.rdb.stewardHands, nil, "his list ends in what the account kept")
+				AsSteward(); K.Reset(); K.LoadHands()
+				Renamed()
+				eq(#K.Hands(), 0, "he starts from none")
+				n = #w.sent
+				K.SendStewardHands(); K.SendStewardHands(true)
+				eq(SentHelper(n), nil, "nothing of his old list goes out")
+				-- An alt taking a newer list that still names him keeps what the account kept of his.
+				Again(STEWARD_E)
+				Fresh(AsSteward); K.AddHand("Helper")
+				AsSoldier("Steward Alt"); K.Reset(); K.LoadHands()
+				Renamed()
+				AsSteward(); K.Reset(); K.LoadHands()
+				eq(table.concat(K.Hands(), ","), "Helper-Realm", "his list, across the alt's session")
 			end, Signed2)
 		end)
 	end)

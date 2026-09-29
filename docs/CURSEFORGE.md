@@ -133,8 +133,10 @@ Any soldier can reach the Lord of another Olympus guild in two clicks.
 the officers of `<Olympus>` are of the Crown for `<Olympus>`'s own members, whose roster (the
 server's word) names them: on every other client, where only the census could, they count as
 Captains, and the Crown of `<Olympus>` there is the King himself (by his character's name) and
-the Hands he names, on his word alone: while his list names them, a Hand who is one of its
-officers has its Royal decrees, Tabard inspections and [Lords] lines on every client. The
+the Hands his list or a Steward's own list names, on their word alone: while a list names them,
+a Hand who is one of its officers has its Royal decrees, Tabard inspections and [Lords] lines
+on every client. The King can't take back a Hand his Steward named: that Steward does, or the
+author, by removing him. The
 King's Steward (1.0.0, below) sends the Crown's decrees for `<Olympus>` on every client,
 whatever his rank, like the King.
 
@@ -146,7 +148,7 @@ WoW channel number to join). Each channel is exclusive to a rank:
 |---|---|---|
 | **[Olympus]** | `/ol <text>` | every member of every Olympus guild |
 | **[Captains]** | `/olc <text>` | the Captains (rank 1) and Lords of every Olympus guild |
-| **[Lords]** | `/oll <text>` | the Lords (every guild master, the King included) and the officers of `<Olympus>` (their lines show to `<Olympus>`'s own members, and to everyone for those the King names his Hands, 1.0.0) |
+| **[Lords]** | `/oll <text>` | the Lords (every guild master, the King included) and the officers of `<Olympus>` (their lines show to `<Olympus>`'s own members, and to everyone for the Hands the King's list or a Steward's own names, 1.0.0) |
 
 - Higher ranks also use the channels below theirs: a Lord writes in all three.
 - `/oly mute captains` (or `olympus`, `lords`) hides a channel in chat; the same command shows it again.
@@ -217,7 +219,8 @@ tools lives where it belongs:
   writs, pardons or his crown on the map. Their addons learn the list from his, and it ends
   when he stops sending it. A Hand who is an officer of `<Olympus>` keeps its Crown (Royal
   decrees, Tabard inspections, [Lords]) on every client, not only on its members' (1.0.0).
-  Each Steward names Hands of his own beside his, in a list of his own (1.0.0, below).
+  Each Steward names Hands of his own beside his, in a list of his own, with the same tools and
+  the same Crown, which the King can't change (1.0.0, below).
 - **Show me on the map** (his own button, with the crown): while he turns it on, everyone with
   the addon sees a crown where he is, on the world map and the minimap. Off by default (his
   position is on stream); the same button hides it, its tooltip says whether it is on now, and
@@ -227,8 +230,8 @@ tools lives where it belongs:
 
 Every command is checked on each client: it only counts if the sender is the King by name
 (the server stamps every sender's name, so nobody else can carry his), his Steward for what is
-his to do in the King's name (1.0.0), or one of the King's Hands, for what is lent to them. No
-census vote can make anyone else King or silence him. On the
+his to do in the King's name (1.0.0), or one of the Hands (the King's or a Steward's), for what
+is lent to them. No census vote can make anyone else King or silence him. On the
 Horde the King is Duskmonkey Boneback, guild master of `<Mudhutters>` (0.9.4): his guild counts
 as an Olympus guild there, whatever its name. Answers go to the King alone. Nothing another player sends can put free text on his screen: only names and
 Olympus guild names.
@@ -266,7 +269,9 @@ removing him as Steward (both pages say so). The King's list is the same message
 before. A Steward's list goes out from his own client alone, in a message of its own; every
 client keeps the last one it heard from him (by his name, which the server stamps), and it ends
 20 minutes after his client stopped repeating it, or at once, on every client, when a newer
-signed list no longer names him. Clients before 1.0.0 follow the King's list alone, as they
+signed list no longer names him: named again later, he starts from no Hands, as long as his
+addon saw the list without him (on any of his characters there). Clients before 1.0.0 follow
+the King's list alone, as they
 always did, and leave a Steward's out: a Hand only a Steward named has his tools on 1.0.0
 clients.
 
@@ -541,7 +546,9 @@ few characters working together can still reach is said plainly further down
   - **The King's Steward** (1.0.0) is named by the author's signature, like the High Council:
     a character the signed titles list marks, for his realm group and his King's faction, and
     nobody else (no name in the code, no vote). His word counts by his name, which the server
-    stamps: a list of Hands of his own, beside the King's (nobody changes anyone else's list);
+    stamps: a list of Hands of his own, beside the King's, whose Hands have the same Crown for
+    `<Olympus>` on the other guilds' clients (nobody changes anyone else's list: the King can't
+    take them back);
     the treasury's keepers and its switches, dated, the newest kept and the King's newer word
     always over his; and the Crown's decrees for `<Olympus>` on every client; and he sees the
     whole treasury as the King does, whatever the switches (every keeper is told so before
@@ -566,9 +573,10 @@ few characters working together can still reach is said plainly further down
     who is the only one of their guild with the addon is not.)
   - **The Crown** (any guild master) needs two senders naming them, and one of the two may be
     that Lord himself (see below). The officers of `<Olympus>` are of the Crown only on
-    `<Olympus>` members' clients, from their roster (1.0.0), and those the King names his Hands
-    (his word, never a vote): everywhere else they count as Captains, so outsiders' reports
-    can't add one to the Crown.
+    `<Olympus>` members' clients, from their roster (1.0.0), and the Hands the King's list or a
+    Steward's own list names (their word, never a vote; the King can't take back a Steward's
+    Hand: that Steward does, or the author by removing him): everywhere else they count as
+    Captains, so outsiders' reports can't add one to the Crown.
   - A sender speaks for one guild only (a player who changed guilds can speak for the new one
     after 15 quiet minutes). A guild is one whatever the capitals a report spells it with: a
     second spelling is a vote on the same guild, never a second guild.
@@ -582,8 +590,9 @@ few characters working together can still reach is said plainly further down
 - **Sealed channel** (`/oly key`): outsiders can't find the channel or join it.
 - **Validation**: every number is range checked, names are length limited, and malformed
   messages are dropped. Decrees are rate limited per sender (one a minute) and in total (6 a
-  minute from senders only the census vouches for; since 1.0.0 the King's, his Hands' for
-  `<Olympus>` and your own guild's officers' never wait behind that limit).
+  minute from senders only the census vouches for; since 1.0.0 the King's, his Steward's, the
+  Hands' for `<Olympus>` (the King's list or a Steward's) and your own guild's officers' never
+  wait behind that limit).
 - **Admission** (0.9.3): one sender gets 60 messages at once and 2 a second after that, whatever
   they are; past it their messages are dropped unread. Pieces of long messages waiting for the
   rest are capped (4 per sender, 400 in all), so nobody can fill memory with pieces that never
@@ -627,8 +636,8 @@ code.
   King or silences him. Three outsiders can still add one of their own to its officers in the
   census. Before 1.0.0 that made him of the Crown on every client outside `<Olympus>`; since
   1.0.0 the officers of `<Olympus>` are of the Crown on its own members' clients only (their
-  roster), and a census officer of `<Olympus>` is a Captain everywhere else, unless the King
-  names him one of his Hands (his word, never a vote).
+  roster), and a census officer of `<Olympus>` is a Captain everywhere else, unless the King's
+  list or a Steward's own list names him a Hand (their word, never a vote).
 - **Numbers.** A guild's size and online count are not part of the picture. One outsider who
   copies a guild's leader and officers with other numbers shows his numbers on every screen
   until its reporter's next report (800 members as 1, the King offline). Each made-up guild
@@ -640,12 +649,15 @@ code.
   the King's share sends to the army.
 
 What 1.0.0 hardened: the King's decrees and [Lords] lines count by his name, with no census at
-all, and his Hands' for `<Olympus>` by his word; those and your own guild's officers' decrees
-never wait behind the flood guard, however many made-up Captains fill it; a decree speaks
+all, and the Hands' for `<Olympus>` by the word of the King or of the Steward whose own list
+names them; those, the Steward's and your own guild's officers' decrees never wait behind the
+flood guard, however many made-up Captains fill it; a decree speaks
 for one guild per sender, as the chats do; a decree's words go out with Blizzard's logged
 addon-message function (one that arrives any other way, from a sender before 1.0.0, still
 shows, without its words); and the officers of `<Olympus>` are of the Crown on its own
-members' clients only, and elsewhere only those the King names his Hands.
+members' clients only, and elsewhere only the Hands the King's list or a Steward's own list
+names (the King can't take back a Steward's Hand: that Steward does, or the author by removing
+him).
 
 On the public channel anyone can try all of the above; **seal it with `/oly key`** and only
 members of Olympus guilds can (any of them still can). The structural fix is **signed

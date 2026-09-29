@@ -164,9 +164,10 @@ local function NewId() return math.random(1, 99999) end
 -- nobody changes anyone else's. The King's list is the same message as before 1.0.0, from his
 -- client alone. Each client keeps the list it last heard from each Steward (by his name, which
 -- the server stamps); it ends HANDS_FRESH after his client stopped repeating it, and at once, on
--- every client, when the author's signed titles list no longer names him. A Hand's powers are
--- the same whoever named him. The King never removes a Steward's Hand: that Steward does, or
--- the author, by removing him (the Hands page shows the others' lists, to read only).
+-- every client, when the author's signed titles list no longer names him (for good: named again,
+-- he starts from none, King.StewardsChanged). A Hand's powers are the same whoever named him.
+-- The King never removes a Steward's Hand: that Steward does, or the author, by removing him
+-- (the Hands page shows the others' lists, to read only).
 ---------------------------------------------------------------------------
 
 King.HAND_MAY = { S = true, I = true, A = true, X = true, V = true, E = true, G = true }
@@ -190,7 +191,9 @@ local handsSendPending = false
 -- 1.0.0: each Steward's list as this client last heard it from him:
 -- [his Name-Realm] = { names = { "Name-Realm", ... }, set = { [Name-Realm] = true }, at = when }
 local stewardHands = {}
-local myStewardHands = {} -- a Steward's own list, on his client, in order (saved: rdb.stewardHands)
+-- A Steward's own list, on his client, in order (saved: rdb.stewardHands[his Name-Realm]: the
+-- characters of one account on a realm group share what they save).
+local myStewardHands = {}
 local lastStewardSent = -math.huge
 
 -- A Steward's list as heard here, while it counts: he is still a Steward (the signed titles
@@ -278,12 +281,15 @@ function King.CanCommand() return King.IsKing() or King.IsSteward() or King.IsHa
 function King.FromKing(sender, guild) return KingSender(sender, guild, true) end
 
 -- The King's list, kept across sessions (a /reload must not drop his Hands); a Steward's own
--- the same (1.0.0).
+-- the same (1.0.0), under his name: it ends with him (King.StewardsChanged), whichever character
+-- of his account on that realm group sees the list without him.
 local function SaveHands()
 	if not ns.rdb then return end
 	local own, copy = Own(), {}
 	for i, n in ipairs(own) do copy[i] = n end
-	if own == myStewardHands then ns.rdb.stewardHands = copy else ns.rdb.kingHands = copy end
+	if own ~= myStewardHands then ns.rdb.kingHands = copy; return end
+	if type(ns.rdb.stewardHands) ~= "table" then ns.rdb.stewardHands = {} end
+	ns.rdb.stewardHands[ns.FullName(ns.me)] = copy
 end
 
 -- Several changes in a row go out as one list, a few seconds after the last one.
@@ -421,7 +427,33 @@ function King.LoadHands()
 		end
 	end
 	Load(myHands, ns.rdb and ns.rdb.kingHands)
-	Load(myStewardHands, ns.rdb and ns.rdb.stewardHands)
+	local stewards = ns.rdb and ns.rdb.stewardHands
+	Load(myStewardHands, type(stewards) == "table" and stewards[ns.FullName(ns.me)])
+end
+
+-- A signed titles list was taken (Workshop.TakeTitles, 1.0.0): the list of each Steward it no
+-- longer names ends here for good, as heard from him and as his account kept it, his own
+-- client's with it. Named again later, a Steward starts from none: nothing he named before comes
+-- back until he names it again. (His account forgets it when one of its characters on that realm
+-- group takes a list without him: if none did before the list naming him again, what it kept
+-- comes back with him.)
+function King.StewardsChanged()
+	local changed = false
+	for steward in pairs(stewardHands) do
+		if not King.IsStewardName(steward) then stewardHands[steward], changed = nil, true end
+	end
+	local saved = ns.rdb and ns.rdb.stewardHands
+	if type(saved) == "table" then
+		for owner in pairs(saved) do
+			if not King.IsStewardName(owner) then saved[owner] = nil end
+		end
+		if next(saved) == nil then ns.rdb.stewardHands = nil end
+	end
+	if not King.IsSteward() and (#myStewardHands > 0 or lastStewardSent ~= -math.huge) then
+		wipe(myStewardHands)
+		lastStewardSent, changed = -math.huge, true
+	end
+	if changed then Changed() end
 end
 
 StaticPopupDialogs["OLYMPUS_KING_HAND"] = {

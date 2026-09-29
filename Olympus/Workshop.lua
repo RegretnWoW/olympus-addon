@@ -1383,6 +1383,9 @@ function Workshop.TakeTitles(blob, sender)
 	elseif was and not now then
 		ns.Print(L.STEWARD_NO_LONGER)
 	end
+	-- The list of Hands of each Steward it no longer names ends with him for good, heard or kept,
+	-- his own client's too (King.StewardsChanged).
+	if type(ns.King) == "table" and type(ns.King.StewardsChanged) == "function" then ns.King.StewardsChanged() end
 	ns.Fire("DATA_CHANGED")
 	return true
 end
