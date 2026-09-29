@@ -29,8 +29,9 @@ icon's name under Interface\\Icons, or its file number) may be left out. "public
 everyone sees the council in the census (until then, the councillors and the author alone).
 
 The King's Steward (1.0.0): an optional "stewards" list in the same file names the characters
-who set up for the King what only he could set up (his Hands, the treasury's keepers and what
-the army sees of it) and send the Crown's decrees on every client:
+who name Hands of their own beside the King's, set up for the King what only he could set up
+(the treasury's keepers and what the army sees of it) and send the Crown's decrees on every
+client:
 
   "stewards": ["First Surname-Realm", {"name": "First Surname-Realm", "faction": "Horde"}]
 

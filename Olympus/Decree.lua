@@ -188,7 +188,7 @@ ns.Comm.Handle("D1", function(dist, sender, text)
 	local d = ns.Codec.DecodeDecree(text)
 	if not d or not ns.IsFederation(d.guild) then return end
 	-- The King by his pinned name (the server stamps it), never by a vote: his decree needs no
-	-- census. So do his Hands' for his guild (the list he last sent, King.IsHandName), on every
+	-- census. So do his Hands' for his guild (his list or a Steward's, King.IsHandName), on every
 	-- client outside it: there they are of his Crown on his word (1.0.0); on its own members'
 	-- clients its roster says who speaks for it. His Steward's (1.0.0: the signed titles list
 	-- names him, King.IsStewardName) on every client, as the King's. Everyone else: the rank we

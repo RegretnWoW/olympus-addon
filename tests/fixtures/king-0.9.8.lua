@@ -2,7 +2,8 @@
 -- `git show v0.9.8:Olympus/King.lua`. 0.9.9's differs only in how the crown is drawn on the map
 -- (the gamepad UI): its Hands of the King (Authorized, OnHands, HandleCommand) are these. A client
 -- of those versions takes the list of Hands from the King's pinned character alone, reads the
--- names after the guild and never reads the number before it. Loaded on a namespace of its own:
+-- names after the guild and never reads the number before it, and leaves out a kind of T1 it
+-- does not know (1.0.0: a Steward's own list, T1~N). Loaded on a namespace of its own:
 --   loadfile("tests/fixtures/king-0.9.8.lua")("Olympus", kns)   -- kns.King
 local ADDON, ns = ...
 local L = ns.L

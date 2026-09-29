@@ -146,8 +146,9 @@ local RECRUIT_BUTTONS = {
 
 -- Small extra buttons inside the detail box (only where needed).
 local function KingOnly() return ns.King.IsKing() or ns.King.Preview() end
--- The King and his Steward (1.0.0): the lists the Steward sets in the King's name (his Hands, the
--- treasury's switches); never the King's own buttons (his crown on the map, the court, writs).
+-- The King and his Steward (1.0.0): the Hands (each his own list) and the treasury's switches,
+-- which the Steward sets in the King's name; never the King's own buttons (his crown on the map,
+-- the court, writs).
 local function KingOrSteward() return ns.King.SetsLists() or ns.King.Preview() end
 
 -- One of the King's treasury switches: its label says whether the army sees that part, its
@@ -165,7 +166,7 @@ local function TreasuryFlag(what)
 end
 local DETAIL_BUTTONS = {
 	throne = {
-		-- His Hands: the page to name them (his, and his Steward's in his name).
+		-- His Hands: the page to name them (his; a Steward's own, 1.0.0).
 		{ "HANDS_BTN", function() ns.King.Show("hands") end, refresh = true, shown = KingOrSteward },
 		-- His own button: the crown the army sees, what it does and whether it is on now.
 		{ "THRONE_LOCATION", function() ns.King.ToggleLocation() end, refresh = true, shown = KingOnly,

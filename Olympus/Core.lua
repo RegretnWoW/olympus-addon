@@ -692,9 +692,10 @@ function ns.CouncilTitle(name)
 	return nil
 end
 
--- The King's Steward (1.0.0): a character the author marks in the signed titles list, who sets
--- up for the King what only the King could set up before (his Hands, the treasury's keepers and
--- switches) and sends the Crown's decrees on every client (King.lua, Treasury.lua, Decree.lua).
+-- The King's Steward (1.0.0): a character the author marks in the signed titles list, who names
+-- Hands of his own beside the King's, sets up for the King what only the King could set up before
+-- (the treasury's keepers and switches) and sends the Crown's decrees on every client (King.lua,
+-- Treasury.lua, Decree.lua).
 -- The titles list names him in an entry of its own among the departments, one per faction:
 --   ^steward^<Alliance|Horde>^<First Surname-Realm>,...
 -- Three "^": a client of 0.9.9 reads a department as two (<name>^<icon>^<members>), leaves this
@@ -850,8 +851,9 @@ end
 -- from it, never from the census). Anywhere else the census alone could name them, and three
 -- outsiders' reports were enough to add one of their own: there they are Captains like any
 -- guild's officers, and the Crown of the King's guild is the King himself (his pinned name) and
--- the Hands his list names (King.IsHandName: his word, never a vote), who speak for his guild
--- with his Crown there (Decree.lua, Channels.VerifiedLevel) besides his tools (King.Authorized).
+-- the Hands his list or a Steward's own names (King.IsHandName: their word, never a vote), who
+-- speak for his guild with his Crown there (Decree.lua, Channels.VerifiedLevel) besides his
+-- tools (King.Authorized).
 function ns.IsCrownRank(guild, rankIndex)
 	if not guild or not rankIndex then return false end
 	if rankIndex == 0 then return true end

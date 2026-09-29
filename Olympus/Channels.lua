@@ -116,8 +116,8 @@ function Channels.VerifiedLevel(sender, guild)
 	end
 	if rank then return 0, false end -- a guildmate of ours speaking for another guild
 	-- The King by his pinned name (the server stamps it), never by a census vote, his Steward (the
-	-- signed titles list, King.IsStewardName) and the Hands the list names (the King's word or
-	-- his Steward's, King.IsHandName): of his Crown for his guild here, outside it (1.0.0).
+	-- signed titles list, King.IsStewardName) and the Hands the King's list or a Steward's own
+	-- names (King.IsHandName): of his Crown for his guild here, outside it (1.0.0).
 	if ns.IsKingGuild(guild) and (ns.IsKingCharacter(who)
 		or (ns.King ~= nil and (ns.King.IsStewardName(who) or ns.King.IsHandName(who)))) then
 		return Channels.LevelOf(guild, 0), true

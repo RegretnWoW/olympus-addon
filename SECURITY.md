@@ -43,21 +43,19 @@ until you turn it on.
   Since 1.0.0 the King's decrees and [Lords] lines count by his name too, with no census.
 - **The King's Steward (1.0.0) is the author's signature.** The High Council's titles list,
   signed by the author's key like the council, can mark a character the Steward of his
-  faction's King (on the list's realm group). Every client takes from him, by his name, what the
-  King alone set before: the King's Hands, the treasury's keepers and what the army sees of it
+  faction's King (on the list's realm group). Every client takes from him, by his name, a list
+  of Hands of his own beside the King's (sent by his client alone; nobody changes anyone else's
+  list), what the King alone set before: the treasury's keepers and what the army sees of it
   (dated; the newest wins and the King's newer word always wins), and the Crown's decrees for
   `<Olympus>` on every client. He sees the whole treasury as the King does (the balance, the
   ranking, every keeper's shared book and the guild bank, whatever the switches), and every
-  keeper is told so before sharing. Never the King's crown on the map, his court, writs,
-  pardons, the untabarded list, or his own book of the treasury and his yes to share it. No name
-  is written in the code and no census vote makes one; a newer signed list without him ends it
-  at once, and a list of Hands he set counts no longer than he does. Every client keeps the
-  newest list of Hands it took and never goes back to an older one (a list saved in an earlier
-  session goes out held back until confirmed); a player's word that a newer list is held only
-  holds back the King's or the Steward's own saved list on his client, and never names or
-  removes a Hand. A list, a switch or such a claim dated more than a minute ahead of the
-  server's clock is not taken. The trust this adds is in the author's key: whoever holds it can
-  make a character act for the King in these, as it can name the High Council.
+  keeper is told so before sharing. Never the King's own list of Hands, his crown on the map,
+  his court, writs, pardons, the untabarded list, or his own book of the treasury and his yes to
+  share it. No name is written in the code and no census vote makes one; a newer signed list
+  without him ends it at once, and the Hands he named with it on every client. A word of the
+  treasury dated more than a minute ahead of the server's clock is not taken. The trust this
+  adds is in the author's key: whoever holds it can make a character act for the King in these,
+  as it can name the High Council.
 - **Ranks of other guilds come from the census**, the picture most senders agree on, and a
   census report is its sender's word: nothing the server tells an addon proves which guild a
   sender belongs to. So a few characters working together can, today (1.0.0):

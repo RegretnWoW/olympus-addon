@@ -217,8 +217,7 @@ tools lives where it belongs:
   writs, pardons or his crown on the map. Their addons learn the list from his, and it ends
   when he stops sending it. A Hand who is an officer of `<Olympus>` keeps its Crown (Royal
   decrees, Tabard inspections, [Lords]) on every client, not only on its members' (1.0.0).
-  His Steward names and removes them too, and the list lasts while either of them is online
-  (1.0.0, below).
+  Each Steward names Hands of his own beside his, in a list of his own (1.0.0, below).
 - **Show me on the map** (his own button, with the crown): while he turns it on, everyone with
   the addon sees a crown where he is, on the world map and the minimap. Off by default (his
   position is on stream); the same button hides it, its tooltip says whether it is on now, and
@@ -239,7 +238,8 @@ The King's right hand, so that he needn't set everything up himself: a character
 marks as **Steward** in the High Council's signed titles list. On the Steward's client the
 Throne opens as the King's, with **Acting for the King** on top of every page, and in the
 King's name he:
-- names and removes the **Hands of the King** (the Hands button on the Throne);
+- names and removes **Hands of his own**, beside the King's (the Hands button on the Throne):
+  the King's list stays the King's, and his own is his;
 - names and removes the **treasury's keepers**, and sets **what the army sees** of the
   treasury (its three switches), on the Treasury tab, and **sees the whole treasury as the King
   does**: the balance, the ranking, every keeper's shared book and the guild bank, whatever the
@@ -255,53 +255,36 @@ Never the King's own: his crown on the map and his layer, holding court, Royal W
 Pardons, the untabarded list, and the King's own book of the treasury or his yes to share it
 (the Steward keeps no book unless named a keeper).
 
-**Whose word counts.** A list the Steward sets carries nothing but his name, which the server
-stamps on every message: each client takes the Hands, the keepers and the switches only from
-the King's character or from a Steward its signed titles list names, each list dated by the
-server's clock. The newest wins, and on the same second the King's: **the King's newer word
-always wins** (his screen tells him when his Steward changed one of them; the name is cut short
-there while the council's names are hidden on his stream; a Steward's screen tells him when the
-King's own word replaced his list of Hands). The King's client and the Steward's take the
-newest list as theirs and repeat it, and each answers an older list it hears with the newer one.
+**The Hands: each list its owner's.** The Hands are the King's list and each Steward's own
+list together, and a Hand has the same tools, and the same Crown for `<Olympus>` on the other
+guilds' clients, whoever named him. Nobody changes anyone else's list: the King's Hands page
+shows his own list, to change, and each Steward's, to read, under that Steward's name; a
+Steward's page shows his own list, to change, and the King's and the other Stewards', to read.
+**The King can't take back a Hand his Steward named**: that Steward does, or the author, by
+removing him as Steward (both pages say so). The King's list is the same message as before
+1.0.0, from his client alone, and ends 20 minutes after his client stopped repeating it, as
+before. A Steward's list goes out from his own client alone, in a message of its own; every
+client keeps the last one it heard from him (by his name, which the server stamps), and it ends
+20 minutes after his client stopped repeating it, or at once, on every client, when a newer
+signed list no longer names him. Clients before 1.0.0 follow the King's list alone, as they
+always did, and leave a Steward's out: a Hand only a Steward named has his tools on 1.0.0
+clients.
 
-**When they are not online together** (the usual case), every client keeps the newest list of
-Hands it took, across sessions, and never goes back to an older one. The Hands last while the
-King's client or a Steward's is online, whatever list it repeats, and end 20 minutes after both
-logged off, as before. A list the King's or the Steward's client saved in an earlier session
-goes out *held back* for 30 seconds: no client takes it (nor brings back the same list it kept
-from an earlier session), and every client that holds a newer list says so, each after a short
-wait of its own, drawn so that one of them says it within 16 seconds however few hold it, and
-only a few say it before the first is heard however many do. That client then keeps its list
-held back and tells its player (the Hands page says so too) until he hears the newer list from
-whoever set it, or names the Hands again, which makes his own word the newest. That claim is
-anybody's word, so it does nothing else: it never names or removes a Hand, and a claim heard
-earlier never keeps anyone from saying it later. A client that never heard the newer list still
-takes a saved list nobody answered within those 30 seconds, when no client that holds the newer
-one is online. A list a Steward set counts no longer than he does: once a newer signed list
-drops him, it names nobody on any client, the King's or a Steward's client that held it stops
-saying it and tells its player, who names the Hands again, and any list of the King's replaces
-it, whatever its date. The King's client repeating a list his Steward set says whose it is, so
-it stays the Steward's word everywhere and never becomes the King's. A list of the Throne (the
-Hands, the keepers, the switches), or such a claim, dated more than a minute ahead of the
-server's clock is not taken.
-
-Clients before 1.0.0 follow the King's own list alone, as they always did (the held-back mark,
-and the Steward's name before a list the King's client repeats for him, are no names to them). A
-King's client before 1.0.0 sends his list without a date: a 1.0.0 client takes it where it holds
-nothing newer, and over the Steward's list only when the King changes his, so a King still on
-0.9.x replaces his Steward's Hands each time he changes his own list. A client knows he changed
-it when it heard his list before, or took a Steward's list, which says which list of the King's
-it was built on (when the Steward's client had heard one); a client that knows neither takes his
-change as his oldest word. The list the King's client saved before 1.0.0 is weighed the same way
-when he first logs in with 1.0.0 (held back first, as any saved list), so it is never held back
-as older than itself.
+**The treasury: the newest word.** The treasury's keepers and its switches are one list each,
+which the King and his Steward both set: each client takes them only from the King's character
+or from a Steward its signed titles list names, each word dated by the server's clock. The
+newest wins, and on the same second the King's: **the King's newer word always wins** (his
+screen tells him when his Steward changed one of them; the name is cut short there while the
+council's names are hidden on his stream). The King's client and the Steward's take the newest
+word as theirs and repeat it, and each answers an older word it hears with the newer one. A word
+dated more than a minute ahead of the server's clock is not taken.
 
 **Who he is.** Only the author names a Steward, with the same key that signs the council (the
 README on GitHub says how): no name is written in the addon, no census vote counts, and nobody
 else can make one. A Steward acts for the Alliance's King (the Horde's only when the list names
 one for the Horde), on the list's realm group, where a King is named. A newer signed list
 without him ends it on every client at once. `/oly status` says whom your addon knows as the
-Steward and whose list of Hands it holds.
+Steward and the lists of Hands it holds, whose each is.
 
 ### The Treasury (its keepers, the King, and the army when the King says so)
 A tab with a coin for the treasury's keepers, for the King, and for every member once the King
@@ -558,17 +541,15 @@ few characters working together can still reach is said plainly further down
   - **The King's Steward** (1.0.0) is named by the author's signature, like the High Council:
     a character the signed titles list marks, for his realm group and his King's faction, and
     nobody else (no name in the code, no vote). His word counts by his name, which the server
-    stamps: the King's Hands, the treasury's keepers and its switches, dated, the newest kept
-    and the King's newer word always over his; and the Crown's decrees for `<Olympus>` on every
-    client; and he sees the whole treasury as the King does, whatever the switches (every keeper
-    is told so before sharing). Never the King's crown on the map, his court, writs, pardons,
-    untabarded list, book or yes. This adds trust in the author's key: whoever holds it can
-    make a character act for the King in these, as it can name the council. A newer signed list
-    without him ends it, and a list of Hands he set counts no longer than he does. Every client keeps the newest
-    list of Hands it took and never goes back to an older one; a player's word that a newer
-    list is held only holds back the King's or the Steward's own saved list on his client: it
-    never names or removes a Hand. A list, a switch or such a claim dated more than a minute
-    ahead of the server's clock is not taken.
+    stamps: a list of Hands of his own, beside the King's (nobody changes anyone else's list);
+    the treasury's keepers and its switches, dated, the newest kept and the King's newer word
+    always over his; and the Crown's decrees for `<Olympus>` on every client; and he sees the
+    whole treasury as the King does, whatever the switches (every keeper is told so before
+    sharing). Never the King's own list of Hands, his crown on the map, his court, writs,
+    pardons, untabarded list, book or yes. This adds trust in the author's key: whoever holds it
+    can make a character act for the King in these, as it can name the council. A newer signed
+    list without him ends it, and the Hands he named with it, on every client at once. A word of
+    the treasury dated more than a minute ahead of the server's clock is not taken.
   - A decree counts only if its sender is the Lord or a Captain of that guild as the census
     pictures it (below), or as our own roster says for our own guild; the King's by his name.
     The rank written inside the message is ignored. Since 1.0.0 a sender speaks for one guild
@@ -723,7 +704,7 @@ Other limits:
 | `/oly map` | zone markers on the world map |
 | `/oly sound` | alert sounds on or off |
 | `/oly bug` | copyable bug report (also: the help button left of the window's X, then **Report a bug**) |
-| `/oly status` | diagnostics in chat (1.0.0: whom your addon knows as the King's Steward, and whose list of Hands it holds) |
+| `/oly status` | diagnostics in chat (1.0.0: whom your addon knows as the King's Steward, and the lists of Hands it holds, whose each is) |
 
 ## Reporting a bug
 
