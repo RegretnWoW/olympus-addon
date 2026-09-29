@@ -1043,9 +1043,24 @@ function Treasury.SetConsent(on)
 		Treasury.Share(true)
 		if ns.Bank and ns.Bank.Share then ns.Bank.Share(true) end
 	else
-		ns.Comm.Send("CHANNEL", "TX~" .. (GetGuildInfo("player") or ""), "treasury")
+		Treasury.Withdraw(true)
 	end
 	ns.Fire("TREASURY_CHANGED")
+end
+
+-- His no withdraws his book (and his copy of the bank) from every screen: at once when he says
+-- it, then again as his book would go out (Share: after login, and every SHARE_EVERY while he
+-- plays), for as long as his no stands (it is kept: ns.db.keeperShares). Konig's review of
+-- 1.0.0: said once, it never reached a client that was offline then, which kept showing his
+-- book (a keeper's book never runs out while he is one).
+local lastWithdraw = -math.huge
+function Treasury.Withdraw(force)
+	if not RealKeeper() or Treasury.Consent() ~= false then return false end
+	local now = ns.Now()
+	if not force and now - lastWithdraw < Treasury.SHARE_EVERY then return false end
+	lastWithdraw = now
+	ns.Comm.Send("CHANNEL", "TX~" .. (GetGuildInfo("player") or ""), "treasury")
+	return true
 end
 
 -- The keepers' books as they reached us: { [Name-Realm] = report }.
@@ -1192,7 +1207,13 @@ local function Send(msg, key)
 end
 
 function Treasury.Share(force)
-	if not CanSend() then return end
+	if not CanSend() then
+		-- Kept private: his no goes out instead, as often as his book would (and the Treasurer's
+		-- client passes on his mail character's no, whatever his own answer).
+		Treasury.Withdraw()
+		Treasury.Relay()
+		return
+	end
 	local now = ns.Now()
 	-- A change inside the gap goes out once the gap is over, not never.
 	if not force and now - lastShare < Treasury.SHARE_GAP then
@@ -1216,10 +1237,11 @@ end
 -- once after login and every RELAY_EVERY (it changes only while that character plays): an
 -- account plays one character at a time, and outside an Olympus guild the addon sends nothing,
 -- so a mail character in another guild or none never sends its own. That character's own yes
--- counts: kept private, its book is withdrawn instead (TX with its name). The time is when that
--- book last changed: a copy as new (its own TB, heard when it came) stays.
+-- counts: kept private, its book is withdrawn instead (TX with its name), repeated as often,
+-- whether the Treasurer shares his own book or not (1.0.0). The time is when that book last
+-- changed: a copy as new (its own TB, heard when it came) stays.
 function Treasury.Relay(force)
-	if not CanSend() or not ns.IsTreasurer(ns.me, GetGuildInfo("player")) then return end
+	if not RealKeeper() or not ns.IsTreasurer(ns.me, GetGuildInfo("player")) then return end
 	local now = ns.Now()
 	if not force and now - lastRelay < Treasury.RELAY_EVERY then return end
 	lastRelay = now
@@ -1227,7 +1249,8 @@ function Treasury.Relay(force)
 	for key, b in pairs(Books()) do
 		if type(b) == "table" and b.epoch == Treasury.EPOCH and b.opening ~= nil and type(b.lines) == "table"
 			and ns.IsTreasurerMail(b.name) and Treasury.IsOwnCharacter(b.name) then
-			if shares[key] == true then
+			-- Its book with his yes too (his client sends it); its no with or without his.
+			if shares[key] == true and CanSend() then
 				Send(("TR~%s~%d~"):format(Clean(b.name), BookTime(b)) .. Treasury.Message(b))
 			elseif shares[key] == false then
 				ns.Comm.Send("CHANNEL", ("TX~%s~%s"):format(Clean(GetGuildInfo("player")), Clean(b.name)), "treasuryx " .. key)
@@ -2559,6 +2582,7 @@ StaticPopupDialogs["OLYMPUS_TREASURY_OPENING"] = {
 -- Tests start from a clean state.
 function Treasury.Reset()
 	trade, mailOut, lastShare, sharePending, lastFlagsSent, lastKeepersSent = nil, nil, -math.huge, false, -math.huge, -math.huge
+	lastWithdraw = -math.huge
 	asked, lastWordAnswer = false, -math.huge
 	wipe(pending)
 	wipe(itemPending)

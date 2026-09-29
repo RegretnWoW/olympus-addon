@@ -18454,6 +18454,96 @@ test("1.0.0 Konig's review: a keeper's book is checked when it comes (shape, siz
 	end)
 end)
 
+-- Konig's review of 1.0.0: a keeper's no (TX) went out once, when he said it. A client offline
+-- then kept his book (books never run out while he is a keeper) and showed it for good.
+test("1.0.0 Konig's review: a keeper's no is kept and repeated like his book, so a client offline when he said it drops his book too", function()
+	WithThrone(function(w, K)
+		local T = ns.Treasury
+		local savedSplit = ns.splitNames
+		local ok, err = pcall(function()
+			ns.splitNames = true
+			local function Sent(prefix)
+				local out = {}
+				for _, s in ipairs(w.sent) do if s.msg:sub(1, #prefix) == prefix then out[#out + 1] = s.msg end end
+				return out
+			end
+			local function Held() return ns.rdb.treasuryReports and ns.rdb.treasuryReports["Test Keeper-Realm"] or nil end
+			ns.rdb.treasuryKeepers = { at = w.clock, names = { "Test Keeper-Realm" } }
+			-- The keeper shares his book; a soldier takes it.
+			AsSoldier("Test Keeper")
+			T.SetConsent(true)
+			local book = Sent("TB~")[1]
+			assert(book, "his book")
+			AsSoldier()
+			T.HandleReport("CHANNEL", "Test Keeper-Realm", book)
+			assert(Held(), "the soldier holds his book")
+			-- He says no while the soldier is offline: the soldier never hears it then.
+			AsSoldier("Test Keeper")
+			w.sent = {}
+			T.SetConsent(false)
+			eq(Sent("TX~")[1], "TX~Olympus II", "withdrawn at once")
+			assert(Printed(w, ns.L.TREASURER_SHARE_OFF) and ns.L.TREASURER_SHARE_OFF:find("again every 5 minutes", 1, true), "he is told it is repeated")
+			-- His addon repeats it as it would his book (Share: every SHARE_EVERY, and after login),
+			-- not more often.
+			w.sent = {}
+			T.Share(true)
+			eq(#Sent("TX~"), 0, "not again at once")
+			w.clock = w.clock + T.SHARE_EVERY
+			T.Share(true)
+			eq(Sent("TX~")[1], "TX~Olympus II", "repeated for whoever was offline")
+			eq(#Sent("TB~"), 0, "his book stays home")
+			T.Share(true)
+			eq(#Sent("TX~"), 1, "once in SHARE_EVERY")
+			-- The soldier, back online, hears the repeat: the book is gone from his screen.
+			AsSoldier()
+			T.HandleWithdraw("CHANNEL", "Test Keeper-Realm", Sent("TX~")[1])
+			eq(Held(), nil, "dropped")
+			-- His no is kept (a new session, the same answer): repeated after login too.
+			T.Reset()
+			ns.rdb.treasuryKeepers = { at = w.clock, names = { "Test Keeper-Realm" } }
+			ns.db.keeperShares = { ["test keeper-realm"] = false }
+			AsSoldier("Test Keeper")
+			w.sent = {}
+			T.Share(true)
+			eq(Sent("TX~")[1], "TX~Olympus II", "his kept no, repeated after login")
+			-- A keeper who never answered withdraws nothing; one who says yes again sends his book, no TX.
+			T.Reset()
+			ns.rdb.treasuryKeepers = { at = w.clock, names = { "Test Keeper-Realm" } }
+			w.sent = {}
+			T.Share(true)
+			eq(#w.sent, 0, "no answer: nothing")
+			T.SetConsent(true)
+			w.clock = w.clock + T.SHARE_EVERY
+			w.sent = {}
+			T.Share(true)
+			eq(#Sent("TX~"), 0); eq(#Sent("TB~"), 1)
+			-- The Treasurer's own no keeps his client passing on his mail character's no.
+			T.Reset()
+			ns.db.myCharacters = { [TREASURER_KEY] = true, [ANDARAI_KEY] = true }
+			ns.db.keeperShares = { [TREASURER_KEY] = false, [ANDARAI_KEY] = false }
+			local mailBook = T.BookOf(ANDARAI, true)
+			mailBook.opening = 0
+			AsTreasurer()
+			w.sent = {}
+			T.Share(true)
+			local tx = Sent("TX~")
+			table.sort(tx)
+			eq(table.concat(tx, " "), "TX~Olympus TX~Olympus~Pyralis Andarai-Realm", "both nos, repeated")
+			-- What he is told, in Portuguese too.
+			local pt = { L = setmetatable({}, { __index = ns.L }) }
+			local savedLocale = GetLocale
+			GetLocale = function() return "ptBR" end
+			local okPt, errPt = pcall(function() assert(loadfile(ADDON_DIR .. "Locales.lua"))("Olympus", pt) end)
+			GetLocale = savedLocale
+			if not okPt then error(errPt, 0) end
+			assert(rawget(pt.L, "TREASURER_SHARE_OFF"):find("a cada 5 minutos", 1, true))
+		end)
+		ns.splitNames = savedSplit
+		ns.db.myCharacters = nil
+		if not ok then error(err, 0) end
+	end)
+end)
+
 test("1.0 the Treasurer's mail and the early supporters: their lines in both languages, with the same format arguments", function()
 	local savedLocale, pt = GetLocale, {}
 	GetLocale = function() return "ptBR" end

@@ -707,7 +707,7 @@ L.TREASURER_SHARE_ASK = "You keep a book of the treasury of Olympus (as its Trea
 L.TREASURER_SHARE_YES = "Share"
 L.TREASURER_SHARE_NO = "Keep private"
 L.TREASURER_SHARE_ON = "Your treasury book and the guild bank are shared (the King and his Steward see them; the army only if the King allows it). /oly treasurer off withdraws them."
-L.TREASURER_SHARE_OFF = "Your treasury book and the guild bank are yours alone (withdrawn from every screen). /oly treasurer on shares them."
+L.TREASURER_SHARE_OFF = "Your treasury book and the guild bank are yours alone (withdrawn from every screen; your addon says so again every 5 minutes while you play, for anyone who was offline). /oly treasurer on shares them."
 L.HELP_TREASURER = "  /oly treasurer on|off - a keeper of the treasury shares his book and the guild bank, or not"
 -- 0.9.3: inspection opt-out
 L.INSPECTION_OPT_ON = "You take part in the King's Royal Inspection when your addon is in the sample: a 2-minute patrol of the players around you, reported to him. /oly inspection off says no."
@@ -1678,7 +1678,7 @@ if GetLocale and GetLocale() == "ptBR" then
 	L.TREASURER_SHARE_YES = "Compartilhar"
 	L.TREASURER_SHARE_NO = "Manter privado"
 	L.TREASURER_SHARE_ON = "Seu livro do tesouro e o banco da guilda estão compartilhados (o Rei e o Senescal dele veem; o exército só se o Rei permitir). /oly treasurer off retira."
-	L.TREASURER_SHARE_OFF = "Seu livro do tesouro e o banco da guilda são só seus (retirados de toda tela). /oly treasurer on compartilha."
+	L.TREASURER_SHARE_OFF = "Seu livro do tesouro e o banco da guilda são só seus (retirados de toda tela; o seu addon repete isso a cada 5 minutos enquanto você joga, para quem estava offline). /oly treasurer on compartilha."
 	L.HELP_TREASURER = "  /oly treasurer on|off - um guardião do tesouro compartilha ou não o livro dele e o banco da guilda"
 	-- 0.9.3: inspection opt-out
 	L.INSPECTION_OPT_ON = "Você participa da Inspeção Real do Rei quando seu addon cai na amostra: uma patrulha de 2 minutos nos jogadores ao seu redor, reportada a ele. /oly inspection off recusa."
