@@ -277,11 +277,13 @@ test("federation filter: Olympus however it was spelled, but not other words", f
 	end
 	-- Guilds against Olympus are not Olympus.
 	for _, name in ipairs({ "ANTI OLYMPUS", "Anti-Olympus", "AntiOlympus", "Anti Olimpvs", "Against Olympus", "No Olympus",
-		"Down with Olympus", "Death to Olympus", "Olympus Haters", "Olympus Sucks", "Kill Olympus" }) do
+		"Down with Olympus", "Death to Olympus", "Olympus Haters", "Olympus Sucks", "Kill Olympus",
+		"Ruin Olympus", "RUIN OLYMPUS", "Ruins of Olympus", "Ruined Olympus", "Olympus Ruined", "Burn Olympus",
+		"Crush Olympus", "Raze Olympus", "Doom of Olympus", "Olympus Falls" }) do
 		eq(ns.IsFederation(name), false, name)
 	end
 	for _, name in ipairs({ "Knights of Olympus", "Sons of Olympus", "Olympus No Mercy", "OLYMPUS NULLA", "Order of the Olympus",
-		"Olympus Killers", "Anti Horde Olympus" }) do
+		"Olympus Killers", "Anti Horde Olympus", "Olympus Rising", "Olympus Reborn", "Rise of Olympus", "Dark Olympus", "DARK OLYMPUS" }) do
 		eq(ns.IsFederation(name), true, name)
 	end
 	eq(ns.Slips("olmps", "olympus", 2), 2); eq(ns.Slips("olympia", "olympus", 2), 2); eq(ns.Slips("abcdefg", "olympus", 2), 3)

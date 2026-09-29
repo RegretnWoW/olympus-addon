@@ -2,7 +2,7 @@ local ADDON, ns = ...
 local L = ns.L
 
 ns.NAME = "Olympus"
-ns.VERSION = "1.0.0"
+ns.VERSION = "1.0.1"
 ns.PREFIX = "OLYMPUS"        -- addon message prefix (max 16 chars)
 ns.CHANNEL = "OlympusNet"    -- hidden chat channel shared by every Olympus guild (Alliance)
 ns.CHANNEL_HORDE = "OlympusNetH" -- the Horde's: the two factions never see each other's guilds
@@ -949,9 +949,11 @@ end
 -- Olympus", "AntiOlympus", "Olympus Haters". The word before (or the one before "with", "to",
 -- "the", "of"), glued in front, or the word after.
 local AGAINST = { anti = true, against = true, no = true, ["not"] = true, never = true, down = true,
-	death = true, kill = true, hate = true, hates = true, haters = true, destroy = true }
+	death = true, kill = true, hate = true, hates = true, haters = true, destroy = true,
+	ruin = true, ruins = true, ruined = true, ruining = true, raze = true, burn = true, crush = true,
+	doom = true, wreck = true } -- "Ruin Olympus", "Ruins of Olympus", "Burn Olympus" (1.0.1)
 local LINKS = { with = true, to = true, the = true, of = true }
-local AGAINST_AFTER = { haters = true, hater = true, sucks = true }
+local AGAINST_AFTER = { haters = true, hater = true, sucks = true, ruined = true, burns = true, falls = true }
 
 local function Against(words, i)
 	if words[i]:find("^anti") then return true end -- glued: AntiOlympus
