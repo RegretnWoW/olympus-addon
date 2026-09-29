@@ -16294,6 +16294,34 @@ test("1.0.0 photo mode: the author's /oly photo hides all but Olympus and the wo
 	ns.Print, ns.me, ns.devThrone, ns.devWorkshop, ns.UI = saved.print, saved.me, saved.devThrone, saved.devWorkshop, saved.UI
 	if not ok then error(err, 0) end
 end)
+
+-- Konig's review of 1.0.0 (H-1, the author's client only): /oly photo walked every child of
+-- UIParent, however many a screen holds. Now PHOTO_MAX at most; the rest are left as they are.
+test("1.0.0 photo mode walks PHOTO_MAX children of UIParent at most, and gives back what it changed", function()
+	local UI = LoadUI()
+	local saved = { UIParent = UIParent, combat = InCombatLockdown, print = ns.Print, me = ns.me, devThrone = ns.devThrone, UI = ns.UI }
+	local ok, err = pcall(function()
+		ns.UI = UI
+		ns.Print = function() end
+		InCombatLockdown = function() return false end
+		local cap = UI.PHOTO_MAX or 1000 -- (1000 before it was a setting: the walk had no cap)
+		local children = {}
+		for i = 1, cap + 5 do children[i] = PhotoFrame("Frame" .. i, 1) end
+		UIParent = { GetChildren = function() return unpack(children) end }
+		ns.me, ns.devThrone = "Tester-Realm", { Tester = true } -- (the author's test build)
+		SlashCmdList.OLYMPUS("photo")
+		eq(UI.PhotoMode(), true)
+		local hidden = 0
+		for _, f in ipairs(children) do if f.alpha == 0 then hidden = hidden + 1 end end
+		eq(hidden, cap, "PHOTO_MAX walked")
+		for i = cap + 1, #children do eq(children[i].sets, 0, "left as it is: " .. i) end
+		SlashCmdList.OLYMPUS("photo")
+		eq(UI.PhotoMode(), false)
+		for i, f in ipairs(children) do eq(f.alpha, 1, "given back: " .. i) end
+	end)
+	UIParent, InCombatLockdown, ns.Print, ns.me, ns.devThrone, ns.UI = saved.UIParent, saved.combat, saved.print, saved.me, saved.devThrone, saved.UI
+	if not ok then error(err, 0) end
+end)
 ---------------------------------------------------------------------------
 -- 1.0.0: a search on top of the Census, the Realm, the Tabards and the Treasury (Views.lua): the
 -- Workshop's box, remembered per tab for the session, changing only what the list shows.
