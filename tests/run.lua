@@ -18189,11 +18189,13 @@ test("1.0 the early supporters go out from his mail character only with the Trea
 			-- The mail character's own no still keeps it quiet, whatever his.
 			sent, te, asked = Try({ [TREASURER_KEY] = true, [ANDARAI_KEY] = false }, true)
 			eq(sent, false); eq(#te + #asked, 0, "its own no")
-			-- Both yes (his 1.0 yes, or his 0.9.3 yes unanswered since): sent, and an ask answered.
+			-- Both yes (his 1.0 yes): sent, and an ask answered.
 			sent, te, asked = Try({ [TREASURER_KEY] = true, [ANDARAI_KEY] = true }, false)
 			eq(sent, true); eq(#te, 1); eq(te[1], want); eq(#asked, 1, "an ask answered"); eq(asked[1], want)
+			-- His 0.9.3 yes unanswered since is not enough (Konig's review of 1.0.0: until then it
+			-- was; its question never said these names go to everyone on the channel, 1.0's does).
 			sent, te, asked = Try({ [ANDARAI_KEY] = true }, true)
-			eq(sent, true); eq(te[1], want, "his 0.9.3 yes"); eq(#asked, 1)
+			eq(sent, false); eq(#te + #asked, 0, "his 0.9.3 yes alone")
 			-- His character not yet among the account's: his answer by his name on our realm.
 			ns.db.myCharacters = { [ANDARAI_KEY] = true }
 			sent, te, asked = Try({ [TREASURER_KEY] = false, [ANDARAI_KEY] = true }, true)
@@ -18540,6 +18542,67 @@ test("1.0.0 Konig's review: a keeper's no is kept and repeated like his book, so
 		end)
 		ns.splitNames = savedSplit
 		ns.db.myCharacters = nil
+		if not ok then error(err, 0) end
+	end)
+end)
+
+-- Konig's review of 1.0.0: the early supporters (every name in 0.9's book, up to 1000, to
+-- everyone on the channel) went out under the Treasurer's 0.9.3 yes, given to a question that
+-- never said so. And a Treasurer with that yes was never asked 1.0's question.
+test("1.0.0 Konig's review: the early supporters go out only with the Treasurer's 1.0 yes, whose question says their names go to everyone on the channel", function()
+	WithThrone(function(w, K)
+		local T = ns.Treasury
+		local saved = { split = ns.splitNames, after = ns.After, shares = ns.db.treasurerShares, combat = InCombatLockdown, inst = IsInInstance }
+		local ok, err = pcall(function()
+			ns.splitNames = true
+			ns.After = function() end
+			InCombatLockdown, IsInInstance = function() return false end, function() return false end
+			local function Sent(prefix)
+				local out = {}
+				for _, s in ipairs(w.sent) do if s.msg:sub(1, #prefix) == prefix then out[#out + 1] = s.msg end end
+				return out
+			end
+			-- His 0.9 book, archived on his account; his 0.9.3 yes, no answer to 1.0's question yet.
+			ns.rdb.treasuryEpoch = nil
+			ns.rdb.treasury = { { name = "Alice Early", money = 100, how = "mail", t = w.clock - 1000 } }
+			AsTreasurer()
+			T.Migrate()
+			ns.db.keeperShares, ns.db.treasurerShares = nil, true
+			w.sent = {}
+			eq(T.SendEarly(true), false, "0.9.3's yes: the early supporters stay home")
+			T.HandleEarlyAsk("CHANNEL", "Soldier-Realm", "TQ~0")
+			eq(#Sent("TE~"), 0, "an ask is not answered either")
+			-- His book still goes out under that yes (0.9.3's question was about his book).
+			T.Share(true)
+			eq(#Sent("TB~"), 1, "his book, as before")
+			-- He is asked 1.0's question, which says the names go out to everyone on the channel.
+			eq(T.AskConsent(), true, "1.0's question, though 0.9.3's yes stands")
+			eq(w.popups[#w.popups].name, "OLYMPUS_TREASURER_SHARE")
+			local ask = StaticPopupDialogs.OLYMPUS_TREASURER_SHARE.text
+			assert(ask:find("names of everyone who gave before 1.0", 1, true) and ask:find("every client on it receives them, the names too", 1, true), ask)
+			-- His yes to it: the list goes out, and an ask is answered.
+			StaticPopupDialogs.OLYMPUS_TREASURER_SHARE.OnAccept()
+			eq(ns.db.keeperShares[TREASURER_KEY], true)
+			w.sent = {}
+			eq(T.SendEarly(true), true, "his 1.0 yes")
+			eq(Sent("TE~")[1], ("TE~Olympus~%d~1~1~Alice Early"):format(ns.rdb.treasuryArchive["0.9"].closed))
+			eq(T.AskConsent(), false, "answered: not asked again")
+			-- His no to it: nothing, his 0.9.3 yes notwithstanding.
+			T.SetConsent(false)
+			w.sent = {}
+			eq(T.SendEarly(true), false, "his 1.0 no")
+			-- Portuguese: the same question says it too.
+			local pt = { L = setmetatable({}, { __index = ns.L }) }
+			local savedLocale = GetLocale
+			GetLocale = function() return "ptBR" end
+			local okPt, errPt = pcall(function() assert(loadfile(ADDON_DIR .. "Locales.lua"))("Olympus", pt) end)
+			GetLocale = savedLocale
+			if not okPt then error(errPt, 0) end
+			local pAsk = rawget(pt.L, "TREASURER_SHARE_ASK")
+			assert(pAsk:find("nomes de todos que doaram antes da 1.0", 1, true) and pAsk:find("os nomes também", 1, true), pAsk)
+		end)
+		ns.splitNames, ns.After, ns.db.treasurerShares = saved.split, saved.after, saved.shares
+		InCombatLockdown, IsInInstance = saved.combat, saved.inst
 		if not ok then error(err, 0) end
 	end)
 end)

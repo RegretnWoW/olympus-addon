@@ -1110,8 +1110,11 @@ StaticPopupDialogs["OLYMPUS_TREASURER_SHARE"] = {
 	noCancelOnEscape = true, -- Escape is no answer: asked again next session
 	preferredIndex = 3,
 }
+-- Asked while he has given no answer to 1.0's question: the Treasurer too while only his 0.9.3
+-- answer stands (1.0's also covers the early supporters' names: TreasurerYes).
 function Treasury.AskConsent()
-	if asked or not RealKeeper() or Treasury.Consent() ~= nil then return false end
+	local shares = ns.db and ns.db.keeperShares
+	if asked or not RealKeeper() or (type(shares) == "table" and shares[ConsentKey()] ~= nil) then return false end
 	if (InCombatLockdown and InCombatLockdown()) or (IsInInstance and IsInInstance()) then return false end
 	asked = true
 	ns.ShowDialog("OLYMPUS_TREASURER_SHARE", ns.Comm.Audience and ns.Comm.Audience() or "")
@@ -1849,7 +1852,8 @@ StaticPopupDialogs["OLYMPUS_TREASURY_UNKEEP"] = {
 -- 0.9's book (the Treasurer's, archived at 1.0's fresh start, never shown or sent) keeps the
 -- names of everyone who gave to the treasury before 1.0. The Treasurer's character holding it
 -- (his account kept it) sends their names alone, in alphabetical order, never an amount (1.0's
--- ranking starts afresh): in pieces of one message each (TE), once after login and when a
+-- ranking starts afresh), once he said yes to 1.0's question (TreasurerYes): in pieces of one
+-- message each (TE), once after login and when a
 -- client that has none asks (TQ), EARLY_GAP apart at the soonest. The list carries the time
 -- 0.9's book was closed: a newer list replaces an older one, taken once every piece is in.
 -- Taken from the Treasurer's pinned characters alone. Shown under the ranking, to whoever may
@@ -1934,12 +1938,16 @@ local function EarlyPieces(list, guild)
 	return pieces
 end
 
--- 0.9's book was the Treasurer's: its names go out with his own yes (his 1.0 answer, or his
--- 0.9.3 one while he has given none since), whichever of his pinned characters holds it. His
+-- 0.9's book was the Treasurer's: its names go out with his own yes to 1.0's question, which
+-- says the names go to everyone on the channel, whichever of his pinned characters holds it.
+-- His 0.9.3 yes is not enough (Konig's review of 1.0.0: it was given to a question that never
+-- said so; his book still goes out under it, and he is asked 1.0's question: AskConsent). His
 -- mail character's yes is to its own book, not to his.
 local function TreasurerYes()
-	if TreasurerPin(ns.me) == 1 then return Treasury.Consent() == true end
-	return SharesBook(TreasurerCharacter() or OwnKey(ns.TREASURER), ns.TREASURER)
+	local shares = ns.db and ns.db.keeperShares
+	if type(shares) ~= "table" then return false end
+	local key = TreasurerPin(ns.me) == 1 and ConsentKey() or TreasurerCharacter() or OwnKey(ns.TREASURER)
+	return shares[key] == true
 end
 local function MaySendEarly() return CanSend() and EarlyHolder() and TreasurerYes() end
 

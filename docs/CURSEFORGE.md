@@ -332,7 +332,7 @@ shows the army something of it.
   read 0.9's treasury, and 0.9 clients get a short copy of 1.0's, in 0.9's shape, from the
   Treasurer's addon.
 - **The ranking of donors** (all time) and the week's donations, with a copy for Discord.
-- **Early supporters**: everyone who gave before 1.0 (from 0.9's closed book, sent by the Treasurer's addon), names only, in alphabetical order, under the ranking and with its switch.
+- **Early supporters**: everyone who gave before 1.0 (from 0.9's closed book, sent by the Treasurer's addon), names only, in alphabetical order, under the ranking and with its switch. They go out only once the Treasurer said yes to 1.0's question, which says their names go to everyone on the channel (his yes of 0.9.3 is not enough: he is asked again).
 - **The guild bank of <Olympus>**: whoever of that guild opens the bank with the addon on takes
   a snapshot of it (each tab's items with icons and counts, the bank's gold, when it was seen);
   a keeper's snapshot (the newest, whoever took it) reaches the King and, with his "book"
