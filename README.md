@@ -313,8 +313,9 @@ shows the army something of it.
   the King, and up to 5 characters the King adds on the Treasury tab (**The treasury's
   keepers**, then **Add a treasury character**, by name or target; a click on one takes it off).
   The list is the King's word (or his Steward's, in his name): every client checks it comes from
-  his character or a Steward's, keeps it (it never runs out while he is away), and the
-  Treasurer's addon repeats it.
+  his character or a Steward's and keeps it (it never runs out while he is away); their addons
+  repeat it. No keeper's book carries it, the Treasurer's included (his could otherwise name
+  anyone a keeper).
 - **The Treasurer's mail**: Pyralis Andarai, his hunter where the treasury's mail goes, keeps a book of its own like him (pinned by name on his realm group, in any guild or none; gold between the two is a transfer, and outside an Olympus guild its book reaches the others through the Treasurer's addon).
 - **Each keeper's book**: gold and items a keeper receives by trade or mail are a donation, gold
   and items he gives a payment, each written down by itself in his own character's book, by his
@@ -346,7 +347,7 @@ shows the army something of it.
   read 0.9's treasury, and 0.9 clients get a short copy of 1.0's, in 0.9's shape, from the
   Treasurer's addon.
 - **The ranking of donors** (all time) and the week's donations, with a copy for Discord.
-- **Early supporters**: everyone who gave before 1.0 (from 0.9's closed book, sent by the Treasurer's addon), names only, in alphabetical order, under the ranking and with its switch.
+- **Early supporters**: everyone who gave before 1.0 (from 0.9's closed book, sent by the Treasurer's addon), names only, in alphabetical order, under the ranking and with its switch. They go out only once the Treasurer said yes to 1.0's question, which says their names go to everyone on the channel (his yes of 0.9.3 is not enough: he is asked again).
 - **The guild bank of <Olympus>**: whoever of that guild opens the bank with the addon on takes
   a snapshot of it (each tab's items with icons and counts, the bank's gold, when it was seen);
   a keeper's snapshot (the newest, whoever took it) reaches the King and, with his "book"
@@ -356,7 +357,11 @@ shows the army something of it.
   so on the tab.
 - **Sent by each keeper's addon by itself** (every 5 minutes and after a change), once he said
   yes: his book's balance, totals, ranking, items donated and latest lines, on the Olympus
-  channel. Every client checks it comes from a keeper himself.
+  channel. Every client checks it comes from a keeper himself, and that it holds together (its
+  shape and sizes, a balance its totals add up to, no list longer than a book sends, no date
+  before 2026 or more than a day ahead of the server's clock): one that doesn't is refused whole,
+  and the copy it had of that keeper's book stays. A keeper's own addon never sends such a date,
+  even when his computer's clock is wrong: it sends his dates within the server's clock.
 - **The King chooses what the army sees** (his Steward too, in his name), with three buttons:
   the balance, the ranking, the book. Until he does, only the keepers, the King and his Steward
   see them (a keeper's tab says so, and so does the question each keeper answers before sharing).
@@ -588,7 +593,7 @@ tracking. Your name is on every message (the game adds it). What goes where:
 | [Olympus], [Captains] and [Lords] lines | everyone on the Olympus channel, all three | when you write one |
 | Hello: addon version, realm, public or sealed channel, whether you share your zone | your guild | every minute or so |
 | Your position as a dot on the map | your guild | only with `/oly share` (off by default) |
-| A treasury keeper's book (balance, gold and items given and who gave them, the ranking) and the guild bank of `<Olympus>` (its gold and items) | everyone on the Olympus channel receives the bytes; the addon shows them to the King and his Steward, and to the army only with the King's switches | only after that keeper says yes (each keeper, the King too, is asked once; `/oly treasurer on\|off`), withdrawn at once when he turns it off |
+| A treasury keeper's book (balance, gold and items given and who gave them, the ranking) and the guild bank of `<Olympus>` (its gold and items) | everyone on the Olympus channel receives the bytes; the addon shows them to the King and his Steward, and to the army only with the King's switches | only after that keeper says yes (each keeper, the King too, is asked once; `/oly treasurer on\|off`), withdrawn at once when he turns it off, and again every 5 minutes while he plays, for clients that were offline |
 | The King's crown on the map, and with it his zone and layer | everyone on the Olympus channel | only while the King turns it on (Throne tab), whatever he answered to the question |
 | Olympus Link (1.0.0): a request (your guild, faction, a random number, your code's id and a tag made from your code's signature and your name) | the confirmers asked (a whisper each): a High Councillor, or verified players drawn for your code | only after you press **Accept** on `/oly discord <code>` |
 | Olympus Link: the finished proof (your character name, realm, guild, faction, the tag, and the confirmers' names, how each knew your guild, their signatures and their keys' certificates) | the Olympus bot, through the page you scan it with, or a watcher (a High Councillor, by whisper) who hands it to the bot | when it is ready, until it is delivered (5 days after your code expired at most) |
@@ -658,7 +663,8 @@ few characters working together can still reach is said plainly further down
 - **Sender names cannot be forged.** The server stamps every message with its sender.
   - **The King and the Treasurer are known by name**, not by vote: only their characters can
     send their commands and the treasury (with the characters the King names to the treasury,
-    whose books count while his list names them). A report of `<Olympus>` naming anyone else as its
+    whose books count while his list names them: a list taken from his character or his
+    Steward's alone, never from a keeper's book). A report of `<Olympus>` naming anyone else as its
     leader counts for nothing, not even as a vote: no count of votes makes anyone else its King.
     Since 1.0.0 the King's decrees and [Lords] lines count by his name too, with no census.
     Their names count on their realm group only (Forever's PvP realms): a namesake anywhere

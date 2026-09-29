@@ -703,11 +703,11 @@ L.ROLLCALL_OFF = "The author's roll calls and update notices are refused. /oly r
 L.HELP_ROLLCALL = "  /oly rollcall on|off - answer the author's roll calls (version, client, channel state) or not"
 -- 0.9.3: treasurer
 L.TREASURER_ONLY = "Only a keeper of the treasury can change this."
-L.TREASURER_SHARE_ASK = "You keep a book of the treasury of Olympus (as its Treasurer, its King, or a character the King named). Share your book (balance, gold and items given and who gave them, the ranking) and the guild bank when you open it (its gold and items)?\n\nThey go out on the Olympus channel, and every client on it receives them. %s The addon shows them to the King and to his Steward (a character the author may name to act for him), and to the army only when the King allows it. Change it any time with /oly treasurer on or off."
+L.TREASURER_SHARE_ASK = "You keep a book of the treasury of Olympus (as its Treasurer, its King, or a character the King named). Share your book (balance, gold and items given and who gave them, the ranking) and the guild bank when you open it (its gold and items)? The Treasurer's yes also sends the names of everyone who gave before 1.0 (the early supporters, from 0.9's book).\n\nThey go out on the Olympus channel, and every client on it receives them, the names too. %s The addon shows them to the King and to his Steward (a character the author may name to act for him), and to the army only when the King allows it. Change it any time with /oly treasurer on or off."
 L.TREASURER_SHARE_YES = "Share"
 L.TREASURER_SHARE_NO = "Keep private"
 L.TREASURER_SHARE_ON = "Your treasury book and the guild bank are shared (the King and his Steward see them; the army only if the King allows it). /oly treasurer off withdraws them."
-L.TREASURER_SHARE_OFF = "Your treasury book and the guild bank are yours alone (withdrawn from every screen). /oly treasurer on shares them."
+L.TREASURER_SHARE_OFF = "Your treasury book and the guild bank are yours alone (withdrawn from every screen; your addon says so again every 5 minutes while you play, for anyone who was offline). /oly treasurer on shares them."
 L.HELP_TREASURER = "  /oly treasurer on|off - a keeper of the treasury shares his book and the guild bank, or not"
 -- 0.9.3: inspection opt-out
 L.INSPECTION_OPT_ON = "You take part in the King's Royal Inspection when your addon is in the sample: a 2-minute patrol of the players around you, reported to him. /oly inspection off says no."
@@ -1684,11 +1684,11 @@ if GetLocale and GetLocale() == "ptBR" then
 	L.HELP_ROLLCALL = "  /oly rollcall on|off - responder ou não às chamadas do autor (versão, cliente, estado do canal)"
 	-- 0.9.3: treasurer
 	L.TREASURER_ONLY = "Só um guardião do tesouro pode mudar isso."
-	L.TREASURER_SHARE_ASK = "Você guarda um livro do tesouro de Olympus (como Tesoureiro, como Rei, ou como personagem nomeado pelo Rei). Compartilhar o seu livro (saldo, ouro e itens dados e quem deu, o ranking) e o banco da guilda quando você o abrir (ouro e itens)?\n\nEles saem no canal Olympus, e todo cliente nele os recebe. %s O addon mostra ao Rei e ao Senescal dele (um personagem que o autor pode nomear para agir por ele), e ao exército só quando o Rei permitir. Mude quando quiser com /oly treasurer on ou off."
+	L.TREASURER_SHARE_ASK = "Você guarda um livro do tesouro de Olympus (como Tesoureiro, como Rei, ou como personagem nomeado pelo Rei). Compartilhar o seu livro (saldo, ouro e itens dados e quem deu, o ranking) e o banco da guilda quando você o abrir (ouro e itens)? O sim do Tesoureiro também envia os nomes de todos que doaram antes da 1.0 (os primeiros apoiadores, do livro da 0.9).\n\nEles saem no canal Olympus, e todo cliente nele os recebe, os nomes também. %s O addon mostra ao Rei e ao Senescal dele (um personagem que o autor pode nomear para agir por ele), e ao exército só quando o Rei permitir. Mude quando quiser com /oly treasurer on ou off."
 	L.TREASURER_SHARE_YES = "Compartilhar"
 	L.TREASURER_SHARE_NO = "Manter privado"
 	L.TREASURER_SHARE_ON = "Seu livro do tesouro e o banco da guilda estão compartilhados (o Rei e o Senescal dele veem; o exército só se o Rei permitir). /oly treasurer off retira."
-	L.TREASURER_SHARE_OFF = "Seu livro do tesouro e o banco da guilda são só seus (retirados de toda tela). /oly treasurer on compartilha."
+	L.TREASURER_SHARE_OFF = "Seu livro do tesouro e o banco da guilda são só seus (retirados de toda tela; o seu addon repete isso a cada 5 minutos enquanto você joga, para quem estava offline). /oly treasurer on compartilha."
 	L.HELP_TREASURER = "  /oly treasurer on|off - um guardião do tesouro compartilha ou não o livro dele e o banco da guilda"
 	-- 0.9.3: inspection opt-out
 	L.INSPECTION_OPT_ON = "Você participa da Inspeção Real do Rei quando seu addon cai na amostra: uma patrulha de 2 minutos nos jogadores ao seu redor, reportada a ele. /oly inspection off recusa."
