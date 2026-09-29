@@ -20174,6 +20174,100 @@ do
 				path .. ": says Olympus Link is not open yet exactly while this addon knows no key of the bot")
 		end
 	end)
+
+	-- The privacy table's rows (under "## Privacy"), each flattened to one line.
+	local function PrivacyRows(path)
+		local privacy = assert(Section(Doc(path), "Privacy"), path .. ": a Privacy section")
+		local rows = {}
+		for line in privacy:gmatch("[^\n]+") do
+			if line:sub(1, 2) == "| " and not line:find("^| What |") then rows[#rows + 1] = line end
+		end
+		return rows, Flat(privacy)
+	end
+	local function Row(rows, path, what)
+		for _, r in ipairs(rows) do if r:find(what, 1, true) then return r end end
+		error(path .. ": no privacy row with " .. what, 2)
+	end
+	local WORDS = { "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten" }
+
+	test("1.0.0 docs (Konig's review): both privacy tables name the Royal Inspection (on by default), the census's top players, the donors and early supporters, OfficerSpy's bridge and Olympus Link, as the addon does them", function()
+		local K, T = ns.King, ns.Treasury
+		-- The addon, first. A player who never answered takes part in a Royal Inspection when
+		-- sampled (on by default): a 2-minute patrol, then a report to whoever called it, alone.
+		WithThrone(function(w, K)
+			local saved = { random = K.random, opt = ns.db.royalInspection, after = ns.After }
+			local timers = {}
+			local ok, err = pcall(function()
+				AsSoldier("Never Asked")
+				if ns.Inspect.IsPatrolling() then ns.Inspect.SetPatrol(false) end
+				K.random = function() return 0 end -- in the sample
+				ns.db.royalInspection = nil -- a fresh install: never answered
+				ns.After = function(seconds, _, fn) timers[#timers + 1] = { seconds = seconds, fn = fn } end
+				K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", "T1~I~23~Olympus")
+				eq(ns.Inspect.IsPatrolling(), true, "never asked: a sampled player patrols")
+				eq(#timers, 1); eq(timers[1].seconds, K.INSPECT_TIME)
+				timers[1].fn()
+				eq(ns.Inspect.IsPatrolling(), false, "the patrol ends with the inspection")
+				eq(#w.whispered, 1, "one report"); eq(w.whispered[1].to, "Asmongold Asmongler-Realm", "to whoever called it")
+				assert(w.whispered[1].msg:find("^T3~23~Olympus II~"), w.whispered[1].msg)
+				for _, s in ipairs(w.sent) do assert(not s.msg:find("^T3~"), "never on the channel") end
+			end)
+			K.random, ns.db.royalInspection, ns.After = saved.random, saved.opt, saved.after
+			if ns.Inspect.IsPatrolling() then ns.Inspect.SetPatrol(false) end
+			ns.Inspect.SetPace(nil)
+			if not ok then error(err, 0) end
+		end)
+		-- The census names a guild's highest-level members, online or not (the roster's word, not theirs).
+		local saved = { count = GetNumGuildMembers, info = GetGuildRosterInfo }
+		local ok, err = pcall(function()
+			local roster = { { "Leader", 0, 20, true }, { "Offline Sixty", 3, 60, false }, { "Low", 3, 5, true } }
+			for i = 1, 6 do roster[#roster + 1] = { "Mid" .. i, 3, 30 + i, i % 2 == 0 } end
+			GetNumGuildMembers = function() return #roster, 4 end
+			GetGuildRosterInfo = function(i)
+				local m = roster[i]
+				return m[1] .. "-Realm", "rank", m[2], m[3], "class", m[4] and "Stormwind City" or nil, "", "", m[4], 0, "MAGE"
+			end
+			local r = ns.Roster.Scan()
+			r.users = 1
+			local top = Codec.DecodeReport(Codec.EncodeReport(r)).top
+			eq(#top, Codec.MAX_TOP, "the census names this many")
+			eq(top[1].name, "Offline Sixty", "offline, and named first"); eq(top[1].level, 60)
+		end)
+		GetNumGuildMembers, GetGuildRosterInfo = saved.count, saved.info
+		ns.Roster.Scan() -- (the harness's roster again, for the tests after this one)
+		if not ok then error(err, 0) end
+		-- OfficerSpy's bridge is a global: any addon loaded in this game can read it.
+		local bridge = rawget(_G, "OlympusBridge")
+		assert(type(bridge) == "table", "OlympusBridge is a global")
+		for _, fn in ipairs({ "RegisterChatObserver", "GetCouncil", "IsHighCouncillor" }) do eq(type(bridge[fn]), "function", fn) end
+
+		-- Then each page's privacy table says so.
+		for _, path in ipairs(DOCS) do
+			local rows, privacy = PrivacyRows(path)
+			local inspection = Row(rows, path, "Royal Inspection")
+			for _, must in ipairs({ "on by default", "`/oly inspection off`", ("%d minutes"):format(K.INSPECT_TIME / 60),
+				("level %d and up"):format(ns.Inspect.MIN_LEVEL), ("up to %d names"):format(K.MAX_NAMES),
+				("one every %d minutes"):format(K.INSPECT_GAP / 60), "whoever called it" }) do
+				Has(inspection, must, path .. ": the Royal Inspection's row")
+			end
+			local census = Row(rows, path, "highest-level")
+			for _, must in ipairs({ WORDS[Codec.MAX_TOP] .. " highest-level", "online or not", "nobody named is asked" }) do
+				Has(census, must, path .. ": the census's row of named players")
+			end
+			local donors = Row(rows, path, "ranking of donors")
+			for _, must in ipairs({ ("top %d"):format(T.RANK_SENT), "a donor is not asked" }) do Has(donors, must, path .. ": the donors' row") end
+			local early = Row(rows, path, "early supporters")
+			for _, must in ipairs({ "names only", "a donor is not asked" }) do Has(early, must, path .. ": the early supporters' row") end
+			local bridgeRow = Row(rows, path, "`OlympusBridge`")
+			for _, must in ipairs({ "OfficerSpy", "any addon", "High Council list" }) do Has(bridgeRow, must, path .. ": the bridge's row") end
+			local links = 0
+			for _, r in ipairs(rows) do if r:find("^| Olympus Link") then links = links + 1 end end
+			assert(links >= 4, path .. ": Olympus Link's rows (" .. links .. ")")
+			-- What goes out without a yes today, and the screen that will ask first.
+			Has(privacy, "first-start screen", path .. ": the privacy section")
+			Has(privacy, "comes in 1.1", path .. ": the privacy section")
+		end
+	end)
 end
 ---------------------------------------------------------------------------
 -- OfficerSpy's bridge (Bridge.lua): what a companion addon the mods run may read, and that it
