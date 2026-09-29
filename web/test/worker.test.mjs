@@ -462,17 +462,19 @@ describe('Worker', { skip: probe ? false : 'node:sqlite is not available in this
 					await env.DB.prepare('INSERT INTO members (character, discord_id, guild, faction, r, linked) VALUES (?, ?, ?, ?, ?, ?)').bind(CK.character, USER_C.id, 'Olympus I', 'Alliance', '0000000000', 1780000000).run();
 					return B5.bundle;
 				}, /own key/],
+				// (A character of the councillor's account is that account's: refused before any proof is
+				// looked at since Konig's review, since a character never moves to another account.)
 				['a character of the councillor\'s account', async () => {
 					for (const c of [CK.character, B5.requester]) {
 						await env.DB.prepare('INSERT INTO members (character, discord_id, guild, faction, r, linked) VALUES (?, ?, ?, ?, ?, ?)').bind(c, '500000000000000077', 'Olympus I', 'Alliance', '0000000000', 1780000000).run();
 					}
 					return B5.bundle;
-				}, /own character/],
+				}, /linked to another Discord account/, 'linked-elsewhere'],
 			];
-			for (const [name, prepare, why] of cases) {
+			for (const [name, prepare, why, reason = 'not-enough'] of cases) {
 				await setup();
 				const r = await submit(await prepare(), USER_C);
-				assert.equal(r.reason, 'not-enough', `${name}: ${r.message}`);
+				assert.equal(r.reason, reason, `${name}: ${r.message}`);
 				assert.match(r.message, why, name);
 				assert.equal(discord.calls.length, 0, name);
 			}
@@ -626,12 +628,14 @@ describe('Worker', { skip: probe ? false : 'node:sqlite is not available in this
 				await env.DB.prepare('DELETE FROM members WHERE character = ?').bind(OWN.player02).run();
 				return B3.bundle;
 			}, /not a linked character/],
+			// (Refused before any proof is looked at since Konig's review: that character is the key
+			// owner's, and a character never moves to another account.)
 			['the requester is a character of a key owner', async () => {
 				await env.DB.prepare('INSERT INTO members (character, discord_id, guild, faction, r, linked) VALUES (?, ?, ?, ?, ?, ?)')
 					.bind(B3.requester, KEYS.player01.owner_discord_id, 'Olympus Vanguard', 'Horde', '0000000000', 1780000000)
 					.run();
 				return B3.bundle;
-			}, /own character/],
+			}, /linked to another Discord account/, undefined, 'linked-elsewhere'],
 			['a signature that does not match', async () => {
 				const p = parseBundle(B3.bundle).bundle;
 				p.proofs[1].sig = p.proofs[0].sig;
@@ -645,12 +649,12 @@ describe('Worker', { skip: probe ? false : 'node:sqlite is not available in this
 			['signed before the code existed', async () => makeBundle(B3, [[TOKEN_A.created - LINK.CLOCK_SKEW - 1, 'player01', OWN.player01], three[1], three[2]]), /outside the code/],
 			['signed in the future', async () => makeBundle(B3, [three[0], three[1], [NOW + LINK.CLOCK_SKEW + 60, 'player03', OWN.player03]]), /in the future/],
 		];
-		for (const [name, prepare, why, user] of cases) {
+		for (const [name, prepare, why, user, reason = 'not-enough'] of cases) {
 			await setup();
 			const bundle = await prepare();
 			const r = await submit(bundle, user || USER_A);
 			assert.equal(r.status, 'rejected', `${name}: ${r.message}`);
-			assert.equal(r.reason, 'not-enough', name);
+			assert.equal(r.reason, reason, name);
 			assert.match(r.message, why, name);
 			assert.equal(discord.calls.length, 0, name);
 			assert.equal((await row('SELECT used FROM codes WHERE r = ?', B3.R)).used, null, name);
@@ -880,11 +884,12 @@ describe('Worker', { skip: probe ? false : 'node:sqlite is not available in this
 			const user = { id: String(500000000000000000n + BigInt(users)), username: `fresh.user${users}` };
 			const res = await call('POST', '/api/link/code', { user });
 			assert.equal(res.status, 200);
-			return { user, token: parseToken((await res.json()).token).token };
+			// Each code's own requester: a character linked to one account never moves to another.
+			return { user, token: parseToken((await res.json()).token).token, requester: `Fresh Requester ${users}-ClassicBetaPvP` };
 		};
 		// A link on `code` with these keys' proofs, signed from `issued` on, sent now.
 		const link = async (code, ids, issued) => {
-			const b = { requester: 'Fresh Requester-ClassicBetaPvP', guild: 'Olympus Vanguard', faction: 'Horde', nonce: '0011223344556677', R: code.token.R, proofs: [] };
+			const b = { requester: code.requester, guild: 'Olympus Vanguard', faction: 'Horde', nonce: '0011223344556677', R: code.token.R, proofs: [] };
 			b.tag = await linkTag(code.token.sig, b.requester);
 			ids.forEach((keyId, i) => {
 				const p = { issued: issued + i, keyId, confirmer: chars[keyId], gv: 'r' };
@@ -1064,15 +1069,16 @@ describe('Worker', { skip: probe ? false : 'node:sqlite is not available in this
 		assert.equal((await row('SELECT discord_id FROM members WHERE character = ?', B1.requester)).discord_id, USER_C.id);
 	});
 
-	test('a character linked again moves to the new account; the old one loses the role if it has no other', async () => {
+	test('a character linked to another account stays with it: no role given, none taken (Konig\'s review)', async () => {
 		await setup();
 		await env.DB.prepare('INSERT INTO members (character, discord_id, guild, faction, r, linked) VALUES (?, ?, ?, ?, ?, ?)')
 			.bind(B1.requester, '500000000000000001', 'Olympus II', 'Alliance', '1111111111', 1780000000)
 			.run();
-		assert.equal((await submit(B1.bundle, USER_C)).status, 'linked');
-		assert.equal((await row('SELECT discord_id FROM members WHERE character = ?', B1.requester)).discord_id, USER_C.id);
-		assert.deepEqual(discord.calls.map((c) => c.method), ['PUT', 'DELETE']);
-		assert.match(discord.calls[1].url, /members\/500000000000000001\/roles\//);
+		const r = await submit(B1.bundle, USER_C);
+		assert.deepEqual([r.status, r.reason], ['rejected', 'linked-elsewhere'], r.message);
+		assert.equal((await row('SELECT discord_id FROM members WHERE character = ?', B1.requester)).discord_id, '500000000000000001');
+		assert.deepEqual(discord.calls, [], 'no PUT, no DELETE');
+		assert.equal((await row('SELECT used FROM codes WHERE r = ?', B1.R)).used, null);
 	});
 
 	test('the page may submit 10 times an hour per account', async () => {

@@ -852,7 +852,9 @@ function errorView() {
 	const reason = T.errors[r.reason] ? r.reason : 'server';
 	let action;
 	const readAgain = ['not-enough', 'format', 'guild-unverified'].includes(reason);
+	const elsewhere = reason === 'linked-elsewhere'; // nothing to retry: another character, or the other account
 	if (reason === 'login') action = discordButton(T.loginButton);
+	else if (elsewhere) action = button(T.readAnother, { kind: 'primary', onclick: readAnother, 'data-key': 'retry' });
 	else if (['unknown-code', 'other-user', 'code-used', 'expired', 'tag'].includes(reason)) action = button(T.newCode, { kind: 'primary', onclick: codeAgain, 'data-key': 'retry' });
 	else if (readAgain) action = button(T.readAgain, { kind: 'primary', onclick: readAnother, 'data-key': 'retry' });
 	else action = button(T.retry, { kind: 'primary', onclick: () => (state.found ? send() : location.reload()), 'data-key': 'retry' });
@@ -861,7 +863,7 @@ function errorView() {
 		{ class: 'result result-error', role: 'alert', 'data-key': 'result', tabindex: '-1' },
 		h('div', { class: 'result-head' }, icon('alert', 'result-icon'), h('p', { class: 'result-title', text: T.errorTitle })),
 		h('p', { text: T.errors[reason] }),
-		h('div', { class: 'actions' }, action, state.found && !readAgain ? button(T.readAnother, { kind: 'ghost', onclick: readAnother }) : null),
+		h('div', { class: 'actions' }, action, state.found && !readAgain && !elsewhere ? button(T.readAnother, { kind: 'ghost', onclick: readAnother }) : null),
 	);
 }
 

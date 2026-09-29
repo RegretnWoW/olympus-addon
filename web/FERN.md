@@ -118,7 +118,7 @@ export default {
 		const url = new URL(request.url);
 		const roles = {
 			promote: (discordId) => promote(env, discordId), // your grant: throw if Discord refuses
-			demote: (discordId) => demote(env, discordId), // optional: a character moved to another account
+			demote: (discordId) => demote(env, discordId), // optional: never for a link (nothing moves)
 		};
 		if (url.pathname === '/proof') return handleProof(request, env, roles);
 		if (url.pathname === '/api/link/keys') return handleKeys(request, env); // LINK_ADMIN_TOKEN: revoking (step 7), player keys (step 9)
@@ -141,7 +141,9 @@ explains in English or Portuguese.
 
 The checks, each a few lines in `link-core.mjs`: the proof's tag matches the code's own signature
 and the player who typed it (someone who saw the code on a stream gets nothing); the code is
-yours, known, unused and not expired, and used once; every confirmation's Ed25519 signature,
+yours, known, unused and not expired, and used once; the character is not linked to another
+Discord account (`linked-elsewhere`: a link never moves one, nor takes anyone's role); every
+confirmation's Ed25519 signature,
 with a key you registered (its certificate your bot's key's, still running when the proof was
 signed) or one the council authority certified (for a character on
 `LINK_COUNCIL_CHARACTERS`), not revoked, signed within the code's life; the
@@ -158,7 +160,7 @@ while an address that sends it too many bad tokens; the rule keeps a flood of ma
 reaching Discord from your Worker.
 
 Rather write the route yourself? `checkProof(env, text, { discordId })` gives the verdict and
-writes nothing; `acceptProof(env, text, { discordId, promote, demote })` does the whole link;
+writes nothing; `acceptProof(env, text, { discordId, promote })` does the whole link;
 `discordUser`, `corsHeaders`, `tooManyProofs` and `logProof` are the rest of `handleProof`.
 
 ### 7. Revoking, from day one
@@ -376,6 +378,20 @@ wrangler d1 execute olympus-link --remote --file forget.sql
 Take the role away with your own `demote`. Dropping the `olympus-link` database removes
 everything.
 
+### A character is linked to the wrong Discord account?
+
+A link never moves a character from one account to another: a link for a character already
+linked elsewhere is refused (`linked-elsewhere`, the code stays unused), and nobody's role
+changes. So one councillor's confirmation, or a leaked councillor key, never takes a member's
+link. The account that holds the character removes its link, or you do:
+
+```sh
+wrangler d1 execute olympus-link --remote --command "DELETE FROM members WHERE character = '<Name-Realm>'"
+```
+
+Then the right account links it with a new code. Take the role from the old account yourself if
+it has no other character left.
+
 ### Can the page, or Daniel, give anyone a role?
 
 The page, no. It only forwards what the game signed, your Worker checks all of it, and the addon
@@ -387,8 +403,9 @@ authority certifies for a character on `LINK_COUNCIL_CHARACTERS` counts as a Hig
 and in mode `"c"` one councillor's confirmation links. Whoever holds that seed can certify a new
 key for one of those characters, confirm any character with it, and link it to any Discord
 account whose `/verify` code they have (their own, an alt's, a friend's); your `promote()` then
-gives the role. For a character name you never listed, the authority's certificate counts for
-nothing: the list is closed by default (left out or empty, none counts). That is the trust
+gives the role. A character already linked to another account stays with it
+(`linked-elsewhere`). For a character name you never listed, the authority's certificate counts
+for nothing: the list is closed by default (left out or empty, none counts). That is the trust
 `LINK_CA_PUBLIC` asks of you. What keeps it with you:
 
 - **Limit it**: `LINK_COUNCIL_CHARACTERS` (step 3). Only the councillors you list count, whatever

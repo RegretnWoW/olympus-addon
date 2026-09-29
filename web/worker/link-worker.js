@@ -85,7 +85,7 @@ export async function sessionUser(request, env) {
 	throw new Error('Olympus Link: connect sessionUser() to your Discord login (web/WORKER.md, "Who is sending")');
 }
 
-// The role, given and taken by the bot (your promote() and demote(), in the terms of acceptProof).
+// The role, given and taken by the bot (your promote() and demote() in the terms of handleProof).
 export const giveRole = (env) => (discordId) => discordRole(env, 'PUT', discordId);
 export const takeRole = (env) => (discordId) => discordRole(env, 'DELETE', discordId);
 
@@ -124,7 +124,7 @@ export async function handleLink(request, env, ctx, { getUser = sessionUser } = 
 // acceptProof with this Worker's role: the old name, kept for the tests and tools that use it.
 // opts.userId: the signed-in user, who must own the code (the page); absent for the watcher.
 export function acceptBundle(env, text, opts = {}) {
-	return acceptProof(env, text, { discordId: opts.userId, t: opts.t, promote: giveRole(env), demote: takeRole(env) });
+	return acceptProof(env, text, { discordId: opts.userId, t: opts.t, promote: giveRole(env) });
 }
 
 // ---------------------------------------------------------------------------

@@ -228,10 +228,10 @@ export default {
 
 - `promote(discordId, verdict)` is yours: it gives the role. Resolve when it did; throw (or
   return `false`) when Discord refused, and the code is freed so the same link works on the next
-  try; `{ ok: false, reason: 'not-in-server' }` tells the player to join the server first.
-  `demote(discordId)` (optional) takes the role from an account whose only linked character
-  moved to another account.
-- `acceptProof(env, text, { discordId, promote, demote })` is the whole link, for routes you write
+  try; `{ ok: false, reason: 'not-in-server' }` tells the player to join the server first. A
+  link never moves a character linked to one Discord account to another, nor takes anyone's
+  role (`linked-elsewhere`, "What the Worker checks").
+- `acceptProof(env, text, { discordId, promote })` is the whole link, for routes you write
   yourself: the checks ("What the Worker checks"), then it claims the code, calls `promote`, and
   records the character. `checkProof(env, text, { discordId })` gives the same verdict, reading
   only. `handleProof` is `acceptProof` with the page's CORS, the sign-in check, the rate limit and
@@ -545,7 +545,7 @@ whole address in `config.js`).
 
 `status` is `linked` (reason `linked`, or `already` when that link had already counted),
 `rejected` (reason `format`, `unknown-code`, `other-user`, `tag`, `code-used`, `expired`,
-`not-enough`, `guild-unverified`, `not-in-server`: the code stays unused) or `error` (`login`,
+`not-enough`, `guild-unverified`, `linked-elsewhere`, `not-in-server`: the code stays unused) or `error` (`login`,
 `origin`, `site`, `limit`, `discord`, `server`: nothing was used, try again). `PROOF_REASONS` in
 `link-core.mjs` lists them, and the page shows each one in English or Portuguese with what to do
 next.
@@ -608,7 +608,12 @@ For every bundle, from the page or the inbox (`checkProof` reads, `acceptProof` 
    names (checked with Discord, step 4; else `other-user`); from the inbox, the
    account is the code's owner. The tag is the one made from that code's own token and the
    bundle's requester (else `tag`: whoever saw `R` in a QR code cannot use it for another
-   character). The code is unused (a link that already counted answers `already`).
+   character). The code is unused (a link that already counted answers `already`). The
+   character is not linked to another Discord account (else `linked-elsewhere`, and the code
+   stays unused): a link never moves a character from one account to another, so neither one
+   councillor's proof nor a leaked councillor key takes a member's link or role. Its owner removes
+   the link first, or you do (`forgetUser`, or its row in `members`); the same account linking
+   its own character again, with a new code, updates it.
 3. Its confirmations were signed within the code's life (from issue, less 5 minutes of clock
    difference, to `exp`), none more than 5 minutes ahead of the Worker's clock (the requester's
    addon refuses the same). The bundle may arrive up to 7 days after `exp`: the addon hands it to
@@ -637,9 +642,8 @@ For every bundle, from the page or the inbox (`checkProof` reads, `acceptProof` 
 6. With `LINK_GUILD_POLICY = "verified"`, one of the proofs that count (a councillor's, or a
    drawn player's in mode `a`) checked the guild (`r` or `w`), else `guild-unverified`.
 7. Then it claims the code (so two deliveries cannot both count), calls your `promote()` to give
-   the role, and records the character in `members`, moving it if it was linked to another
-   account (your `demote()` takes the role from that account when it has no character left),
-   with the proofs that counted (`used`) and the council authority's keys whose proofs checked
+   the role, and records the character in `members` (another account that linked it meanwhile
+   keeps it: `linked-elsewhere`, the code released), with the proofs that counted (`used`) and the council authority's keys whose proofs checked
    (`council_keys`): nothing is written for a proof before the whole link is accepted. If
    `promote()` fails (the player is not in the server, Discord is down, the network fails), or
    D1 cannot record the link, the code is released and nothing is recorded, so the same link
@@ -1054,9 +1058,9 @@ CREATE INDEX IF NOT EXISTS uploads_by_user ON inbox_uploads (discord_id, uploade
 // The functions, by what they are for:
 //   codes      issueCode(env, user) -> { ok, token, command, reply }        (your /verify)
 //   proofs     checkProof(env, text, { discordId })   reads only: the verdict
-//              acceptProof(env, text, { discordId, promote, demote })   checks, claims the code,
-//              calls your promote(discordId), records the link (and frees the code if promote fails)
-//              handleProof(request, env, { promote, demote })   the whole POST /proof, CORS included
+//              acceptProof(env, text, { discordId, promote })   checks, claims the code, calls your
+//              promote(discordId), records the link (and frees the code if promote fails)
+//              handleProof(request, env, { promote })   the whole POST /proof, CORS included
 //   watcher    acceptInbox(env, body, { promote }) / handleInbox(request, env, { promote })
 //   keys       manageKeys(env, body) / handleKeys(request, env), registerKey, renewKey, revokeKey,
 //              revokeCharacter, councilCharacters(env)
@@ -1095,6 +1099,7 @@ export const PROOF_REASONS = [
 	'expired',
 	'not-enough',
 	'guild-unverified',
+	'linked-elsewhere',
 	'not-in-server',
 	'login', // "error" from here on: nothing was used, the same link works again
 	'origin',
@@ -1443,6 +1448,11 @@ async function examine(env, input, opts = {}) {
 		return { verdict: reject('code-used', 'This code was already used.', b.R) };
 	}
 	if (t > code.exp + LINK.DELIVERY_GRACE) return { verdict: reject('expired', 'This code expired more than 7 days ago.', b.R) };
+	// A character linked to one account never moves to another on a link (Konig's review: one
+	// councillor's proof, or a leaked councillor seed, would take anyone's link and role). Its owner
+	// removes the link first, or you do.
+	const owner = await DB.prepare('SELECT discord_id FROM members WHERE character = ?').bind(b.requester).first();
+	if (owner && owner.discord_id !== code.discord_id) return { verdict: linkedElsewhere(b) };
 
 	const checks = [];
 	for (const p of b.proofs) checks.push(await checkConfirmation(env, b, p, code, t));
@@ -1473,7 +1483,11 @@ async function examine(env, input, opts = {}) {
 		};
 	}
 	const verdict = linkVerdict(code, b, gv, counted, `${b.requester} can be linked to @${code.username}.`);
-	return { verdict, b, code, counted, valid, gv };
+	return { verdict, b, code, counted, valid, gv, owned: !!owner };
+}
+
+function linkedElsewhere(b) {
+	return reject('linked-elsewhere', `${b.requester} is linked to another Discord account: that account removes its link first, or the bot's keeper does.`, b.R);
 }
 
 function linkVerdict(code, b, gv, counted, message) {
@@ -1501,12 +1515,11 @@ function linkVerdict(code, b, gv, counted, message) {
 //   promote(discordId, verdict): yours. Resolve (with nothing, true or { ok: true }) when the role is
 //     given; throw, or return false or { ok: false }, when it is not ({ ok: false, reason:
 //     'not-in-server' } when the member is not in the server: the player is told to join first).
-//   demote(discordId): optional. Called when the character was linked to another account that has
-//     no other linked character left: take that account's role away. Its errors are only logged.
+// A link never takes a character from another account, nor anyone's role (linked-elsewhere).
 // Answers { ok, status: 'linked' | 'rejected' | 'error', reason, message, R, and for a link:
 // discordId, username, character, guild, faction, guildCheck, guildKnown, characters }.
 export async function acceptProof(env, text, opts = {}) {
-	const { promote, demote } = opts;
+	const { promote } = opts;
 	if (typeof promote !== 'function') throw new TypeError('Olympus Link: acceptProof needs promote(discordId), your function that gives the role');
 	const t = opts.t || now();
 	const DB = database(env);
@@ -1535,33 +1548,26 @@ export async function acceptProof(env, text, opts = {}) {
 		if (role.reason === 'not-in-server') return reject('not-in-server', 'Join the Olympus Discord server first, then send the link again.', b.R);
 		return failure('discord', 'Discord did not take the role change: try again in a minute.', { R: b.R });
 	}
-	let previous;
 	try {
-		previous = await DB.prepare('SELECT discord_id FROM members WHERE character = ?').bind(b.requester).first();
 		await DB.batch([
 			...x.counted.map((c) => DB.prepare('INSERT OR IGNORE INTO used (r, key_id, t) VALUES (?, ?, ?)').bind(b.R, c.proof.keyId, t)),
 			// The council authority's keys whose proofs checked in this link: recorded now, not before.
 			...x.valid.filter((c) => c.key.council).map((c) => recordCouncilKey(DB, c, t)),
-			DB.prepare(
-				'INSERT INTO members (character, discord_id, guild, gv, faction, r, linked) VALUES (?, ?, ?, ?, ?, ?, ?) ' +
-					'ON CONFLICT(character) DO UPDATE SET discord_id = excluded.discord_id, guild = excluded.guild, gv = excluded.gv, faction = excluded.faction, r = excluded.r, linked = excluded.linked',
-			).bind(b.requester, code.discord_id, b.guild, x.gv, b.faction, b.R, t),
+			// The account's own character again (a new code) is updated; a new one is inserted, and
+			// one another account linked since the check fails the whole batch: nothing moves.
+			x.owned
+				? DB.prepare(
+						'INSERT INTO members (character, discord_id, guild, gv, faction, r, linked) VALUES (?, ?, ?, ?, ?, ?, ?) ' +
+							'ON CONFLICT(character) DO UPDATE SET guild = excluded.guild, gv = excluded.gv, faction = excluded.faction, r = excluded.r, linked = excluded.linked WHERE members.discord_id = excluded.discord_id',
+					).bind(b.requester, code.discord_id, b.guild, x.gv, b.faction, b.R, t)
+				: DB.prepare('INSERT INTO members (character, discord_id, guild, gv, faction, r, linked) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(b.requester, code.discord_id, b.guild, x.gv, b.faction, b.R, t),
 		]);
 	} catch (err) {
-		console.error('olympus-link: could not record the link', b.R, err && err.stack ? err.stack : err);
 		await release();
+		const holder = await DB.prepare('SELECT discord_id FROM members WHERE character = ?').bind(b.requester).first();
+		if (holder && holder.discord_id !== code.discord_id) return linkedElsewhere(b);
+		console.error('olympus-link: could not record the link', b.R, err && err.stack ? err.stack : err);
 		return failure('server', 'The link could not be recorded: send it again in a minute.', { R: b.R });
-	}
-	if (previous && previous.discord_id !== code.discord_id && typeof demote === 'function') {
-		const left = await DB.prepare('SELECT COUNT(*) AS n FROM members WHERE discord_id = ?').bind(previous.discord_id).first();
-		if (!left || left.n === 0) {
-			// The character moved away, and the old account has no other.
-			try {
-				await demote(previous.discord_id);
-			} catch (err) {
-				console.error('olympus-link: demote failed for', previous.discord_id, err && err.stack ? err.stack : err);
-			}
-		}
 	}
 	return { ...linkedAnswer(v, 'linked', `${b.requester} is now linked to @${code.username}.`), characters: await charactersOf(env, code.discord_id) };
 }
@@ -1800,8 +1806,8 @@ export async function discordUser(accessToken, { clientId, fetchImpl = globalThi
 // The whole POST /proof, CORS preflight included, as a Response: the origin, your site token
 // (when you set LINK_SITE_TOKEN), the body, the link's form, who the player is (discordUser), 10
 // links an hour per account, then acceptProof with your promote, and the audit trail.
-//   if (url.pathname === '/proof') return handleProof(request, env, { promote, demote });
-export async function handleProof(request, env, { promote, demote, fetchImpl } = {}) {
+//   if (url.pathname === '/proof') return handleProof(request, env, { promote });
+export async function handleProof(request, env, { promote, fetchImpl } = {}) {
 	const cors = corsHeaders(request, env);
 	const reply = (answer) => respond(answer, cors || { Vary: 'Origin' });
 	try {
@@ -1826,7 +1832,7 @@ export async function handleProof(request, env, { promote, demote, fetchImpl } =
 		if (!who.ok) return reply(who);
 		const t = now();
 		if (await tooManyProofs(env, who.user.id, t)) return reply(failure('limit', 'Too many tries: wait a while and send it again.'));
-		const result = await acceptProof(env, text, { discordId: who.user.id, promote, demote, t });
+		const result = await acceptProof(env, text, { discordId: who.user.id, promote, t });
 		try {
 			await logProof(env, 'site', text, result, { discordId: who.user.id, uploaded: t });
 		} catch (err) {
@@ -1850,7 +1856,7 @@ function pageAnswer(r) {
 // web/tools/read-inbox.mjs with your admin token. The Discord account is each code's owner.
 //   body: {"bundles": [{"R", "bundle", "from", "t"}, ...]} (500 at most; a bare string is a bundle)
 // { ok: true, status: 'ok', results: [{ R, status, reason, message }] } or a format error.
-export async function acceptInbox(env, body, { promote, demote } = {}) {
+export async function acceptInbox(env, body, { promote } = {}) {
 	if (typeof promote !== 'function') throw new TypeError('Olympus Link: acceptInbox needs promote(discordId), your function that gives the role');
 	const list = body && Array.isArray(body.bundles) ? body.bundles : null;
 	if (!list || list.length > LINK.MAX_BUNDLES) return failure('format', `Send {"bundles": [...]} with at most ${LINK.MAX_BUNDLES}.`);
@@ -1865,7 +1871,7 @@ export async function acceptInbox(env, body, { promote, demote } = {}) {
 			result =
 				parsed.ok && typeof entry.R === 'string' && entry.R !== parsed.bundle.R
 					? reject('format', 'The inbox key does not match the link.', parsed.bundle.R)
-					: await acceptProof(env, text, { t, promote, demote });
+					: await acceptProof(env, text, { t, promote });
 		} catch (err) {
 			// One link that fails on our side does not stop the others: this one is sent again later.
 			console.error('olympus-link: inbox entry', err && err.stack ? err.stack : err);
@@ -1886,10 +1892,10 @@ export async function acceptInbox(env, body, { promote, demote } = {}) {
 }
 
 // POST <your inbox route> for read-inbox.mjs --post: the admin token, then acceptInbox.
-export async function handleInbox(request, env, { promote, demote } = {}) {
+export async function handleInbox(request, env, { promote } = {}) {
 	if (!(await adminAuthorized(request, env))) return respond(failure('auth', 'Wrong admin token.'));
 	const body = await readJson(request, 2 * 1024 * 1024);
-	return respond(await acceptInbox(env, body, { promote, demote }));
+	return respond(await acceptInbox(env, body, { promote }));
 }
 
 // ---------------------------------------------------------------------------
@@ -2381,7 +2387,7 @@ export async function sessionUser(request, env) {
 	throw new Error('Olympus Link: connect sessionUser() to your Discord login (web/WORKER.md, "Who is sending")');
 }
 
-// The role, given and taken by the bot (your promote() and demote(), in the terms of acceptProof).
+// The role, given and taken by the bot (your promote() and demote() in the terms of handleProof).
 export const giveRole = (env) => (discordId) => discordRole(env, 'PUT', discordId);
 export const takeRole = (env) => (discordId) => discordRole(env, 'DELETE', discordId);
 
@@ -2420,7 +2426,7 @@ export async function handleLink(request, env, ctx, { getUser = sessionUser } = 
 // acceptProof with this Worker's role: the old name, kept for the tests and tools that use it.
 // opts.userId: the signed-in user, who must own the code (the page); absent for the watcher.
 export function acceptBundle(env, text, opts = {}) {
-	return acceptProof(env, text, { discordId: opts.userId, t: opts.t, promote: giveRole(env), demote: takeRole(env) });
+	return acceptProof(env, text, { discordId: opts.userId, t: opts.t, promote: giveRole(env) });
 }
 
 // ---------------------------------------------------------------------------

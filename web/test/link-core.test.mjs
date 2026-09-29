@@ -304,18 +304,41 @@ describe('with D1', { skip: probe ? false : 'node:sqlite is not available in thi
 		}
 	});
 
-	test('acceptProof: a character linked again moves; demote() is asked for the old account when it has none left, and its failure is only logged', async () => {
+	test('acceptProof: a character linked to another account stays with it; one proof never moves it, and nobody is demoted (Konig\'s review)', async () => {
+		const OLD = '500000000000000001';
+		const linkedTo = async (id) => env.DB.prepare('INSERT INTO members (character, discord_id, guild, gv, faction, r, linked) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(B1.requester, id, 'Olympus I', 'r', 'Alliance', '1111111111', 1780000000).run();
 		await setup();
-		await env.DB.prepare('INSERT INTO members (character, discord_id, guild, faction, r, linked) VALUES (?, ?, ?, ?, ?, ?)').bind(B1.requester, '500000000000000001', 'Olympus II', 'Alliance', '1111111111', 1780000000).run();
+		await linkedTo(OLD);
+		// One councillor's proof (a leaked seed would do) for a character someone already linked.
+		const v = await checkProof(env, B1.bundle, { discordId: USER_C.id });
+		assert.deepEqual([v.ok, v.status, v.reason], [false, 'rejected', 'linked-elsewhere'], v.message);
 		const r = await acceptProof(env, B1.bundle, { discordId: USER_C.id, promote, demote });
-		assert.equal(r.status, 'linked');
-		assert.deepEqual(roles, [['promote', USER_C.id, B1.requester], ['demote', '500000000000000001']]);
+		assert.deepEqual([r.ok, r.status, r.reason, r.R], [false, 'rejected', 'linked-elsewhere', B1.R]);
+		assert.deepEqual(roles, [], 'no role given, none taken');
+		assert.deepEqual({ ...(await row('SELECT discord_id, guild, r FROM members WHERE character = ?', B1.requester)) }, { discord_id: OLD, guild: 'Olympus I', r: '1111111111' });
+		assert.equal((await row('SELECT used FROM codes WHERE r = ?', B1.R)).used, null, 'the code stays unused');
+		assert.equal((await row('SELECT COUNT(*) AS n FROM used')).n, 0);
+		// The same account linking its own character again (a new code, another guild): it updates.
 		await setup();
-		await env.DB.prepare('INSERT INTO members (character, discord_id, guild, faction, r, linked) VALUES (?, ?, ?, ?, ?, ?)').bind(B1.requester, '500000000000000001', 'Olympus II', 'Alliance', '1111111111', 1780000000).run();
-		const broken = async () => {
-			throw new Error('Discord down');
+		await linkedTo(USER_C.id);
+		const again = await acceptProof(env, B1.bundle, { discordId: USER_C.id, promote, demote });
+		assert.equal(again.status, 'linked', again.message);
+		assert.deepEqual({ ...(await row('SELECT discord_id, guild, r FROM members WHERE character = ?', B1.requester)) }, { discord_id: USER_C.id, guild: 'Olympus II', r: B1.R });
+		assert.deepEqual(roles, [['promote', USER_C.id, B1.requester]]);
+		// Linked by another account between the check and the record (promote() runs in between):
+		// nothing is recorded, the code is freed, and the character stays the other account's.
+		await setup();
+		roles = [];
+		const racing = async (discordId, verdict) => {
+			await promote(discordId, verdict);
+			await linkedTo(OLD);
 		};
-		assert.equal((await acceptProof(env, B1.bundle, { discordId: USER_C.id, promote, demote: broken })).status, 'linked');
+		const raced = await acceptProof(env, B1.bundle, { discordId: USER_C.id, promote: racing, demote });
+		assert.deepEqual([raced.status, raced.reason], ['rejected', 'linked-elsewhere'], raced.message);
+		assert.equal((await row('SELECT discord_id FROM members WHERE character = ?', B1.requester)).discord_id, OLD);
+		assert.equal((await row('SELECT used FROM codes WHERE r = ?', B1.R)).used, null);
+		assert.equal((await row('SELECT COUNT(*) AS n FROM used')).n, 0);
+		assert.deepEqual(roles.map((x) => x[0]), ['promote'], 'never a demote');
 	});
 
 	test('handleProof: CORS for the page\'s origin only, exact, never a wildcard nor credentials', async () => {
