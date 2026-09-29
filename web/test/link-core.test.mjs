@@ -651,6 +651,53 @@ describe('with D1', { skip: probe ? false : 'node:sqlite is not available in thi
 		assert.equal((await forgetUser(env, 'someone')).reason, 'format');
 	});
 
+	test('handleProof: a signed-in player deletes his own link from the page, and your demote() takes the role (Konig\'s review)', async () => {
+		const forget = (token, opts = {}) => handleProof(page('POST', { body: { forget: true, discordToken: token } }), env, { promote, demote: opts.demote === undefined ? demote : opts.demote, fetchImpl: discordStub() });
+		const answer = async (res) => ({ http: res.status, headers: res.headers, ...(await res.json()) });
+		await setup();
+		assert.equal((await proof(B1.bundle, 'token-of-some-player-0001')).status, 'linked');
+		assert.equal((await proof(B3.bundle, 'token-of-tester-two-00002')).status, 'linked');
+		roles = [];
+		let r = await answer(await forget('token-of-some-player-0001'));
+		assert.deepEqual([r.http, r.ok, r.status, r.reason, r.username, r.characters], [200, true, 'forgotten', 'forgotten', USER_C.username, [B1.requester]]);
+		assert.equal(r.discordId, undefined, 'the page never gets the Discord id');
+		assert.equal(r.headers.get('Access-Control-Allow-Origin'), PAGE_ORIGIN);
+		assert.deepEqual(roles, [['demote', USER_C.id]]);
+		for (const table of ['members', 'codes', 'inbox_uploads']) assert.equal((await row(`SELECT COUNT(*) AS n FROM ${table} WHERE discord_id = ?`, USER_C.id)).n, 0, table);
+		assert.equal(await row('SELECT 1 AS x FROM used WHERE r = ?', B1.R), null);
+		// Another player's link is untouched.
+		assert.equal((await row('SELECT discord_id FROM members WHERE character = ?', B3.requester)).discord_id, USER_A.id);
+		// Nothing left to delete: the same answer, with no character.
+		r = await answer(await forget('token-of-some-player-0001'));
+		assert.deepEqual([r.status, r.characters], ['forgotten', []]);
+		// The role could not be taken: nothing is deleted, the player tries again.
+		await setup();
+		assert.equal((await proof(B1.bundle, 'token-of-some-player-0001')).status, 'linked');
+		r = await answer(await forget('token-of-some-player-0001', { demote: async () => ({ ok: false }) }));
+		assert.deepEqual([r.status, r.reason], ['error', 'discord']);
+		assert.equal((await row('SELECT discord_id FROM members WHERE character = ?', B1.requester)).discord_id, USER_C.id);
+		// Not in the server any more (no role to take), or no demote(): deleted.
+		r = await answer(await forget('token-of-some-player-0001', { demote: async () => ({ ok: false, reason: 'not-in-server' }) }));
+		assert.equal(r.status, 'forgotten');
+		await setup();
+		assert.equal((await proof(B1.bundle, 'token-of-some-player-0001')).status, 'linked');
+		r = await answer(await forget('token-of-some-player-0001', { demote: null }));
+		assert.equal(r.status, 'forgotten');
+		assert.equal(await row('SELECT 1 AS x FROM members WHERE character = ?', B1.requester), null);
+		// Only with a sign-in Discord vouches for, and within the limits: a made-up one deletes nothing.
+		await setup();
+		assert.equal((await proof(B1.bundle, 'token-of-some-player-0001')).status, 'linked');
+		r = await answer(await forget('made-up-token-000000'));
+		assert.deepEqual([r.http, r.reason], [401, 'login']);
+		assert.ok(await row('SELECT 1 AS x FROM members WHERE character = ?', B1.requester));
+		// A body that asks for both, or for neither: refused.
+		for (const body of [{ forget: true, text: B1.bundle, discordToken: 'token-of-some-player-0001' }, { forget: 'yes', discordToken: 'token-of-some-player-0001' }]) {
+			const res = await handleProof(page('POST', { body }), env, { promote, demote, fetchImpl: discordStub() });
+			assert.deepEqual([res.status, (await res.json()).reason], [400, 'format'], JSON.stringify(body));
+		}
+		assert.ok(await row('SELECT 1 AS x FROM members WHERE character = ?', B1.requester));
+	});
+
 	test('pruneLink: what no link can use any more goes, on your schedule; the links and what counted for them stay (Konig\'s review)', async () => {
 		await setup();
 		// B1 linked (its code and the proof that counted), then TOKEN_A's code left unused.

@@ -535,6 +535,17 @@ button.step-go:hover .step-label {
 	color: var(--ok);
 }
 
+.btn-danger {
+	background: var(--danger-wash);
+	border-color: rgba(255, 145, 135, 0.45);
+	color: var(--danger);
+}
+
+.btn-danger:hover:not(:disabled) {
+	background: rgba(255, 145, 135, 0.18);
+	border-color: var(--danger);
+}
+
 .btn-discord {
 	background: var(--discord);
 	color: #fff;
@@ -1432,6 +1443,25 @@ body[data-step='read'] .foot-privacy {
 	margin-top: 8px;
 	color: var(--text-3);
 	font-size: 12.5px;
+}
+
+.foot-link {
+	padding: 4px 2px;
+	border: 0;
+	background: none;
+	font: inherit;
+	color: var(--text-3);
+	text-decoration: underline;
+	text-underline-offset: 3px;
+	cursor: pointer;
+}
+
+.foot-link:hover {
+	color: var(--text);
+}
+
+.actions-center {
+	justify-content: center;
 }
 
 /* ------------------------------------------------------------------ phones */

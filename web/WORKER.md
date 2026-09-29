@@ -235,12 +235,13 @@ export default {
   return `false`) when Discord refused, and the code is freed so the same link works on the next
   try; `{ ok: false, reason: 'not-in-server' }` tells the player to join the server first. A
   link never moves a character linked to one Discord account to another, nor takes anyone's
-  role (`linked-elsewhere`, "What the Worker checks").
+  role (`linked-elsewhere`, "What the Worker checks"). `demote(discordId)` takes the role when
+  the player deletes his own link on the page ("The API"); give it, or take the role yourself.
 - `acceptProof(env, text, { discordId, promote })` is the whole link, for routes you write
   yourself: the checks ("What the Worker checks"), then it claims the code, calls `promote`, and
   records the character. `checkProof(env, text, { discordId })` gives the same verdict, reading
   only. `handleProof` is `acceptProof` with the page's CORS, the sign-in check, the rate limit and
-  the audit trail around it.
+  the audit trail around it, and the player's own "Delete my link" (`forgetOwnLink`).
 - `pruneLink(env)`, once a day from your `scheduled()` (Konig's review: nothing was pruned),
   deletes what no link can use any more: codes past their delivery grace (7 days after they
   expire), the proofs recorded for codes gone that link nothing now (what counted for a
@@ -338,7 +339,8 @@ is set), and it shows nothing to click inside another page's frame.
 
 The code step tells the player to use `/verify` in the Olympus server and to keep the code, and
 the game's Olympus Link window, off stream and out of screenshots. `?demo=code` (and `wait`,
-`screen`, `scanning`, `phone`, `other`, `pick`, `scanned`, `found`, `done`, `error`, `closed`) shows
+`screen`, `scanning`, `phone`, `other`, `pick`, `scanned`, `found`, `done`, `error`, `forget`,
+`forgotten`, `closed`) shows
 each step with made-up data and never calls anything; `&lang=pt` shows the Portuguese page (it is
 chosen from the browser's language otherwise).
 
@@ -557,7 +559,7 @@ whole address in `config.js`).
 
 | Route | Who | Body | Answer |
 |---|---|---|---|
-| `POST /proof` (`handleProof`; the reference Worker's `/api/link/proof`) | the page, from `LINK_ORIGIN` | `{"text": "OLB5~... or its address", "discordToken": "<access token>"}` | `200 {"status", "reason", "message", "R", "username", "character", "guild", "faction", "guildCheck", "guildKnown", "characters"}`; `401 {"reason": "login" \| "site"}`, `403 {"reason": "origin"}`, `400 {"reason": "format"}` (no text or token), `429 {"reason": "limit"}` past the limits before Discord is asked (20 a minute per IP address, 10 an hour per sign-in, 300 a minute in all) or after 10 links an hour per account; `OPTIONS`: `204` with the CORS headers for `LINK_ORIGIN` only |
+| `POST /proof` (`handleProof`; the reference Worker's `/api/link/proof`) | the page, from `LINK_ORIGIN` | `{"text": "OLB5~... or its address", "discordToken": "<access token>"}`, or `{"forget": true, "discordToken"}` (the player's own "Delete my link": `200 {"status": "forgotten", "characters"}`) | `200 {"status", "reason", "message", "R", "username", "character", "guild", "faction", "guildCheck", "guildKnown", "characters"}`; `401 {"reason": "login" \| "site"}`, `403 {"reason": "origin"}`, `400 {"reason": "format"}` (no text or token), `429 {"reason": "limit"}` past the limits before Discord is asked (20 a minute per IP address, 10 an hour per sign-in, 300 a minute in all) or after 10 links an hour per account; `OPTIONS`: `204` with the CORS headers for `LINK_ORIGIN` only |
 | `POST /api/link/inbox` (`handleInbox`) | watcher tool | `{"bundles": [{"R", "bundle", "from", "t"}]}` (500 at most) | `200 {"results": [{"R", "status", "reason", "message"}]}` |
 | `POST /api/link/keys` (`handleKeys`) | you | `{"key_id", "public_key", "owner_discord_id", "owner_username", "character", "kind", "bootstrap", "days", "replace"}`, or `{"key_id", "renew": true, "days"}`, or `{"key_id", "revoke": true}`, or `{"character", "revoke": true}` | `200 {"status": "ok", "key_id", "kind", "character", "public_key", "cert", "cert_exp", "cert_from", "command", "replaced"}`: a new player key's `cert`, `cert_exp` and `command` are `null` (with a `message`) until `cert_from`, when `renew` gives them (`{"status": "ok", "revoked": true}` for a revoke, with `"council": true` and the councillor's `character`, once seen, for a key of the council authority's; `{"status": "ok", "character", "revoked": true, "keys", "council_keys"}` for a character: the registered keys it revoked, the authority's keys seen for it); `409 {"reason": "key-id-used" \| "public-key-used" \| "owner-has-key" \| "character-not-linked" \| "revoked" \| "replaced" \| "too-early"}` (`too-early` with `cert_from`), `404 {"reason": "unknown-key"}`, `400 {"reason": "format"}` |
 | `POST /api/link/bot-code` | gateway bot | `{"id", "username"}` | `200 {"token", "command", "exp", "mode", "reply"}` |
@@ -566,8 +568,19 @@ whole address in `config.js`).
 
 `status` is `linked` (reason `linked`, or `already` when that link had already counted),
 `rejected` (reason `format`, `unknown-code`, `other-user`, `tag`, `code-used`, `expired`,
-`not-enough`, `guild-unverified`, `linked-elsewhere`, `not-in-server`: the code stays unused) or `error` (`login`,
-`origin`, `site`, `limit`, `discord`, `server`: nothing was used, try again). `PROOF_REASONS` in
+`not-enough`, `guild-unverified`, `linked-elsewhere`, `not-in-server`: the code stays unused),
+`forgotten` (reason `forgotten`: the player deleted his own link, below) or `error` (`login`,
+`origin`, `site`, `limit`, `discord`, `server`: nothing was used, try again).
+
+**The player deletes his own link** (Konig's review: players could not): the page's "Delete my
+link", at the foot of every step, signs the player in with Discord and sends the same route
+`{"forget": true, "discordToken": "<access token>"}`. `handleProof` checks it as it checks a link
+(origin, site token, the limits before Discord, the sign-in with Discord), then `forgetOwnLink`:
+your `demote(discordId)` takes the role (an answer `{ ok: false, reason: 'not-in-server' }` is
+fine: there is none to take; any other failure deletes nothing and answers `discord`, to try
+again), then `forgetUser` deletes everything kept about the account. The answer: `200 {"status":
+"forgotten", "reason": "forgotten", "message", "username", "characters"}` (the characters no
+longer linked). Without `demote`, only the data goes: take the role yourself. `PROOF_REASONS` in
 `link-core.mjs` lists them, and the page shows each one in English or Portuguese with what to do
 next.
 
@@ -1093,7 +1106,8 @@ CREATE TABLE IF NOT EXISTS limits (
 //   proofs     checkProof(env, text, { discordId })   reads only: the verdict
 //              acceptProof(env, text, { discordId, promote })   checks, claims the code, calls your
 //              promote(discordId), records the link (and frees the code if promote fails)
-//              handleProof(request, env, { promote })   the whole POST /proof, CORS included
+//              handleProof(request, env, { promote, demote })   the whole POST /proof, CORS included
+//              (and a player's own "delete my link": forgetOwnLink)
 //   watcher    acceptInbox(env, body, { promote }) / handleInbox(request, env, { promote })
 //   keys       manageKeys(env, body) / handleKeys(request, env), registerKey, renewKey, revokeKey,
 //              revokeCharacter, councilCharacters(env)
@@ -1132,6 +1146,7 @@ export const LINK = {
 export const PROOF_REASONS = [
 	'linked', // status "linked": done
 	'already', // status "linked": that link had counted before, nothing new
+	'forgotten', // status "forgotten": the player deleted his own link on the page ({"forget": true})
 	'format', // "rejected" from here on: the code stays unused
 	'unknown-code',
 	'other-user',
@@ -1824,9 +1839,10 @@ export async function logProof(env, source, text, result, extra = {}) {
 // The page: POST /proof, from the static page on GitHub Pages
 //
 // Body {"text": "<the link: OLB5~... or its address>", "discordToken": "<the player's Discord
-// access token>"}; the page sends "Authorization: Bearer <LINK_SITE_TOKEN>" when you gave it one.
-// The token is only shown to Discord (GET /oauth2/@me), never stored: it must be for your
-// application (DISCORD_CLIENT_ID) with the identify scope, and it says who the player is.
+// access token>"}, or {"forget": true, "discordToken"} when the player deletes his own link; the
+// page sends "Authorization: Bearer <LINK_SITE_TOKEN>" when you gave it one. The token is only
+// shown to Discord (GET /oauth2/@me), never stored: it must be for your application
+// (DISCORD_CLIENT_ID) with the identify scope, and it says who the player is.
 
 // The CORS headers for a request from the page's origin (LINK_ORIGIN, exactly; several may be
 // listed, comma-separated, while a new address comes in), or null for any other origin.
@@ -1882,9 +1898,11 @@ export async function discordUser(accessToken, { clientId, fetchImpl = globalThi
 // The whole POST /proof, CORS preflight included, as a Response: the origin, your site token
 // (when you set LINK_SITE_TOKEN), the body, the link's form, the limits before Discord is asked
 // (tooManyRequests), who the player is (discordUser), 10 links an hour per account, then
-// acceptProof with your promote, and the audit trail.
-//   if (url.pathname === '/proof') return handleProof(request, env, { promote });
-export async function handleProof(request, env, { promote, fetchImpl } = {}) {
+// acceptProof with your promote, and the audit trail. {"forget": true} instead of a link: the
+// signed-in player's own link and everything kept about his account, gone (forgetOwnLink, with
+// your demote to take the role).
+//   if (url.pathname === '/proof') return handleProof(request, env, { promote, demote });
+export async function handleProof(request, env, { promote, demote, fetchImpl } = {}) {
 	const cors = corsHeaders(request, env);
 	const reply = (answer) => respond(answer, cors || { Vary: 'Origin' });
 	try {
@@ -1897,11 +1915,12 @@ export async function handleProof(request, env, { promote, fetchImpl } = {}) {
 			return reply(failure('site', 'This page is not allowed to send links right now.'));
 		}
 		const body = await readJson(request, 8 * 1024);
-		if (!body || typeof body.text !== 'string' || typeof body.discordToken !== 'string') {
-			return reply(failure('format', 'Send {"text": "<the link>", "discordToken": "<the Discord sign-in>"}.'));
+		const forget = !!body && body.forget === true;
+		if (!body || typeof body.discordToken !== 'string' || (forget ? body.text !== undefined : typeof body.text !== 'string')) {
+			return reply(failure('format', 'Send {"text": "<the link>", "discordToken": "<the Discord sign-in>"}, or {"forget": true, "discordToken"}.'));
 		}
-		const text = proofText(body.text);
-		if (!text || !parseBundle(text).ok) {
+		const text = forget ? null : proofText(body.text);
+		if (!forget && (!text || !parseBundle(text).ok)) {
 			const why = text ? parseBundle(text).error : 'prefix';
 			return reply(reject('format', `This is not a complete Olympus link (${why}).`));
 		}
@@ -1911,6 +1930,7 @@ export async function handleProof(request, env, { promote, fetchImpl } = {}) {
 		}
 		const who = await discordUser(body.discordToken, { clientId: env.DISCORD_CLIENT_ID, fetchImpl });
 		if (!who.ok) return reply(who);
+		if (forget) return reply(pageAnswer(await forgetOwnLink(env, who.user, { demote, t })));
 		if (await tooManyProofs(env, who.user.id, t)) return reply(failure('limit', 'Too many tries: wait a while and send it again.'));
 		const result = await acceptProof(env, text, { discordId: who.user.id, promote, t });
 		try {
@@ -1923,6 +1943,26 @@ export async function handleProof(request, env, { promote, fetchImpl } = {}) {
 		console.error('olympus-link: /proof', err && err.stack ? err.stack : err);
 		return reply(failure('server', 'Something went wrong on our side.'));
 	}
+}
+
+// The page's "delete my link" (Konig's review: players could not delete their own link), for the
+// Discord user the sign-in names: your demote(discordId) takes the role first (resolve, or
+// { ok: false, reason: 'not-in-server' } when there is none to take), then forgetUser deletes
+// everything kept about the account. When demote fails otherwise, nothing is deleted and the
+// player tries again ('discord'). Without demote, only the data goes: take the role yourself.
+// { ok: true, status: 'forgotten', reason: 'forgotten', message, discordId, username, characters }
+// (the characters it removed) or an error answer.
+export async function forgetOwnLink(env, user, { demote, t = now() } = {}) {
+	const id = String(user && user.id);
+	if (!DISCORD_ID_RE.test(id)) return failure('login', 'Sign in with Discord first.');
+	if (typeof demote === 'function') {
+		const role = await promoted(demote, id);
+		if (!role.ok && role.reason !== 'not-in-server') return failure('discord', 'Discord did not take the role change: try again in a minute.');
+	}
+	const gone = await forgetUser(env, id, t);
+	if (!gone.ok) return gone;
+	const message = gone.characters.length ? `${gone.characters.join(', ')}: no longer linked, and nothing is kept about this Discord account.` : 'Nothing is kept about this Discord account.';
+	return { ok: true, status: 'forgotten', reason: 'forgotten', message, discordId: id, username: user.username, characters: gone.characters };
 }
 
 // What the page gets back: the answer without the Discord id.

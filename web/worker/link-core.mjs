@@ -28,7 +28,8 @@
 //   proofs     checkProof(env, text, { discordId })   reads only: the verdict
 //              acceptProof(env, text, { discordId, promote })   checks, claims the code, calls your
 //              promote(discordId), records the link (and frees the code if promote fails)
-//              handleProof(request, env, { promote })   the whole POST /proof, CORS included
+//              handleProof(request, env, { promote, demote })   the whole POST /proof, CORS included
+//              (and a player's own "delete my link": forgetOwnLink)
 //   watcher    acceptInbox(env, body, { promote }) / handleInbox(request, env, { promote })
 //   keys       manageKeys(env, body) / handleKeys(request, env), registerKey, renewKey, revokeKey,
 //              revokeCharacter, councilCharacters(env)
@@ -67,6 +68,7 @@ export const LINK = {
 export const PROOF_REASONS = [
 	'linked', // status "linked": done
 	'already', // status "linked": that link had counted before, nothing new
+	'forgotten', // status "forgotten": the player deleted his own link on the page ({"forget": true})
 	'format', // "rejected" from here on: the code stays unused
 	'unknown-code',
 	'other-user',
@@ -759,9 +761,10 @@ export async function logProof(env, source, text, result, extra = {}) {
 // The page: POST /proof, from the static page on GitHub Pages
 //
 // Body {"text": "<the link: OLB5~... or its address>", "discordToken": "<the player's Discord
-// access token>"}; the page sends "Authorization: Bearer <LINK_SITE_TOKEN>" when you gave it one.
-// The token is only shown to Discord (GET /oauth2/@me), never stored: it must be for your
-// application (DISCORD_CLIENT_ID) with the identify scope, and it says who the player is.
+// access token>"}, or {"forget": true, "discordToken"} when the player deletes his own link; the
+// page sends "Authorization: Bearer <LINK_SITE_TOKEN>" when you gave it one. The token is only
+// shown to Discord (GET /oauth2/@me), never stored: it must be for your application
+// (DISCORD_CLIENT_ID) with the identify scope, and it says who the player is.
 
 // The CORS headers for a request from the page's origin (LINK_ORIGIN, exactly; several may be
 // listed, comma-separated, while a new address comes in), or null for any other origin.
@@ -817,9 +820,11 @@ export async function discordUser(accessToken, { clientId, fetchImpl = globalThi
 // The whole POST /proof, CORS preflight included, as a Response: the origin, your site token
 // (when you set LINK_SITE_TOKEN), the body, the link's form, the limits before Discord is asked
 // (tooManyRequests), who the player is (discordUser), 10 links an hour per account, then
-// acceptProof with your promote, and the audit trail.
-//   if (url.pathname === '/proof') return handleProof(request, env, { promote });
-export async function handleProof(request, env, { promote, fetchImpl } = {}) {
+// acceptProof with your promote, and the audit trail. {"forget": true} instead of a link: the
+// signed-in player's own link and everything kept about his account, gone (forgetOwnLink, with
+// your demote to take the role).
+//   if (url.pathname === '/proof') return handleProof(request, env, { promote, demote });
+export async function handleProof(request, env, { promote, demote, fetchImpl } = {}) {
 	const cors = corsHeaders(request, env);
 	const reply = (answer) => respond(answer, cors || { Vary: 'Origin' });
 	try {
@@ -832,11 +837,12 @@ export async function handleProof(request, env, { promote, fetchImpl } = {}) {
 			return reply(failure('site', 'This page is not allowed to send links right now.'));
 		}
 		const body = await readJson(request, 8 * 1024);
-		if (!body || typeof body.text !== 'string' || typeof body.discordToken !== 'string') {
-			return reply(failure('format', 'Send {"text": "<the link>", "discordToken": "<the Discord sign-in>"}.'));
+		const forget = !!body && body.forget === true;
+		if (!body || typeof body.discordToken !== 'string' || (forget ? body.text !== undefined : typeof body.text !== 'string')) {
+			return reply(failure('format', 'Send {"text": "<the link>", "discordToken": "<the Discord sign-in>"}, or {"forget": true, "discordToken"}.'));
 		}
-		const text = proofText(body.text);
-		if (!text || !parseBundle(text).ok) {
+		const text = forget ? null : proofText(body.text);
+		if (!forget && (!text || !parseBundle(text).ok)) {
 			const why = text ? parseBundle(text).error : 'prefix';
 			return reply(reject('format', `This is not a complete Olympus link (${why}).`));
 		}
@@ -846,6 +852,7 @@ export async function handleProof(request, env, { promote, fetchImpl } = {}) {
 		}
 		const who = await discordUser(body.discordToken, { clientId: env.DISCORD_CLIENT_ID, fetchImpl });
 		if (!who.ok) return reply(who);
+		if (forget) return reply(pageAnswer(await forgetOwnLink(env, who.user, { demote, t })));
 		if (await tooManyProofs(env, who.user.id, t)) return reply(failure('limit', 'Too many tries: wait a while and send it again.'));
 		const result = await acceptProof(env, text, { discordId: who.user.id, promote, t });
 		try {
@@ -858,6 +865,26 @@ export async function handleProof(request, env, { promote, fetchImpl } = {}) {
 		console.error('olympus-link: /proof', err && err.stack ? err.stack : err);
 		return reply(failure('server', 'Something went wrong on our side.'));
 	}
+}
+
+// The page's "delete my link" (Konig's review: players could not delete their own link), for the
+// Discord user the sign-in names: your demote(discordId) takes the role first (resolve, or
+// { ok: false, reason: 'not-in-server' } when there is none to take), then forgetUser deletes
+// everything kept about the account. When demote fails otherwise, nothing is deleted and the
+// player tries again ('discord'). Without demote, only the data goes: take the role yourself.
+// { ok: true, status: 'forgotten', reason: 'forgotten', message, discordId, username, characters }
+// (the characters it removed) or an error answer.
+export async function forgetOwnLink(env, user, { demote, t = now() } = {}) {
+	const id = String(user && user.id);
+	if (!DISCORD_ID_RE.test(id)) return failure('login', 'Sign in with Discord first.');
+	if (typeof demote === 'function') {
+		const role = await promoted(demote, id);
+		if (!role.ok && role.reason !== 'not-in-server') return failure('discord', 'Discord did not take the role change: try again in a minute.');
+	}
+	const gone = await forgetUser(env, id, t);
+	if (!gone.ok) return gone;
+	const message = gone.characters.length ? `${gone.characters.join(', ')}: no longer linked, and nothing is kept about this Discord account.` : 'Nothing is kept about this Discord account.';
+	return { ok: true, status: 'forgotten', reason: 'forgotten', message, discordId: id, username: user.username, characters: gone.characters };
 }
 
 // What the page gets back: the answer without the Discord id.

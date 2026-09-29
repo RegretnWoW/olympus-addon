@@ -443,6 +443,12 @@ sends it to the bot. The bot's side is in [`web/FERN.md`](web/FERN.md), every de
 account (waiting for confirmers, ready, delivered), `/oly discord forget` drops this character's
 request and proof.
 
+A character linked to one Discord account never moves to another by a new link: the bot refuses
+it. To remove your link, use **Delete my link** at the foot of the Olympus Link page, signed in
+with Discord: the bot takes the role away and deletes everything it keeps about your Discord
+account (your linked characters, codes and their history). You can link again later with a new
+code.
+
 **For confirmers and watchers.** A confirmer's key belongs to one character, and so does its
 certificate, which names it: another character of the same account confirms nothing with it.
 **High Councillors paste nothing**: the first time the signed High Council list names your

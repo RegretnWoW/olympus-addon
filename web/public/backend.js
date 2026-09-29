@@ -2,6 +2,8 @@
 // Pages); the Olympus bot's Worker checks each link and gives the role (web/FERN.md). One request
 // leaves the browser, when the player sends a link:
 //   POST <CONFIG.PROOF_URL>  {"text": "<the link>", "discordToken": "<the Discord sign-in>"}
+// or, to the same address, when the player deletes his own link ("Delete my link"):
+//   POST <CONFIG.PROOF_URL>  {"forget": true, "discordToken": "<the Discord sign-in>"}
 //   (with "Authorization: Bearer <CONFIG.SITE_TOKEN>" when config.js has one; never a cookie)
 // The sign-in is Discord's own page (OAuth2, the implicit grant, scope identify): it comes back to
 // this page with a token in the address's fragment, which the page reads, checks against the
@@ -35,6 +37,15 @@ function proofUrl(config) {
 // The one request: { url, init } for fetch. No cookie, no referrer, nothing but the link and the
 // sign-in in the body (and the site token, when there is one, in its header).
 export function proofRequest(config, text, discordToken) {
+	return request(config, { text, discordToken });
+}
+
+// "Delete my link": the same request to the same address, with {"forget": true} for the link.
+export function forgetRequest(config, discordToken) {
+	return request(config, { forget: true, discordToken });
+}
+
+function request(config, body) {
 	const headers = { Accept: 'application/json', 'Content-Type': 'application/json' };
 	if (config.SITE_TOKEN) headers.Authorization = `Bearer ${config.SITE_TOKEN}`;
 	return {
@@ -46,9 +57,28 @@ export function proofRequest(config, text, discordToken) {
 			cache: 'no-store',
 			referrerPolicy: 'no-referrer',
 			headers,
-			body: JSON.stringify({ text, discordToken }),
+			body: JSON.stringify(body),
 		},
 	};
+}
+
+// The bot's answer to one of them, as the page reads it; a network or bot failure says so.
+async function answerOf(fetchImpl, { url, init }) {
+	let res;
+	try {
+		res = await fetchImpl(url, init);
+	} catch {
+		return { status: 'error', reason: 'server', message: '', characters: [] };
+	}
+	let data = null;
+	try {
+		data = await res.json();
+	} catch {
+		data = null;
+	}
+	if (data && typeof data.status === 'string') return { characters: [], ...data };
+	const reason = res.status === 401 ? 'login' : res.status === 429 ? 'limit' : 'server';
+	return { status: 'error', reason, message: '', characters: [] };
 }
 
 // The page's own folder (no query, no fragment): the redirect registered with Discord.
@@ -104,31 +134,16 @@ export function createBackend({ config = CONFIG, demo = null, fetchImpl = global
 		configured: isConfigured(config),
 		loginUrl: (state, redirect) => authorizeUrl(config, { state, redirect }),
 		// { status: 'linked' | 'rejected' | 'error', reason, message, username, characters }
-		async submit(text, token) {
-			const { url, init } = proofRequest(config, text, token);
-			let res;
-			try {
-				res = await fetchImpl(url, init);
-			} catch {
-				return { status: 'error', reason: 'server', message: '', characters: [] };
-			}
-			let data = null;
-			try {
-				data = await res.json();
-			} catch {
-				data = null;
-			}
-			if (data && typeof data.status === 'string') return { characters: [], ...data };
-			const reason = res.status === 401 ? 'login' : res.status === 429 ? 'limit' : 'server';
-			return { status: 'error', reason, message: '', characters: [] };
-		},
+		submit: (text, token) => answerOf(fetchImpl, proofRequest(config, text, token)),
+		// { status: 'forgotten' | 'error', reason, message, username, characters (the ones removed) }
+		forget: (token) => answerOf(fetchImpl, forgetRequest(config, token)),
 	};
 }
 
 // ---------------------------------------------------------------------------
 // The demo: made-up answers from the shared test vectors (throwaway test keys).
 
-export const DEMO_STATES = ['code', 'wait', 'screen', 'scanning', 'phone', 'other', 'pick', 'scanned', 'found', 'done', 'error', 'closed'];
+export const DEMO_STATES = ['code', 'wait', 'screen', 'scanning', 'phone', 'other', 'pick', 'scanned', 'found', 'done', 'error', 'forget', 'forgotten', 'closed'];
 
 export const DEMO_DATA = {
 	username: 'some.player',
@@ -153,6 +168,10 @@ function demoBackend(state) {
 			}
 			const requester = String(bundle).split('~')[1] || 'Some Player-ClassicBetaPvP';
 			return { status: 'linked', reason: 'linked', message: `${requester} is now linked.`, username: DEMO_DATA.username, characters: [requester, 'Some Alt-ClassicBetaPvP'] };
+		},
+		async forget() {
+			await wait(700);
+			return { status: 'forgotten', reason: 'forgotten', message: '', username: DEMO_DATA.username, characters: ['Some Player-ClassicBetaPvP', 'Some Alt-ClassicBetaPvP'] };
 		},
 	};
 }

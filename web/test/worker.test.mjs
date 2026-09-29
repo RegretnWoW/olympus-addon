@@ -1202,5 +1202,12 @@ describe('Worker', { skip: probe ? false : 'node:sqlite is not available in this
 		const r = await res.json();
 		assert.deepEqual([r.status, r.reason, r.character, r.username], ['linked', 'linked', B1.requester, USER_C.username]);
 		assert.deepEqual(discord.calls.map((c) => [c.method, c.url]), [['PUT', `https://discord.com/api/v10/guilds/${env.GUILD_ID}/members/${USER_C.id}/roles/${env.ROLE_ID}`]]);
+		// The player deletes his own link on the page: the role goes (DELETE), then everything kept.
+		res = await at('POST', { headers: { Origin: env.LINK_ORIGIN, 'Content-Type': 'application/json' }, body: JSON.stringify({ forget: true, discordToken: 'token-of-some-player-0001' }) });
+		const gone = await res.json();
+		assert.deepEqual([res.status, gone.status, gone.characters], [200, 'forgotten', [B1.requester]]);
+		assert.deepEqual(discord.calls.map((c) => c.method), ['PUT', 'DELETE']);
+		assert.match(discord.calls[1].url, new RegExp(`members/${USER_C.id}/roles/${env.ROLE_ID}$`));
+		assert.equal(await row('SELECT 1 AS x FROM members WHERE discord_id = ?', USER_C.id), null);
 	});
 });

@@ -119,7 +119,7 @@ export default {
 		const url = new URL(request.url);
 		const roles = {
 			promote: (discordId) => promote(env, discordId), // your grant: throw if Discord refuses
-			demote: (discordId) => demote(env, discordId), // optional: never for a link (nothing moves)
+			demote: (discordId) => demote(env, discordId), // takes the role when a player deletes his own link
 		};
 		if (url.pathname === '/proof') return handleProof(request, env, roles);
 		if (url.pathname === '/api/link/keys') return handleKeys(request, env); // LINK_ADMIN_TOKEN: revoking (step 7), player keys (step 9)
@@ -150,6 +150,13 @@ and the player can send the same proof a minute later; return `{ ok: false, reas
 'not-in-server' }` when the member is not in the server, and the page tells them to join first.
 The answer is JSON with a `status` (`linked`, `rejected`, `error`) and a `reason` the page
 explains in English or Portuguese.
+
+The same route takes `{"forget": true, "discordToken": "..."}`: the page's "Delete my link"
+(Konig's review), for a player who wants his link gone. Checked the same way up to Discord's
+answer, then your `demote(discordId)` takes the role (return `{ ok: false, reason:
+'not-in-server' }` when the member left: nothing to take), and `forgetUser` deletes everything
+kept about the account (`forgotten`). If `demote` fails otherwise, nothing is deleted and the
+player tries again. Without `demote`, only the data goes.
 
 The checks, each a few lines in `link-core.mjs`: the proof's tag matches the code's own signature
 and the player who typed it (someone who saw the code on a stream gets nothing); the code is
@@ -404,15 +411,18 @@ python3 scripts/link-keys.py forget <their Discord id> > forget.sql
 wrangler d1 execute olympus-link --remote --file forget.sql
 ```
 
-Take the role away with your own `demote`. Dropping the `olympus-link` database removes
-everything.
+Take the role away with your own `demote`. Players do it themselves on the page: "Delete my
+link", at the foot of every step, signs them in with Discord, and your Worker takes the role
+(`demote`) and runs `forgetUser` for that account (step 6). Dropping the `olympus-link` database
+removes everything.
 
 ### A character is linked to the wrong Discord account?
 
 A link never moves a character from one account to another: a link for a character already
 linked elsewhere is refused (`linked-elsewhere`, the code stays unused), and nobody's role
 changes. So one councillor's confirmation, or a leaked councillor key, never takes a member's
-link. The account that holds the character removes its link, or you do:
+link. The account that holds the character removes its link ("Delete my link" on the page), or
+you do:
 
 ```sh
 wrangler d1 execute olympus-link --remote --command "DELETE FROM members WHERE character = '<Name-Realm>'"
