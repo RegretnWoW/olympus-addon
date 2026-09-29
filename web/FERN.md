@@ -141,8 +141,8 @@ crons = ["17 4 * * *"]   # pruneLink, daily (add the call to your scheduled() if
 `handleProof` answers the browser's preflight (`OPTIONS`) and the `POST`, and does, in order:
 our origin only (never `*`); your site token, if you set one; the body
 `{"text": "<the proof>", "discordToken": "<the player's Discord sign-in>"}`; the proof's form;
-the limits before Discord is asked anything (20 a minute per IP address, 10 an hour per
-sign-in, 300 a minute for the whole page); who the player is, asked of Discord (`GET /oauth2/@me`: your application, scope `identify`, not
+the limits before Discord is asked anything (20 a minute per IP address, an IPv6 one by its
+/64, 10 an hour per sign-in, 300 a minute for the whole page); who the player is, asked of Discord (`GET /oauth2/@me`: your application, scope `identify`, not
 expired; the token is stored nowhere); 10 tries an hour per account; then the checks you
 already do plus the new ones (below), then it claims the code, calls your `promote(discordId)`,
 and records the character. When `promote` throws (or returns `false`), the code is freed again
@@ -180,10 +180,12 @@ revocation lists are yours, and stay.
 
 Each `/proof` with a token asks Discord once, and Discord blocks for a while an address that
 sends it too many bad tokens: your Worker's, and your bot's with it. So `handleProof` counts
-before it asks (Konig's review): 20 a minute per IP address (Cloudflare's `CF-Connecting-IP`),
-10 an hour per sign-in, 300 a minute for the whole page, then `429 limit` without a word to
-Discord (`LINK.IP_PER_MINUTE`, `LINK.SIGNIN_PER_HOUR`, `LINK.PAGE_PER_MINUTE` in
-`link-core.mjs`). It counts in D1 (`limits`), under a keyed hash of each address and sign-in. A
+before it asks (Konig's review): 20 a minute per IP address (Cloudflare's `CF-Connecting-IP`;
+an IPv6 address counts by its /64, since one host usually has a whole /64), 10 an hour per
+sign-in, 300 a minute for the whole page, then `429 limit` without a word to Discord
+(`LINK.IP_PER_MINUTE`, `LINK.SIGNIN_PER_HOUR`, `LINK.PAGE_PER_MINUTE` in `link-core.mjs`). It
+counts in D1 (`limits`), under a keyed hash of each address and sign-in, and once the whole page
+is at its limit a request writes nothing more there. A
 rate-limiting rule on `/proof` in Cloudflare's dashboard is still a good outer wall: it stops a
 flood before your Worker runs at all.
 

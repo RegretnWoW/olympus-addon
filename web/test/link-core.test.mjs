@@ -481,6 +481,50 @@ describe('with D1', { skip: probe ? false : 'node:sqlite is not available in thi
 		assert.equal((await from('10.200.0.1', 'token-of-some-player-0001', { fetchImpl: discordStub() })).status, 'linked');
 	});
 
+	test('handleProof: an IPv6 address counts by its /64, so one host cannot shut the page for everyone (Konig\'s review)', async () => {
+		await setup();
+		const madeUp = (i) => `made-up-token-${String(i).padStart(6, '0')}`;
+		const from = (ip, token) => proof(B1.bundle, token, { headers: { 'CF-Connecting-IP': ip } });
+		// 21 addresses of one /64 within a minute: IP_PER_MINUTE are asked of Discord, the 21st is not.
+		for (let i = 0; i < LINK.IP_PER_MINUTE; i++) assert.equal((await from(`2001:db8:1:2::${(i + 1).toString(16)}`, madeUp(i))).reason, 'login', `#${i}`);
+		let r = await from(`2001:db8:1:2::${(LINK.IP_PER_MINUTE + 1).toString(16)}`, madeUp(500));
+		assert.deepEqual([r.http, r.reason], [429, 'limit']);
+		// However the address is written: in full, in capitals, or any other host of the same /64.
+		for (const ip of ['2001:0db8:0001:0002:0000:0000:0000:0001', '2001:DB8:1:2:ffff:ffff:ffff:ffff', '2001:db8:1:2:a:b:c:d']) {
+			r = await from(ip, madeUp(600));
+			assert.deepEqual([r.http, r.reason], [429, 'limit'], ip);
+		}
+		assert.equal(discordCalls.length, LINK.IP_PER_MINUTE, 'not asked of Discord past the /64\'s limit');
+		// The next /64 is someone else.
+		assert.equal((await from('2001:db8:1:3::1', madeUp(700))).reason, 'login');
+		// An IPv4 address counts as itself, however it is written (::ffff:a.b.c.d is that address).
+		await setup();
+		discordCalls = [];
+		for (let i = 0; i < LINK.IP_PER_MINUTE; i++) assert.equal((await from(i % 2 ? '198.51.100.9' : '::ffff:198.51.100.9', madeUp(i))).reason, 'login');
+		assert.equal((await from('::FFFF:c633:6409', madeUp(800))).reason, 'limit');
+		assert.equal((await from('198.51.100.10', madeUp(801))).reason, 'login', 'the next IPv4 address is someone else');
+		// Konig's case: one host sends PAGE_PER_MINUTE requests from its /64, then a real player elsewhere links.
+		await setup();
+		discordCalls = [];
+		for (let i = 0; i < LINK.PAGE_PER_MINUTE; i++) await from(`2001:db8:1:2::${i.toString(16)}`, madeUp(i));
+		assert.equal(discordCalls.length, LINK.IP_PER_MINUTE, 'the host was asked of Discord IP_PER_MINUTE times, no more');
+		r = await from('198.51.100.9', 'token-of-some-player-0001');
+		assert.deepEqual([r.http, r.status], [200, 'linked'], r.message);
+	});
+
+	test('tooManyRequests: once the whole page is at its limit, a request writes nothing more (Konig\'s review)', async () => {
+		await setup();
+		const count = async () => (await env.DB.prepare('SELECT COUNT(*) AS n FROM limits').first()).n;
+		for (let i = 0; i < LINK.PAGE_PER_MINUTE; i++) assert.equal(await core.tooManyRequests(env, { ip: `10.${i >> 8}.${i & 255}.1`, discordToken: `made-up-token-${i}` }, NOW), false, `#${i}`);
+		const rows = await count();
+		assert.equal(rows, 2 * LINK.PAGE_PER_MINUTE + 1, 'an address and a sign-in each, and the page');
+		// A flood past the page's limit, each from a new address with a new sign-in: refused, and no row added.
+		for (let i = 0; i < 50; i++) assert.equal(await core.tooManyRequests(env, { ip: `172.16.${i}.1`, discordToken: `flood-token-${i}` }, NOW + 1), true);
+		assert.equal(await count(), rows, 'the flood added no rows to limits');
+		// A minute later, the page counts again.
+		assert.equal(await core.tooManyRequests(env, { ip: '172.16.0.1', discordToken: 'flood-token-0' }, NOW + 61), false);
+	});
+
 	test('acceptInbox and handleInbox: the watcher\'s links, the code\'s owner linked, each logged', async () => {
 		await setup();
 		const r = await acceptInbox(env, { bundles: [{ R: B1.R, bundle: B1.bundle, from: 'Some Player-ClassicBetaPvP', t: 1799990130 }, B3.bundle, { R: 'AAAAAAAAAA', bundle: B1.bundle }] }, { promote, demote });

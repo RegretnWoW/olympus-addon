@@ -112,7 +112,8 @@ CREATE INDEX IF NOT EXISTS uploads_by_user ON inbox_uploads (discord_id, uploade
 
 -- The page's limits (POST /proof), counted before Discord is asked who a sign-in is: one row a
 -- key, counted until its window ends. A key is a keyed hash (HMAC-SHA-256 with the backend seed)
--- of an IP address or of a Discord sign-in, or the page as a whole: never either one itself.
+-- of an IP address (an IPv6 one's /64) or of a Discord sign-in, or the page as a whole: never
+-- either one itself.
 CREATE TABLE IF NOT EXISTS limits (
   k     TEXT PRIMARY KEY,                          -- 'ip:<hash>', 'signin:<hash>' or 'page'
   until INTEGER NOT NULL,                          -- the end of its window

@@ -51,7 +51,7 @@ export const LINK = {
 	SUBMITS_PER_HOUR: 10,
 	// POST /proof, before Discord is asked who a sign-in is (Konig's review: Discord shuts out an
 	// address that sends it too many bad sign-ins, and yours is the bot's): so many a minute per IP
-	// address, an hour per sign-in, and a minute for the whole page.
+	// address (an IPv6 one by its /64), an hour per sign-in, and a minute for the whole page.
 	IP_PER_MINUTE: 20,
 	SIGNIN_PER_HOUR: 10,
 	PAGE_PER_MINUTE: 300,
@@ -702,13 +702,17 @@ export async function charactersOf(env, discordId) {
 }
 
 // The page's limits before Discord is asked who a sign-in is: IP_PER_MINUTE per IP address (on
-// Cloudflare, the CF-Connecting-IP header), SIGNIN_PER_HOUR per sign-in, PAGE_PER_MINUTE for the
-// whole page, in that order (an address over its limit spends nothing of the others'). True when
-// one is reached. Each is counted in limits under a keyed hash (HMAC-SHA-256 with your backend seed):
-// never an address or a sign-in itself.
+// Cloudflare, the CF-Connecting-IP header; an IPv6 address counts by its /64, limitAddress below),
+// SIGNIN_PER_HOUR per sign-in, PAGE_PER_MINUTE for the whole page, in that order (an address over
+// its limit spends nothing of the others'). True when one is reached. When the whole page already
+// is, nothing is counted or written (Konig's review: a flood past it adds no rows). Each is counted
+// in limits under a keyed hash (HMAC-SHA-256 with your backend seed): never an address or a
+// sign-in itself.
 export async function tooManyRequests(env, { ip, discordToken } = {}, t = now()) {
+	const full = await database(env).prepare("SELECT n FROM limits WHERE k = 'page' AND until > ?").bind(t).first();
+	if (full && full.n >= LINK.PAGE_PER_MINUTE) return true;
 	const buckets = [];
-	if (typeof ip === 'string' && ip) buckets.push([`ip:${await limitKey(env, `ip~${ip}`)}`, LINK.IP_PER_MINUTE, 60]);
+	if (typeof ip === 'string' && ip) buckets.push([`ip:${await limitKey(env, `ip~${limitAddress(ip)}`)}`, LINK.IP_PER_MINUTE, 60]);
 	if (typeof discordToken === 'string' && discordToken) buckets.push([`signin:${await limitKey(env, `signin~${discordToken}`)}`, LINK.SIGNIN_PER_HOUR, 3600]);
 	buckets.push(['page', LINK.PAGE_PER_MINUTE, 60]);
 	for (const [k, max, window] of buckets) {
@@ -722,6 +726,52 @@ export async function tooManyRequests(env, { ip, discordToken } = {}, t = now())
 		if (row && row.n > max) return true;
 	}
 	return false;
+}
+
+// What an IP address counts as for its limit (Konig's review): an IPv4 address itself, an IPv6
+// address its /64 (one host is routinely given a whole /64, so counting each address would give
+// it 2^64 limits of its own). ::ffff:a.b.c.d is the IPv4 address a.b.c.d. Anything that is
+// neither counts as it is written.
+function limitAddress(ip) {
+	const v4 = ipv4Bytes(ip);
+	if (v4) return v4.join('.');
+	const h = ipv6Groups(ip);
+	if (!h) return `?${ip}`;
+	if (h.slice(0, 5).every((x) => x === 0) && h[5] === 0xffff) return [h[6] >> 8, h[6] & 255, h[7] >> 8, h[7] & 255].join('.');
+	return `${h.slice(0, 4).map((x) => x.toString(16)).join(':')}::/64`;
+}
+
+// a.b.c.d as its four numbers, or null.
+function ipv4Bytes(s) {
+	const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(s);
+	if (!m) return null;
+	const bytes = m.slice(1).map(Number);
+	return bytes.every((b) => b <= 255) ? bytes : null;
+}
+
+// An IPv6 address (any case, :: anywhere once, a dotted IPv4 address at its end) as its eight
+// 16-bit groups, or null.
+function ipv6Groups(s) {
+	const halves = s.toLowerCase().split('::');
+	if (halves.length > 2) return null;
+	const groups = (text, last) => {
+		if (text === '') return [];
+		const out = [];
+		const parts = text.split(':');
+		for (let i = 0; i < parts.length; i++) {
+			const v4 = last && i === parts.length - 1 && ipv4Bytes(parts[i]);
+			if (v4) out.push((v4[0] << 8) | v4[1], (v4[2] << 8) | v4[3]);
+			else if (/^[0-9a-f]{1,4}$/.test(parts[i])) out.push(parseInt(parts[i], 16));
+			else return null;
+		}
+		return out;
+	};
+	const left = groups(halves[0], halves.length === 1);
+	const right = halves.length === 2 ? groups(halves[1], true) : [];
+	if (!left || !right) return null;
+	if (halves.length === 1) return left.length === 8 ? left : null;
+	const fill = 8 - left.length - right.length;
+	return fill >= 1 ? [...left, ...new Array(fill).fill(0), ...right] : null;
 }
 
 let limitHmac = null;

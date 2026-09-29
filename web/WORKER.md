@@ -269,8 +269,12 @@ Discord sign-in in the body, and `handleProof` asks Discord who that is (`discor
   20 a minute per IP address (Cloudflare's `CF-Connecting-IP`), 10 an hour per sign-in, 300 a
   minute for the whole page (`LINK.IP_PER_MINUTE`, `SIGNIN_PER_HOUR`, `PAGE_PER_MINUTE`), in that
   order, so an address over its limit spends nothing of the others; past one, `429 limit` and
-  Discord is not asked. The `limits` table holds a keyed hash (HMAC-SHA-256 with the backend
-  seed) of each address and sign-in, never either one.
+  Discord is not asked. An IPv4 address counts as itself (`::ffff:a.b.c.d` too) and an IPv6
+  address by its /64: one host is routinely given a whole /64, and counting each of its addresses
+  apart would let it fill the page's 300 a minute alone and shut everyone else out (Konig's
+  review). Once the whole page is at its limit, a request is refused before anything is counted,
+  so a flood past it adds no rows. The `limits` table holds a keyed hash (HMAC-SHA-256 with the
+  backend seed) of each address (or /64) and sign-in, never either one.
 - CORS: only `LINK_ORIGIN` (`https://dnl-gentile.github.io`, exactly: never `*`, and no
   credentials) gets `Access-Control-Allow-Origin`. `OPTIONS` (the browser's preflight) answers 204
   for it and 403 for anyone else, and a `POST` from another origin, or with none, is refused
@@ -559,7 +563,7 @@ whole address in `config.js`).
 
 | Route | Who | Body | Answer |
 |---|---|---|---|
-| `POST /proof` (`handleProof`; the reference Worker's `/api/link/proof`) | the page, from `LINK_ORIGIN` | `{"text": "OLB5~... or its address", "discordToken": "<access token>"}`, or `{"forget": true, "discordToken"}` (the player's own "Delete my link": `200 {"status": "forgotten", "characters"}`) | `200 {"status", "reason", "message", "R", "username", "character", "guild", "faction", "guildCheck", "guildKnown", "characters"}`; `401 {"reason": "login" \| "site"}`, `403 {"reason": "origin"}`, `400 {"reason": "format"}` (no text or token), `429 {"reason": "limit"}` past the limits before Discord is asked (20 a minute per IP address, 10 an hour per sign-in, 300 a minute in all) or after 10 links an hour per account; `OPTIONS`: `204` with the CORS headers for `LINK_ORIGIN` only |
+| `POST /proof` (`handleProof`; the reference Worker's `/api/link/proof`) | the page, from `LINK_ORIGIN` | `{"text": "OLB5~... or its address", "discordToken": "<access token>"}`, or `{"forget": true, "discordToken"}` (the player's own "Delete my link": `200 {"status": "forgotten", "characters"}`) | `200 {"status", "reason", "message", "R", "username", "character", "guild", "faction", "guildCheck", "guildKnown", "characters"}`; `401 {"reason": "login" \| "site"}`, `403 {"reason": "origin"}`, `400 {"reason": "format"}` (no text or token), `429 {"reason": "limit"}` past the limits before Discord is asked (20 a minute per IP address, an IPv6 one by its /64, 10 an hour per sign-in, 300 a minute in all) or after 10 links an hour per account; `OPTIONS`: `204` with the CORS headers for `LINK_ORIGIN` only |
 | `POST /api/link/inbox` (`handleInbox`) | watcher tool | `{"bundles": [{"R", "bundle", "from", "t"}]}` (500 at most) | `200 {"results": [{"R", "status", "reason", "message"}]}` |
 | `POST /api/link/keys` (`handleKeys`) | you | `{"key_id", "public_key", "owner_discord_id", "owner_username", "character", "kind", "bootstrap", "days", "replace"}`, or `{"key_id", "renew": true, "days"}`, or `{"key_id", "revoke": true}`, or `{"character", "revoke": true}` | `200 {"status": "ok", "key_id", "kind", "character", "public_key", "cert", "cert_exp", "cert_from", "command", "replaced"}`: a new player key's `cert`, `cert_exp` and `command` are `null` (with a `message`) until `cert_from`, when `renew` gives them (`{"status": "ok", "revoked": true}` for a revoke, with `"council": true` and the councillor's `character`, once seen, for a key of the council authority's; `{"status": "ok", "character", "revoked": true, "keys", "council_keys"}` for a character: the registered keys it revoked, the authority's keys seen for it); `409 {"reason": "key-id-used" \| "public-key-used" \| "owner-has-key" \| "character-not-linked" \| "revoked" \| "replaced" \| "too-early"}` (`too-early` with `cert_from`), `404 {"reason": "unknown-key"}`, `400 {"reason": "format"}` |
 | `POST /api/link/bot-code` | gateway bot | `{"id", "username"}` | `200 {"token", "command", "exp", "mode", "reply"}` |
@@ -695,7 +699,7 @@ while councillors-only mode keeps the pool out of play until it is large.
 
 Limits and logs: 3 codes per Discord account a day (`/verify` again gets the same unused code
 back); the page may submit 10 times an hour per account, and before Discord is asked, 20 times
-a minute per IP address, 10 an hour per sign-in and 300 a minute in all; every bundle received
+a minute per IP address (an IPv6 one by its /64), 10 an hour per sign-in and 300 a minute in all; every bundle received
 is logged in `inbox_uploads` (never the Discord token, nor an IP address), and kept 90 days
 (`pruneLink`, daily); the admin and site tokens are compared in constant
 time; a Worker whose
@@ -1061,7 +1065,8 @@ CREATE INDEX IF NOT EXISTS uploads_by_user ON inbox_uploads (discord_id, uploade
 
 -- The page's limits (POST /proof), counted before Discord is asked who a sign-in is: one row a
 -- key, counted until its window ends. A key is a keyed hash (HMAC-SHA-256 with the backend seed)
--- of an IP address or of a Discord sign-in, or the page as a whole: never either one itself.
+-- of an IP address (an IPv6 one's /64) or of a Discord sign-in, or the page as a whole: never
+-- either one itself.
 CREATE TABLE IF NOT EXISTS limits (
   k     TEXT PRIMARY KEY,                          -- 'ip:<hash>', 'signin:<hash>' or 'page'
   until INTEGER NOT NULL,                          -- the end of its window
@@ -1129,7 +1134,7 @@ export const LINK = {
 	SUBMITS_PER_HOUR: 10,
 	// POST /proof, before Discord is asked who a sign-in is (Konig's review: Discord shuts out an
 	// address that sends it too many bad sign-ins, and yours is the bot's): so many a minute per IP
-	// address, an hour per sign-in, and a minute for the whole page.
+	// address (an IPv6 one by its /64), an hour per sign-in, and a minute for the whole page.
 	IP_PER_MINUTE: 20,
 	SIGNIN_PER_HOUR: 10,
 	PAGE_PER_MINUTE: 300,
@@ -1780,13 +1785,17 @@ export async function charactersOf(env, discordId) {
 }
 
 // The page's limits before Discord is asked who a sign-in is: IP_PER_MINUTE per IP address (on
-// Cloudflare, the CF-Connecting-IP header), SIGNIN_PER_HOUR per sign-in, PAGE_PER_MINUTE for the
-// whole page, in that order (an address over its limit spends nothing of the others'). True when
-// one is reached. Each is counted in limits under a keyed hash (HMAC-SHA-256 with your backend seed):
-// never an address or a sign-in itself.
+// Cloudflare, the CF-Connecting-IP header; an IPv6 address counts by its /64, limitAddress below),
+// SIGNIN_PER_HOUR per sign-in, PAGE_PER_MINUTE for the whole page, in that order (an address over
+// its limit spends nothing of the others'). True when one is reached. When the whole page already
+// is, nothing is counted or written (Konig's review: a flood past it adds no rows). Each is counted
+// in limits under a keyed hash (HMAC-SHA-256 with your backend seed): never an address or a
+// sign-in itself.
 export async function tooManyRequests(env, { ip, discordToken } = {}, t = now()) {
+	const full = await database(env).prepare("SELECT n FROM limits WHERE k = 'page' AND until > ?").bind(t).first();
+	if (full && full.n >= LINK.PAGE_PER_MINUTE) return true;
 	const buckets = [];
-	if (typeof ip === 'string' && ip) buckets.push([`ip:${await limitKey(env, `ip~${ip}`)}`, LINK.IP_PER_MINUTE, 60]);
+	if (typeof ip === 'string' && ip) buckets.push([`ip:${await limitKey(env, `ip~${limitAddress(ip)}`)}`, LINK.IP_PER_MINUTE, 60]);
 	if (typeof discordToken === 'string' && discordToken) buckets.push([`signin:${await limitKey(env, `signin~${discordToken}`)}`, LINK.SIGNIN_PER_HOUR, 3600]);
 	buckets.push(['page', LINK.PAGE_PER_MINUTE, 60]);
 	for (const [k, max, window] of buckets) {
@@ -1800,6 +1809,52 @@ export async function tooManyRequests(env, { ip, discordToken } = {}, t = now())
 		if (row && row.n > max) return true;
 	}
 	return false;
+}
+
+// What an IP address counts as for its limit (Konig's review): an IPv4 address itself, an IPv6
+// address its /64 (one host is routinely given a whole /64, so counting each address would give
+// it 2^64 limits of its own). ::ffff:a.b.c.d is the IPv4 address a.b.c.d. Anything that is
+// neither counts as it is written.
+function limitAddress(ip) {
+	const v4 = ipv4Bytes(ip);
+	if (v4) return v4.join('.');
+	const h = ipv6Groups(ip);
+	if (!h) return `?${ip}`;
+	if (h.slice(0, 5).every((x) => x === 0) && h[5] === 0xffff) return [h[6] >> 8, h[6] & 255, h[7] >> 8, h[7] & 255].join('.');
+	return `${h.slice(0, 4).map((x) => x.toString(16)).join(':')}::/64`;
+}
+
+// a.b.c.d as its four numbers, or null.
+function ipv4Bytes(s) {
+	const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(s);
+	if (!m) return null;
+	const bytes = m.slice(1).map(Number);
+	return bytes.every((b) => b <= 255) ? bytes : null;
+}
+
+// An IPv6 address (any case, :: anywhere once, a dotted IPv4 address at its end) as its eight
+// 16-bit groups, or null.
+function ipv6Groups(s) {
+	const halves = s.toLowerCase().split('::');
+	if (halves.length > 2) return null;
+	const groups = (text, last) => {
+		if (text === '') return [];
+		const out = [];
+		const parts = text.split(':');
+		for (let i = 0; i < parts.length; i++) {
+			const v4 = last && i === parts.length - 1 && ipv4Bytes(parts[i]);
+			if (v4) out.push((v4[0] << 8) | v4[1], (v4[2] << 8) | v4[3]);
+			else if (/^[0-9a-f]{1,4}$/.test(parts[i])) out.push(parseInt(parts[i], 16));
+			else return null;
+		}
+		return out;
+	};
+	const left = groups(halves[0], halves.length === 1);
+	const right = halves.length === 2 ? groups(halves[1], true) : [];
+	if (!left || !right) return null;
+	if (halves.length === 1) return left.length === 8 ? left : null;
+	const fill = 8 - left.length - right.length;
+	return fill >= 1 ? [...left, ...new Array(fill).fill(0), ...right] : null;
 }
 
 let limitHmac = null;
