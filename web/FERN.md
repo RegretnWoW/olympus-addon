@@ -36,7 +36,8 @@ database_id = "<the id wrangler d1 create printed>"
 ```
 
 A database of its own, bound as `LINK_DB`: the tables have plain names (`codes`, `keys`,
-`members`...) that could meet yours in your bot's database.
+`members`...) that could meet yours in your bot's database. Run the same command again after an
+update of `schema.sql`: it only adds what is missing.
 
 ### 2. Your bot's key: send us only the public half
 
@@ -130,7 +131,8 @@ export default {
 `handleProof` answers the browser's preflight (`OPTIONS`) and the `POST`, and does, in order:
 our origin only (never `*`); your site token, if you set one; the body
 `{"text": "<the proof>", "discordToken": "<the player's Discord sign-in>"}`; the proof's form;
-who the player is, asked of Discord (`GET /oauth2/@me`: your application, scope `identify`, not
+the limits before Discord is asked anything (20 a minute per IP address, 10 an hour per
+sign-in, 300 a minute for the whole page); who the player is, asked of Discord (`GET /oauth2/@me`: your application, scope `identify`, not
 expired; the token is stored nowhere); 10 tries an hour per account; then the checks you
 already do plus the new ones (below), then it claims the code, calls your `promote(discordId)`,
 and records the character. When `promote` throws (or returns `false`), the code is freed again
@@ -154,14 +156,19 @@ code; one councillor, or in mode `"a"` three drawn players (the draw is [not 3 o
 `handleKeys` is your admin route from day one, behind `LINK_ADMIN_TOKEN`: it is how you revoke a
 key in minutes (step 7), and later how you register player keys (step 9).
 
-One thing worth adding in Cloudflare's dashboard: a rate-limiting rule on `/proof` (say 20
-requests a minute per IP). Each `/proof` with a token asks Discord once, and Discord blocks for a
-while an address that sends it too many bad tokens; the rule keeps a flood of made-up tokens from
-reaching Discord from your Worker.
+Each `/proof` with a token asks Discord once, and Discord blocks for a while an address that
+sends it too many bad tokens: your Worker's, and your bot's with it. So `handleProof` counts
+before it asks (Konig's review): 20 a minute per IP address (Cloudflare's `CF-Connecting-IP`),
+10 an hour per sign-in, 300 a minute for the whole page, then `429 limit` without a word to
+Discord (`LINK.IP_PER_MINUTE`, `LINK.SIGNIN_PER_HOUR`, `LINK.PAGE_PER_MINUTE` in
+`link-core.mjs`). It counts in D1 (`limits`), under a keyed hash of each address and sign-in. A
+rate-limiting rule on `/proof` in Cloudflare's dashboard is still a good outer wall: it stops a
+flood before your Worker runs at all.
 
 Rather write the route yourself? `checkProof(env, text, { discordId })` gives the verdict and
 writes nothing; `acceptProof(env, text, { discordId, promote })` does the whole link;
-`discordUser`, `corsHeaders`, `tooManyProofs` and `logProof` are the rest of `handleProof`.
+`corsHeaders`, `tooManyRequests` (before Discord), `discordUser`, `tooManyProofs` and `logProof`
+are the rest of `handleProof`.
 
 ### 7. Revoking, from day one
 
@@ -355,7 +362,7 @@ we put the new one in the page). CORS does not tell them apart either: it binds 
 and a script sends whatever `Origin` it likes (the `curl` in [Testing](#testing) does). What
 protects `/proof` is the rest: the player's Discord sign-in checked with Discord (only your
 application's, which Discord hands only to the redirect you registered), the signatures in the
-proof, one use per code, and 10 tries an hour per account.
+proof, one use per code, 10 tries an hour per account, and the limits before Discord is asked.
 
 ### What data is stored, and where?
 
@@ -363,7 +370,8 @@ Only in your D1 (the page stores nothing on any server): the codes (Discord id a
 when, used or not); the linked characters (name, guild, faction, how the guild was checked, the
 Discord id); which confirmer keys counted for which code; confirmer public keys (never a private
 key); the revocation lists; and a log of every proof received (source, code, Discord id,
-character, result). Never a Discord token, never an IP address.
+character, result). Never a Discord token, never an IP address: the limits before Discord is
+asked (step 6) count a keyed hash of each (HMAC with your bot's seed), in `limits`.
 
 ### How is someone's data deleted?
 

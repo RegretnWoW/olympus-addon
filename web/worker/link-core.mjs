@@ -32,7 +32,8 @@
 //   watcher    acceptInbox(env, body, { promote }) / handleInbox(request, env, { promote })
 //   keys       manageKeys(env, body) / handleKeys(request, env), registerKey, renewKey, revokeKey,
 //              revokeCharacter, councilCharacters(env)
-//   people     discordUser(accessToken, { clientId }), forgetUser(env, discordId)
+//   people     discordUser(accessToken, { clientId }), tooManyRequests(env, { ip, discordToken }),
+//              forgetUser(env, discordId)
 //   answers    httpStatus(answer), respond(answer, headers), corsHeaders(request, env)
 
 export const LINK = {
@@ -47,6 +48,12 @@ export const LINK = {
 	KEY_MIN_AGE: 7 * 24 * 3600, // a player key counts for codes issued 7 days after it...
 	ACCOUNT_MIN_AGE: 30 * 24 * 3600, // ...and its owner's Discord account is 30 days older than the code
 	SUBMITS_PER_HOUR: 10,
+	// POST /proof, before Discord is asked who a sign-in is (Konig's review: Discord shuts out an
+	// address that sends it too many bad sign-ins, and yours is the bot's): so many a minute per IP
+	// address, an hour per sign-in, and a minute for the whole page.
+	IP_PER_MINUTE: 20,
+	SIGNIN_PER_HOUR: 10,
+	PAGE_PER_MINUTE: 300,
 	MAX_BUNDLES: 500,
 	CERT_DAYS: 365, // a councillor key's certificate life, unless the request says otherwise...
 	CERT_DAYS_PLAYER: 90, // ...a player key's: a revoked or replaced one stays in the addons' draw until it ends...
@@ -689,6 +696,39 @@ export async function charactersOf(env, discordId) {
 	return rows.map((r) => r.character);
 }
 
+// The page's limits before Discord is asked who a sign-in is: IP_PER_MINUTE per IP address (on
+// Cloudflare, the CF-Connecting-IP header), SIGNIN_PER_HOUR per sign-in, PAGE_PER_MINUTE for the
+// whole page, in that order (an address over its limit spends nothing of the others'). True when
+// one is reached. Each is counted in limits under a keyed hash (HMAC-SHA-256 with your backend seed):
+// never an address or a sign-in itself.
+export async function tooManyRequests(env, { ip, discordToken } = {}, t = now()) {
+	const buckets = [];
+	if (typeof ip === 'string' && ip) buckets.push([`ip:${await limitKey(env, `ip~${ip}`)}`, LINK.IP_PER_MINUTE, 60]);
+	if (typeof discordToken === 'string' && discordToken) buckets.push([`signin:${await limitKey(env, `signin~${discordToken}`)}`, LINK.SIGNIN_PER_HOUR, 3600]);
+	buckets.push(['page', LINK.PAGE_PER_MINUTE, 60]);
+	for (const [k, max, window] of buckets) {
+		const row = await database(env)
+			.prepare(
+				'INSERT INTO limits (k, until, n) VALUES (?, ?, 1) ON CONFLICT(k) DO UPDATE SET ' +
+					'n = CASE WHEN limits.until > ? THEN limits.n + 1 ELSE 1 END, until = CASE WHEN limits.until > ? THEN limits.until ELSE excluded.until END RETURNING n',
+			)
+			.bind(k, t + window, t, t)
+			.first();
+		if (row && row.n > max) return true;
+	}
+	return false;
+}
+
+let limitHmac = null;
+
+async function limitKey(env, text) {
+	const secret = `olympus-link-limits~${(env && (env.LINK_BACKEND_SEED || env.LINK_ADMIN_TOKEN)) || ''}`;
+	if (!limitHmac || limitHmac.secret !== secret) {
+		limitHmac = { secret, key: await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']) };
+	}
+	return bytesToHex(new Uint8Array(await crypto.subtle.sign('HMAC', limitHmac.key, enc.encode(text)))).slice(0, 32);
+}
+
 // The page's limit: SUBMITS_PER_HOUR links an hour per Discord account (counted in inbox_uploads).
 export async function tooManyProofs(env, discordId, t = now()) {
 	const recent = await database(env)
@@ -772,8 +812,9 @@ export async function discordUser(accessToken, { clientId, fetchImpl = globalThi
 }
 
 // The whole POST /proof, CORS preflight included, as a Response: the origin, your site token
-// (when you set LINK_SITE_TOKEN), the body, the link's form, who the player is (discordUser), 10
-// links an hour per account, then acceptProof with your promote, and the audit trail.
+// (when you set LINK_SITE_TOKEN), the body, the link's form, the limits before Discord is asked
+// (tooManyRequests), who the player is (discordUser), 10 links an hour per account, then
+// acceptProof with your promote, and the audit trail.
 //   if (url.pathname === '/proof') return handleProof(request, env, { promote });
 export async function handleProof(request, env, { promote, fetchImpl } = {}) {
 	const cors = corsHeaders(request, env);
@@ -796,9 +837,12 @@ export async function handleProof(request, env, { promote, fetchImpl } = {}) {
 			const why = text ? parseBundle(text).error : 'prefix';
 			return reply(reject('format', `This is not a complete Olympus link (${why}).`));
 		}
+		const t = now();
+		if (await tooManyRequests(env, { ip: request.headers.get('CF-Connecting-IP'), discordToken: body.discordToken }, t)) {
+			return reply(failure('limit', 'Too many tries: wait a while and send it again.'));
+		}
 		const who = await discordUser(body.discordToken, { clientId: env.DISCORD_CLIENT_ID, fetchImpl });
 		if (!who.ok) return reply(who);
-		const t = now();
 		if (await tooManyProofs(env, who.user.id, t)) return reply(failure('limit', 'Too many tries: wait a while and send it again.'));
 		const result = await acceptProof(env, text, { discordId: who.user.id, promote, t });
 		try {

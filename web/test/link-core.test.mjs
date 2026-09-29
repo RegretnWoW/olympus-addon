@@ -439,6 +439,47 @@ describe('with D1', { skip: probe ? false : 'node:sqlite is not available in thi
 		assert.equal((await proof(B1.bundle, 'token-of-some-player-0001', { fetchImpl: discordStub({ expires: '2028-01-01T00:00:00+00:00' }) })).status, 'linked');
 	});
 
+	test('handleProof: limits per IP address, per Discord sign-in and for the whole page before Discord is asked (Konig\'s review)', async () => {
+		await setup();
+		const madeUp = (i) => `made-up-token-${String(i).padStart(6, '0')}`;
+		const from = (ip, token) => proof(B1.bundle, token, { headers: { 'CF-Connecting-IP': ip } });
+		// One address sending made-up sign-ins: Discord is asked IP_PER_MINUTE times, then no more.
+		for (let i = 0; i < LINK.IP_PER_MINUTE; i++) assert.equal((await from('203.0.113.7', madeUp(i))).reason, 'login');
+		assert.equal(discordCalls.length, LINK.IP_PER_MINUTE);
+		let r = await from('203.0.113.7', madeUp(999));
+		assert.deepEqual([r.http, r.status, r.reason], [429, 'error', 'limit']);
+		assert.equal(discordCalls.length, LINK.IP_PER_MINUTE, 'not asked of Discord');
+		// Another address is not held back by it; the same one is again a minute later.
+		assert.equal((await from('198.51.100.20', madeUp(1000))).reason, 'login');
+		Date.now = () => (NOW + 61) * 1000;
+		assert.equal((await from('203.0.113.7', madeUp(1001))).reason, 'login');
+		// One made-up sign-in from many addresses: SIGNIN_PER_HOUR tries, then Discord is not asked.
+		await setup();
+		Date.now = () => NOW * 1000;
+		discordCalls = [];
+		for (let i = 0; i < LINK.SIGNIN_PER_HOUR; i++) assert.equal((await from(`192.0.2.${i + 1}`, madeUp(1))).reason, 'login');
+		r = await from('192.0.2.200', madeUp(1));
+		assert.deepEqual([r.http, r.reason], [429, 'limit']);
+		assert.equal(discordCalls.length, LINK.SIGNIN_PER_HOUR);
+		// The whole page: PAGE_PER_MINUTE asked of Discord a minute, whoever sends them.
+		await setup();
+		discordCalls = [];
+		for (let i = 0; i < LINK.PAGE_PER_MINUTE; i++) {
+			const x = await from(`10.${i >> 8}.${i & 255}.1`, madeUp(i));
+			assert.equal(x.reason, 'login', `#${i}`);
+		}
+		r = await from('10.200.0.1', 'token-of-some-player-0001');
+		assert.deepEqual([r.http, r.reason], [429, 'limit']);
+		assert.equal(discordCalls.length, LINK.PAGE_PER_MINUTE);
+		assert.deepEqual(roles, []);
+		// Kept for the limits: a keyed hash of each address and sign-in, never either one.
+		const kept = JSON.stringify((await env.DB.prepare('SELECT * FROM limits').all()).results);
+		for (const secret of ['10.0.0.1', 'made-up-token', 'token-of-some-player']) assert.equal(kept.includes(secret), false, secret);
+		// A minute later, the page goes on.
+		Date.now = () => (NOW + 61) * 1000;
+		assert.equal((await from('10.200.0.1', 'token-of-some-player-0001', { fetchImpl: discordStub() })).status, 'linked');
+	});
+
 	test('acceptInbox and handleInbox: the watcher\'s links, the code\'s owner linked, each logged', async () => {
 		await setup();
 		const r = await acceptInbox(env, { bundles: [{ R: B1.R, bundle: B1.bundle, from: 'Some Player-ClassicBetaPvP', t: 1799990130 }, B3.bundle, { R: 'AAAAAAAAAA', bundle: B1.bundle }] }, { promote, demote });

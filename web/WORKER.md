@@ -197,14 +197,16 @@ wrangler d1 execute olympus-link --remote --file web/worker/schema.sql
 
 A database of its own, bound as `LINK_DB` (step 5): the tables have plain names (`codes`, `keys`,
 `members`...) that could meet yours. `link-core.mjs` reads `LINK_DB`, or `DB` when there is no
-`LINK_DB`. Eight tables: `codes` (every code issued, single use, with its draw threshold), `keys`
+`LINK_DB`. Nine tables: `codes` (every code issued, single use, with its draw threshold), `keys`
 (confirmer public keys you registered, one certified per Discord account, each for one
 character, with the end of their certificate), `council_keys` (High Councillors' keys the council
 authority certified, recorded with the first link each one helped accept), `revoked_keys` (the council
 authority's keys you revoked), `revoked_characters` (characters whose keys you revoked all at
 once), `used` (the proofs that counted), `members` (linked characters,
-with how their guild was checked) and `inbox_uploads` (every bundle received: the audit trail and
-the page's rate limit). The full schema is in "The D1 schema" below.
+with how their guild was checked), `inbox_uploads` (every bundle received: the audit trail and
+the page's limit per account) and `limits` (the page's limits before Discord is asked: keyed
+hashes of IP addresses and sign-ins, counted). The full schema is in "The D1 schema" below. Run
+the same command again after an update of `schema.sql`: it only adds what is missing.
 
 ### 3. The code
 
@@ -252,6 +254,13 @@ Discord sign-in in the body, and `handleProof` asks Discord who that is (`discor
   application's (`application.id` is `DISCORD_CLIENT_ID`), with `identify`, and not expired. A token
   another site got for its own application counts for nothing. The token goes to Discord only and
   is stored nowhere. Its user is the account that must own the link's code (`other-user` if not).
+- Before it asks Discord anything, it counts (`tooManyRequests`, Konig's review): Discord blocks
+  for a while an address that sends it too many bad tokens, and that address is your Worker's.
+  20 a minute per IP address (Cloudflare's `CF-Connecting-IP`), 10 an hour per sign-in, 300 a
+  minute for the whole page (`LINK.IP_PER_MINUTE`, `SIGNIN_PER_HOUR`, `PAGE_PER_MINUTE`), in that
+  order, so an address over its limit spends nothing of the others; past one, `429 limit` and
+  Discord is not asked. The `limits` table holds a keyed hash (HMAC-SHA-256 with the backend
+  seed) of each address and sign-in, never either one.
 - CORS: only `LINK_ORIGIN` (`https://dnl-gentile.github.io`, exactly: never `*`, and no
   credentials) gets `Access-Control-Allow-Origin`. `OPTIONS` (the browser's preflight) answers 204
   for it and 403 for anyone else, and a `POST` from another origin, or with none, is refused
@@ -536,7 +545,7 @@ whole address in `config.js`).
 
 | Route | Who | Body | Answer |
 |---|---|---|---|
-| `POST /proof` (`handleProof`; the reference Worker's `/api/link/proof`) | the page, from `LINK_ORIGIN` | `{"text": "OLB5~... or its address", "discordToken": "<access token>"}` | `200 {"status", "reason", "message", "R", "username", "character", "guild", "faction", "guildCheck", "guildKnown", "characters"}`; `401 {"reason": "login" \| "site"}`, `403 {"reason": "origin"}`, `400 {"reason": "format"}` (no text or token), `429 {"reason": "limit"}` after 10 an hour; `OPTIONS`: `204` with the CORS headers for `LINK_ORIGIN` only |
+| `POST /proof` (`handleProof`; the reference Worker's `/api/link/proof`) | the page, from `LINK_ORIGIN` | `{"text": "OLB5~... or its address", "discordToken": "<access token>"}` | `200 {"status", "reason", "message", "R", "username", "character", "guild", "faction", "guildCheck", "guildKnown", "characters"}`; `401 {"reason": "login" \| "site"}`, `403 {"reason": "origin"}`, `400 {"reason": "format"}` (no text or token), `429 {"reason": "limit"}` past the limits before Discord is asked (20 a minute per IP address, 10 an hour per sign-in, 300 a minute in all) or after 10 links an hour per account; `OPTIONS`: `204` with the CORS headers for `LINK_ORIGIN` only |
 | `POST /api/link/inbox` (`handleInbox`) | watcher tool | `{"bundles": [{"R", "bundle", "from", "t"}]}` (500 at most) | `200 {"results": [{"R", "status", "reason", "message"}]}` |
 | `POST /api/link/keys` (`handleKeys`) | you | `{"key_id", "public_key", "owner_discord_id", "owner_username", "character", "kind", "bootstrap", "days", "replace"}`, or `{"key_id", "renew": true, "days"}`, or `{"key_id", "revoke": true}`, or `{"character", "revoke": true}` | `200 {"status": "ok", "key_id", "kind", "character", "public_key", "cert", "cert_exp", "cert_from", "command", "replaced"}`: a new player key's `cert`, `cert_exp` and `command` are `null` (with a `message`) until `cert_from`, when `renew` gives them (`{"status": "ok", "revoked": true}` for a revoke, with `"council": true` and the councillor's `character`, once seen, for a key of the council authority's; `{"status": "ok", "character", "revoked": true, "keys", "council_keys"}` for a character: the registered keys it revoked, the authority's keys seen for it); `409 {"reason": "key-id-used" \| "public-key-used" \| "owner-has-key" \| "character-not-linked" \| "revoked" \| "replaced" \| "too-early"}` (`too-early` with `cert_from`), `404 {"reason": "unknown-key"}`, `400 {"reason": "format"}` |
 | `POST /api/link/bot-code` | gateway bot | `{"id", "username"}` | `200 {"token", "command", "exp", "mode", "reply"}` |
@@ -660,8 +669,9 @@ share slow and costly to build and stop a few friends from signing for each othe
 while councillors-only mode keeps the pool out of play until it is large.
 
 Limits and logs: 3 codes per Discord account a day (`/verify` again gets the same unused code
-back); the page may submit 10 times an hour per account; every bundle received is logged in
-`inbox_uploads` (never the Discord token); the admin and site tokens are compared in constant
+back); the page may submit 10 times an hour per account, and before Discord is asked, 20 times
+a minute per IP address, 10 an hour per sign-in and 300 a minute in all; every bundle received
+is logged in `inbox_uploads` (never the Discord token, nor an IP address); the admin and site tokens are compared in constant
 time; a Worker whose
 `LINK_BACKEND_SEED` and `LINK_BACKEND_PUBLIC` do not match refuses to issue codes and
 certificates.
@@ -1021,6 +1031,15 @@ CREATE TABLE IF NOT EXISTS inbox_uploads (
   reason         TEXT
 );
 CREATE INDEX IF NOT EXISTS uploads_by_user ON inbox_uploads (discord_id, uploaded);
+
+-- The page's limits (POST /proof), counted before Discord is asked who a sign-in is: one row a
+-- key, counted until its window ends. A key is a keyed hash (HMAC-SHA-256 with the backend seed)
+-- of an IP address or of a Discord sign-in, or the page as a whole: never either one itself.
+CREATE TABLE IF NOT EXISTS limits (
+  k     TEXT PRIMARY KEY,                          -- 'ip:<hash>', 'signin:<hash>' or 'page'
+  until INTEGER NOT NULL,                          -- the end of its window
+  n     INTEGER NOT NULL                           -- requests in it
+);
 ```
 
 ## The core
@@ -1064,7 +1083,8 @@ CREATE INDEX IF NOT EXISTS uploads_by_user ON inbox_uploads (discord_id, uploade
 //   watcher    acceptInbox(env, body, { promote }) / handleInbox(request, env, { promote })
 //   keys       manageKeys(env, body) / handleKeys(request, env), registerKey, renewKey, revokeKey,
 //              revokeCharacter, councilCharacters(env)
-//   people     discordUser(accessToken, { clientId }), forgetUser(env, discordId)
+//   people     discordUser(accessToken, { clientId }), tooManyRequests(env, { ip, discordToken }),
+//              forgetUser(env, discordId)
 //   answers    httpStatus(answer), respond(answer, headers), corsHeaders(request, env)
 
 export const LINK = {
@@ -1079,6 +1099,12 @@ export const LINK = {
 	KEY_MIN_AGE: 7 * 24 * 3600, // a player key counts for codes issued 7 days after it...
 	ACCOUNT_MIN_AGE: 30 * 24 * 3600, // ...and its owner's Discord account is 30 days older than the code
 	SUBMITS_PER_HOUR: 10,
+	// POST /proof, before Discord is asked who a sign-in is (Konig's review: Discord shuts out an
+	// address that sends it too many bad sign-ins, and yours is the bot's): so many a minute per IP
+	// address, an hour per sign-in, and a minute for the whole page.
+	IP_PER_MINUTE: 20,
+	SIGNIN_PER_HOUR: 10,
+	PAGE_PER_MINUTE: 300,
 	MAX_BUNDLES: 500,
 	CERT_DAYS: 365, // a councillor key's certificate life, unless the request says otherwise...
 	CERT_DAYS_PLAYER: 90, // ...a player key's: a revoked or replaced one stays in the addons' draw until it ends...
@@ -1721,6 +1747,39 @@ export async function charactersOf(env, discordId) {
 	return rows.map((r) => r.character);
 }
 
+// The page's limits before Discord is asked who a sign-in is: IP_PER_MINUTE per IP address (on
+// Cloudflare, the CF-Connecting-IP header), SIGNIN_PER_HOUR per sign-in, PAGE_PER_MINUTE for the
+// whole page, in that order (an address over its limit spends nothing of the others'). True when
+// one is reached. Each is counted in limits under a keyed hash (HMAC-SHA-256 with your backend seed):
+// never an address or a sign-in itself.
+export async function tooManyRequests(env, { ip, discordToken } = {}, t = now()) {
+	const buckets = [];
+	if (typeof ip === 'string' && ip) buckets.push([`ip:${await limitKey(env, `ip~${ip}`)}`, LINK.IP_PER_MINUTE, 60]);
+	if (typeof discordToken === 'string' && discordToken) buckets.push([`signin:${await limitKey(env, `signin~${discordToken}`)}`, LINK.SIGNIN_PER_HOUR, 3600]);
+	buckets.push(['page', LINK.PAGE_PER_MINUTE, 60]);
+	for (const [k, max, window] of buckets) {
+		const row = await database(env)
+			.prepare(
+				'INSERT INTO limits (k, until, n) VALUES (?, ?, 1) ON CONFLICT(k) DO UPDATE SET ' +
+					'n = CASE WHEN limits.until > ? THEN limits.n + 1 ELSE 1 END, until = CASE WHEN limits.until > ? THEN limits.until ELSE excluded.until END RETURNING n',
+			)
+			.bind(k, t + window, t, t)
+			.first();
+		if (row && row.n > max) return true;
+	}
+	return false;
+}
+
+let limitHmac = null;
+
+async function limitKey(env, text) {
+	const secret = `olympus-link-limits~${(env && (env.LINK_BACKEND_SEED || env.LINK_ADMIN_TOKEN)) || ''}`;
+	if (!limitHmac || limitHmac.secret !== secret) {
+		limitHmac = { secret, key: await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']) };
+	}
+	return bytesToHex(new Uint8Array(await crypto.subtle.sign('HMAC', limitHmac.key, enc.encode(text)))).slice(0, 32);
+}
+
 // The page's limit: SUBMITS_PER_HOUR links an hour per Discord account (counted in inbox_uploads).
 export async function tooManyProofs(env, discordId, t = now()) {
 	const recent = await database(env)
@@ -1804,8 +1863,9 @@ export async function discordUser(accessToken, { clientId, fetchImpl = globalThi
 }
 
 // The whole POST /proof, CORS preflight included, as a Response: the origin, your site token
-// (when you set LINK_SITE_TOKEN), the body, the link's form, who the player is (discordUser), 10
-// links an hour per account, then acceptProof with your promote, and the audit trail.
+// (when you set LINK_SITE_TOKEN), the body, the link's form, the limits before Discord is asked
+// (tooManyRequests), who the player is (discordUser), 10 links an hour per account, then
+// acceptProof with your promote, and the audit trail.
 //   if (url.pathname === '/proof') return handleProof(request, env, { promote });
 export async function handleProof(request, env, { promote, fetchImpl } = {}) {
 	const cors = corsHeaders(request, env);
@@ -1828,9 +1888,12 @@ export async function handleProof(request, env, { promote, fetchImpl } = {}) {
 			const why = text ? parseBundle(text).error : 'prefix';
 			return reply(reject('format', `This is not a complete Olympus link (${why}).`));
 		}
+		const t = now();
+		if (await tooManyRequests(env, { ip: request.headers.get('CF-Connecting-IP'), discordToken: body.discordToken }, t)) {
+			return reply(failure('limit', 'Too many tries: wait a while and send it again.'));
+		}
 		const who = await discordUser(body.discordToken, { clientId: env.DISCORD_CLIENT_ID, fetchImpl });
 		if (!who.ok) return reply(who);
-		const t = now();
 		if (await tooManyProofs(env, who.user.id, t)) return reply(failure('limit', 'Too many tries: wait a while and send it again.'));
 		const result = await acceptProof(env, text, { discordId: who.user.id, promote, t });
 		try {
