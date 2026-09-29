@@ -396,8 +396,8 @@ Players in game prove to the Olympus bot on Discord that a character is yours, a
 you your role. No password, no Battle.net login, and nothing leaves the game before you say yes.
 
 Not open yet: the addon carries it, but `/oly discord` says it is not open until the Olympus bot
-is ready and its key is in the addon. High Councillors' addons already make their own keys and
-get them certified in the meantime.
+is ready and its key is in the addon. Until then no addon makes, keeps, announces or uses a
+confirmer key, and none asks for or signs a certificate.
 
 The Olympus bot (Fernmelder's, on Discord) issues the codes, checks every proof and gives the role;
 the Olympus Link page is a static page on this repository's GitHub Pages

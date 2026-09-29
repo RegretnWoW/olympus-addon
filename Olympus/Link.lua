@@ -66,12 +66,14 @@ local L = ns.L
 -- The Olympus bot's public keys (64 hex digits each, from scripts/link-keys.py backend): a code
 -- or certificate signed by any of them is accepted, so two can be listed while the key changes.
 -- Anything that is not 64 hex digits is ignored: until the bot's key is pasted here, every code
--- is refused.
+-- is refused, and no confirmer key is made, typed, announced or used, nor any certificate asked
+-- for, signed or typed (Link.BotReady).
 ns.LINK_BACKEND_KEYS = { "PASTE-THE-BOT-PUBLIC-KEY-HEX-HERE" }
 -- The High Council's certificate authority (scripts/link-keys.py ca, on the author's computer):
 -- its public keys (64 hex digits each), whose certificates of tier c count for councillors' keys.
 -- Its seed is only in dist/LinkCA.lua (ns.LINK_CA_SEED), copied to the author's own game and never
--- published. Until a key is pasted here, councillors' addons make no key and ask for nothing.
+-- published. Until a key is pasted here and the bot's is too, councillors' addons make no key and
+-- ask for nothing.
 ns.LINK_CA_KEYS = { "a84125fa433276244fda242a28d2e4208a5d6db26dcb529e3e87af61939e10a7" }
 -- The Olympus Link page, a static page on this repository's GitHub Pages (web/public/, its address
 -- also in web/public/config.js as PAGE_URL): the QR code and the copy box open it with the link in
@@ -256,6 +258,10 @@ local backendKeys, caKeys = {}, {}
 -- The bot's public keys this version knows, and the council authority's.
 function Link.BackendKeys() return KeyList(ns.LINK_BACKEND_KEYS, backendKeys) end
 function Link.CAKeys() return KeyList(ns.LINK_CA_KEYS, caKeys) end
+-- The bot is ready: this version knows one of its keys. Until then (Konig's review) no confirmer
+-- key is made, typed, announced or used, and no certificate is asked for, signed or typed: a key
+-- would only wait in the SavedVariables for the launch.
+function Link.BotReady() return #Link.BackendKeys() > 0 end
 
 -- Who signed a parsed code or certificate (its `signed` and `sig`): "bot" (one of the bot's
 -- keys), "ca" (the council authority's: a certificate of tier c only, for a key whose id is its
@@ -514,10 +520,11 @@ local function UsableCert(k)
 end
 
 -- Every ANNOUNCE_EVERY with a key and a certificate the bot (or the council authority) signed
--- for it. A councillor taken off the signed list stops: DV~0 once, if it had announced.
+-- for it, once the bot is ready (never before). A councillor taken off the signed list stops:
+-- DV~0 once, if it had announced.
 function Link.Announce(force)
 	local k = Link.Key()
-	local c = k and UsableCert(k)
+	local c = k and Link.BotReady() and UsableCert(k)
 	if not c then
 		if announced then
 			announced = nil
@@ -1375,7 +1382,7 @@ end
 -- with a later click in the Olympus window, never with the gamepad UI, Who.lua): the player's
 -- addon asks again while it waits for a proof that knows the guild, and then the proof says "w".
 function Link.HandleRequest(dist, sender, text)
-	if dist ~= "WHISPER" or type(text) ~= "string" then return end
+	if dist ~= "WHISPER" or type(text) ~= "string" or not Link.BotReady() then return end
 	local key, seed = Link.Key()
 	if not key or not UsableCert(key) then return end
 	local requester, now = ns.FullName(sender), ns.Now()
@@ -1451,7 +1458,7 @@ function Link.SetKey(args)
 		-- A councillor's new key (a lost or leaked one, or one a year old): made here, and the
 		-- author's client certifies it the next time it is heard.
 		if not ns.IsHighCouncillor(ns.me) then return ns.Print(L.LINK_KEY_NEW_ONLY) end
-		if #Link.CAKeys() == 0 then return ns.Print(L.LINK_NOT_OPEN) end
+		if #Link.CAKeys() == 0 or not Link.BotReady() then return ns.Print(L.LINK_NOT_OPEN) end
 		local had = DropKey()
 		d.nokey[ns.me] = nil
 		Link.MakeCouncilKey()
@@ -1461,6 +1468,8 @@ function Link.SetKey(args)
 	local id, seed = args:match("^(%S+)%s+(%S+)$")
 	id = id and id:lower()
 	if not KeyId(id) or not seed or #seed ~= 43 or not Ed.FromB64(seed) then return ns.Print(L.LINK_KEY_BAD) end
+	-- (Not kept before the bot is ready: it would wait, in plain text, for a launch.)
+	if not Link.BotReady() then return ns.Print(L.LINK_NOT_OPEN) end
 	local old = d.keys[ns.me]
 	local cert = type(old) == "table" and old.cert or nil
 	local oldCert = Link.ParseCert(cert)
@@ -1499,7 +1508,7 @@ function Link.SetCert(args)
 	if c.id ~= k.id then return ns.Print(L.LINK_CERT_OTHER:format(c.id, k.id)) end
 	if c.name ~= ns.me then return ns.Print(L.LINK_CERT_OTHER_CHAR:format(c.name, ns.me)) end
 	if c.exp <= ServerTime() then return ns.Print(L.LINK_CERT_EXPIRED) end
-	if #Link.BackendKeys() == 0 and #Link.CAKeys() == 0 then return ns.Print(L.LINK_NOT_OPEN) end
+	if not Link.BotReady() then return ns.Print(L.LINK_NOT_OPEN) end
 	ns.Print(L.LINK_CERT_CHECKING)
 	local cached = CachedPub(k)
 	local queued = Ed.Run(function()
@@ -1578,7 +1587,7 @@ end
 -- A new key for this councillor: the pool stirred over ENTROPY_FRAMES frames, then its seed and
 -- public half in a job; kept for this character (auto: its certificate comes by itself).
 function Link.MakeCouncilKey()
-	if making then return false end
+	if making or #Link.CAKeys() == 0 or not Link.BotReady() then return false end
 	local m = { samples = {}, me = ns.me }
 	making = m
 	local function Frame()
@@ -1611,9 +1620,9 @@ end
 -- Every tick: a councillor of the signed list with no key gets one (unless its key was turned
 -- off: /oly discord key off); with its own key made here and no certificate, it listens for the
 -- author (Comm.senderHook). An ask unanswered for CA_WAIT counts as refused. Nothing happens
--- until this version knows the council authority's key.
+-- until this version knows the council authority's key and the bot's (Link.BotReady).
 function Link.CouncilKeyStep(now)
-	if #Link.CAKeys() == 0 or not ns.IsHighCouncillor(ns.me) or not Link.ValidName(ns.me) then return end
+	if #Link.CAKeys() == 0 or not Link.BotReady() or not ns.IsHighCouncillor(ns.me) or not Link.ValidName(ns.me) then return end
 	local k = Link.Key()
 	if not k then
 		local d = ns.db and ns.db.discord
@@ -1633,7 +1642,7 @@ function Link.HeardFrom(sender)
 	local W = ns.Workshop
 	if not W or not W.IsAuthorName(sender) then return end
 	local k = Link.Key()
-	if not k or not k.auto or MyCert(k) or not ns.IsHighCouncillor(ns.me) then
+	if not k or not k.auto or MyCert(k) or not ns.IsHighCouncillor(ns.me) or #Link.CAKeys() == 0 or not Link.BotReady() then
 		if ns.Comm.senderHook == Link.HeardFrom then ns.Comm.senderHook = nil end
 		return
 	end
@@ -1659,7 +1668,7 @@ end
 -- council authority's signature, our key's id and public half, this character, tier c, the
 -- expiry) before it is kept; then our addon says it is online. Anything else counts as a refusal.
 function Link.HandleCertificate(dist, sender, text)
-	if dist ~= "WHISPER" or type(text) ~= "string" or not ns.Workshop or not ns.Workshop.IsAuthorName(sender) then return end
+	if dist ~= "WHISPER" or type(text) ~= "string" or not ns.Workshop or not ns.Workshop.IsAuthorName(sender) or not Link.BotReady() then return end
 	local k, seed = Link.Key()
 	if not k or not k.auto or not auto.askedAt or MyCert(k) then return end
 	local c = Link.ParseCert(text:match("^DE~(OLK2%.[^~]+)$"))
@@ -1750,7 +1759,7 @@ end
 -- signed in a job, and recorded. Nothing is said to anyone else. The authority's key must be one
 -- this version knows (ns.LINK_CA_KEYS): else it certifies nothing (a line in the log, once).
 function Link.HandleCertRequest(dist, sender, text)
-	if dist ~= "WHISPER" or type(text) ~= "string" or caPub == false or not Link.IsCA() then return end
+	if dist ~= "WHISPER" or type(text) ~= "string" or caPub == false or not Link.IsCA() or not Link.BotReady() then return end
 	local seed = CASeed()
 	local name, now = ns.FullName(sender), ns.Now()
 	local pubB64 = text:match("^DC~1~([%w_%-]+)$")

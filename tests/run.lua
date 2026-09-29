@@ -15121,6 +15121,86 @@ test("Olympus Link: the council authority's certificate the addon makes is lua-c
 	end)
 end)
 
+-- Konig's review of 1.0.0 (3): councillors' keys were made at login from tens of bits, kept in
+-- plain text, announced every 5 minutes and certified for a year, all before the bot was ready.
+test("Olympus Link (Konig's review): while the bot is not ready (no bot key in ns.LINK_BACKEND_KEYS), no councillor key is made, no key is typed, announced or used, and no certificate is asked for or signed", function()
+	WithLink(function(w)
+		local realm = ns.AUTHOR_REALM
+		local me = "Test Councillor-" .. realm
+		local samples = 0
+		Link.EntropySample = function() samples = samples + 1 return "not ready " .. samples end
+		-- As this release ships: the council authority's key known, the bot's not yet.
+		ns.LINK_BACKEND_KEYS = { "PASTE-THE-BOT-PUBLIC-KEY-HEX-HERE" }
+		ns.LINK_CA_KEYS = { SAMPLE.ca_pub }
+		ns.me = me
+		local function Ticks()
+			for _ = 1, 3 do
+				Link.Tick(); RunFrames(w)
+				w.clock = w.clock + Link.ANNOUNCE_EVERY
+			end
+		end
+		-- A High Councillor of the signed list: no key made, nothing said.
+		Ticks()
+		eq(Link.Key(), nil, "no key made")
+		eq(samples, 0, "nothing sampled")
+		eq(#w.sent + #w.whispered, 0, "nothing sent")
+		-- A key an earlier build made in game, which the author's client certified (in the
+		-- SavedVariables): not announced, and it signs no request.
+		local seed = ns.Sign.SHA256("olympus-link-test:not-ready")
+		local pub = Ed.PublicKey(seed)
+		local id = Link.KeyIdOf(pub)
+		local cert = Cert(id, Ed.ToB64(pub), "c", CERT_EXP, CA_SEED, me)
+		Link.Store().keys[me] = { id = id, seed = Ed.ToB64(seed), cert = cert, auto = true }
+		Ticks()
+		eq(#w.sent, 0, "no DV")
+		Link.HandleRequest("WHISPER", "Some Player-" .. realm, "DR~0123456789abcdef~Olympus II~Alliance~7K3M9QX2TB~0011223344556677")
+		RunFrames(w)
+		eq(#Whispers(w, "DA~"), 0, "no request signed")
+		-- The same key without its certificate: the author's client is never asked for one.
+		Link.Store().keys[me].cert = nil
+		Ticks()
+		assert(ns.Comm.senderHook ~= Link.HeardFrom, "not listening for the author")
+		Link.HeardFrom(AUTHOR_CHAR)
+		RunFrames(w)
+		eq(#Whispers(w, "DC~"), 0, "no DC")
+		-- /oly discord key new, a key typed, a certificate typed: not open yet, nothing kept.
+		Link.Store().keys[me] = nil
+		w.printed = {}
+		SlashCmdList.OLYMPUS("discord key new")
+		RunFrames(w)
+		eq(Link.Key(), nil); eq(samples, 0)
+		assert(Said(w, ns.L.LINK_NOT_OPEN))
+		local k = TestKey("council01", "c")
+		w.printed = {}
+		SlashCmdList.OLYMPUS("discord key " .. k.id .. " " .. k.seed)
+		eq(Link.Key(), nil, "a key typed is not kept")
+		assert(Said(w, ns.L.LINK_NOT_OPEN))
+		Link.Store().keys[me] = { id = k.id, seed = k.seed }
+		w.printed = {}
+		SlashCmdList.OLYMPUS("discord cert " .. k.CertFor(me))
+		RunFrames(w)
+		eq(Link.Key().cert, nil, "a certificate typed is not kept")
+		assert(Said(w, ns.L.LINK_NOT_OPEN))
+		-- The author's client certifies nothing: no job, no DE.
+		ns.me, ns.LINK_CA_SEED = AUTHOR_CHAR, SAMPLE.ca_seed
+		Link.HandleCertRequest("WHISPER", me, "DC~1~" .. Ed.ToB64(pub))
+		eq(Ed.Busy(), 0, "no job")
+		RunFrames(w)
+		eq(#Whispers(w, "DE~"), 0, "no certificate signed")
+		ns.me, ns.LINK_CA_SEED = me, nil
+		eq(#w.sent, 0, "still no DV")
+		-- Once this version knows the bot's key: the key and certificate its keeper made are typed,
+		-- kept and announced.
+		ns.LINK_BACKEND_KEYS = { SAMPLE.backend_pub }
+		Link.Store().keys[me] = nil
+		SlashCmdList.OLYMPUS("discord key " .. k.id .. " " .. k.seed)
+		SlashCmdList.OLYMPUS("discord cert " .. k.CertFor(me))
+		RunFrames(w)
+		eq(Link.Key().cert, k.CertFor(me))
+		eq(w.sent[#w.sent].msg, "DV~1~" .. k.CertFor(me))
+	end)
+end)
+
 test("Olympus Link: the requester hands its proof to a watcher, waits for its word, tries again when a watcher is heard", function()
 	WithLink(function(w)
 		local sample = Link.Parse(SAMPLE.bundle_players)
