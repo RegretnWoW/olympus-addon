@@ -27,6 +27,7 @@ const {
 	revokeCharacter,
 	discordUser,
 	forgetUser,
+	pruneLink,
 	proofText,
 	httpStatus,
 	respond,
@@ -648,6 +649,40 @@ describe('with D1', { skip: probe ? false : 'node:sqlite is not available in thi
 		assert.deepEqual([httpStatus(again), again.reason], [409, 'key-id-used']);
 		assert.deepEqual([(await revokeKey(env, 'council01')).revoked, httpStatus(await renewKey(env, 'council01'))], [true, 404]);
 		assert.equal((await forgetUser(env, 'someone')).reason, 'format');
+	});
+
+	test('pruneLink: what no link can use any more goes, on your schedule; the links and what counted for them stay (Konig\'s review)', async () => {
+		await setup();
+		// B1 linked (its code and the proof that counted), then TOKEN_A's code left unused.
+		assert.equal((await acceptProof(env, B1.bundle, { discordId: USER_C.id, promote })).status, 'linked');
+		const add = (sql, ...args) => env.DB.prepare(sql).bind(...args).run();
+		// An old code nobody used, with a proof recorded for it that links nothing now (its character forgotten).
+		await add('INSERT INTO codes (r, discord_id, username, mode, draw_t, created, exp, token, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', 'OLDCODE000', '123456789012345678', 'old.one', 'c', '00000000', 1700000000, 1700086400, 'x', 'discord');
+		await add('INSERT INTO used (r, key_id, t) VALUES (?, ?, ?)', 'OLDCODE000', 'council01', 1700000100);
+		await add('INSERT INTO used (r, key_id, t) VALUES (?, ?, ?)', 'GONECODE00', 'council01', 1700000100);
+		// Log lines: one past LOG_DAYS, one within; limits: one ended, one running.
+		await add('INSERT INTO inbox_uploads (source, r, uploaded, status) VALUES (?, ?, ?, ?)', 'site', 'OLDCODE000', NOW - LINK.LOG_DAYS * 86400 - 1, 'rejected');
+		await add('INSERT INTO inbox_uploads (source, r, uploaded, status) VALUES (?, ?, ?, ?)', 'site', 'NEWCODE000', NOW - 60, 'rejected');
+		await add('INSERT INTO limits (k, until, n) VALUES (?, ?, ?)', 'ip:ended', NOW - 1, 20);
+		await add('INSERT INTO limits (k, until, n) VALUES (?, ?, ?)', 'ip:running', NOW + 30, 3);
+		const count = async (table) => (await row(`SELECT COUNT(*) AS n FROM ${table}`)).n;
+		const before = { codes: await count('codes'), used: await count('used'), inbox_uploads: await count('inbox_uploads'), limits: await count('limits') };
+		const r = await pruneLink(env, NOW);
+		assert.deepEqual([r.ok, r.status], [true, 'ok']);
+		assert.deepEqual([r.codes, r.used, r.logs, r.limits], [1, 2, 1, 1]);
+		assert.deepEqual({ codes: await count('codes'), used: await count('used'), inbox_uploads: await count('inbox_uploads'), limits: await count('limits') }, { codes: before.codes - 1, used: before.used - 2, inbox_uploads: before.inbox_uploads - 1, limits: before.limits - 1 });
+		assert.equal(await row('SELECT 1 AS x FROM codes WHERE r = ?', 'OLDCODE000'), null);
+		assert.equal(await row('SELECT 1 AS x FROM limits WHERE k = ?', 'ip:ended'), null);
+		// Kept: the codes a link can still use or answer "already" for, and what counted for a link.
+		assert.ok(await row('SELECT 1 AS x FROM codes WHERE r = ?', TOKEN_A.R));
+		assert.equal((await acceptProof(env, B1.bundle, { promote })).reason, 'already');
+		assert.ok(await row('SELECT 1 AS x FROM used WHERE r = ? AND key_id = ?', B1.R, 'council01'));
+		// Once its code is past the delivery grace, the code goes; the link and what counted for it stay.
+		const later = TOKEN_C.exp + LINK.DELIVERY_GRACE + 1;
+		await pruneLink(env, later);
+		assert.equal(await row('SELECT 1 AS x FROM codes WHERE r = ?', B1.R), null);
+		assert.equal((await row('SELECT discord_id FROM members WHERE character = ?', B1.requester)).discord_id, USER_C.id);
+		assert.ok(await row('SELECT 1 AS x FROM used WHERE r = ?', B1.R));
 	});
 
 	test('every reason POST /proof answered here is in PROOF_REASONS', async () => {

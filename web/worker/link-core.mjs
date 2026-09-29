@@ -33,7 +33,7 @@
 //   keys       manageKeys(env, body) / handleKeys(request, env), registerKey, renewKey, revokeKey,
 //              revokeCharacter, councilCharacters(env)
 //   people     discordUser(accessToken, { clientId }), tooManyRequests(env, { ip, discordToken }),
-//              forgetUser(env, discordId)
+//              forgetUser(env, discordId), pruneLink(env) (daily, from your Worker's scheduled())
 //   answers    httpStatus(answer), respond(answer, headers), corsHeaders(request, env)
 
 export const LINK = {
@@ -55,6 +55,7 @@ export const LINK = {
 	SIGNIN_PER_HOUR: 10,
 	PAGE_PER_MINUTE: 300,
 	MAX_BUNDLES: 500,
+	LOG_DAYS: 90, // the audit trail (inbox_uploads) keeps a line this long: pruneLink, on your schedule
 	CERT_DAYS: 365, // a councillor key's certificate life, unless the request says otherwise...
 	CERT_DAYS_PLAYER: 90, // ...a player key's: a revoked or replaced one stays in the addons' draw until it ends...
 	CERT_DAYS_MAX: 3650, // ...up to this
@@ -1210,6 +1211,28 @@ export async function forgetUser(env, discordId, t = now()) {
 		DB.prepare('DELETE FROM codes WHERE discord_id = ?').bind(id),
 	]);
 	return { ok: true, status: 'ok', discord_id: id, characters, keys: keys.map((k) => k.key_id) };
+}
+
+// What no link can use any more, gone (Konig's review: nothing was pruned). Run it on a schedule,
+// once a day (your Worker's scheduled(), with a cron trigger):
+//   async scheduled(event, env, ctx) { ctx.waitUntil(pruneLink(env)); }
+// - codes past their delivery grace (a link on one is refused as expired, and none waits anywhere);
+// - the proofs recorded for codes gone that link nothing now (what counted for a character still
+//   linked stays: it is how you see which key linked whom);
+// - the audit trail's lines older than LINK.LOG_DAYS (the page's limit per account reads an hour);
+// - the page's limits whose window ended.
+// Keys, links, the council authority's keys seen and the revocation lists are yours: they stay.
+// { ok, status, codes, used, logs, limits }: how many rows went from each.
+export async function pruneLink(env, t = now()) {
+	const DB = database(env);
+	const [codes, used, logs, limits] = await DB.batch([
+		DB.prepare('DELETE FROM codes WHERE exp < ?').bind(t - LINK.DELIVERY_GRACE),
+		DB.prepare('DELETE FROM used WHERE r NOT IN (SELECT r FROM codes) AND r NOT IN (SELECT r FROM members)'),
+		DB.prepare('DELETE FROM inbox_uploads WHERE uploaded < ?').bind(t - LINK.LOG_DAYS * 86400),
+		DB.prepare('DELETE FROM limits WHERE until <= ?').bind(t),
+	]);
+	const n = (r) => (r && r.meta && Number(r.meta.changes)) || 0;
+	return { ok: true, status: 'ok', codes: n(codes), used: n(used), logs: n(logs), limits: n(limits) };
 }
 
 // ---------------------------------------------------------------------------

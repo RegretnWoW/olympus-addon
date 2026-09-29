@@ -16,6 +16,7 @@
 //   GET /api/link/me, POST /api/link/code, POST /api/link/submit: only for a page served from
 //   this Worker's own site behind your own login (sessionUser); the GitHub Pages page uses /proof.
 // Anything else returns null from handleLink, so it can sit in front of an existing router.
+// scheduled(): pruneLink once a day, with a cron trigger in wrangler.toml ([triggers] crons).
 
 import {
 	acceptProof,
@@ -26,6 +27,7 @@ import {
 	handleProof,
 	issueCode,
 	logProof,
+	pruneLink,
 	readJson,
 	adminAuthorized,
 	allowedOrigins,
@@ -62,6 +64,8 @@ export {
 	councilKeyId,
 	councilCertificate,
 	manageKeys,
+	forgetUser,
+	pruneLink,
 	ed25519Verify,
 } from './link-core.mjs';
 
@@ -74,6 +78,10 @@ const now = () => Math.floor(Date.now() / 1000);
 export default {
 	async fetch(request, env, ctx) {
 		return (await handleLink(request, env, ctx)) || new Response('Not found', { status: 404 });
+	},
+	// What no link can use any more, gone once a day (wrangler.toml: [triggers] crons = ["17 4 * * *"]).
+	async scheduled(event, env, ctx) {
+		ctx.waitUntil(pruneLink(env));
 	},
 };
 

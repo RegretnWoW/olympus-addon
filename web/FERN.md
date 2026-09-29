@@ -91,7 +91,7 @@ wrangler secret put LINK_ADMIN_TOKEN    # your admin route (steps 6 to 9): pytho
 ### 4. Import the core
 
 ```js
-import { issueCode, handleProof, handleInbox, handleKeys } from './link-core.mjs';
+import { issueCode, handleProof, handleInbox, handleKeys, pruneLink } from './link-core.mjs';
 ```
 
 ### 5. `/verify` gives a code
@@ -125,7 +125,17 @@ export default {
 		if (url.pathname === '/api/link/keys') return handleKeys(request, env); // LINK_ADMIN_TOKEN: revoking (step 7), player keys (step 9)
 		// ...your routes
 	},
+	// Once a day: what no link can use any more goes (the cron trigger below).
+	async scheduled(event, env, ctx) {
+		ctx.waitUntil(pruneLink(env));
+	},
 };
+```
+
+```toml
+# wrangler.toml
+[triggers]
+crons = ["17 4 * * *"]   # pruneLink, daily (add the call to your scheduled() if you have one)
 ```
 
 `handleProof` answers the browser's preflight (`OPTIONS`) and the `POST`, and does, in order:
@@ -155,6 +165,11 @@ code; one councillor, or in mode `"a"` three drawn players (the draw is [not 3 o
 
 `handleKeys` is your admin route from day one, behind `LINK_ADMIN_TOKEN`: it is how you revoke a
 key in minutes (step 7), and later how you register player keys (step 9).
+
+`pruneLink`, once a day, deletes what no link can use any more: codes past their delivery grace
+(7 days after they expire), the proofs recorded for codes gone that link nothing now, log lines
+older than 90 days (`LINK.LOG_DAYS`) and the page's limits whose window ended. Links, keys and
+revocation lists are yours, and stay.
 
 Each `/proof` with a token asks Discord once, and Discord blocks for a while an address that
 sends it too many bad tokens: your Worker's, and your bot's with it. So `handleProof` counts
@@ -371,7 +386,9 @@ when, used or not); the linked characters (name, guild, faction, how the guild w
 Discord id); which confirmer keys counted for which code; confirmer public keys (never a private
 key); the revocation lists; and a log of every proof received (source, code, Discord id,
 character, result). Never a Discord token, never an IP address: the limits before Discord is
-asked (step 6) count a keyed hash of each (HMAC with your bot's seed), in `limits`.
+asked (step 6) count a keyed hash of each (HMAC with your bot's seed), in `limits`. With
+`pruneLink` on its daily schedule (step 6), a code goes a week after it expires, a log line after
+90 days, a limit when its window ends.
 
 ### How is someone's data deleted?
 

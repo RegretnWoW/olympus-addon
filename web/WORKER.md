@@ -214,7 +214,7 @@ Copy `web/worker/link-core.mjs` next to your Worker's entry file. It needs nothi
 (Ed25519 and SHA-256), `fetch` and D1: no npm packages. Your routes call it:
 
 ```js
-import { handleProof, handleInbox, handleKeys } from './link-core.mjs';
+import { handleProof, handleInbox, handleKeys, pruneLink } from './link-core.mjs';
 
 export default {
 	async fetch(request, env, ctx) {
@@ -224,6 +224,9 @@ export default {
 		if (pathname === '/api/link/inbox') return handleInbox(request, env, roles);
 		if (pathname === '/api/link/keys') return handleKeys(request, env);
 		return yourBot(request, env, ctx); // everything you already answer, /verify included (step 7)
+	},
+	async scheduled(event, env, ctx) {
+		ctx.waitUntil(pruneLink(env)); // once a day: [triggers] crons in wrangler.toml (step 5)
 	},
 };
 ```
@@ -238,8 +241,14 @@ export default {
   records the character. `checkProof(env, text, { discordId })` gives the same verdict, reading
   only. `handleProof` is `acceptProof` with the page's CORS, the sign-in check, the rate limit and
   the audit trail around it.
+- `pruneLink(env)`, once a day from your `scheduled()` (Konig's review: nothing was pruned),
+  deletes what no link can use any more: codes past their delivery grace (7 days after they
+  expire), the proofs recorded for codes gone that link nothing now (what counted for a
+  character still linked stays), the audit trail's lines older than `LINK.LOG_DAYS` (90) and the
+  page's limits whose window ended. Keys, links, the council authority's keys seen and the
+  revocation lists stay. It answers how many rows went from each.
 - `web/worker/link-worker.js` is a complete Worker on the same functions (its `discordRole` is a
-  `promote`), with its routes under `/api/link/`.
+  `promote`), with its routes under `/api/link/` and its `scheduled()`.
 
 ### 4. Who is sending
 
@@ -279,6 +288,9 @@ Discord sign-in in the body, and `handleProof` asks Discord who that is (`discor
 
 ```toml
 # wrangler.toml (your existing file: add these)
+[triggers]
+crons = ["17 4 * * *"]                   # pruneLink, daily (step 3)
+
 [[d1_databases]]
 binding = "LINK_DB"
 database_name = "olympus-link"
@@ -671,7 +683,8 @@ while councillors-only mode keeps the pool out of play until it is large.
 Limits and logs: 3 codes per Discord account a day (`/verify` again gets the same unused code
 back); the page may submit 10 times an hour per account, and before Discord is asked, 20 times
 a minute per IP address, 10 an hour per sign-in and 300 a minute in all; every bundle received
-is logged in `inbox_uploads` (never the Discord token, nor an IP address); the admin and site tokens are compared in constant
+is logged in `inbox_uploads` (never the Discord token, nor an IP address), and kept 90 days
+(`pruneLink`, daily); the admin and site tokens are compared in constant
 time; a Worker whose
 `LINK_BACKEND_SEED` and `LINK_BACKEND_PUBLIC` do not match refuses to issue codes and
 certificates.
@@ -1085,7 +1098,7 @@ CREATE TABLE IF NOT EXISTS limits (
 //   keys       manageKeys(env, body) / handleKeys(request, env), registerKey, renewKey, revokeKey,
 //              revokeCharacter, councilCharacters(env)
 //   people     discordUser(accessToken, { clientId }), tooManyRequests(env, { ip, discordToken }),
-//              forgetUser(env, discordId)
+//              forgetUser(env, discordId), pruneLink(env) (daily, from your Worker's scheduled())
 //   answers    httpStatus(answer), respond(answer, headers), corsHeaders(request, env)
 
 export const LINK = {
@@ -1107,6 +1120,7 @@ export const LINK = {
 	SIGNIN_PER_HOUR: 10,
 	PAGE_PER_MINUTE: 300,
 	MAX_BUNDLES: 500,
+	LOG_DAYS: 90, // the audit trail (inbox_uploads) keeps a line this long: pruneLink, on your schedule
 	CERT_DAYS: 365, // a councillor key's certificate life, unless the request says otherwise...
 	CERT_DAYS_PLAYER: 90, // ...a player key's: a revoked or replaced one stays in the addons' draw until it ends...
 	CERT_DAYS_MAX: 3650, // ...up to this
@@ -2264,6 +2278,28 @@ export async function forgetUser(env, discordId, t = now()) {
 	return { ok: true, status: 'ok', discord_id: id, characters, keys: keys.map((k) => k.key_id) };
 }
 
+// What no link can use any more, gone (Konig's review: nothing was pruned). Run it on a schedule,
+// once a day (your Worker's scheduled(), with a cron trigger):
+//   async scheduled(event, env, ctx) { ctx.waitUntil(pruneLink(env)); }
+// - codes past their delivery grace (a link on one is refused as expired, and none waits anywhere);
+// - the proofs recorded for codes gone that link nothing now (what counted for a character still
+//   linked stays: it is how you see which key linked whom);
+// - the audit trail's lines older than LINK.LOG_DAYS (the page's limit per account reads an hour);
+// - the page's limits whose window ended.
+// Keys, links, the council authority's keys seen and the revocation lists are yours: they stay.
+// { ok, status, codes, used, logs, limits }: how many rows went from each.
+export async function pruneLink(env, t = now()) {
+	const DB = database(env);
+	const [codes, used, logs, limits] = await DB.batch([
+		DB.prepare('DELETE FROM codes WHERE exp < ?').bind(t - LINK.DELIVERY_GRACE),
+		DB.prepare('DELETE FROM used WHERE r NOT IN (SELECT r FROM codes) AND r NOT IN (SELECT r FROM members)'),
+		DB.prepare('DELETE FROM inbox_uploads WHERE uploaded < ?').bind(t - LINK.LOG_DAYS * 86400),
+		DB.prepare('DELETE FROM limits WHERE until <= ?').bind(t),
+	]);
+	const n = (r) => (r && r.meta && Number(r.meta.changes)) || 0;
+	return { ok: true, status: 'ok', codes: n(codes), used: n(used), logs: n(logs), limits: n(limits) };
+}
+
 // ---------------------------------------------------------------------------
 // Crypto (WebCrypto Ed25519: Workers and Node 20+)
 
@@ -2399,6 +2435,7 @@ its login (step 4); the GitHub Pages page never needs it.
 //   GET /api/link/me, POST /api/link/code, POST /api/link/submit: only for a page served from
 //   this Worker's own site behind your own login (sessionUser); the GitHub Pages page uses /proof.
 // Anything else returns null from handleLink, so it can sit in front of an existing router.
+// scheduled(): pruneLink once a day, with a cron trigger in wrangler.toml ([triggers] crons).
 
 import {
 	acceptProof,
@@ -2409,6 +2446,7 @@ import {
 	handleProof,
 	issueCode,
 	logProof,
+	pruneLink,
 	readJson,
 	adminAuthorized,
 	allowedOrigins,
@@ -2445,6 +2483,8 @@ export {
 	councilKeyId,
 	councilCertificate,
 	manageKeys,
+	forgetUser,
+	pruneLink,
 	ed25519Verify,
 } from './link-core.mjs';
 
@@ -2457,6 +2497,10 @@ const now = () => Math.floor(Date.now() / 1000);
 export default {
 	async fetch(request, env, ctx) {
 		return (await handleLink(request, env, ctx)) || new Response('Not found', { status: 404 });
+	},
+	// What no link can use any more, gone once a day (wrangler.toml: [triggers] crons = ["17 4 * * *"]).
+	async scheduled(event, env, ctx) {
+		ctx.waitUntil(pruneLink(env));
 	},
 };
 

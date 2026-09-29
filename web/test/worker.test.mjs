@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { afterEach, beforeEach, describe, test } from 'node:test';
-import { handleLink, drawThreshold, drawPrefix, drawLimit, verifyCertificate, parseCertificate, councilKeyId, LINK } from '../worker/link-worker.js';
+import worker, { handleLink, drawThreshold, drawPrefix, drawLimit, verifyCertificate, parseCertificate, councilKeyId, LINK } from '../worker/link-worker.js';
 import { parseToken, buildBundle, parseBundle, signedMessage, linkTag, utf8Length } from '../public/core.js';
 import { vectors, makeD1, sign, verify, b64url, publicHexOf } from './helpers.mjs';
 
@@ -1079,6 +1079,18 @@ describe('Worker', { skip: probe ? false : 'node:sqlite is not available in this
 		assert.equal((await row('SELECT discord_id FROM members WHERE character = ?', B1.requester)).discord_id, '500000000000000001');
 		assert.deepEqual(discord.calls, [], 'no PUT, no DELETE');
 		assert.equal((await row('SELECT used FROM codes WHERE r = ?', B1.R)).used, null);
+	});
+
+	test('scheduled(): the reference Worker prunes what no link can use any more (Konig\'s review)', async () => {
+		await setup();
+		clock = TOKEN_C.exp + LINK.DELIVERY_GRACE + 1; // every vector code past its delivery grace
+		const waiting = [];
+		await worker.scheduled({ cron: '17 4 * * *', scheduledTime: clock * 1000 }, env, { waitUntil: (p) => waiting.push(p) });
+		assert.equal(waiting.length, 1);
+		const r = await waiting[0];
+		assert.deepEqual([r.status, r.codes], ['ok', vectors.backend.tokens.length]);
+		assert.equal((await row('SELECT COUNT(*) AS n FROM codes')).n, 0);
+		assert.equal((await row('SELECT COUNT(*) AS n FROM members')).n, Object.keys(OWN).length, 'links stay');
 	});
 
 	test('the page may submit 10 times an hour per account', async () => {
