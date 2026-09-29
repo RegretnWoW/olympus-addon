@@ -559,9 +559,12 @@ find or join it. Share the same secret with the officers of the other Olympus gu
 3. The reporter sends a compact summary of its guild about every 3 minutes on the hidden Olympus channel.
 4. Every client adds up all the summaries: that is the census.
 
-Nothing leaves the game. There is no server, no website, no account and no tracking. The one
-exception is Olympus Link, and only when you ask for it: the proof that a character is yours
-goes to the Olympus bot on Discord, through the page you scan it with or a watcher.
+The addon itself talks only in game, through the game's own addon messages: it has no server of
+its own, and nothing it sends leaves the game. The one exception is
+[Olympus Link](#olympus-link-your-discord-role-100), and only when you choose to link a
+character: it uses a website (the Olympus Link page, on this repository's GitHub Pages) and the
+Olympus bot on Discord, and the proof that a character is yours goes to the bot through that
+page or a High Councillor's watcher.
 
 **Realms vs layers.** A realm (ClassicBetaPvP, ClassicBetaPvP2...) is a separate world
 with its own guilds; layers are copies of a zone *inside* one realm. Guilds on the same
@@ -575,8 +578,11 @@ window shows which realms you are counting.
 
 ## Privacy
 
-The addon talks only through the game's own addon messages: no server, no website, no
-tracking. Your name is on every message (the game adds it). What goes where:
+The addon itself talks only through the game's own addon messages: it has no server of its own,
+and what it sends stays in the game. The one exception is Olympus Link, and only when you choose
+to link a character: then the proof goes to the Olympus bot on Discord, through the Olympus Link
+page on GitHub Pages (where you sign in with Discord) or a High Councillor's watcher. Your name is
+on every message (the game adds it). What goes where:
 
 | What | Who receives it | When |
 |---|---|---|

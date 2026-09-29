@@ -376,6 +376,40 @@ shows the army something of it.
 - The round **Olympus** button in the bottom left corner of the map switches markers
   (army per zone, decrees) on and off.
 
+### Olympus Link: your Discord role (1.0.0, optional)
+Prove to the Olympus bot on Discord that a character is yours, and the bot gives you your role.
+It is the one part of Olympus that goes outside the game, and only if you choose to link a
+character: no password, no Battle.net login, and nothing is sent before you say yes.
+
+Not open yet: the addon carries it, but `/oly discord` says it is not open until the Olympus bot
+is ready and its key is in the addon.
+
+1. **Get a code** from the Olympus bot on Discord (its `/verify` command, in the Olympus server:
+   only you see the reply). It is good for 24 hours. Keep it to yourself, and don't show it (or
+   the Olympus Link window) on a stream.
+2. **Type `/oly discord <code>`** in the game's chat. The addon checks the bot's signature on the
+   code, then asks whether to link this character to the Discord account the code names (the
+   bot's word: nobody can change it). **Cancel** sends nothing.
+3. **Players confirm in game**, by addon whisper, that this character asked: a High Councillor
+   online, or, when none is, verified players drawn for your code (three of them must confirm).
+   Each signs with a key of its own, certified for its character.
+4. **The proof reaches the bot.** The **Olympus Link** window shows a QR code and the same link
+   in a copy box. Open the Olympus Link page, https://dnl-gentile.github.io/olympus-addon/ (a
+   static page on the project's GitHub Pages): point your phone's camera at the code, share the
+   game's window with the page, or paste the link, then sign in with Discord there (Discord's own
+   sign-in page, which tells the bot who you are on Discord) and the page sends the proof to the
+   bot. Or, later, the addon hands it to a High Councillor's watcher the next time you are both
+   online, and the bot's keeper uploads it.
+
+The page reads the code in your browser: the camera and the shared window never leave it, and
+the proof rides after the `#` of the link, which a browser never sends to any server. The page
+loads its fonts from Google Fonts. The bot keeps which character (name, realm, guild and
+faction) is linked to which Discord account, and a record of each proof it received. The Olympus
+bot is Fernmelder's; how it checks a proof is on
+[GitHub](https://github.com/dnl-gentile/olympus-addon) (the README and `web/FERN.md`).
+`/oly discord show` opens the window again, `/oly discord status` lists every character of your
+account, `/oly discord forget` drops this character's request and proof.
+
 ### Everywhere
 - **Copy**: every tab produces a ready-to-paste text for Discord.
 - **Search**: a box on top of the Census (a guild or its Lord), the Realm (guilds, Lords, Captains,
@@ -451,7 +485,10 @@ find or join it. Share the same secret with the officers of the other Olympus gu
 3. The reporter sends a compact summary of its guild about every 3 minutes on the hidden Olympus channel.
 4. Every client adds up all the summaries: that is the census.
 
-Nothing leaves the game. There is no server, no website, no account and no tracking.
+The addon itself talks only in game, through the game's own addon messages: it has no server of
+its own, and nothing it sends leaves the game. The one exception is Olympus Link (above), and
+only when you choose to link a character: it uses a website (the Olympus Link page, on the
+project's GitHub Pages) and the Olympus bot on Discord.
 
 **Realms vs layers.** A realm (ClassicBetaPvP, ClassicBetaPvP2...) is a separate world
 with its own guilds; layers are copies of a zone *inside* one realm. Guilds on the same
@@ -465,8 +502,11 @@ window shows which realms you are counting.
 
 ## Privacy
 
-The addon talks only through the game's own addon messages: no server, no website, no
-tracking. Your name is on every message (the game adds it). What goes where:
+The addon itself talks only through the game's own addon messages: it has no server of its own,
+and what it sends stays in the game. The one exception is Olympus Link, and only when you choose
+to link a character: then the proof goes to the Olympus bot on Discord, through the Olympus Link
+page on GitHub Pages (where you sign in with Discord) or a High Councillor's watcher. Your name is
+on every message (the game adds it). What goes where:
 
 | What | Who receives it | When |
 |---|---|---|
@@ -709,6 +749,8 @@ Other limits:
 | `/oly helpme [text]` (or **Ask a High Councillor** on the Realm tab) | ask the High Council (the moderators) for help: it goes by whisper to up to three of them online who take requests |
 | `/oly council list` · `/oly council help on\|off` | the High Council as your addon knows it; moderators: take help requests or not. The list is signed by the author on his own computer and checked by every client: no name is written in the addon's code, and nobody can forge or change it. An addon without the list (`High Council: -`) asks the channel for it a minute or so after login, and again until it has it (two and a half minutes later when nobody answered, up to 3 times). Since 1.0.0 the list also crosses realms through guild chat: guildmates on another realm answer the ask and pass the list on, and it goes on to your realm's channel |
 | `/oly council icon` (or **My council icon** on the Realm tab, councillors only) | moderators: a councillor's name in the Olympus chats always carries the High Council's mark (the game's target-frame skull), which nobody can change. An icon of your own after it is optional: pick it from the game's icons, like a macro's. Your addon announces it on the channel (at once, then every 20 minutes), and other clients take it only from a councillor and only as a game icon |
+| `/oly discord <code>` · `/oly discord` | Olympus Link: link this character to your Discord account with the bot's code (or paste it in a box) |
+| `/oly discord show` · `status` · `forget` | the Olympus Link window (QR code and link) again; every character's request or proof; drop this character's |
 | `/oly hop` | ask for an invite to the King's layer (while he is online) |
 | `/oly vox off` · `/oly vox on` | Vox Populi questions in chat only, or in a window |
 | `/oly layerhelp on` · `/oly layerhelp off` | get (or not) requests to invite players to your layer |

@@ -20117,6 +20117,64 @@ test("1.0.1 borders: Max's frames ship as 256 x 256 32-bit TGAs with alpha, the 
 	local credits = readme:match("\n## Credits\n(.-)\n## ")
 	assert(credits and credits:find("\n%- %*%*Art:%*%* Max %(the bronze elite borders"), "README's Credits credit Max for the bronze frames")
 end)
+
+-- 1.0.0, Konig's review: what the README and the CurseForge page (docs/CURSEFORGE.md) tell players
+-- about what leaves their game must be what the addon does. Both are checked here against the
+-- code: the addon itself talks only in game; Olympus Link, when a player chooses to link a
+-- character, uses a website (GitHub Pages) and the Olympus bot on Discord.
+do
+	local DOCS = { "README.md", "docs/CURSEFORGE.md" }
+	local function Doc(path) return assert(ReadFile(ROOT .. path), "missing " .. path) end
+	local function Flat(s) return (s:gsub("%s+", " ")) end
+	-- A "## <title>" section, up to the next "## " heading (its "### " subsections included).
+	local function Section(doc, title)
+		local from = doc:find("\n## " .. title .. "\n", 1, true)
+		if not from then return nil end
+		local body = doc:sub(from + #title + 5)
+		local stop = body:find("\n## ", 1, true)
+		return stop and body:sub(1, stop) or body
+	end
+	-- A "### <title...>" subsection, up to the next heading of level 2 or 3.
+	local function Subsection(doc, title)
+		local from = doc:find("\n### " .. title, 1, true)
+		if not from then return nil end
+		local body = doc:sub(doc:find("\n", from + 1, true) + 1)
+		local stop = body:find("\n##", 1, true)
+		return stop and body:sub(1, stop) or body
+	end
+	local function Has(text, what, msg) assert(text:find(what, 1, true), msg .. ": " .. what) end
+
+	test("1.0.0 docs (Konig's review): no page says there is no server, website or account; Olympus Link, the one part outside the game, has a section on the CurseForge page too", function()
+		local config = Doc("web/public/config.js")
+		local page, verify = config:match("PAGE_URL: '([^']+)'"), config:match("VERIFY_COMMAND: '([^']+)'")
+		eq(page, ns.LINK_SITE, "the page the addon's QR code opens is the Olympus Link page's own address")
+		assert(verify, "the bot's command in the page's settings")
+		assert(ns.LINK_SITE:find("^https://[%w%-]+%.github%.io/"), "the page is on GitHub Pages: " .. ns.LINK_SITE)
+		local open = #ns.Link.BackendKeys() > 0
+		for _, path in ipairs(DOCS) do
+			local doc = Doc(path)
+			local flat = Flat(doc)
+			for _, claim in ipairs({ "no server, no website", "There is no server", "no website", "no account" }) do
+				assert(not flat:find(claim, 1, true), path .. " still says: " .. claim)
+			end
+			-- How it works, and the words above the privacy table: the addon itself talks only in
+			-- game, and Olympus Link is the exception, only when a player links a character.
+			local how = Flat(assert(Section(doc, "How it works"), path .. ": How it works"))
+			Has(how, "Olympus Link", path .. ": How it works names the exception")
+			local privacy = assert(Section(doc, "Privacy"), path .. ": a Privacy section")
+			local intro = Flat(privacy:sub(1, (privacy:find("\n|", 1, true))))
+			for _, must in ipairs({ "addon messages", "Olympus Link", "GitHub Pages", "Discord" }) do Has(intro, must, path .. ": the privacy section's first words") end
+			-- The Olympus Link section: the page the addon opens, where it is, the bot and its command,
+			-- and whether it is open yet, as this version of the addon has it.
+			local link = Flat(assert(Subsection(doc, "Olympus Link"), path .. ": a section for Olympus Link"))
+			for _, must in ipairs({ ns.LINK_SITE, "GitHub Pages", "the Olympus bot on Discord", "`/oly discord <code>`", "`" .. verify .. "`" }) do
+				Has(link, must, path .. ": the Olympus Link section")
+			end
+			eq(link:find("Not open yet", 1, true) ~= nil, not open,
+				path .. ": says Olympus Link is not open yet exactly while this addon knows no key of the bot")
+		end
+	end)
+end
 ---------------------------------------------------------------------------
 -- OfficerSpy's bridge (Bridge.lua): what a companion addon the mods run may read, and that it
 -- can change nothing. The signed list is the 0.9.7 test's, checked by the real signature code.
