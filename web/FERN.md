@@ -1,13 +1,13 @@
 # Olympus Link: what your bot adds
 
 Hi Fern. Your split works, with a few changes to your plan, [explained after the
-steps](#why-these-changes-to-your-plan). One of them moves some trust, so please read it before
-you set `LINK_CA_PUBLIC`. Your bot keeps `/verify` and the whisper path, adds `POST /proof`, does
-every check and gives the role with the same `promote()` you have. Our side is the addon (the QR
-code, councillors signing on their own, `/oly discord <code>` and Accept) and a page that is only
-a page: static, on GitHub Pages, it signs the player in with Discord, reads the proof (screen
-share, phone camera, paste, or a file) and posts it to your `/proof`. It has no database at all:
-who is mid-scan stays in the player's browser tab.
+steps](#why-these-changes-to-your-plan). Your bot keeps `/verify` and the whisper path, adds
+`POST /proof`, does every check and gives the role with the same `promote()` you have, and you
+make every confirmer's key, the High Councillors' too, as you planned (step 6b). Our side is the
+addon (the QR code, councillors' addons signing with the keys you give them, `/oly discord
+<code>` and Accept) and a page that is only a page: static, on GitHub Pages, it signs the player
+in with Discord, reads the proof (screen share, phone camera, paste, or a file) and posts it to
+your `/proof`. It has no database at all: who is mid-scan stays in the player's browser tab.
 
 Everything below is for your Worker. The checks are already written, in one file you import:
 [`web/worker/link-core.mjs`](worker/link-core.mjs) (no npm package, WebCrypto and `fetch` only).
@@ -49,17 +49,18 @@ secret (`wrangler secret put LINK_BACKEND_SEED`; keep a copy in a password manag
 else). The public key (64 hex) is `LINK_BACKEND_PUBLIC` below, and the one thing Daniel puts in
 the addon: every player's game checks your codes against it.
 
-### 3. Settings, `LINK_CA_PUBLIC` among them
+### 3. Settings
 
 ```toml
 [vars]
 LINK_BACKEND_PUBLIC = "<the 64 hex of step 2>"
-LINK_CA_PUBLIC = "a84125fa433276244fda242a28d2e4208a5d6db26dcb529e3e87af61939e10a7"
-LINK_COUNCIL_CHARACTERS = "<Name-Realm>, <Name-Realm>"   # the High Councillors you accept
 LINK_ORIGIN = "https://dnl-gentile.github.io"
 DISCORD_CLIENT_ID = "<your Discord application's client id>"
 LINK_MODE = "c"                  # councillors only; "a" adds three drawn players (step 9)
 LINK_GUILD_POLICY = "verified"   # a confirmer saw the player in the guild in game
+# Leave these two out: the council authority is off (below).
+# LINK_CA_PUBLIC = "a84125fa433276244fda242a28d2e4208a5d6db26dcb529e3e87af61939e10a7"
+# LINK_COUNCIL_CHARACTERS = "<Name-Realm>, <Name-Realm>"
 ```
 
 ```sh
@@ -67,18 +68,18 @@ wrangler secret put LINK_BACKEND_SEED   # the seed of step 2
 wrangler secret put LINK_ADMIN_TOKEN    # your admin route (steps 6 to 9): python3 -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
 
-- `LINK_CA_PUBLIC` is the council authority, Daniel's client: it certifies the High Councillors'
-  keys, so you never mint or paste theirs. It is also trust you give: with it, a key the
-  authority certifies counts as a councillor's, and one councillor's confirmation links a
-  player ([FAQ](#can-the-page-or-daniel-give-anyone-a-role)).
-- `LINK_COUNCIL_CHARACTERS` keeps the say over that with you: the High Councillors' characters
-  you accept, as the game writes them (`Name-Realm`, comma-separated). A certificate for any
-  other character then counts for nothing, whatever the authority signs; set but empty, none
-  counts. Left out, every character the authority certifies counts. We suggest you set it: it is
-  a handful of names, Daniel sends them to you, and it keeps the authority (or a leaked copy of
-  its seed) from making councillors of anyone else. When the High Council changes, change the
-  list too: a councillor who is not on it still confirms in game, and your Worker refuses those
-  links (`not-enough`).
+- `LINK_CA_PUBLIC` stays out. It is the council authority, Daniel's client, which could certify
+  keys the High Councillors' addons make in game. That path is off in the addon (Konig's
+  review: a key made in game comes from a few tens of bits of frame timing, sits in plain text in
+  the SavedVariables, and its certificate would last a year), so the councillors' keys are yours
+  to make (step 6b), and without `LINK_CA_PUBLIC` your Worker takes none of the authority's
+  certificates either. Should Daniel ever turn it on, he tells you, and you decide then: with
+  it, a key the authority certifies counts as a councillor's, and one councillor's confirmation
+  links a player ([FAQ](#can-the-page-or-daniel-give-anyone-a-role)).
+- `LINK_COUNCIL_CHARACTERS` only matters with `LINK_CA_PUBLIC`: the High Councillors' characters
+  you accept from the authority, as the game writes them (`Name-Realm`, comma-separated). A
+  certificate of the authority for any other character then counts for nothing, whatever it
+  signs; set but empty, none counts. Keys you make yourself don't need it.
 - `LINK_ORIGIN` is our page's origin: the only one browsers let call your `/proof` (CORS). CORS
   binds browsers only: a script sends any origin it likes.
 - In the Developer Portal, OAuth2, add our page as a redirect, exactly:
@@ -148,8 +149,9 @@ confirmer is neither the player nor one of the key owner's characters; a key cou
 code; one councillor, or in mode `"a"` three drawn players (the draw is [not 3 of
 5](#why-these-changes-to-your-plan)); the guild check.
 
-`handleKeys` is your admin route from day one, behind `LINK_ADMIN_TOKEN`: it is how you revoke a
-key in minutes (step 7), and later how you register player keys (step 9).
+`handleKeys` is your admin route from day one, behind `LINK_ADMIN_TOKEN`: it is how you register
+the High Councillors' keys (step 6b), revoke a key in minutes (step 7), and later register player
+keys (step 9).
 
 One thing worth adding in Cloudflare's dashboard: a rate-limiting rule on `/proof` (say 20
 requests a minute per IP). Each `/proof` with a token asks Discord once, and Discord blocks for a
@@ -160,10 +162,29 @@ Rather write the route yourself? `checkProof(env, text, { discordId })` gives th
 writes nothing; `acceptProof(env, text, { discordId, promote, demote })` does the whole link;
 `discordUser`, `corsHeaders`, `tooManyProofs` and `logProof` are the rest of `handleProof`.
 
+### 6b. The High Councillors' keys: you make them
+
+Every confirmer's key is one you make on your computer, the High Councillors' too: their addons
+make no key of their own. For each councillor, once, for the one character that confirms:
+
+```sh
+python3 scripts/link-keys.py confirmer <id> c --character "<Name-Realm>" --owner <their Discord id> --username <their username> --bootstrap
+```
+
+It prints the `/oly discord key <id> <key>` line, which you send that councillor privately (a
+direct message, never a channel), and the `curl` that registers the public key with your
+`/api/link/keys`; the answer's `command` is their second line, `/oly discord cert OLK2...`. Both
+fit the game's chat line. They type both on that character, in the addon release that carries
+your bot's key (before it, the addon keeps neither and says Olympus Link is not open).
+`--bootstrap` because at launch nobody has linked a character yet. One key per Discord account;
+the certificate lasts 365 days, and `{"key_id": "<id>", "renew": true}` renews it
+([WORKER.md](WORKER.md) step 8 has the rest). Daniel sends you the councillors' characters and
+Discord accounts, and every change to the High Council.
+
 ### 7. Revoking, from day one
 
-A leaked key (a councillor's, or one you minted) stops counting the moment you revoke it, even
-for proofs signed before. With the admin route of step 6:
+A leaked key (a councillor's or a player's: all of them yours) stops counting the moment you
+revoke it, even for proofs signed before. With the admin route of step 6:
 
 ```sh
 curl https://<your worker>/api/link/keys -H "Authorization: Bearer $LINK_ADMIN_TOKEN" \
@@ -217,18 +238,18 @@ answers the second line, `/oly discord cert OLK2...`. Both fit the game's chat l
   signature over the confirmation", with a public key instead of a secret. Your D1 then holds only
   public keys, so a leak or a dump forges nothing, and every player's addon (and your watcher's)
   can check each confirmation before it ever reaches you, so made-up proofs never arrive.
-- **No minting for High Councillors, and what that trusts.** Their addons make their own keys in
-  game, and Daniel's client certifies each one when they meet (the council authority,
-  `LINK_CA_PUBLIC`). Your Worker takes a councillor's key from the certificate the proof carries
-  and records it the first time it helps accept a link. The price: your Worker trusts what the
-  authority certifies, and one councillor's confirmation links a player. Left alone, that is any
-  character name the authority puts in a certificate. `LINK_COUNCIL_CHARACTERS` (step 3) gives
-  you the say back: only the councillors you list count. You can also revoke a key, or every key
-  of a character (step 7). `/oly discord key <id> <key>` exists exactly as you wrote it, for the
-  keys you do mint (player keys in step 9), followed by one `/oly discord cert` line.
+- **You mint the High Councillors' keys too, as you planned** (Konig's review). An earlier draft
+  had their addons make their own keys in game and Daniel's client certify each one (the council
+  authority, `LINK_CA_PUBLIC`), so nobody pasted anything. WoW's Lua has no cryptographic random
+  source, so such a key comes from a few tens of bits of frame timing, sits in plain text in the
+  SavedVariables, and its certificate would last a year. The addon still carries that path,
+  behind a switch Daniel leaves off: no councillor's addon makes a key or asks for a
+  certificate, his client signs none, and keys an earlier build made are removed at login. So
+  `/oly discord key <id> <key>` exists exactly as you wrote it, for every key you mint (step 6b,
+  and player keys in step 9), followed by one `/oly discord cert` line.
 - **`keyId` to public key, not to a secret.** The same table (`keys`, with `revoked` and
-  `revoked_at`), holding the public half. Councillors' ids are the first 12 hex of their key's
-  hash, so nobody names them; ids you mint are 6 to 16 of a-z and 0-9 (`hc01` is too short).
+  `revoked_at`), holding the public half. Ids you mint are 6 to 16 of a-z and 0-9 (`hc01` is too
+  short); 12 hex digits are kept for the council authority's keys.
 - **The draw: 3 of the drawn keys, not 3 of 5.** In mode `"a"`, each code draws M = max(20, 3%
   of the active player keys): all of them while there are 20 or fewer, 30 of 1000. The draw is
   signed into the code, so nobody picks who is drawn. Any 3 of the drawn keys, from 3 Discord
@@ -259,9 +280,9 @@ And, if you set them: the site token, and the name for "&lt;name&gt;'s watcher" 
 
 We send you:
 
-- The council authority's public key: `LINK_CA_PUBLIC` above.
-- The High Councillors' characters, for `LINK_COUNCIL_CHARACTERS`, and every change to the
-  High Council after that.
+- The High Councillors' characters and Discord accounts, for the keys you make them (step 6b),
+  and every change to the High Council after that. (Not the council authority's key: it stays
+  off, and `LINK_CA_PUBLIC` out.)
 - Our page: `https://dnl-gentile.github.io/olympus-addon/` (the redirect), origin
   `https://dnl-gentile.github.io` (`LINK_ORIGIN`).
 - What we do on our side: turn on GitHub Pages (Settings > Pages > Source: GitHub Actions; the
@@ -305,17 +326,14 @@ High Councillor online, the QR code, and the role.
 
 Every revocation goes through your admin route or the tool's SQL (step 7).
 
-- **A councillor's key** (leaked, or replaced with `/oly discord key new`, which prints the old id
-  for them to send you): `{"key_id": "<12 hex>", "revoke": true}`, or
-  `revokeKey(env, '<12 hex>')`. It stops counting at once, seen before or not.
-- **A councillor off the High Council**: take their character off `LINK_COUNCIL_CHARACTERS` (if
-  you set it), and send `{"character": "<Name-Realm>", "revoke": true}`, or
-  `revokeCharacter(env, 'Name-Realm')`:
-  every certificate the council authority signed for that character until now stops counting,
-  whatever key it names. A certificate the authority signs for it later counts again (a
-  councillor back on the council, with a new key), unless the character is off your list. In
-  Daniel's game, `/oly discord certified` lists what his client certified (key id, character,
-  end).
+- **A councillor's key** (leaked or lost; `/oly discord key off` in game prints its id for them
+  to send you): `{"key_id": "<id>", "revoke": true}`, or `revokeKey(env, '<id>')`. It stops
+  counting at once. Their new key: register it with `"replace": true` and send them the two new
+  lines ([WORKER.md](WORKER.md) step 8).
+- **A councillor off the High Council**: send `{"character": "<Name-Realm>", "revoke": true}`,
+  or `revokeCharacter(env, 'Name-Realm')`: every key you registered for that character stops
+  counting (and every certificate the council authority signed for it, should you ever set
+  `LINK_CA_PUBLIC`: then take it off `LINK_COUNCIL_CHARACTERS` too).
 - **A player key**: revoke it the same way; rotate with a new key and `"replace": true`.
 - **Your bot's key**: make a new one and send us its public key (the addon takes two while it
   changes). Once that release is out, switch `LINK_BACKEND_SEED` and `LINK_BACKEND_PUBLIC`, then
@@ -323,13 +341,13 @@ Every revocation goes through your admin route or the tool's SQL (step 7).
   its certificate with the new key, and you send that confirmer the new `/oly discord cert` line.
   The keys to renew:
   `wrangler d1 execute olympus-link --remote --command "SELECT key_id, character FROM keys WHERE revoked = 0 AND replaced_at IS NULL AND cert_exp IS NOT NULL"`.
-  Tell us when they have their new lines: only then do we take the old key out of the addon,
-  since a certificate the old key signed stops checking in players' addons once it is gone.
-  High Councillors' certificates are the authority's and do not change. Codes already handed
-  out stay good until they expire.
-- **The council authority's key**: `LINK_CA_PUBLIC` takes two, comma-separated, while it changes.
-  If its seed leaked, take the old key out of `LINK_CA_PUBLIC` at once: no certificate it signed
-  counts from then on (keys you registered yourself still do).
+  Tell us when they have their new lines, the High Councillors' included: only then do we take
+  the old key out of the addon, since a certificate the old key signed stops checking in
+  players' addons once it is gone. Codes already handed out stay good until they expire.
+- **The council authority's key** (only if you ever set `LINK_CA_PUBLIC`): it takes two,
+  comma-separated, while it changes. If its seed leaked, take the old key out of
+  `LINK_CA_PUBLIC` at once: no certificate it signed counts from then on (keys you registered
+  yourself still do).
 
 ## FAQ
 
@@ -377,9 +395,12 @@ everything.
 The page, no. It only forwards what the game signed, your Worker checks all of it, and the addon
 never sees your key's secret half.
 
-Daniel, yes, and so could anyone who copied his council authority's seed
-(`LinkCA.lua`, which only his own game loads). With `LINK_CA_PUBLIC` set, a key the authority
-certifies counts as a High Councillor's, and in mode `"c"` one councillor's confirmation links.
+Daniel, not as it ships: the council authority is off in the addon (a switch only he turns on),
+and while `LINK_CA_PUBLIC` stays out your Worker takes none of its certificates, so every key
+that counts is one you made. Should he turn it on and you set `LINK_CA_PUBLIC`, then yes, and so
+could anyone who copied his council authority's seed (`LinkCA.lua`, which only his own game
+loads): a key the authority certifies counts as a High Councillor's, and in mode `"c"` one
+councillor's confirmation links.
 Without `LINK_COUNCIL_CHARACTERS`, whoever holds that seed can certify a key for a character name
 you never heard of, confirm any character with it, and link it to any Discord account whose
 `/verify` code they have (their own, an alt's, a friend's); your `promote()` then gives the role.
@@ -400,12 +421,10 @@ keeps it with you:
 
 - **Cut it**: revoke a key or a character (step 7), or take `LINK_CA_PUBLIC` out, and no
   certificate of the authority counts (councillor keys you register yourself still do).
-- **Or hold every councillor key yourself**, as you planned: leave `LINK_CA_PUBLIC` out and mint
-  each councillor's key (`python3 scripts/link-keys.py confirmer <id> c --character
-  "<Name-Realm>" --owner <their Discord id> --bootstrap`, [WORKER.md](WORKER.md) step 8). Each
-  councillor then types your two lines in game. One who doesn't keeps a key made in game, which
-  your Worker ignores: players' addons may still ask them, and those links need another
-  councillor.
+- **Or hold every councillor key yourself**, as you planned and as it ships: leave
+  `LINK_CA_PUBLIC` out and mint each councillor's key (step 6b,
+  `python3 scripts/link-keys.py confirmer <id> c --character "<Name-Realm>" --owner <their Discord id> --bootstrap`,
+  [WORKER.md](WORKER.md) step 8). Each councillor types your two lines in game.
 
 ### Our origin is all of `dnl-gentile.github.io`: does that matter?
 
