@@ -30,8 +30,11 @@ local L = ns.L
 -- (or when the King names him). The epoch travels in the message: 1.0 clients never read 0.9's
 -- treasury (T8), and a later reset (another epoch) is never merged with 1.0's books.
 --   TB~1.0~<guild>~<opening>~<balance>~<all in>~<all out>~<week in>~<donors this week>~<Name,...>
---     ~<switches@time|->~<time@Name-Realm,...|->~<Name:copper,...>
+--     ~<switches@time|->~-~<Name:copper,...>
 --     ~<i|o|r|s:copper:Name:m|t:time[:item:count],...>~<item:count:time:Name,...>
+--     ~<transfers in>:<transfers out>
+--   (checked when it comes, and refused whole when it fails: ReadBook. The balance is the
+--   opening, plus all in, less all out, plus the transfers in, less the transfers out.)
 --   (the book's lines: i a donation, o a payment, r and s a transfer received and sent; items
 --   with copper 0. The switches only count from the Treasurer; the keepers field is "-", and
 --   read from nobody's book.)
@@ -1147,9 +1150,9 @@ function Treasury.Message(b)
 			local last = it.donors[1]
 			items[i] = ("%d:%d:%d:%s"):format(it.id, math.min(it.n, Treasury.MAX_COUNT), math.floor(tonumber(it.t) or 0), Clean(last and last.name or ""))
 		end
-		return ("TB~%s~%s~%d~%d~%d~%d~%d~%d~%s~%s~%s~%s~%s~%s"):format(Treasury.EPOCH, Clean(GetGuildInfo("player")), U(Treasury.Opening(b)),
+		return ("TB~%s~%s~%d~%d~%d~%d~%d~%d~%s~%s~%s~%s~%s~%s~%d:%d"):format(Treasury.EPOCH, Clean(GetGuildInfo("player")), U(Treasury.Opening(b)),
 			S(Treasury.Balance(b)), U(t.allIn), U(t.allOut), U(t.weekIn), math.min(#t.givers, 9999), table.concat(week, ","), flags, keepers,
-			table.concat(rank, ","), table.concat(lines, ","), table.concat(items, ","))
+			table.concat(rank, ","), table.concat(lines, ","), table.concat(items, ","), U(t.transIn), U(t.transOut))
 	end
 	-- Too long (it is rare): the week's names go first (they only count the donors), then items,
 	-- then the ranking's tail, then lines of the book; the top 25 donors last of all.
@@ -1233,50 +1236,126 @@ function Treasury.Relay(force)
 	end
 end
 
-local function Num(s)
-	local n = tonumber(s) or 0
-	return math.max(-Treasury.MAX_COPPER, math.min(n, Treasury.MAX_COPPER))
+-- A number as a book writes it: digits alone, `max` at most (Treasury.MAX_COPPER unless said,
+-- the most an honest client ever writes); nil otherwise.
+local function Amount(s, max)
+	if type(s) ~= "string" or #s > 12 or not s:match("^%d+$") then return nil end
+	local n = tonumber(s)
+	return n <= (max or Treasury.MAX_COPPER) and n or nil
+end
+-- A list's entries, empty ones too (an honest client writes none): {} for an empty list.
+local function Entries(s)
+	local out = {}
+	if s == "" then return out end
+	for e in (s .. ","):gmatch("([^,]*),") do out[#out + 1] = e end
+	return out
 end
 
--- A book (TB) as it came, of this era: its fields read, every name and item checked (only what
--- can be a name or an item is kept), as of `t`; and its fields. nil for another era's.
+-- A book (TB) as it came, of this era, as of `t`, checked (Konig's review of 1.0.0: it was
+-- taken as it came, its numbers clamped and its lists cut). An honest client never sends one
+-- that fails, so one that fails is refused whole (nil and why; our copy of that keeper's book
+-- stays):
+--   its shape: 16 fields, digits where the numbers go, each entry of its list's shape;
+--   its sizes: Treasury.ROOM in all, each list no longer than a book sends, amounts within
+--     MAX_COPPER and items within MAX_COUNT;
+--   its dates: none before FIRST_DAY, none more than DATE_SLACK ahead of the server's clock (a
+--     keeper's clock a little ahead: taken as of now), an item's 0 where its donor's line is gone;
+--   its sums: the balance is its opening, plus all in, less all out, plus the transfers in, less
+--     the transfers out; the week no more than all in; no more donors named than counted; the
+--     ranking in its order, each donor more than nothing, worth no more than all in; the lines
+--     of each kind worth no more than its total (a total at MAX_COPPER, clamped, proves nothing).
+-- What can't be a name is left out (the names reach the King's stream), nothing else. nil, nil
+-- for another era's book (0.9's, a later reset's): never merged with ours. Returns r, f.
+Treasury.FIRST_DAY = 1767225600  -- 2026-01-01 00:00 UTC: no line of a 1.0 book is older
+Treasury.DATE_SLACK = 86400      -- a keeper's clock may run a day ahead of the server's
 local function ReadBook(text, from, t)
+	if type(text) ~= "string" or text:sub(1, 3) ~= "TB~" then return nil, "not a book" end
+	if #text > Treasury.ROOM then return nil, "longer than a book is sent" end
 	local f = {}
 	for field in (text .. "~"):gmatch("([^~]*)~") do f[#f + 1] = field end
-	if f[1] ~= "TB" or #f < 15 then return nil end
-	-- Another era's book (0.9's, a later reset's) is never merged with ours.
-	if f[2] ~= Treasury.EPOCH then return nil end
-	local now = ns.Now()
-	local function Time(s) return math.min(tonumber(s) or 0, now) end
-	local r = { epoch = f[2], guild = f[3], from = from, t = t, opening = U(f[4]), balance = Num(f[5]), allIn = U(f[6]),
-		allOut = U(f[7]), week = U(f[8]), donors = math.min(tonumber(f[9]) or 0, 9999), weekNames = {}, rank = {}, book = {}, items = {} }
-	for name in f[10]:gmatch("[^,]+") do
-		local clean = ns.King.CleanName(name)
-		if clean and #r.weekNames < Treasury.WEEK_SENT then r.weekNames[#r.weekNames + 1] = clean end
+	if f[2] ~= Treasury.EPOCH then return nil, nil end
+	if #f ~= 16 then return nil, ("%d fields"):format(#f) end
+	local MAX = Treasury.MAX_COPPER
+	local opening, allIn, allOut, week, donors = Amount(f[4]), Amount(f[6]), Amount(f[7]), Amount(f[8]), Amount(f[9], 9999)
+	local balance = f[5]:match("^%-?%d+$") and #f[5] <= 12 and tonumber(f[5]) or nil
+	local tin, tout = f[16]:match("^(%d+):(%d+)$")
+	tin, tout = Amount(tin), Amount(tout)
+	if not (opening and allIn and allOut and week and donors and balance and tin and tout) or math.abs(balance) > MAX then
+		return nil, "its numbers"
 	end
-	for name, copper in f[13]:gmatch("([^,:]+):(%d+)") do
-		local clean = ns.King.CleanName(name)
-		if clean and #r.rank < Treasury.RANK_SENT then r.rank[#r.rank + 1] = { name = clean, money = U(copper) } end
+	if f[11] ~= "-" and not f[11]:match("^[01][01][01]@%d+$") then return nil, "its switches" end
+	-- (The keepers' field is read from nobody's book: "-", or the shape 1.0.0 builds before
+	-- Konig's review wrote.)
+	if f[12] ~= "-" and not f[12]:match("^%d+@") then return nil, "its keepers' field" end
+	local clock, now = Clock(), ns.Now()
+	local function When(s, unknown)
+		local n = Amount(s, math.huge)
+		if n == 0 and unknown then return 0 end
+		if not n or n < Treasury.FIRST_DAY or n > clock + Treasury.DATE_SLACK then return nil end
+		return math.min(n, now)
 	end
-	for entry in f[14]:gmatch("[^,]+") do
-		local kind, copper, name, how, when, rest = entry:match("^([iors]):(%d+):([^:]+):([mt]):(%d+)(.*)$")
-		local clean = kind and ns.King.CleanName(name)
-		local item, count = tostring(rest or ""):match("^:(%d+):(%d+)$")
-		item, count = tonumber(item), tonumber(count)
-		local ok = clean and (rest == "" or (item and item > 0 and item < 2 ^ 31 and count and count > 0))
-		if ok and #r.book < Treasury.BOOK_SENT then
+	local function Within(sum, total) return total >= MAX or sum <= total end
+	local r = { epoch = f[2], guild = f[3], from = from, t = t, opening = opening, balance = balance, allIn = allIn, allOut = allOut,
+		week = week, donors = donors, transIn = tin, transOut = tout, weekNames = {}, rank = {}, book = {}, items = {} }
+	-- The sums.
+	local expected = opening + allIn - allOut + tin - tout
+	local clamped = allIn >= MAX or allOut >= MAX or tin >= MAX or tout >= MAX or math.abs(expected) >= MAX
+	if not clamped and balance ~= expected then return nil, "a balance its totals don't add up to" end
+	if not Within(week, allIn) then return nil, "a week over all time" end
+	-- The week's donors.
+	local entries = Entries(f[10])
+	if #entries > Treasury.WEEK_SENT or #entries > donors then return nil, "the week's donors" end
+	for _, name in ipairs(entries) do
+		if name == "" then return nil, "the week's donors" end
+		local clean = ns.King.CleanName(name)
+		if clean then r.weekNames[#r.weekNames + 1] = clean end
+	end
+	-- The ranking.
+	entries = Entries(f[13])
+	if #entries > Treasury.RANK_SENT then return nil, "a ranking longer than a book sends" end
+	local sum, last = 0, math.huge
+	for _, e in ipairs(entries) do
+		local name, copper = e:match("^([^:]*):(%d+)$")
+		copper = Amount(copper)
+		if not copper or copper < 1 or copper > last then return nil, "the ranking" end
+		last, sum = copper, sum + copper
+		local clean = ns.King.CleanName(name)
+		if clean then r.rank[#r.rank + 1] = { name = clean, money = copper } end
+	end
+	if not Within(sum, allIn) then return nil, "a ranking over all in" end
+	-- The book's lines.
+	entries = Entries(f[14])
+	if #entries > Treasury.BOOK_SENT then return nil, "more lines than a book sends" end
+	local sums = { i = 0, o = 0, r = 0, s = 0 }
+	for _, e in ipairs(entries) do
+		local kind, copper, name, how, when, rest = e:match("^([iors]):(%d+):([^:]*):([mt]):(%d+)(.*)$")
+		local item, count
+		if rest and rest ~= "" then
+			item, count = rest:match("^:(%d+):(%d+)$")
+			item, count = Amount(item), Amount(count, Treasury.MAX_COUNT)
+			if not (item and item > 0 and count and count > 0) then return nil, "a line's item" end
+		end
+		copper, when = Amount(copper), When(when)
+		if not (kind and copper and when) or (item and copper ~= 0) or (not item and copper < 1) then return nil, "a line" end
+		sums[kind] = sums[kind] + copper
+		local clean = ns.King.CleanName(name)
+		if clean then
 			r.book[#r.book + 1] = { out = (kind == "o" or kind == "s") or nil, kind = (kind == "r" or kind == "s") and "transfer" or nil,
-				money = U(copper), name = clean, how = how == "m" and "mail" or "trade", t = Time(when),
-				item = item, count = item and math.min(count, Treasury.MAX_COUNT) or nil }
+				money = copper, name = clean, how = how == "m" and "mail" or "trade", t = when, item = item, count = count }
 		end
 	end
-	for entry in f[15]:gmatch("[^,]+") do
-		local id, n, when, name = entry:match("^(%d+):(%d+):(%d+):([^:]*)$")
-		id, n = tonumber(id), tonumber(n)
-		if id and id > 0 and id < 2 ^ 31 and n and n > 0 and #r.items < Treasury.ITEMS_SENT then
-			local clean = ns.King.CleanName(name)
-			r.items[#r.items + 1] = { id = id, n = math.min(n, Treasury.MAX_COUNT), t = Time(when), donors = clean and { { name = clean, t = Time(when) } } or {} }
-		end
+	if not (Within(sums.i, allIn) and Within(sums.o, allOut) and Within(sums.r, tin) and Within(sums.s, tout)) then
+		return nil, "lines over their totals"
+	end
+	-- The items donated.
+	entries = Entries(f[15])
+	if #entries > Treasury.ITEMS_SENT then return nil, "more items than a book sends" end
+	for _, e in ipairs(entries) do
+		local id, n, when, name = e:match("^(%d+):(%d+):(%d+):([^:]*)$")
+		id, n, when = Amount(id), Amount(n, Treasury.MAX_COUNT), When(when, true)
+		if not (id and id > 0 and n and n > 0 and when) then return nil, "an item" end
+		local clean = ns.King.CleanName(name)
+		r.items[#r.items + 1] = { id = id, n = n, t = when, donors = clean and { { name = clean, t = when } } or {} }
 	end
 	return r, f
 end
@@ -1297,7 +1376,10 @@ end
 function Treasury.HandleReport(dist, sender, text)
 	if dist ~= "CHANNEL" or type(text) ~= "string" then return end
 	local r, f = ReadBook(text, ns.FullName(sender), ns.Now())
-	if not r then return end
+	if not r then
+		if f then ns.Log("treasury book from %s refused: %s", tostring(sender), f) end
+		return
+	end
 	local guild = r.guild
 	if not Treasury.IsKeeperName(sender, guild) then
 		ns.Log("treasury book from %s (%s) ignored: not a keeper", tostring(sender), tostring(guild))
@@ -1318,13 +1400,23 @@ ns.Comm.Handle("TB", function(...) Treasury.HandleReport(...) end)
 -- His mail character's book as the Treasurer's client passes it on (TR): from the Treasurer
 -- himself (his name, set by the server, in <Olympus>), about his mail character alone, of this
 -- era; taken unless our copy of that book is as new (its own TB, dated when it came, always is).
+-- The book is checked as a keeper's own is (ReadBook), and its date too: DATE_SLACK ahead of the
+-- server's clock at most (Konig's review of 1.0.0).
 function Treasury.HandleRelay(dist, sender, text)
 	if dist ~= "CHANNEL" or type(text) ~= "string" or ns.faction == "Horde" then return end
 	local whose, at, book = text:match("^TR~([^~]+)~(%d+)~(TB~.*)$")
 	if not whose then return end
 	whose = ns.FullName(whose)
-	local r = ReadBook(book, whose, math.min(tonumber(at) or 0, ns.Now()))
-	if not r or not ns.IsTreasurer(sender, r.guild) or not ns.IsTreasurerMail(whose) then return end
+	at = Amount(at, math.huge)
+	if not at or at > Clock() + Treasury.DATE_SLACK then
+		return ns.Log("treasury relay from %s refused: its date", tostring(sender))
+	end
+	local r, why = ReadBook(book, whose, math.min(at, ns.Now()))
+	if not r then
+		if why then ns.Log("treasury relay from %s refused: %s", tostring(sender), why) end
+		return
+	end
+	if not ns.IsTreasurer(sender, r.guild) or not ns.IsTreasurerMail(whose) then return end
 	Treasury.Migrate()
 	for from, old in pairs(Reports()) do
 		if SameChar(from, whose) and type(old) == "table" and (tonumber(old.t) or 0) >= r.t then return end

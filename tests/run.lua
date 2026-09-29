@@ -6385,12 +6385,16 @@ test("Treasury review fixes: the week survives the update, the King's word reach
 			T.Toggle(T.Lines()[1]); t = T.Totals()
 			eq(t.weekIn, 20000); eq(t.allIn, 20000)
 			T.Toggle(T.Lines()[1]); eq(T.Totals().weekIn, 50000)
-			-- A book with a negative week (an older client's) is still read, the week as 0.
+			-- A book with a negative week is refused whole (Konig's review of 1.0.0: an honest
+			-- client never writes one, its week is never below nothing; until then it was read,
+			-- the week as 0). The same book with its week is taken.
 			AsKing()
 			local savedRank = ns.Roster.RankOf
 			ns.Roster.RankOf = function(n) if ns.FullName(n) == "Pyralis Ashandar-Realm" then return 1 end return savedRank(n) end
-			T.HandleReport("CHANNEL", "Pyralis Ashandar-Realm", "TB~1.0~Olympus~0~500~100~0~-5~1~Giver~-~-~Giver:100~~")
-			eq(T.Report().week, 0); eq(T.Report().balance, 500)
+			T.HandleReport("CHANNEL", "Pyralis Ashandar-Realm", "TB~1.0~Olympus~0~500~100~0~-5~1~Giver~-~-~Giver:100~~~400:0")
+			eq((ns.rdb.treasuryReports or {})["Pyralis Ashandar-Realm"], nil, "a negative week: refused")
+			T.HandleReport("CHANNEL", "Pyralis Ashandar-Realm", "TB~1.0~Olympus~0~500~100~0~5~1~Giver~-~-~Giver:100~~~400:0")
+			eq(T.Report().week, 5); eq(T.Report().balance, 500)
 			ns.Roster.RankOf = savedRank
 			-- Mail: counted when its gold arrives. Two clicks before then count once; a take the
 			-- server refuses counts nothing (the retry does); the mail that moves up into its place
@@ -7502,11 +7506,11 @@ test("#18: the Treasurer by his name alone: forged votes can't silence his treas
 		ns.rdb.guilds = { ["Olympus"] = Vouched({ total = 900, online = 90, zones = {}, t = w.clock, leader = "Asmongold Asmongler", realm = "Realm" },
 			"Atk-Realm", "Accomplice-Realm", "Third-Realm") }
 		eq(ns.Data.KnownRank("Pyralis Ashandar-Realm", "Olympus", true), nil, "the census doesn't name him")
-		T.HandleReport("CHANNEL", "Faker-Realm", "TB~1.0~Olympus~0~500~100~0~5~1~Giver~-~-~Giver:100~~")
+		T.HandleReport("CHANNEL", "Faker-Realm", "TB~1.0~Olympus~0~500~100~0~5~1~Giver~-~-~Giver:100~~~400:0")
 		eq(T.Report(), nil, "not the Treasurer")
-		T.HandleReport("CHANNEL", "Pyralis Ashandar-Realm", "TB~1.0~Olympus II~0~500~100~0~5~1~Giver~-~-~Giver:100~~")
+		T.HandleReport("CHANNEL", "Pyralis Ashandar-Realm", "TB~1.0~Olympus II~0~500~100~0~5~1~Giver~-~-~Giver:100~~~400:0")
 		eq(T.Report(), nil, "not for the King's guild")
-		T.HandleReport("CHANNEL", "Pyralis Ashandar-Realm", "TB~1.0~Olympus~0~500~100~0~5~1~Giver~-~-~Giver:100~~")
+		T.HandleReport("CHANNEL", "Pyralis Ashandar-Realm", "TB~1.0~Olympus~0~500~100~0~5~1~Giver~-~-~Giver:100~~~400:0")
 		eq(T.Report() and T.Report().balance, 500, "his treasury")
 		local bank = ("T9~Olympus~%d~1234~Main;2589x200"):format(w.clock)
 		B.HandleReport("CHANNEL", "Faker-Realm", bank)
@@ -17055,11 +17059,13 @@ test("1.0 the treasury's keepers: the King names them (his word alone, dated, ke
 			AsSoldier("Other")
 			ns.rdb.treasuryKeepers = nil
 			local full = at .. "@Test Keeper-Realm,Extra a-Realm,Extra b-Realm,Extra c-Realm"
-			T.HandleReport("CHANNEL", "Pyralis Ashandar-Realm", "TB~1.0~Olympus~0~0~0~0~0~0~~-~" .. full .. "~~~")
+			T.HandleReport("CHANNEL", "Pyralis Ashandar-Realm", "TB~1.0~Olympus~0~0~0~0~0~0~~-~" .. full .. "~~~~0:0")
+			assert(ns.rdb.treasuryReports["Pyralis Ashandar-Realm"], "his book is taken")
 			eq(#T.Keepers(), 0, "not from the Treasurer"); eq(T.KeeperByName("Extra c"), false)
 			K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", latest)
 			eq(#T.Keepers(), 4, "from the King"); eq(T.KeeperByName("Extra c"), true)
-			T.HandleReport("CHANNEL", "Test Keeper-Realm", "TB~1.0~Olympus~0~0~0~0~0~0~~-~" .. (at + 10) .. "@Test Keeper-Realm,Faker Guy-Realm~~~")
+			T.HandleReport("CHANNEL", "Test Keeper-Realm", "TB~1.0~Olympus~0~0~0~0~0~0~~-~" .. (at + 10) .. "@Test Keeper-Realm,Faker Guy-Realm~~~~0:0")
+			assert(ns.rdb.treasuryReports["Test Keeper-Realm"], "his book is taken")
 			eq(T.KeeperByName("Faker Guy"), false, "another keeper's repeat is not read")
 			eq(#T.Keepers(), 4)
 			-- The King's client repeats his list for late logins, not more often than his switches.
@@ -17491,7 +17497,7 @@ test("1.0 items: given by trade or mail, a donation (or a payment); in a deal, n
 			-- Sent in his book (within the pieces' room), merged on the King's screen.
 			local msg = T.Message()
 			assert(#msg <= T.ROOM, #msg)
-			local items = msg:match("~([^~]*)$")
+			local items = msg:match("~([^~]*)~[^~]*$") -- (the last field but one: the transfers close the book)
 			assert(items:find("^2589:60:%d+:Grace,2770:14:%d+:Dave"), items)
 			assert(msg:find("i:0:Grace:m:%d+:2589:10"), msg)
 			AsKing()
@@ -17526,7 +17532,7 @@ test("1.0 only keepers' books count: a non-keeper's treasury or bank is refused,
 			ns.splitNames = true
 			ns.rdb.treasuryKeepers = { at = w.clock, names = { "Test Keeper-Realm" } }
 			AsSoldier()
-			local book = "TB~1.0~%s~0~500~500~0~500~1~Giver~-~-~Giver:500~i:500:Giver:t:" .. w.clock .. "~"
+			local book = "TB~1.0~%s~0~500~500~0~500~1~Giver~-~-~Giver:500~i:500:Giver:t:" .. w.clock .. "~~0:0"
 			T.HandleReport("CHANNEL", "Faker Guy-Realm", book:format("Olympus"))
 			T.HandleReport("CHANNEL", "Pyralis Ashandar-Realm", book:format("Olympus II"))
 			T.HandleReport("CHANNEL", "Asmongold Asmongler-Realm", book:format("Olympus II"))
@@ -17537,12 +17543,18 @@ test("1.0 only keepers' books count: a non-keeper's treasury or bank is refused,
 			T.HandleReport("CHANNEL", "Asmongold Asmongler-Realm", book:format("Olympus"))
 			T.HandleReport("CHANNEL", "Pyralis Ashandar-Realm", book:format("Olympus"))
 			eq(#T.Report().keepers, 3); eq(T.Report().balance, 1500)
-			-- A forged line in a keeper's book: what can't be a name is dropped, nothing else.
-			T.HandleReport("CHANNEL", "Test Keeper-Realm", "TB~1.0~Olympus II~0~9~9~0~0~0~~-~-~Bad|Name:9~i:9:Bad Name Here:t:1,i:9:Ok:t:1:0:5~")
+			-- A forged name in a keeper's book: what can't be a name is dropped, nothing else.
+			T.HandleReport("CHANNEL", "Test Keeper-Realm", "TB~1.0~Olympus II~0~9~9~0~0~0~~-~-~Bad|Name:9~i:9:Bad Name Here:t:" .. w.clock .. "~~0:0")
 			local r = T.Report()
 			local banker
 			for _, p in ipairs(r.parts) do if p.name == "Test Keeper-Realm" then banker = p end end
-			eq(#banker.rank, 0); eq(#banker.book, 0, "a bad item and a bad name: dropped")
+			eq(#banker.rank, 0); eq(#banker.book, 0, "a bad name: dropped"); eq(banker.balance, 9)
+			-- A line dated in 1970, or an item of id 0, no honest client writes: since Konig's review
+			-- of 1.0.0 the whole book is refused and the copy we had stays (before, such lines alone
+			-- were dropped and the rest of the book taken).
+			T.HandleReport("CHANNEL", "Test Keeper-Realm", "TB~1.0~Olympus II~0~18~18~0~0~0~~-~-~~i:9:Ok:t:1,i:0:Ok:t:" .. w.clock .. ":0:5~~0:0")
+			for _, p in ipairs(T.Report().parts) do if p.name == "Test Keeper-Realm" then banker = p end end
+			eq(banker.balance, 9, "the copy we had")
 			-- The guild bank: a keeper's snapshot (the King's, the banker's), newest kept.
 			local bank = "T9~Olympus~%d~%d~Main;2589x200"
 			B.HandleReport("CHANNEL", "Faker Guy-Realm", bank:format(w.clock, 1))
@@ -17941,7 +17953,8 @@ test("1.0 the Treasurer's client passes on his mail character's book (it never r
 			eq(T.Report().balance, 470000, "an older copy passed on late")
 			-- A newer copy (its book changed since) replaces it.
 			w.clock = w.clock + 60
-			T.HandleRelay("CHANNEL", "Pyralis Ashandar-Realm", (tr[1]:gsub("^(TR~[^~]*~)%d+", "%1" .. w.clock):gsub("~450000~", "~480000~")))
+			-- (Its numbers add up, as every book's must since Konig's review of 1.0.0.)
+			T.HandleRelay("CHANNEL", "Pyralis Ashandar-Realm", (tr[1]:gsub("^(TR~[^~]*~)%d+", "%1" .. w.clock):gsub("~450000~50000~0~50000~", "~480000~80000~0~80000~")))
 			eq(T.Report().balance, 480000)
 			-- Kept private: no longer passed on, withdrawn from every screen.
 			ns.db.keeperShares[ANDARAI_KEY] = false
@@ -18314,6 +18327,129 @@ test("1.0.0 Konig's review: the treasury's keepers are set by the King and his S
 			eq(T.Message():match("^TB~[^~]*~[^~]*~[^~]*~[^~]*~[^~]*~[^~]*~[^~]*~[^~]*~[^~]*~[^~]*~([^~]*)~"), "-", "no keepers in his book")
 		end)
 		ns.splitNames = savedSplit
+		if not ok then error(err, 0) end
+	end)
+end)
+
+-- Konig's review of 1.0.0: a keeper's book (TB) was taken as it came, its numbers clamped and its
+-- lists cut, never checked: a balance its own totals don't add up to, a week larger than all
+-- time, a ranking worth more than all that came in, lines dated in 1970 or next year, lists
+-- longer than any book sends, all shown. It is now checked, and refused whole when it fails.
+test("1.0.0 Konig's review: a keeper's book is checked when it comes (shape, sizes, sums, dates) and refused whole when it fails", function()
+	WithThrone(function(w, K)
+		local T = ns.Treasury
+		local logs = {}
+		local savedLog = ns.Log
+		local ok, err = pcall(function()
+			ns.Log = function(fmt, ...) logs[#logs + 1] = tostring(fmt):format(...) end
+			local function Fields(msg)
+				local f = {}
+				for field in (msg .. "~"):gmatch("([^~]*)~") do f[#f + 1] = field end
+				return f
+			end
+			local function With(msg, changes)
+				local f = Fields(msg)
+				for i, v in pairs(changes) do f[i] = v end
+				return table.concat(f, "~")
+			end
+			-- The Treasurer's honest book: an opening, two gifts, a payment, a transfer from the
+			-- King (a keeper), an item given.
+			AsTreasurer()
+			T.SetOpening("1")
+			T.Record("Giver One", 30000, "trade", nil, { quiet = true })
+			T.Record("Giver Two", 20000, "mail", nil, { quiet = true })
+			T.Record("Paid Crafter", 5000, "mail", true, { quiet = true })
+			T.Record("Asmongold Asmongler", 7000, "trade", nil, { quiet = true })
+			T.Record("Giver One", 0, "mail", nil, { quiet = true, item = 2589, count = 20 })
+			local msg = T.Message()
+			local f = Fields(msg)
+			eq(#f, 16, "sixteen fields: the transfers ride the book")
+			eq(f[5], "62000"); eq(f[6], "50000"); eq(f[7], "5000"); eq(f[16], "7000:0")
+			-- A soldier: the honest book is taken.
+			AsSoldier()
+			local function Try(book, sender)
+				ns.rdb.treasuryReports = nil
+				T.HandleReport("CHANNEL", sender or "Pyralis Ashandar-Realm", book)
+				return ns.rdb.treasuryReports and ns.rdb.treasuryReports["Pyralis Ashandar-Realm"] or nil
+			end
+			local r = Try(msg)
+			assert(r, "the honest book is taken")
+			eq(r.balance, 62000); eq(r.allIn, 50000); eq(#r.rank, 2); eq(#r.book, 5); eq(#r.items, 1)
+			-- Each of these is refused whole (a line in the log says why), and nothing is kept.
+			local now = w.clock
+			local line = "i:100:Giver One:t:" .. now
+			local bad = {
+				["a field more"] = msg .. "~0",
+				["a field less (the shape before the transfers)"] = (msg:gsub("~[^~]*$", "")),
+				["a balance its totals don't add up to"] = With(msg, { [5] = "62001" }),
+				["transfers that don't add up either"] = With(msg, { [16] = "7001:0" }),
+				["a negative week"] = With(msg, { [8] = "-5" }),
+				["a number that is not digits"] = With(msg, { [6] = "5e4" }),
+				["an amount over the most a book holds"] = With(msg, { [4] = tostring(T.MAX_COPPER + 1) }),
+				["a week larger than all time"] = With(msg, { [8] = "50001" }),
+				["more donors named than counted"] = With(msg, { [9] = "0" }),
+				["a ranking worth more than all that came in"] = With(msg, { [13] = "Giver One:40000,Giver Two:20000" }),
+				["a ranking out of its order"] = With(msg, { [13] = "Giver Two:20000,Giver One:30000" }),
+				["a donor who gave nothing"] = With(msg, { [13] = "Giver One:30000,Giver Two:0" }),
+				["lines worth more than all that came in"] = With(msg, { [14] = "i:40000:Giver One:t:" .. now .. ",i:20000:Giver Two:t:" .. now }),
+				["a payment line over all that went out"] = With(msg, { [14] = "o:6000:Paid Crafter:m:" .. now }),
+				["a line dated in 1970"] = With(msg, { [14] = "i:100:Giver One:t:1" }),
+				["a line dated two days ahead"] = With(msg, { [14] = "i:100:Giver One:t:" .. (now + 2 * 86400) }),
+				["an item line with gold"] = With(msg, { [14] = "i:100:Giver One:m:" .. now .. ":2589:20" }),
+				["an item of id 0"] = With(msg, { [14] = "i:0:Giver One:m:" .. now .. ":0:20" }),
+				["a line of no known shape"] = With(msg, { [14] = "x:100:Giver One:t:" .. now }),
+				["an empty entry"] = With(msg, { [14] = line .. ",," .. line }),
+				["more lines than a book sends"] = With(msg, { [14] = (line .. ","):rep(T.BOOK_SENT) .. line }),
+				["a longer ranking than a book sends"] = With(msg, { [13] = ("Giver One:1,"):rep(T.RANK_SENT) .. "Giver One:1" }),
+				["more items than a book sends"] = With(msg, { [15] = ("2589:1:0:Giver One,"):rep(T.ITEMS_SENT) .. "2589:1:0:Giver One" }),
+				["an item dated ahead"] = With(msg, { [15] = "2589:20:" .. (now + 2 * 86400) .. ":Giver One" }),
+				["switches of no known shape"] = With(msg, { [11] = "12x@5" }),
+				["longer than a book is sent"] = With(msg, { [3] = "Olympus" .. ("x"):rep(T.ROOM) }),
+			}
+			for why, book in pairs(bad) do
+				local before = #logs
+				eq(Try(book), nil, why)
+				assert(#logs > before and logs[#logs]:find("refused", 1, true), "logged: " .. why)
+			end
+			-- What an honest client may send still passes: a line dated a little ahead (the keeper's
+			-- clock) is taken as of now, an item whose donor's line is gone has no date, a name that
+			-- can't be one is left out (the names reach the King's stream), nothing else.
+			r = Try(With(msg, { [14] = "i:100:Giver One:t:" .. (now + 3600), [15] = "2589:20:0:" }))
+			assert(r, "a clock a little ahead, an item of no date")
+			eq(r.book[1].t, now); eq(r.items[1].t, 0)
+			r = Try(With(msg, { [13] = "Giver One:30000,Bad|Name:20000" }))
+			assert(r, "a name that can't be one: left out, the book taken"); eq(#r.rank, 1)
+			-- A refused book leaves the copy we had: a forged richer one changes nothing.
+			Try(msg)
+			T.HandleReport("CHANNEL", "Pyralis Ashandar-Realm", With(msg, { [5] = "999999999" }))
+			eq(ns.rdb.treasuryReports["Pyralis Ashandar-Realm"].balance, 62000, "the copy we had")
+			-- The Treasurer's relay of his mail character's book is checked the same way, and its
+			-- date too.
+			ns.db.myCharacters = { [TREASURER_KEY] = true, [ANDARAI_KEY] = true }
+			AsTreasurer()
+			ns.db.keeperShares = { [TREASURER_KEY] = true, [ANDARAI_KEY] = true }
+			local mailBook = T.BookOf(ANDARAI, true)
+			mailBook.opening = 0
+			T.Record("Mail Giver", 900, "mail", nil, { quiet = true, book = mailBook })
+			w.sent = {}
+			T.Relay(true)
+			local tr
+			for _, s in ipairs(w.sent) do if s.msg:find("^TR~") then tr = s.msg end end
+			assert(tr, "relayed")
+			ns.db.myCharacters = nil
+			AsSoldier()
+			local function Relayed(text)
+				ns.rdb.treasuryReports = nil
+				T.HandleRelay("CHANNEL", "Pyralis Ashandar-Realm", text)
+				return ns.rdb.treasuryReports and ns.rdb.treasuryReports[ANDARAI] or nil
+			end
+			assert(Relayed(tr), "the honest relay is taken")
+			local head, book = tr:match("^(TR~[^~]+~%d+~)(TB~.*)$")
+			eq(Relayed(head .. With(book, { [5] = "901" })), nil, "a relayed book that doesn't add up")
+			eq(Relayed((tr:gsub("^(TR~[^~]+~)%d+~", "%1" .. (now + 2 * 86400) .. "~"))), nil, "a relay dated two days ahead")
+		end)
+		ns.Log = savedLog
+		ns.db.myCharacters = nil
 		if not ok then error(err, 0) end
 	end)
 end)
