@@ -313,8 +313,9 @@ shows the army something of it.
   the King, and up to 5 characters the King adds on the Treasury tab (**The treasury's
   keepers**, then **Add a treasury character**, by name or target; a click on one takes it off).
   The list is the King's word (or his Steward's, in his name): every client checks it comes from
-  his character or a Steward's, keeps it (it never runs out while he is away), and the
-  Treasurer's addon repeats it.
+  his character or a Steward's and keeps it (it never runs out while he is away); their addons
+  repeat it. No keeper's book carries it, the Treasurer's included (his could otherwise name
+  anyone a keeper).
 - **The Treasurer's mail**: Pyralis Andarai, his hunter where the treasury's mail goes, keeps a book of its own like him (pinned by name on his realm group, in any guild or none; gold between the two is a transfer, and outside an Olympus guild its book reaches the others through the Treasurer's addon).
 - **Each keeper's book**: gold and items a keeper receives by trade or mail are a donation, gold
   and items he gives a payment, each written down by itself in his own character's book, by his
@@ -656,7 +657,8 @@ few characters working together can still reach is said plainly further down
 - **Sender names cannot be forged.** The server stamps every message with its sender.
   - **The King and the Treasurer are known by name**, not by vote: only their characters can
     send their commands and the treasury (with the characters the King names to the treasury,
-    whose books count while his list names them). A report of `<Olympus>` naming anyone else as its
+    whose books count while his list names them: a list taken from his character or his
+    Steward's alone, never from a keeper's book). A report of `<Olympus>` naming anyone else as its
     leader counts for nothing, not even as a vote: no count of votes makes anyone else its King.
     Since 1.0.0 the King's decrees and [Lords] lines count by his name too, with no census.
     Their names count on their realm group only (Forever's PvP realms): a namesake anywhere

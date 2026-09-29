@@ -16987,7 +16987,7 @@ end
 
 local KING_KEY, TREASURER_KEY = "asmongold asmongler-realm", "pyralis ashandar-realm"
 
-test("1.0 the treasury's keepers: the King names them (his word alone, dated, kept), the Treasurer repeats it, nobody else", function()
+test("1.0 the treasury's keepers: the King names them (his word alone, dated, kept), nobody else, and no book repeats it", function()
 	WithThrone(function(w, K)
 		local T = ns.Treasury
 		local savedSplit = ns.splitNames
@@ -17046,15 +17046,19 @@ test("1.0 the treasury's keepers: the King names them (his word alone, dated, ke
 			-- Kept however long the King is away (a keeper's book must not leave the treasury then).
 			w.clock = w.clock + 30 * 86400
 			eq(T.KeeperByName("Test Keeper"), true, "no expiry")
-			-- The Treasurer's book repeats the King's latest list (members who never meet him get
-			-- it); a listed keeper's book repeating one is not read (he could put himself back).
+			-- No book carries the King's list (Konig's review of 1.0.0: until then the Treasurer's
+			-- repeated it, and his client could so name anyone a keeper): the Treasurer's says "-",
+			-- and a list in his book, or in a listed keeper's (he could put himself back), is not read.
 			AsTreasurer()
 			local word = T.Message():match("^TB~[^~]*~[^~]*~[^~]*~[^~]*~[^~]*~[^~]*~[^~]*~[^~]*~[^~]*~[^~]*~([^~]*)~")
-			eq(word, at .. "@Test Keeper-Realm,Extra a-Realm,Extra b-Realm,Extra c-Realm")
+			eq(word, "-", "the Treasurer's book carries no keepers")
 			AsSoldier("Other")
 			ns.rdb.treasuryKeepers = nil
-			T.HandleReport("CHANNEL", "Pyralis Ashandar-Realm", "TB~1.0~Olympus~0~0~0~0~0~0~~-~" .. word .. "~~~")
-			eq(#T.Keepers(), 4, "from the Treasurer"); eq(T.KeeperByName("Extra c"), true)
+			local full = at .. "@Test Keeper-Realm,Extra a-Realm,Extra b-Realm,Extra c-Realm"
+			T.HandleReport("CHANNEL", "Pyralis Ashandar-Realm", "TB~1.0~Olympus~0~0~0~0~0~0~~-~" .. full .. "~~~")
+			eq(#T.Keepers(), 0, "not from the Treasurer"); eq(T.KeeperByName("Extra c"), false)
+			K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", latest)
+			eq(#T.Keepers(), 4, "from the King"); eq(T.KeeperByName("Extra c"), true)
 			T.HandleReport("CHANNEL", "Test Keeper-Realm", "TB~1.0~Olympus~0~0~0~0~0~0~~-~" .. (at + 10) .. "@Test Keeper-Realm,Faker Guy-Realm~~~")
 			eq(T.KeeperByName("Faker Guy"), false, "another keeper's repeat is not read")
 			eq(#T.Keepers(), 4)
@@ -18254,6 +18258,62 @@ test("1.0.0 Konig's review: an ask for the early supporters the holder won't ans
 			eq(Asks(), 0)
 		end)
 		ns.splitNames, ns.After = saved.split, saved.after
+		if not ok then error(err, 0) end
+	end)
+end)
+
+-- Konig's review of 1.0.0: the Treasurer's book carried the King's list of keepers, and every
+-- client took it from there when newer than its own. The Treasurer's client (or a changed one)
+-- could so name any character a keeper, or take the King's keepers off, with a fresh date.
+test("1.0.0 Konig's review: the treasury's keepers are set by the King and his Stewards alone, never by the Treasurer's book", function()
+	WithThrone(function(w, K)
+		local T = ns.Treasury
+		local savedSplit = ns.splitNames
+		local ok, err = pcall(function()
+			ns.splitNames = true
+			local function WithField(msg, i, value)
+				local f = {}
+				for field in (msg .. "~"):gmatch("([^~]*)~") do f[#f + 1] = field end
+				f[i] = value
+				return table.concat(f, "~")
+			end
+			-- The King names a keeper; his list reaches the army.
+			AsKing()
+			T.AddKeeper("Test Keeper")
+			local list = LastSent(w)
+			local at = tonumber(list:match("^T1~K~%d+~Olympus~(%d+)~"))
+			-- The Treasurer's book (as his client builds it).
+			AsTreasurer()
+			ns.db.keeperShares = { [TREASURER_KEY] = true }
+			local his = T.Message()
+			-- A soldier who heard the King: a Treasurer's book naming others, dated later, changes nothing.
+			AsSoldier()
+			ns.rdb.treasuryKeepers = nil
+			K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", list)
+			eq(T.KeeperByName("Test Keeper"), true)
+			T.HandleReport("CHANNEL", "Pyralis Ashandar-Realm", WithField(his, 12, (at + 10) .. "@Faker Guy-Realm"))
+			assert(ns.rdb.treasuryReports["Pyralis Ashandar-Realm"], "his book itself is taken")
+			eq(T.KeeperByName("Faker Guy"), false, "the Treasurer names nobody")
+			eq(T.KeeperByName("Test Keeper"), true, "nor takes the King's keeper off")
+			eq(ns.rdb.treasuryKeepers.at, at)
+			-- A client that never heard the King: the Treasurer's word gives it no list.
+			AsSoldier("Other")
+			ns.rdb.treasuryKeepers = nil
+			T.HandleReport("CHANNEL", "Pyralis Ashandar-Realm", WithField(his, 12, at .. "@Faker Guy-Realm"))
+			eq(ns.rdb.treasuryKeepers, nil, "no list from the Treasurer")
+			eq(T.KeeperByName("Faker Guy"), false)
+			-- The King's own word still sets it, and his client repeats it for late logins.
+			K.HandleCommand("CHANNEL", "Asmongold Asmongler-Realm", list)
+			eq(T.KeeperByName("Test Keeper"), true, "from the King")
+			AsKing()
+			w.sent = {}
+			T.SendKeepers(true)
+			assert(LastSent(w):find("^T1~K~%d+~Olympus~" .. at .. "~Test Keeper%-Realm$"), LastSent(w))
+			-- The Treasurer's book no longer carries the list at all (nobody reads it there).
+			AsTreasurer()
+			eq(T.Message():match("^TB~[^~]*~[^~]*~[^~]*~[^~]*~[^~]*~[^~]*~[^~]*~[^~]*~[^~]*~[^~]*~([^~]*)~"), "-", "no keepers in his book")
+		end)
+		ns.splitNames = savedSplit
 		if not ok then error(err, 0) end
 	end)
 end)
