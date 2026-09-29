@@ -2494,6 +2494,9 @@ async function discordRole(env, method, discordId) {
 node --test web/test          # from the repository root (Node 22.13 or newer)
 ```
 
+CI runs them on every push and pull request (`.github/workflows/tests.yml`, on Node 22 with
+`node:sqlite`, and Python's `cryptography` for the key tool's tests), after the addon's checks.
+
 They run the page's logic and its one request, the core and this Worker (D1 is `node:sqlite`
 with the schema above, Discord a stub, `promote()` a recorder), the key tool, the inbox tool and
 the QR reading against the shared vectors, and nothing touches the network

@@ -910,6 +910,7 @@ scripts/lint-globals.sh                   # catches locals used before they are 
 bash tests/check-scripts.sh               # verify check-script failure handling (also run in CI)
 bash tests/sign-roundtrip.sh              # the High Council signing script end to end (needs python3)
 python3 tests/fixtures/make-link-vectors.py --check  # Olympus Link's shared vectors, sample, draw and inbox (needs "cryptography")
+node --test web/test/*.test.mjs          # Olympus Link's page, core, Worker and tools (Node 22.13 or newer; also run in CI)
 python3 scripts/make-borders.py [--check] # the border textures from media/borders/src (needs Pillow)
 python3 scripts/link-keys.py ca           # the author, once: Olympus Link's council authority (see below)
 python3 scripts/council-sign.py sign "First Surname,..." [realm group]  # the author: sign the High Council list
