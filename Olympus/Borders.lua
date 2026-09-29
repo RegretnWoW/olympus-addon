@@ -29,8 +29,9 @@ local L = ns.L
 --
 -- Cheap: a unit's border is worked out only when the target or focus changes, when its name or
 -- guild reaches the client (UNIT_NAME_UPDATE, PLAYER_GUILD_UPDATE), or when the census report of
--- its guild (or the High Council's list) changes, and only from lookups: its guild's report by
--- name, never a walk over every guild.
+-- its guild (or the High Council's list, or for a councillor the council's names shown or hidden
+-- on the King's screen) changes, and only from lookups: its guild's report by name, never a walk
+-- over every guild.
 --
 -- The author's preview (1.0.0): his character holds no Olympus rank, so his own portrait shows
 -- none of the borders he ships. `/oly borders test <tier>` (a tier's name, as /oly status prints
@@ -137,7 +138,8 @@ local function Facts(unit)
 	local who = ns.UnitFullName(unit)
 	if type(who) ~= "string" or who == "" then return nil end
 	local f = { guild = type(guild) == "string" and guild or nil }
-	f.council = ns.IsHighCouncillor(who) and not ns.CouncilMasked()
+	f.councillor = ns.IsHighCouncillor(who) == true
+	f.council = f.councillor and not ns.CouncilMasked()
 	if not f.guild or not ns.IsFederation(f.guild) then return f end
 	f.olympus, f.rankName = true, rankName
 	f.king = ns.IsKingGuild(f.guild) and (ns.IsKingCharacter(who) or (ns.KingCharacter() == nil and rankIndex == 0))
@@ -185,13 +187,18 @@ end
 -- What a unit's border (or nameplate mark) was worked out from, to know when it must be worked
 -- out again (Borders.Changed): its guild, that guild's census report as it stood (its time, and
 -- its votes: an outvoted report keeps the row and changes the votes, which Data.KnownRank reads),
--- the High Council's list, and our roster when his rank came from it (our own guild's, the server
--- giving none; Roster.lua makes a new table at each scan).
+-- the High Council's list, our roster when his rank came from it (our own guild's, the server
+-- giving none; Roster.lua makes a new table at each scan), and for a High Councillor whether the
+-- council's names were hidden (the King's screen while he streams, ns.CouncilMasked: the eye in
+-- the Realm, Asmon's view, becoming the King).
 local function Inputs(f)
 	local report = f and f.report
 	local row = type(report) == "table"
+	local masked
+	if f and f.councillor then masked = ns.CouncilMasked() == true end
 	return { guild = f and f.guild, report = report, rt = row and report.t or nil, vouch = row and report.vouch or nil,
-		council = ns.rdb and ns.rdb.council, roster = f and f.fromRoster and (ns.Roster and ns.Roster.byName or false) or nil }
+		council = ns.rdb and ns.rdb.council, roster = f and f.fromRoster and (ns.Roster and ns.Roster.byName or false) or nil,
+		masked = masked }
 end
 
 -- Has anything a unit's border or mark was worked out from (Inputs) changed since? Lookups only:
@@ -202,6 +209,7 @@ function Borders.Changed(k)
 	local row = type(report) == "table"
 	return report ~= k.report or (row and report.t or nil) ~= k.rt or (row and report.vouch or nil) ~= k.vouch
 		or (rdb and rdb.council) ~= k.council or (k.roster ~= nil and k.roster ~= (ns.Roster and ns.Roster.byName or false))
+		or (k.masked ~= nil and k.masked ~= (ns.CouncilMasked() == true))
 end
 
 local function Compute(unit, guid)
@@ -366,8 +374,9 @@ function Borders.RefreshAll(fresh)
 	for _, spec in ipairs(RIGS) do Borders.Refresh(spec.unit, fresh) end
 end
 
--- The census, the High Council's list or our roster changed: only a unit whose border was worked
--- out from something that changed since (Borders.Changed) is worked out again.
+-- The census, the High Council's list, our roster or the council's names hidden or shown on the
+-- King's screen changed: only a unit whose border was worked out from something that changed
+-- since (Borders.Changed) is worked out again.
 function Borders.CensusChanged()
 	if not installed then return end
 	for unit, k in pairs(known) do
@@ -513,6 +522,8 @@ end
 
 ns.On("LOGIN", function() Borders.RefreshAll(true) end)
 ns.On("DATA_CHANGED", function() Borders.CensusChanged() end)
+-- The King shows or hides the council's names (the eye in the Realm, ns.SetCouncilNamesShown).
+ns.On("COUNCIL_MASK_CHANGED", function() Borders.CensusChanged() end)
 ns.RegisterEvent("PLAYER_TARGET_CHANGED", function() Borders.Refresh("target") end)
 ns.RegisterEvent("UNIT_NAME_UPDATE", function(unit) if TRACKED[unit] then Borders.Refresh(unit, true) end end)
 -- A unit's guild reaching the client (or ours changing: every border again).

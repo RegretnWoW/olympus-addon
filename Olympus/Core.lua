@@ -714,9 +714,16 @@ end
 -- in the Realm shows each name cut short (ns.MaskName), and no council mark, icon or title goes
 -- with a name anywhere else (census rows, person card, Olympus chats), until he clicks the eye
 -- under the council's header. Never saved: every login and /reload starts hidden again.
+-- The council's borders and nameplate marks follow at once (Borders.lua, Nameplates.lua: they
+-- listen for COUNCIL_MASK_CHANGED, fired only when it flips).
 local councilNamesShown = false
 function ns.CouncilNamesShown() return councilNamesShown end
-function ns.SetCouncilNamesShown(on) councilNamesShown = on == true end
+function ns.SetCouncilNamesShown(on)
+	on = on == true
+	if on == councilNamesShown then return end
+	councilNamesShown = on
+	ns.Fire("COUNCIL_MASK_CHANGED")
+end
 function ns.CouncilMasked() return not councilNamesShown and ns.KingsScreen() end
 
 -- A councillor's name while hidden: its first four characters (UTF-8: a character is a lead

@@ -20358,6 +20358,18 @@ local function WithNameplates(fn, setup)
 			w.units[token] = nil
 			if not how.oursFirst then w.fire(event, token) end
 		end
+		-- A unit's faction changing (a duel begun or ended) as Forever sends it: UNIT_FACTION to the
+		-- plate showing it (NamePlateUnitFrameMixin:OnUnitFactionChanged writes its name again with
+		-- CompactUnitFrame_UpdateName, then looks again at whether it is a friend) and to us; ours
+		-- first where oursFirst says. (The game's plates look again at a friend on UNIT_FACTION and
+		-- when a unit comes to them, never on a bare name update.)
+		w.faction = function(token, oursFirst)
+			if oursFirst then w.fire("UNIT_FACTION", token) end
+			local p = w.plates[token]
+			local f = p and rawget(p, "frame")
+			if f then CompactUnitFrame_UpdateName(f) end
+			if not oursFirst then w.fire("UNIT_FACTION", token) end
+		end
 		w.frameOf = function(token) local p = w.plates[token] return p and rawget(p, "frame") end
 		-- Our texture on a unit frame (never two), and the mark it draws by its art.
 		w.texOf = function(frame)
@@ -20587,16 +20599,41 @@ test("1.0.0 nameplates: hostile players, creatures, our own plate and forbidden 
 		-- Our own plate (the personal resource display): not ours to mark.
 		w.add("nameplate1", w.units.player)
 		eq(w.mark("nameplate1"), nil, "our own plate")
-		-- A duel: a Raider hostile, then friendly again when it ends (the game writes the name again).
+		-- A duel: a Raider hostile, then friendly again when it ends (UNIT_FACTION: the game writes
+		-- the name again, and we hear it), whichever of the two runs first.
 		local duel = BorderUnit("Duelist", "Olympus Zeus", "Raider", 4, { hostile = true })
-		local f = w.add("nameplate2", duel)
+		w.add("nameplate2", duel)
 		eq(w.mark("nameplate2"), nil, "hostile")
 		duel.hostile = nil
-		CompactUnitFrame_UpdateName(f)
+		w.faction("nameplate2")
 		eq(w.mark("nameplate2"), "bronze", "friendly again")
 		duel.hostile = true
-		CompactUnitFrame_UpdateName(f)
+		w.faction("nameplate2", true)
 		eq(w.mark("nameplate2"), nil, "hostile again")
+		duel.hostile = nil
+		w.faction("nameplate2", true)
+		eq(w.mark("nameplate2"), "bronze", "friendly again, ours first")
+		-- A player mind-controlled (his flags): hostile, then ours again.
+		duel.hostile = true
+		w.fire("UNIT_FLAGS", "nameplate2")
+		eq(w.mark("nameplate2"), nil, "UNIT_FLAGS: hostile")
+		duel.hostile = nil
+		w.fire("UNIT_FLAGS", "nameplate2")
+		eq(w.mark("nameplate2"), "bronze", "UNIT_FLAGS: friendly")
+		-- Our own faction changing: every plate looked at again.
+		local other = BorderUnit("Capt", "Olympus Zeus", "Titan", 1)
+		w.add("nameplate6", other)
+		eq(w.mark("nameplate6"), "silver")
+		duel.hostile, other.hostile = true, true
+		w.fire("UNIT_FACTION", "player")
+		eq(w.mark("nameplate2"), nil, "ours: every plate"); eq(w.mark("nameplate6"), nil, "ours: every plate")
+		duel.hostile, other.hostile = nil, nil
+		w.fire("UNIT_FACTION", "player")
+		eq(w.mark("nameplate2"), "bronze"); eq(w.mark("nameplate6"), "silver")
+		w.remove("nameplate6")
+		duel.hostile = true
+		w.faction("nameplate2")
+		eq(w.mark("nameplate2"), nil, "hostile again, to the end")
 		w.add("nameplate3", BorderUnit("Hogger", "Olympus Zeus", nil, nil, { npc = true }))
 		eq(w.mark("nameplate3"), nil, "a creature")
 		-- A forbidden plate (friendly plates in an instance): the game gives it to its own code only;
@@ -20980,6 +21017,177 @@ test("1.0.0 nameplates preview: anyone but the author gets what /oly borders say
 		w.B.PreviewLines(lines)
 		eq(#lines, 0, "no Workshop lines")
 	end)
+end)
+
+-- The game's calls a stretch of code makes (the unit, guild, style and plate functions, secret
+-- value checks, the names' getters of `frames`), and the calls on the game's frames logged
+-- (IsForbidden): how many in all, how many each.
+local PLATE_CALLS = { "UnitExists", "UnitIsPlayer", "UnitIsFriend", "UnitCanAttack", "UnitIsUnit", "UnitGUID", "UnitFactionGroup",
+	"UnitFullName", "GetUnitName", "GetGuildInfo", "IsInGuild", "InCombatLockdown", "issecretvalue" }
+local UNIT_QUERIES = { "UnitExists", "UnitIsPlayer", "UnitIsFriend", "UnitCanAttack", "UnitIsUnit", "UnitGUID", "UnitFactionGroup",
+	"UnitFullName", "GetUnitName", "GetGuildInfo", "IsInGuild", "GetCurrentStyle", "GetNamePlateForUnit", "GetNamePlates" }
+local function PlateCalls(w, frames, fn)
+	local n, by, restore = 0, {}, {}
+	local function Wrap(t, key, label)
+		local original = rawget(t, key)
+		if type(original) ~= "function" then return end
+		restore[#restore + 1] = function() rawset(t, key, original) end
+		rawset(t, key, function(...) n = n + 1; by[label] = (by[label] or 0) + 1; return original(...) end)
+	end
+	for _, name in ipairs(PLATE_CALLS) do Wrap(_G, name, name) end
+	Wrap(C_InputInterfaceStyle, "GetCurrentStyle", "GetCurrentStyle")
+	Wrap(C_NamePlate, "GetNamePlateForUnit", "GetNamePlateForUnit")
+	Wrap(C_NamePlate, "GetNamePlates", "GetNamePlates")
+	Wrap(C_Texture, "GetAtlasInfo", "GetAtlasInfo")
+	for _, f in ipairs(frames) do
+		for _, m in ipairs({ "GetStringWidth", "GetWidth", "GetJustifyH", "IsShown" }) do Wrap(f.name, m, "name:" .. m) end
+	end
+	local logged = #w.log
+	local ok, err = pcall(fn)
+	for i = #restore, 1, -1 do restore[i]() end
+	if not ok then error(err, 0) end
+	return n, by, #w.log - logged
+end
+local function NoUnitQuery(by, what)
+	for _, name in ipairs(UNIT_QUERIES) do eq(by[name], nil, what .. ": " .. name) end
+end
+
+test("1.0.0 nameplates: the game's name updates (every health change, mouseover and target change, on every compact unit frame) ask nothing about a creature's or a hostile player's plate, look only at a marked plate's name, and a raid frame gets IsForbidden alone", function()
+	WithNameplates(function(w)
+		w.internal("LOGIN")
+		local frames, members = {}, {}
+		for i = 1, 20 do frames[#frames + 1] = w.add("nameplate" .. i, BorderUnit("Mob" .. i, nil, nil, nil, { npc = true })) end
+		for i = 1, 20 do
+			local f = w.add("nameplate" .. (20 + i), BorderUnit("Axe" .. i, "Olympus Zeus", "Raider", 4))
+			frames[#frames + 1], members[i] = f, f
+		end
+		local enemy = w.add("nameplate41", BorderUnit("Duelist", "Olympus Zeus", "Raider", 4, { hostile = true }))
+		local stranger = w.add("nameplate42", BorderUnit("Trader", "Stormwind Traders", "Veteran", 3))
+		frames[#frames + 1], frames[#frames + 2] = enemy, stranger
+		eq(w.mark("nameplate1"), nil); eq(w.mark("nameplate21"), "bronze"); eq(w.mark("nameplate41"), nil); eq(w.mark("nameplate42"), nil)
+		-- A raid frame (Blizzard's CompactRaidFrame: a compact unit frame, not a plate's) the same
+		-- hook sees.
+		local raid = { label = "CompactRaidFrame1", unit = "raid1", name = { text = "", shown = true } }
+		raid.IsForbidden = function() w.log[#w.log + 1] = "CompactRaidFrame1:IsForbidden?"; return false end
+		local n, by, logged = PlateCalls(w, frames, function() CompactUnitFrame_UpdateName(frames[1]) end)
+		eq(n, 0, "a creature's plate: nothing asked"); eq(logged, 0)
+		n, by, logged = PlateCalls(w, frames, function() CompactUnitFrame_UpdateName(enemy) end)
+		eq(n, 0, "a hostile player's plate: nothing asked"); eq(logged, 0)
+		n, by, logged = PlateCalls(w, frames, function() CompactUnitFrame_UpdateName(stranger) end)
+		eq(n, 0, "a friendly player outside Olympus: nothing asked"); eq(logged, 0)
+		n, by, logged = PlateCalls(w, frames, function() CompactUnitFrame_UpdateName(members[1]) end)
+		NoUnitQuery(by, "a marked plate"); eq(logged, 0)
+		assert(n <= 8, "a marked plate: its name alone (shown, justified, its width), " .. n .. " calls")
+		n, by, logged = PlateCalls(w, frames, function() CompactUnitFrame_UpdateName(raid) end)
+		eq(n, 0, "a raid frame: nothing asked"); eq(logged, 1, "IsForbidden alone")
+		-- A mouseover (UPDATE_MOUSEOVER_UNIT: every compact unit frame's name again).
+		n, by, logged = PlateCalls(w, frames, function()
+			for _, f in ipairs(frames) do CompactUnitFrame_UpdateName(f) end
+			CompactUnitFrame_UpdateName(raid)
+		end)
+		NoUnitQuery(by, "a mouseover over 42 plates")
+		assert(n <= 20 * 8, "a mouseover over 42 plates: the 20 marked plates' names alone, " .. n .. " calls")
+		eq(logged, 1)
+		-- And the marks as they were, following their names all the same.
+		eq(w.mark("nameplate21"), "bronze"); eq(w.mark("nameplate1"), nil); eq(w.mark("nameplate41"), nil)
+		local u = w.units.nameplate21
+		u.display = u.name .. "-Faraway"
+		CompactUnitFrame_UpdateName(members[1])
+		eq(w.texOf(members[1]).point, MarkPoint(members[1], #u.display), "a longer name followed")
+		OnlyOurTextures(w)
+	end)
+end)
+
+test("1.0.0 nameplates: leaving an Olympus guild hides every mark at once and the game's name updates bring none back; our guild reaching the client brings them", function()
+	WithNameplates(function(w)
+		w.internal("LOGIN")
+		local f = w.add("nameplate1", BORDER_KING)
+		eq(w.mark("nameplate1"), "gold")
+		local me = w.units.player
+		w.units.player = BorderUnit("Tester", "Stormwind Traders", "Hero", 2)
+		w.fire("PLAYER_GUILD_UPDATE", "player")
+		eq(w.mark("nameplate1"), nil, "no longer a member")
+		CompactUnitFrame_UpdateName(f); f:UpdateAnchors()
+		eq(w.mark("nameplate1"), nil, "a name update brings nothing back")
+		w.add("nameplate2", BorderUnit("Axe", "Olympus Zeus", "Raider", 4))
+		eq(w.mark("nameplate2"), nil)
+		w.units.player = me
+		w.fire("PLAYER_GUILD_UPDATE", "player")
+		eq(w.mark("nameplate1"), "gold"); eq(w.mark("nameplate2"), "bronze")
+	end)
+	-- Logged in before the client knows our guild: none; the census coming in once it does (before
+	-- PLAYER_GUILD_UPDATE): every plate.
+	WithNameplates(function(w)
+		w.internal("LOGIN")
+		w.add("nameplate1", BORDER_KING)
+		eq(w.mark("nameplate1"), nil, "our guild not known yet")
+		w.units.player = BORDER_ME
+		w.internal("DATA_CHANGED")
+		eq(w.mark("nameplate1"), "gold")
+	end, function(w) w.units.player = BorderUnit("Tester", nil, nil, nil) end)
+end)
+
+test("1.0.0 nameplates: the King showing or hiding the council's names (the eye, Asmon's view) takes the council's marks and borders off his screen at once, on the plates already up", function()
+	-- The King's own screen: the eye in the Realm (ns.SetCouncilNamesShown).
+	WithNameplates(function(w)
+		local savedFire, fired = ns.Fire, 0
+		ns.Fire = function(name)
+			if name == "COUNCIL_MASK_CHANGED" then fired = fired + 1; w.internal(name) end
+		end
+		local ok, err = pcall(function()
+			w.internal("LOGIN")
+			ns.rdb.council.names["pleb"] = true
+			local sage = BorderUnit("Sage Owl", "Wanderers", "Member", 3)
+			w.add("nameplate1", sage)
+			w.add("nameplate2", BorderUnit("Pleb", "Olympus Zeus", "Peasant", 6))
+			w.add("nameplate3", BorderUnit("Axe", "Olympus Zeus", "Raider", 4))
+			w.target(sage)
+			eq(ns.CouncilMasked(), true, "hidden by default on his screen")
+			eq(w.mark("nameplate1"), nil); eq(w.mark("nameplate2"), "member"); eq(w.mark("nameplate3"), "bronze")
+			eq(w.shown("target"), nil)
+			local n = w.computedMarks()
+			ns.SetCouncilNamesShown(true)
+			eq(fired, 1)
+			eq(w.mark("nameplate1"), "silver", "names shown: the plate up already follows"); eq(w.mark("nameplate2"), "silver")
+			eq(w.mark("nameplate3"), "bronze"); eq(w.shown("target"), "silver-elite")
+			eq(w.computedMarks(), n + 2, "the councillors' plates alone")
+			ns.SetCouncilNamesShown(false)
+			eq(fired, 2)
+			eq(w.mark("nameplate1"), nil, "hidden again: no council mark beside his name on the stream")
+			eq(w.mark("nameplate2"), "member", "a member like any other"); eq(w.shown("target"), nil, "nor his border")
+			assert(not w.N.StatusLine():find("silver", 1, true), w.N.StatusLine())
+			-- The game's updates and the census leave it so.
+			CompactUnitFrame_UpdateName(w.frameOf("nameplate1")); w.frameOf("nameplate2"):UpdateAnchors()
+			w.internal("DATA_CHANGED")
+			eq(w.mark("nameplate1"), nil); eq(w.mark("nameplate2"), "member")
+			-- The same again: nothing fired, nothing worked out.
+			n = w.computedMarks()
+			ns.SetCouncilNamesShown(false)
+			eq(fired, 2); eq(w.computedMarks(), n)
+			ns.rdb.council.names["pleb"] = nil
+		end)
+		ns.Fire = savedFire
+		if not ok then error(err, 0) end
+	end, function(w) w.units.player = BORDER_KING; ns.me = "Asmongold Asmongler-Realm" end)
+	-- The author's Asmon's view (King.SetDevView fires DATA_CHANGED): his screen is the King's.
+	WithNameplates(function(w)
+		local savedFire = ns.Fire
+		ns.Fire = function(name) if name == "DATA_CHANGED" then w.internal(name) end end
+		local ok, err = pcall(function()
+			w.internal("LOGIN")
+			local sage = BorderUnit("Sage Owl", "Wanderers", "Member", 3)
+			w.add("nameplate1", sage)
+			w.target(sage)
+			eq(w.mark("nameplate1"), "silver"); eq(w.shown("target"), "silver-elite")
+			ns.King.SetDevView(true)
+			eq(ns.CouncilMasked(), true, "Asmon's view: the King's screen")
+			eq(w.mark("nameplate1"), nil, "hidden with the view"); eq(w.shown("target"), nil)
+			ns.King.SetDevView(false)
+			eq(w.mark("nameplate1"), "silver", "back without it"); eq(w.shown("target"), "silver-elite")
+		end)
+		ns.Fire = savedFire
+		if not ok then error(err, 0) end
+	end, function(w) w.units.player = MARK_AUTHOR; ns.me = "Faladoriel Skylance-ClassicBetaPvP" end)
 end)
 
 test("1.0.0 nameplates: the member's star ships as a 32 x 32 32-bit TGA with alpha, drawn by scripts/make-borders.py (no ring, clear corners); README and CurseForge list /oly nameplates", function()

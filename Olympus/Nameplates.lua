@@ -42,7 +42,15 @@ local L = ns.L
 --
 -- Cheap: a plate's mark is worked out when a unit is added to it, when its name or guild reaches
 -- the client, and when what it was worked out from changes (Borders.Changed: its guild's census
--- report, the High Council's list, our roster), only for the plates shown.
+-- report, the High Council's list, our roster, the council's names hidden or shown on the King's
+-- screen), only for the plates shown. The game's name update runs many times a second (every
+-- health change, mouseover, target and soft-target change, on every compact unit frame, raid
+-- frames too), so there nothing is asked of the game about the unit: whether it is a friendly
+-- player is worked out when it comes to the plate and again when the game says its faction or
+-- flags changed (UNIT_FACTION, UNIT_FLAGS: Forever's own plates look again at a friend on
+-- UNIT_FACTION alone), and whether the marks are on (Active) is kept until something it comes from
+-- may have changed. A creature's or a hostile player's plate stops at a table lookup; a raid frame
+-- after IsForbidden; a marked plate looks again only at its name (shown, and where it starts).
 --
 -- Switches: `/oly borders off` hides them with the borders, `/oly nameplates on|off` the marks
 -- alone (on by default).
@@ -79,11 +87,12 @@ Nameplates.ORDER = { "gold", "silver", "bronze", "member" }
 Nameplates.PREVIEW = { ["gold-elite"] = "gold", ["silver-elite"] = "silver", gold = "silver", silver = "silver",
 	["bronze-elite"] = "bronze", bronze = "bronze", member = "member" }
 
-local rigs = {}   -- [a plate's unit frame] = { tex, frame, name, unit, shown, dressed, at }
+local rigs = {}   -- [a plate's unit frame] = { tex, frame, name, unit, friend, shown, dressed, point, x, size }
 local byUnit = {} -- [nameplate unit] = the rig of the plate showing it
 local known = {}  -- [nameplate unit] = { guid, mark, and what it was worked out from (Borders.MarkOf) }
 local mine        -- his own name's marks (the preview): { tex = { [mark] = texture }, shown }; false: no such frame
 local hooked, waiting = false, false
+local active      -- Active() as last worked out; nil: to work out again (IsActive)
 Nameplates.stats = { computed = 0 } -- (tests, /oly status)
 
 -- Values the client hides from addons (secret values) count as none.
@@ -100,6 +109,15 @@ function Nameplates.Enabled() return not (ns.db and ns.db.nameplates == false) e
 -- On: the borders and the marks on, with mouse and keyboard, for a member of an Olympus guild.
 local function Active()
 	return ns.Borders.Enabled() == true and Nameplates.Enabled() and not ns.GamepadUI() and ns.IsMember() == true
+end
+
+-- Active(), kept (the game's name updates come many times a second): worked out again after
+-- anything it comes from may have changed. RefreshAll (the two switches, the preview, a login,
+-- our own guild, the end of a fight), CensusChanged (the census: the King's guild, say) and a
+-- switch of interface style forget it.
+local function IsActive()
+	if active == nil then active = Active() end
+	return active
 end
 
 local function InCombat() return InCombatLockdown ~= nil and InCombatLockdown() == true end
@@ -152,14 +170,30 @@ local function IsPlateUnit(unit) return type(unit) == "string" and unit:find("^n
 
 -- A friendly player's plate, as the game decides it (NamePlateUnitFrameMixin:UpdateIsFriend: a
 -- player of the other faction in our party outside an instance can be attacked, so is not
--- friendly), and not our own (the personal resource display).
+-- friendly), and not our own (the personal resource display). Nil while the client hides it
+-- (asked again next time).
 local function FriendlyPlayer(unit)
 	local player = UnitIsPlayer(unit)
+	if Secret(player) then return nil end
+	if player ~= true then return false end -- (a creature: nothing more to ask)
 	local me = UnitIsUnit and UnitIsUnit(unit, "player")
 	local friend = UnitIsFriend and UnitIsFriend("player", unit)
 	local attack = UnitCanAttack and UnitCanAttack("player", unit)
-	if Secret(player, me, friend, attack) then return false end
-	return player == true and me ~= true and friend == true and attack ~= true
+	if Secret(me, friend, attack) then return nil end
+	return me ~= true and friend == true and attack ~= true
+end
+
+-- Is the plate's unit a friendly player? Worked out once for the unit on the plate (fresh: again).
+local function Friend(rig, fresh)
+	if fresh or rig.friend == nil then
+		local unit = rig.unit
+		if not UnitExists(unit) then
+			rig.friend = nil
+			return false
+		end
+		rig.friend = FriendlyPlayer(unit)
+	end
+	return rig.friend == true
 end
 
 -- A mark's art on a texture: the game's atlas at the texture's size (the bronze without colour,
@@ -210,13 +244,12 @@ local function Place(rig)
 	local point, x = Spot(rig.name)
 	if not point then return false end
 	local size = Size()
-	local at = point .. " " .. x .. " " .. size
-	if rig.at == at then return true end
+	if rig.point == point and rig.x == x and rig.size == size then return true end
 	if not CanTouch(rig.tex) then return "later" end
 	rig.tex:ClearAllPoints()
 	rig.tex:SetSize(size, size)
 	rig.tex:SetPoint("RIGHT", rig.name, point, x, 0)
-	rig.at = at
+	rig.point, rig.x, rig.size = point, x, size
 	return true
 end
 
@@ -259,10 +292,11 @@ local function Compute(unit, guid)
 end
 
 -- A plate's mark again: the one worked out for its unit while it is the same player (fresh: work
--- it out again); the preview's tier for any friendly player while the author's preview is on.
+-- it out again, and whether it is a friendly player); the preview's tier for any friendly player
+-- while the author's preview is on.
 local function Refresh(rig, fresh)
 	local unit = rig.unit
-	if not unit or not Active() or not UnitExists(unit) or not FriendlyPlayer(unit) then return Hide(rig) end
+	if not unit or not IsActive() or not Friend(rig, fresh) then return Hide(rig) end
 	local preview = ns.Borders.Preview()
 	if preview then return Show(rig, Nameplates.PREVIEW[preview]) end
 	local guid = UnitGUID and UnitGUID(unit)
@@ -272,8 +306,20 @@ local function Refresh(rig, fresh)
 	Show(rig, k.mark)
 end
 
+-- The game wrote the name of the same friendly player again (his health, a mouseover, a target
+-- change): nothing asked about him, the mark worked out for him put back by his name, or hidden
+-- with it.
+local function Again(rig)
+	if not IsActive() then return Hide(rig) end
+	local preview = ns.Borders.Preview()
+	if preview then return Show(rig, Nameplates.PREVIEW[preview]) end
+	local k = known[rig.unit]
+	if not k then return Refresh(rig) end
+	Show(rig, k.mark)
+end
+
 -- Once, with mouse and keyboard: the hook on the game's name updates (it runs for every compact
--- unit frame, raid frames too: those leave at once).
+-- unit frame, raid frames too: those leave after IsForbidden).
 local function Install()
 	if hooked or ns.GamepadUI() then return end
 	hooked = true
@@ -311,10 +357,10 @@ local function Attach(unit, frame, name)
 		if rig.unit and byUnit[rig.unit] == rig then byUnit[rig.unit] = nil end
 		local old = byUnit[unit]
 		if old and old ~= rig then
-			old.unit = nil
+			old.unit, old.friend = nil, nil
 			Hide(old)
 		end
-		rig.unit = unit
+		rig.unit, rig.friend = unit, nil
 		byUnit[unit] = rig
 	end
 	return rig
@@ -322,7 +368,7 @@ end
 
 local function Detach(rig)
 	if rig.unit and byUnit[rig.unit] == rig then byUnit[rig.unit] = nil end
-	rig.unit = nil
+	rig.unit, rig.friend = nil, nil
 	Hide(rig)
 end
 
@@ -365,7 +411,7 @@ end
 
 -- His own name's mark: the preview's while it is on, none otherwise.
 local function RefreshMine()
-	local preview = Active() and ns.Borders.Preview() or nil
+	local preview = IsActive() and ns.Borders.Preview() or nil
 	local key = preview and Nameplates.PREVIEW[preview] or nil
 	if key and mine == nil then InstallMine() end
 	ShowMine(key)
@@ -379,7 +425,8 @@ end
 -- Every plate shown now (C_NamePlate.GetNamePlates: the game leaves forbidden ones out), and his
 -- own name's mark.
 function Nameplates.RefreshAll(fresh)
-	if not Active() then return HideAll() end
+	active = nil
+	if not IsActive() then return HideAll() end
 	Install()
 	local list = C_NamePlate and C_NamePlate.GetNamePlates
 	local ok, plates = false, nil
@@ -402,7 +449,7 @@ end
 -- NAME_PLATE_UNIT_ADDED. The game's own handler gives the plate its unit frame: where ours runs
 -- first there is none yet, and the hook on its name update (just after) puts the mark on.
 function Nameplates.Added(unit, again)
-	if not Active() then return end
+	if not IsActive() then return end
 	Install()
 	local frame, name = FrameOf(unit)
 	if not frame then
@@ -421,45 +468,70 @@ function Nameplates.Removed(unit)
 end
 
 -- After the game's CompactUnitFrame_UpdateName: a plate's name written, shown or hidden. The game
--- runs it for every compact unit frame (raid frames, and its forbidden plates too): a frame with
--- no mark of ours is looked at only while the marks are on, and a forbidden one no further than
--- IsForbidden.
+-- runs it many times a second for every compact unit frame (raid frames, and its forbidden plates
+-- too). A plate of ours showing the same unit: a table lookup for a creature or a hostile player,
+-- its name looked at for a friendly one. A frame with no mark of ours is looked at only while the
+-- marks are on, and a forbidden one no further than IsForbidden.
 function Nameplates.NameUpdated(frame)
 	if type(frame) ~= "table" then return end
 	local rig = rigs[frame]
-	if not rig then
-		if not Active() or Forbidden(frame) then return end
+	if rig then
 		local unit = frame.unit
-		if not IsPlateUnit(unit) then return end
-		local f, name = FrameOf(unit)
-		if f ~= frame then return end
-		rig = Attach(unit, frame, name)
-		if not rig then return end
-	elseif not Active() then
-		return Hide(rig)
-	elseif frame.unit ~= rig.unit then
-		if not IsPlateUnit(frame.unit) then return Detach(rig) end
-		Attach(frame.unit, frame, rig.name)
+		if unit ~= nil and unit == rig.unit then
+			if rig.friend == false then return end -- (hidden since the unit came)
+			if rig.friend == true then return Again(rig) end
+			return Refresh(rig)
+		end
+		if not IsPlateUnit(unit) then return Detach(rig) end
+		Attach(unit, frame, rig.name)
+		return Refresh(rig)
 	end
-	Refresh(rig)
+	if not IsActive() or Forbidden(frame) then return end
+	local unit = frame.unit
+	if not IsPlateUnit(unit) then return end
+	local f, name = FrameOf(unit)
+	if f ~= frame then return end
+	rig = Attach(unit, frame, name)
+	if rig then Refresh(rig) end
 end
 
 -- After the game's UpdateAnchors on a plate's unit frame: the name may have moved.
 function Nameplates.Follow(frame)
 	local rig = rigs[frame]
 	if not rig or not rig.shown then return end
-	if not Active() then return Hide(rig) end
+	if not IsActive() then return Hide(rig) end
 	Show(rig, rig.shown)
 end
 
--- The census, the High Council's list or our roster changed: only a plate shown whose mark was
--- worked out from something that changed since is worked out again.
+-- The census, the High Council's list, our roster or the council's names hidden or shown on the
+-- King's screen changed: only a plate shown whose mark was worked out from something that changed
+-- since is worked out again. (The census may also make our guild Olympus, or not: every plate.)
 function Nameplates.CensusChanged()
-	if not Active() then return end
+	local was = active
+	active = nil
+	if not IsActive() then return HideAll() end
+	if was == false then return Nameplates.RefreshAll(true) end
 	for unit, k in pairs(known) do
 		local rig = byUnit[unit]
 		if rig and ns.Borders.Changed(k) then Refresh(rig, true) end
 	end
+end
+
+-- A unit's faction or flags changed (a duel begun or ended, a player mind-controlled): whether
+-- its plate shows a friendly player is worked out again; ours: every plate's (Forever's own plates
+-- look again at a friend on UNIT_FACTION, for their unit and ours).
+function Nameplates.FactionChanged(unit, all)
+	if all then
+		for _, rig in pairs(byUnit) do
+			rig.friend = nil
+			Refresh(rig)
+		end
+		return
+	end
+	local rig = byUnit[unit]
+	if not rig then return end
+	rig.friend = nil
+	Refresh(rig)
 end
 
 function Nameplates.Report()
@@ -501,6 +573,8 @@ end
 
 ns.On("LOGIN", function() Nameplates.RefreshAll(true) end)
 ns.On("DATA_CHANGED", function() Nameplates.CensusChanged() end)
+-- The King shows or hides the council's names (the eye in the Realm, ns.SetCouncilNamesShown).
+ns.On("COUNCIL_MASK_CHANGED", function() Nameplates.CensusChanged() end)
 -- Registered where the client has them.
 pcall(ns.RegisterEvent, "NAME_PLATE_UNIT_ADDED", function(unit) Nameplates.Added(unit) end)
 pcall(ns.RegisterEvent, "NAME_PLATE_UNIT_REMOVED", function(unit) Nameplates.Removed(unit) end)
@@ -514,6 +588,8 @@ ns.RegisterEvent("PLAYER_GUILD_UPDATE", function(unit)
 	local rig = byUnit[unit]
 	if rig then Refresh(rig, true) end
 end)
+pcall(ns.RegisterEvent, "UNIT_FACTION", function(unit) Nameplates.FactionChanged(unit, unit == "player") end)
+pcall(ns.RegisterEvent, "UNIT_FLAGS", function(unit) if unit ~= "player" then Nameplates.FactionChanged(unit) end end)
 ns.RegisterEvent("PLAYER_REGEN_ENABLED", function()
 	if not waiting then return end
 	waiting = false
@@ -523,6 +599,11 @@ end)
 -- every mark hides at once; either way they are looked at again just after.
 pcall(ns.RegisterEvent, "INPUT_DEVICE_INTERFACE_TRANSITION", function(newMode)
 	local gamepad = Enum and Enum.InputDeviceInterfaceType and Enum.InputDeviceInterfaceType.Gamepad
-	if gamepad ~= nil and newMode == gamepad then HideAll() end
+	if gamepad ~= nil and newMode == gamepad then
+		active = false
+		HideAll()
+	else
+		active = nil
+	end
 	ns.After(0.2, "nameplates style", function() Nameplates.RefreshAll(true) end)
 end)
