@@ -144,10 +144,12 @@ our origin only (never `*`); your site token, if you set one; the body
 the limits before Discord is asked anything (20 a minute per IP address, an IPv6 one by its
 /64, 10 an hour per sign-in, 300 a minute for the whole page); who the player is, asked of Discord (`GET /oauth2/@me`: your application, scope `identify`, not
 expired; the token is stored nowhere); 10 tries an hour per account; then the checks you
-already do plus the new ones (below), then it claims the code, calls your `promote(discordId)`,
-and records the character. When `promote` throws (or returns `false`), the code is freed again
-and the player can send the same proof a minute later; return `{ ok: false, reason:
-'not-in-server' }` when the member is not in the server, and the page tells them to join first.
+already do plus the new ones (below), then it claims the code, records the character, and only
+then calls your `promote(discordId)`, so no account gets the role for a character another one
+holds (Konig's review). When `promote` throws (or returns `false`), the record is taken back, the
+code is freed again and the player can send the same proof a minute later; return `{ ok: false,
+reason: 'not-in-server' }` when the member is not in the server, and the page tells them to join
+first.
 The answer is JSON with a `status` (`linked`, `rejected`, `error`) and a `reason` the page
 explains in English or Portuguese.
 

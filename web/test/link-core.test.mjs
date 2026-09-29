@@ -120,6 +120,35 @@ function page(method, { body, origin = PAGE_ORIGIN, headers = {} } = {}) {
 	return new Request('https://bot.example.workers.dev/proof', init);
 }
 
+// A link for `code` (issueCode's answer) that council01's councillor confirmed, signed at `issued`.
+async function councillorLink(code, requester, issued) {
+	const k = KEYS.council01;
+	const b = { requester, guild: 'Olympus II', faction: 'Alliance', nonce: '0123456789abcdef', R: code.R };
+	b.tag = await linkTag(code.token.slice(code.token.lastIndexOf('.') + 1), requester);
+	const p = { issued, keyId: k.key_id, confirmer: k.character, gv: 'r' };
+	p.sig = b64url(sign(k.seed_hex, signedMessage(b, p)));
+	b.proofs = [{ ...p, pub: k.public_b64url, tier: 'c', certExp: k.cert_exp, certSig: k.cert.slice(k.cert.lastIndexOf('.') + 1) }];
+	return { R: code.R, text: buildBundle(b) };
+}
+
+// Another request's write, landing once between acceptProof's check and its claim of the code.
+function beforeClaim(write) {
+	const prepare = env.DB.prepare;
+	env.DB.prepare = (sql) => {
+		const s = prepare(sql);
+		if (!sql.startsWith('UPDATE codes SET used = ? WHERE r = ? AND used IS NULL')) return s;
+		env.DB.prepare = prepare;
+		const claim = (...args) => ({
+			...s.bind(...args),
+			run: async () => {
+				await write();
+				return s.bind(...args).run();
+			},
+		});
+		return { ...s, bind: claim };
+	};
+}
+
 async function proof(text, token, opts = {}) {
 	const res = await handleProof(page('POST', { body: { text, discordToken: token }, ...opts }), env, { promote, demote, fetchImpl: opts.fetchImpl || discordStub() });
 	return { http: res.status, headers: res.headers, ...(await res.json()) };
@@ -303,6 +332,29 @@ describe('with D1', { skip: probe ? false : 'node:sqlite is not available in thi
 			await setup();
 			assert.equal((await acceptProof(env, B1.bundle, { discordId: USER_C.id, promote: yes })).status, 'linked');
 		}
+		// The link is recorded before promote() runs (Konig's review), and taken back whole when it
+		// fails: the council authority's key it recorded first goes too, and the account's own
+		// character linked before is as it was.
+		await setup();
+		const recorded = [];
+		const failing = async () => {
+			recorded.push((await row('SELECT discord_id FROM members WHERE character = ?', B5.requester)).discord_id, (await row('SELECT COUNT(*) AS n FROM council_keys')).n);
+			return false;
+		};
+		assert.equal((await acceptProof(env, B5.bundle, { discordId: USER_C.id, promote: failing })).reason, 'discord');
+		assert.deepEqual(recorded, [USER_C.id, 1], 'the character was the account\'s while promote() ran');
+		assert.equal(await row('SELECT 1 AS x FROM members WHERE character = ?', B5.requester), null);
+		assert.equal((await row('SELECT COUNT(*) AS n FROM council_keys')).n, 0);
+		assert.equal((await row('SELECT COUNT(*) AS n FROM used')).n, 0);
+		assert.equal((await row('SELECT used FROM codes WHERE r = ?', B5.R)).used, null);
+		assert.equal((await acceptProof(env, B5.bundle, { discordId: USER_C.id, promote })).status, 'linked');
+		assert.equal((await row('SELECT COUNT(*) AS n FROM council_keys')).n, 1);
+		await setup();
+		await env.DB.prepare('INSERT INTO members (character, discord_id, guild, gv, faction, r, linked) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(B1.requester, USER_C.id, 'Olympus I', 'c', 'Horde', '1111111111', 1780000000).run();
+		assert.equal((await acceptProof(env, B1.bundle, { discordId: USER_C.id, promote: async () => false })).reason, 'discord');
+		assert.deepEqual({ ...(await row('SELECT discord_id, guild, gv, faction, r, linked FROM members WHERE character = ?', B1.requester)) }, { discord_id: USER_C.id, guild: 'Olympus I', gv: 'c', faction: 'Horde', r: '1111111111', linked: 1780000000 });
+		assert.equal((await row('SELECT used FROM codes WHERE r = ?', B1.R)).used, null);
+		assert.equal((await row('SELECT COUNT(*) AS n FROM used')).n, 0);
 	});
 
 	test('acceptProof: a character linked to another account stays with it; one proof never moves it, and nobody is demoted (Konig\'s review)', async () => {
@@ -326,20 +378,74 @@ describe('with D1', { skip: probe ? false : 'node:sqlite is not available in thi
 		assert.equal(again.status, 'linked', again.message);
 		assert.deepEqual({ ...(await row('SELECT discord_id, guild, r FROM members WHERE character = ?', B1.requester)) }, { discord_id: USER_C.id, guild: 'Olympus II', r: B1.R });
 		assert.deepEqual(roles, [['promote', USER_C.id, B1.requester]]);
-		// Linked by another account between the check and the record (promote() runs in between):
-		// nothing is recorded, the code is freed, and the character stays the other account's.
+		// Linked by another account between the check and the record: nothing is recorded, the code
+		// is freed, the character stays the other account's, and this account gets no role (Konig's
+		// review: it was given one before, promote() running before the record).
 		await setup();
 		roles = [];
-		const racing = async (discordId, verdict) => {
-			await promote(discordId, verdict);
-			await linkedTo(OLD);
-		};
-		const raced = await acceptProof(env, B1.bundle, { discordId: USER_C.id, promote: racing, demote });
+		beforeClaim(() => linkedTo(OLD));
+		const raced = await acceptProof(env, B1.bundle, { discordId: USER_C.id, promote, demote });
 		assert.deepEqual([raced.status, raced.reason], ['rejected', 'linked-elsewhere'], raced.message);
 		assert.equal((await row('SELECT discord_id FROM members WHERE character = ?', B1.requester)).discord_id, OLD);
 		assert.equal((await row('SELECT used FROM codes WHERE r = ?', B1.R)).used, null);
 		assert.equal((await row('SELECT COUNT(*) AS n FROM used')).n, 0);
-		assert.deepEqual(roles.map((x) => x[0]), ['promote'], 'never a demote');
+		assert.deepEqual(roles, [], 'no promote for the account that lost, and never a demote');
+		// The account's own character, deleted and linked by another account in between: the same.
+		await setup();
+		await linkedTo(USER_C.id);
+		roles = [];
+		beforeClaim(async () => {
+			await env.DB.prepare('DELETE FROM members WHERE character = ?').bind(B1.requester).run();
+			await linkedTo(OLD);
+		});
+		const taken = await acceptProof(env, B1.bundle, { discordId: USER_C.id, promote, demote });
+		assert.deepEqual([taken.status, taken.reason], ['rejected', 'linked-elsewhere'], taken.message);
+		assert.equal((await row('SELECT discord_id FROM members WHERE character = ?', B1.requester)).discord_id, OLD);
+		assert.equal((await row('SELECT used FROM codes WHERE r = ?', B1.R)).used, null);
+		assert.equal((await row('SELECT COUNT(*) AS n FROM used')).n, 0);
+		assert.deepEqual(roles, []);
+	});
+
+	test('acceptProof: two accounts link one character at the same moment: one gets it and the role, the other neither (Konig\'s review)', async () => {
+		await setup();
+		// A guild member's character types two codes: his own, and one from a friend's account.
+		const MEMBER = { id: '200000000000000005', username: 'guild.member' };
+		const FRIEND = { id: '200000000000000009', username: 'not.in.guild' };
+		const mine = await councillorLink(await issueCode(env, MEMBER), 'Guild Member-ClassicBetaPvP', NOW - 20);
+		const theirs = await councillorLink(await issueCode(env, FRIEND), 'Guild Member-ClassicBetaPvP', NOW - 10);
+		// Discord takes a while to give a role; both links arrive together (two tabs, or the page and the watcher).
+		const slow = async (discordId, verdict) => {
+			await new Promise((done) => setTimeout(done, 50));
+			await promote(discordId, verdict);
+		};
+		const [a, b] = await Promise.all([
+			acceptProof(env, mine.text, { discordId: MEMBER.id, promote: slow }),
+			acceptProof(env, theirs.text, { discordId: FRIEND.id, promote: slow }),
+		]);
+		const [won, lost] = a.status === 'linked' ? [[a, MEMBER, mine], [b, FRIEND, theirs]] : [[b, FRIEND, theirs], [a, MEMBER, mine]];
+		assert.deepEqual([won[0].status, won[0].reason], ['linked', 'linked'], won[0].message);
+		assert.deepEqual([lost[0].status, lost[0].reason], ['rejected', 'linked-elsewhere'], lost[0].message);
+		assert.deepEqual(roles, [['promote', won[1].id, 'Guild Member-ClassicBetaPvP']], 'one character, one role');
+		assert.deepEqual((await env.DB.prepare('SELECT character, discord_id FROM members WHERE discord_id IN (?, ?)').bind(MEMBER.id, FRIEND.id).all()).results.map((m) => ({ ...m })), [{ character: 'Guild Member-ClassicBetaPvP', discord_id: won[1].id }]);
+		assert.equal((await row('SELECT used FROM codes WHERE r = ?', lost[2].R)).used, null, 'the other code stays unused');
+		assert.equal(await row('SELECT 1 AS x FROM used WHERE r = ?', lost[2].R), null);
+		// Sent again, it is refused before anything happens.
+		assert.equal((await acceptProof(env, lost[2].text, { discordId: lost[1].id, promote: slow })).reason, 'linked-elsewhere');
+		assert.equal(roles.length, 1);
+		// The same through the routes: one link from the page, the other from the watcher's inbox.
+		await setup();
+		roles = [];
+		const page1 = await councillorLink(await issueCode(env, USER_C), 'Guild Member-ClassicBetaPvP', NOW - 20);
+		const inbox1 = await councillorLink(await issueCode(env, USER_A), 'Guild Member-ClassicBetaPvP', NOW - 10);
+		const [res, box] = await Promise.all([
+			handleProof(page('POST', { body: { text: page1.text, discordToken: 'token-of-some-player-0001' } }), env, { promote: slow, demote, fetchImpl: discordStub() }).then((x) => x.json()),
+			acceptInbox(env, { bundles: [inbox1.text] }, { promote: slow }),
+		]);
+		const reasons = [res.reason, box.results[0].reason].sort();
+		assert.deepEqual(reasons, ['linked', 'linked-elsewhere']);
+		assert.equal(roles.length, 1, 'one character, one role');
+		const holder = (await row('SELECT discord_id FROM members WHERE character = ?', 'Guild Member-ClassicBetaPvP')).discord_id;
+		assert.deepEqual(roles[0].slice(0, 2), ['promote', holder]);
 	});
 
 	test('handleProof: CORS for the page\'s origin only, exact, never a wildcard nor credentials', async () => {

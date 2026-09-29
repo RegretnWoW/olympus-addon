@@ -26,8 +26,8 @@
 // The functions, by what they are for:
 //   codes      issueCode(env, user) -> { ok, token, command, reply }        (your /verify)
 //   proofs     checkProof(env, text, { discordId })   reads only: the verdict
-//              acceptProof(env, text, { discordId, promote })   checks, claims the code, calls your
-//              promote(discordId), records the link (and frees the code if promote fails)
+//              acceptProof(env, text, { discordId, promote })   checks, claims the code, records the
+//              link, calls your promote(discordId) (and takes it all back if promote fails)
 //              handleProof(request, env, { promote, demote })   the whole POST /proof, CORS included
 //              (and a player's own "delete my link": forgetOwnLink)
 //   watcher    acceptInbox(env, body, { promote }) / handleInbox(request, env, { promote })
@@ -429,7 +429,7 @@ async function examine(env, input, opts = {}) {
 	// A character linked to one account never moves to another on a link (Konig's review: one
 	// councillor's proof, or a leaked councillor seed, would take anyone's link and role). Its owner
 	// removes the link first, or you do.
-	const owner = await DB.prepare('SELECT discord_id FROM members WHERE character = ?').bind(b.requester).first();
+	const owner = await DB.prepare('SELECT * FROM members WHERE character = ?').bind(b.requester).first();
 	if (owner && owner.discord_id !== code.discord_id) return { verdict: linkedElsewhere(b) };
 
 	const checks = [];
@@ -461,7 +461,7 @@ async function examine(env, input, opts = {}) {
 		};
 	}
 	const verdict = linkVerdict(code, b, gv, counted, `${b.requester} can be linked to @${code.username}.`);
-	return { verdict, b, code, counted, valid, gv, owned: !!owner };
+	return { verdict, b, code, counted, valid, gv, owned: owner || null };
 }
 
 function linkedElsewhere(b) {
@@ -487,13 +487,14 @@ function linkVerdict(code, b, gv, counted, message) {
 	};
 }
 
-// The check, then the link: claims the code (two deliveries of the same link may race), calls
-// promote(discordId, verdict) to give the role, then records the character. When promote fails,
-// or the record does, the code is freed again, so the same link works on the next try.
+// The check, then the link: claims the code (two deliveries of the same link may race), records
+// the character, then calls promote(discordId, verdict) to give the role. When promote fails, the
+// record is undone and the code freed again, so the same link works on the next try.
 //   promote(discordId, verdict): yours. Resolve (with nothing, true or { ok: true }) when the role is
 //     given; throw, or return false or { ok: false }, when it is not ({ ok: false, reason:
 //     'not-in-server' } when the member is not in the server: the player is told to join first).
-// A link never takes a character from another account, nor anyone's role (linked-elsewhere).
+// A link never takes a character from another account, nor anyone's role (linked-elsewhere), and
+// an account is given the role only once the character is recorded as its own.
 // Answers { ok, status: 'linked' | 'rejected' | 'error', reason, message, R, and for a link:
 // discordId, username, character, guild, faction, guildCheck, guildKnown, characters }.
 export async function acceptProof(env, text, opts = {}) {
@@ -509,30 +510,22 @@ export async function acceptProof(env, text, opts = {}) {
 		return { ...linkedAnswer(v, 'already', v.message), characters: await charactersOf(env, code.discord_id) };
 	}
 
-	// Claim the code first (two deliveries of the same link may race), then the role. Anything
-	// that fails after the claim releases it, so the same link works on the next try.
+	// Claim the code first (two deliveries of the same link may race), then record the link, and
+	// only then give the role (Konig's review: two accounts linking the same character at the same
+	// moment each got the role, though only one got the character). Anything that fails after the
+	// claim undoes the record and releases the code, so the same link works on the next try.
 	const claim = await DB.prepare('UPDATE codes SET used = ? WHERE r = ? AND used IS NULL').bind(t, b.R).run();
 	if (!claim.meta || claim.meta.changes !== 1) return reject('code-used', 'This code was already used.', b.R);
-	const release = async () => {
-		try {
-			await DB.prepare('UPDATE codes SET used = NULL WHERE r = ? AND used = ?').bind(b.R, t).run();
-		} catch (err) {
-			console.error('olympus-link: could not release code', b.R, err && err.stack ? err.stack : err);
-		}
-	};
-	const role = await promoted(promote, code.discord_id, v);
-	if (!role.ok) {
-		await release();
-		if (role.reason === 'not-in-server') return reject('not-in-server', 'Join the Olympus Discord server first, then send the link again.', b.R);
-		return failure('discord', 'Discord did not take the role change: try again in a minute.', { R: b.R });
-	}
+	const council = x.valid.filter((c) => c.key.council);
+	let wrote;
 	try {
-		await DB.batch([
+		wrote = await DB.batch([
 			...x.counted.map((c) => DB.prepare('INSERT OR IGNORE INTO used (r, key_id, t) VALUES (?, ?, ?)').bind(b.R, c.proof.keyId, t)),
 			// The council authority's keys whose proofs checked in this link: recorded now, not before.
-			...x.valid.filter((c) => c.key.council).map((c) => recordCouncilKey(DB, c, t)),
-			// The account's own character again (a new code) is updated; a new one is inserted, and
-			// one another account linked since the check fails the whole batch: nothing moves.
+			...council.flatMap((c) => recordCouncilKey(DB, c, t)),
+			// Last: the account's own character again (a new code) is updated, and one another account
+			// holds now is left as it is (nothing changes: refused below); a new one is inserted, and
+			// one another account linked since the check fails the whole batch: nothing is written.
 			x.owned
 				? DB.prepare(
 						'INSERT INTO members (character, discord_id, guild, gv, faction, r, linked) VALUES (?, ?, ?, ?, ?, ?, ?) ' +
@@ -541,13 +534,52 @@ export async function acceptProof(env, text, opts = {}) {
 				: DB.prepare('INSERT INTO members (character, discord_id, guild, gv, faction, r, linked) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(b.requester, code.discord_id, b.guild, x.gv, b.faction, b.R, t),
 		]);
 	} catch (err) {
-		await release();
+		// Nothing was written (a batch is all or nothing): the code only is released.
+		try {
+			await DB.prepare('UPDATE codes SET used = NULL WHERE r = ? AND used = ?').bind(b.R, t).run();
+		} catch (e) {
+			console.error('olympus-link: could not release code', b.R, e && e.stack ? e.stack : e);
+		}
 		const holder = await DB.prepare('SELECT discord_id FROM members WHERE character = ?').bind(b.requester).first();
 		if (holder && holder.discord_id !== code.discord_id) return linkedElsewhere(b);
 		console.error('olympus-link: could not record the link', b.R, err && err.stack ? err.stack : err);
 		return failure('server', 'The link could not be recorded: send it again in a minute.', { R: b.R });
 	}
+	// The council authority's keys this link recorded first (each one's INSERT OR IGNORE wrote a row).
+	const first = council.filter((c, i) => changed(wrote[x.counted.length + 2 * i]));
+	if (!changed(wrote[wrote.length - 1])) {
+		await undo(DB, x, t, first);
+		return linkedElsewhere(b);
+	}
+	const role = await promoted(promote, code.discord_id, v);
+	if (!role.ok) {
+		await undo(DB, x, t, first);
+		if (role.reason === 'not-in-server') return reject('not-in-server', 'Join the Olympus Discord server first, then send the link again.', b.R);
+		return failure('discord', 'Discord did not take the role change: try again in a minute.', { R: b.R });
+	}
 	return { ...linkedAnswer(v, 'linked', `${b.requester} is now linked to @${code.username}.`), characters: await charactersOf(env, code.discord_id) };
+}
+
+const changed = (r) => !!(r && r.meta && Number(r.meta.changes) > 0);
+
+// A link's record taken back, when the role was not given or the character is another account's:
+// the character as it was before (the account's own again: its earlier link; a new one: gone),
+// the proofs that counted, the council authority's keys it recorded first, and the code's claim.
+// Each only if this link wrote it, so nothing another link wrote meanwhile goes.
+async function undo(DB, x, t, first) {
+	const { b, code, owned } = x;
+	try {
+		await DB.batch([
+			owned
+				? DB.prepare('UPDATE members SET guild = ?, gv = ?, faction = ?, r = ?, linked = ? WHERE character = ? AND discord_id = ? AND r = ?').bind(owned.guild, owned.gv, owned.faction, owned.r, owned.linked, b.requester, code.discord_id, b.R)
+				: DB.prepare('DELETE FROM members WHERE character = ? AND discord_id = ? AND r = ?').bind(b.requester, code.discord_id, b.R),
+			DB.prepare('DELETE FROM used WHERE r = ? AND t = ?').bind(b.R, t),
+			...first.map((c) => DB.prepare('DELETE FROM council_keys WHERE public_key = ? AND character = ? AND first_seen = ?').bind(c.key.public_key, c.key.character, t)),
+			DB.prepare('UPDATE codes SET used = NULL WHERE r = ? AND used = ?').bind(b.R, t),
+		]);
+	} catch (err) {
+		console.error('olympus-link: could not undo the link', b.R, err && err.stack ? err.stack : err);
+	}
 }
 
 function linkedAnswer(v, reason, message) {
@@ -659,12 +691,13 @@ async function proofKey(env, p) {
 
 // The record of a council authority's key whose proof checked, written with the link it helped
 // accept: its character the first time, a later end of its certificate after (never another
-// character's: that stays the first one's).
+// character's: that stays the first one's). Two statements: the first writes a row only when the
+// key is new (acceptProof reads that, to take back only its own record).
 function recordCouncilKey(DB, c, t) {
-	return DB.prepare(
-		'INSERT INTO council_keys (public_key, key_id, character, cert_exp, first_seen) VALUES (?, ?, ?, ?, ?) ' +
-			'ON CONFLICT(public_key) DO UPDATE SET cert_exp = MAX(council_keys.cert_exp, excluded.cert_exp) WHERE council_keys.character = excluded.character',
-	).bind(c.key.public_key, c.key.key_id, c.key.character, c.key.cert_exp, t);
+	return [
+		DB.prepare('INSERT OR IGNORE INTO council_keys (public_key, key_id, character, cert_exp, first_seen) VALUES (?, ?, ?, ?, ?)').bind(c.key.public_key, c.key.key_id, c.key.character, c.key.cert_exp, t),
+		DB.prepare('UPDATE council_keys SET cert_exp = MAX(cert_exp, ?) WHERE public_key = ? AND character = ?').bind(c.key.cert_exp, c.key.public_key, c.key.character),
+	];
 }
 
 // Mode "a": three drawn players from three owners, signed within 5 minutes of each other. A
