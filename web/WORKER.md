@@ -103,9 +103,11 @@ It prints a seed and a public key, once, and writes nothing to disk.
   the council authority instead (step 1b).
 - Rotating it: make a new key, have its public key added to `ns.LINK_BACKEND_KEYS` next to the
   old one (the addon takes two for this), wait until that addon version is out, then switch the
-  Worker's `LINK_BACKEND_SEED` and `LINK_BACKEND_PUBLIC` and renew every confirmer's
-  certificate (step 8) before the old key leaves the addon. Codes already handed out stay valid
-  until they expire.
+  Worker's `LINK_BACKEND_SEED` and `LINK_BACKEND_PUBLIC`, put the old public key in
+  `LINK_BACKEND_PREVIOUS` (the certificates it signed keep counting meanwhile), and renew every
+  confirmer's certificate (step 8); once they typed the new lines, remove
+  `LINK_BACKEND_PREVIOUS`, before the old key leaves the addon. Codes already handed out stay
+  valid until they expire.
 
 ### 1b. The council authority (High Councillors' keys, nothing to paste)
 
@@ -279,6 +281,7 @@ LINK_GUILD_POLICY = "verified"           # or "claimed": see "The guild check" b
 LINK_ORIGIN = "https://dnl-gentile.github.io"         # the page's origin: no path, no trailing slash
 DISCORD_CLIENT_ID = "<your application's client id>"  # the page's sign-in must be for it
 LINK_BACKEND_PUBLIC = "<64 hex from link-keys.py backend>"
+# LINK_BACKEND_PREVIOUS = "<the old 64 hex>"   # only while you rotate the backend key (step 1)
 LINK_CA_PUBLIC = "a84125fa433276244fda242a28d2e4208a5d6db26dcb529e3e87af61939e10a7" # the council authority (step 1b)
 LINK_COUNCIL_CHARACTERS = "<Name-Realm>, <Name-Realm>"  # the High Councillors you accept from it (step 1b): none when left out
 DISCORD_PUBLIC_KEY = "<Developer Portal > General Information > Public Key>"      # only for /verify over HTTP
@@ -379,7 +382,8 @@ python3 scripts/link-keys.py confirmer <id> p --character "<Name-Realm>" --owner
 - `--character`: the one character that confirms with this key, as the game writes it
   (`Name-Realm`). Only that character's addon announces the key and signs with it; players'
   addons ask it only from that character, and the Worker counts a confirmation only when its
-  certificate is the one registered for the key and names the confirming character. An alt of
+  certificate is the one registered for the key, signed by the backend key, and names the
+  confirming character. An alt of
   the same account needs its own key (or confirms nothing).
 - `c` is a High Councillor, `p` a player for the draw (mode `a`). The character must be one of the
   key owner's linked characters (the Worker refuses the key otherwise, `character-not-linked`,
@@ -422,7 +426,9 @@ python3 scripts/link-keys.py confirmer <id> p --character "<Name-Realm>" --owner
   councillor and 90 for a player by default (`days` in the request, `--days` for the tool):
   renew it before it ends (`{"key_id": "<id>", "renew": true}`, or `link-keys.py cert` again),
   and the confirmer types the new `/oly discord cert` line. A key whose certificate has ended
-  leaves the draw. A player's is shorter because the addons cannot learn that you revoked a
+  leaves the draw, and what it signs after that end counts for nothing (the end of the
+  certificate the proof carries, and of the latest one D1 recorded: a key D1 holds no
+  certificate for counts for nothing either). A player's is shorter because the addons cannot learn that you revoked a
   key or replaced it: they keep asking it, when the draw picks it, until its certificate ends,
   and the Worker refuses what it signs. A replaced or revoked key gets no new certificate.
 - One certified key per Discord account: the database refuses a second. **Rotating** (a new key
@@ -609,7 +615,10 @@ For every bundle, from the page or the inbox (`checkProof` reads, `acceptProof` 
    a watcher until 5 days after `exp`, which leaves the watcher's keeper 2 days to upload it;
    after that it is `expired`.
 4. For each proof, its key: a key registered here, not revoked, whose certificate (the one the
-   proof carries) names its public key, its tier and the confirming character as registered; or
+   proof carries) names its public key, its tier and the confirming character as registered, is
+   signed by the backend key (`LINK_BACKEND_PUBLIC`, or `LINK_BACKEND_PREVIOUS` while it
+   changes) and still ran when the proof was signed, as did the latest certificate D1 recorded
+   for the key (`cert_exp`; a key that never got one counts for nothing); or
    a High Councillor's key the council authority certified (the certificate checks with
    `LINK_CA_PUBLIC`, tier `c`, the id the key's hash, valid when the proof was signed), for a
    character on `LINK_COUNCIL_CHARACTERS` (none when that list is left out), not on the
@@ -1028,6 +1037,8 @@ CREATE INDEX IF NOT EXISTS uploads_by_user ON inbox_uploads (discord_id, uploade
 //   LINK_DB              the D1 database with web/worker/schema.sql (DB when there is no LINK_DB)
 //   LINK_BACKEND_SEED    secret: your bot's Ed25519 seed, base64url (scripts/link-keys.py backend)
 //   LINK_BACKEND_PUBLIC  its public key, 64 hex: the addon holds the same one (ns.LINK_BACKEND_KEYS)
+//   LINK_BACKEND_PREVIOUS  optional, while you rotate the backend key: the old public key, 64 hex. The
+//                        certificates it signed still count until their confirmers type the renewed ones
 //   LINK_CA_PUBLIC       the council authority's public key, 64 hex (two, comma-separated, while it
 //                        changes): the addon author's client certifies High Councillors' keys with it
 //   LINK_COUNCIL_CHARACTERS  the High Councillors' characters you accept from the council authority
@@ -1603,8 +1614,10 @@ async function checkConfirmation(env, b, p, code, t) {
 
 // The key a proof is checked with: { key } or { why }. It only reads: nothing about a proof is
 // written before the whole link is accepted (acceptProof). A key registered here (keys) is D1's:
-// the certificate the proof carries must name its public key, tier and character, and D1 says
-// whether it is revoked. A key this Worker never registered counts only as a High Councillor's
+// the certificate the proof carries must name its public key, tier and character, be signed by
+// the backend key (LINK_BACKEND_PUBLIC, or LINK_BACKEND_PREVIOUS while it changes) and still run
+// when the proof was signed, as must the latest certificate D1 recorded for the key (none: the key
+// never got one, and counts for nothing); D1 says whether it is revoked. A key this Worker never registered counts only as a High Councillor's
 // certified by the council authority (the author's client, LINK_CA_PUBLIC): the certificate the
 // proof carries is then checked here (tier c, the key's id the first 12 hex of SHA-256 of it,
 // valid when the proof was signed), its character on LINK_COUNCIL_CHARACTERS (none when that list
@@ -1623,6 +1636,11 @@ async function proofKey(env, p) {
 		if (row.public_key !== cert.publicHex || row.kind !== cert.tier || row.character !== cert.character) {
 			return { why: "its certificate is not the one registered for this key (public key, tier and character)" };
 		}
+		// Checked as the council authority's are (Konig's review, Codex on #39): whoever holds a
+		// registered key's seed cannot make up its certificate, nor outlive the one it had.
+		if (row.cert_exp === null || row.cert_exp === undefined) return { why: 'no certificate was issued for this key' };
+		if (!(await backendCertificate(env, cert))) return { why: 'its certificate is not signed by the backend key' };
+		if (p.issued >= cert.exp || p.issued >= row.cert_exp) return { why: 'signed after its certificate ended' };
 		return { key: row };
 	}
 	if (!CA_KEYID_RE.test(p.keyId)) return { why: 'unknown key' };
@@ -1907,6 +1925,22 @@ export async function verifyCertificate(publicHex, text) {
 	const c = typeof text === 'string' ? parseCertificate(text) : text;
 	if (!c || !(await ed25519Verify(publicHex, b64urlDecode(c.sig), enc.encode(c.payload)))) return null;
 	return c;
+}
+
+// A parsed certificate the backend key signed (LINK_BACKEND_PUBLIC, or the previous key while it
+// changes: LINK_BACKEND_PREVIOUS), else null.
+export async function backendCertificate(env, c) {
+	for (const pk of backendKeys(env)) {
+		if (await verifyCertificate(pk, c)) return c;
+	}
+	return null;
+}
+
+export function backendKeys(env) {
+	return [env && env.LINK_BACKEND_PUBLIC, env && env.LINK_BACKEND_PREVIOUS]
+		.flatMap((k) => String(k || '').split(/[\s,]+/))
+		.map((k) => k.toLowerCase())
+		.filter((k) => PUBLIC_HEX_RE.test(k));
 }
 
 // The council authority's public keys (LINK_CA_PUBLIC: one, or two while it changes).

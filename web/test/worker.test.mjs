@@ -557,6 +557,40 @@ describe('Worker', { skip: probe ? false : 'node:sqlite is not available in this
 		assert.equal((await keys({ character: CK.character })).reason, 'format', 'without "revoke": true it is not a revocation');
 	});
 
+	test('a registered key counts only with a certificate this Worker\'s backend key signed, while it and the latest one D1 recorded last (Konig\'s review, Codex on #39)', async () => {
+		// Throwaway keys: someone with a registered key's seed forging its certificate, and the bot's
+		// key before a rotation.
+		const forger = crypto.createHash('sha256').update('olympus-link-test:forger').digest('hex');
+		const previous = crypto.createHash('sha256').update('olympus-link-test:backend-previous').digest('hex');
+		const year = NOW + 365 * 86400;
+		const cases = [
+			['a certificate the backend never signed', null, { signer: forger, exp: year }, /not signed by the backend key/],
+			['a key whose certificate ended, with a made-up later one', NOW - 3600, { signer: forger, exp: year }, /not signed by the backend key/],
+			['a key that never got a certificate, with a made-up one', 'none', { signer: forger, exp: year }, /no certificate was issued/],
+			['a key that never got a certificate, with a real one for another life', 'none', { exp: year }, /no certificate was issued/],
+			["the backend's certificate, ended before the proof", null, { exp: NOW - 61 }, /after its certificate ended/],
+			["the backend's certificate, but the latest D1 recorded ended before the proof", NOW - 3600, { exp: year }, /after its certificate ended/],
+			['a certificate of the previous backend key, not named', null, { signer: previous, exp: year }, /not signed by the backend key/],
+		];
+		for (const [name, certExp, cert, why] of cases) {
+			await setup();
+			if (certExp !== null) await env.DB.prepare('UPDATE keys SET cert_exp = ? WHERE key_id = ?').bind(certExp === 'none' ? null : certExp, 'council01').run();
+			const r = await submit(await makeBundle(B1, [[NOW - 60, 'council01', COUNCILLOR, 'w', cert]]), USER_C);
+			assert.deepEqual([r.status, r.reason], ['rejected', 'not-enough'], `${name}: ${r.message}`);
+			assert.match(r.message, why, name);
+			assert.equal(discord.calls.length, 0, name);
+			assert.equal((await row('SELECT used FROM codes WHERE r = ?', B1.R)).used, null, name);
+		}
+		// The backend's own certificate, valid when signed: counts.
+		await setup();
+		assert.equal((await submit(await makeBundle(B1, [[NOW - 60, 'council01', COUNCILLOR, 'w', { exp: year }]]), USER_C)).status, 'linked');
+		// Rotating the bot's key: a certificate the old key signed counts while LINK_BACKEND_PREVIOUS names it.
+		await setup();
+		env.LINK_BACKEND_PREVIOUS = publicHexOf(previous);
+		const r = await submit(await makeBundle(B1, [[NOW - 60, 'council01', COUNCILLOR, 'w', { signer: previous, exp: year }]]), USER_C);
+		assert.equal(r.status, 'linked', r.message);
+	});
+
 	test('mode a refusals: window, key age, account age, replaced, revoked, own key, unlinked confirmer', async () => {
 		const three = [
 			[1799990200, 'player01', OWN.player01, 'r'],
@@ -883,9 +917,11 @@ describe('Worker', { skip: probe ? false : 'node:sqlite is not available in this
 		clock = t0 + 2 * 86400;
 		let code = await newCode();
 		assert.equal(code.token.T, 'ffffffff');
+		// (Since Konig's review a key D1 holds no certificate for counts for nothing, whatever
+		// certificate its proof carries: that is said before its age.)
 		let r = await link(code, ['fresh0001', 'player01', 'player02'], clock - 60);
 		assert.equal(r.reason, 'not-enough');
-		assert.match(r.message, /fresh0001: key younger than 7 days/);
+		assert.match(r.message, /fresh0001: no certificate was issued for this key/);
 		r = await keys({ key_id: 'fresh0001', renew: true });
 		assert.deepEqual([r.http, r.reason, r.cert_from], [409, 'too-early', expectFrom(t0)]);
 		assert.equal(r.cert, undefined);
@@ -895,7 +931,7 @@ describe('Worker', { skip: probe ? false : 'node:sqlite is not available in this
 		clock = t0 + LINK.KEY_MIN_AGE + 3600;
 		assert.equal((await keys({ key_id: 'fresh0001', renew: true })).reason, 'too-early');
 		r = await link(before, ['fresh0001', 'player01', 'player02'], clock - 60);
-		assert.match(r.message, /fresh0001: key younger than 7 days/);
+		assert.match(r.message, /fresh0001: no certificate was issued for this key/);
 		clock = fresh.cert_from - 1;
 		assert.equal((await keys({ key_id: 'fresh0001', renew: true })).reason, 'too-early');
 		// From cert_from on: the certificate (a player's lasts 90 days), and every code a proof

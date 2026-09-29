@@ -204,6 +204,7 @@ test('the reference Worker links the addon\'s sample links, and holds each to it
 	for (const [id, cert] of Object.entries(certs)) if (await councilCertificate({ LINK_CA_PUBLIC: c.ca }, cert)) byAuthority.add(id);
 	assert.ok(byAuthority.size >= 1);
 	// ...for the councillors the bot's keeper lists (LINK_COUNCIL_CHARACTERS: none when left out).
+	// (The keys the keeper registers: their certificates are the sample's backend key's, LINK_BACKEND_PUBLIC.)
 	const LINK_COUNCIL_CHARACTERS = [...byAuthority].map((id) => certs[id].character).join(', ');
 	const ids = [...new Set([...Object.keys(c.pubs), ...Object.keys(certs)])].filter((id) => !byAuthority.has(id));
 	const owner = (id) => String(100000000000000200n + BigInt(ids.indexOf(id) + 1));
@@ -235,7 +236,7 @@ test('the reference Worker links the addon\'s sample links, and holds each to it
 			// whatever the policy, the code unused.
 			for (const t of c.tokens.filter((y) => y.ok && y.token.R === b.R)) {
 				await load(t.token, b);
-				const r = await acceptBundle({ DB, LINK_GUILD_POLICY: 'claimed' }, x.text, { userId: player });
+				const r = await acceptBundle({ DB, LINK_BACKEND_PUBLIC: c.backend, LINK_GUILD_POLICY: 'claimed' }, x.text, { userId: player });
 				assert.equal(r.reason, 'tag', `${x.name}: ${r.message}`);
 				assert.equal((await DB.prepare('SELECT used FROM codes WHERE r = ?').bind(b.R).first()).used, null);
 			}
@@ -244,25 +245,25 @@ test('the reference Worker links the addon\'s sample links, and holds each to it
 		const checked = b.proofs.some((p) => p.gv === 'r' || p.gv === 'w');
 		// "claimed": the addon's sample links are good links.
 		await load(token, b);
-		let r = await acceptBundle({ DB, LINK_GUILD_POLICY: 'claimed', LINK_CA_PUBLIC: c.ca, LINK_COUNCIL_CHARACTERS }, x.text, { userId: player });
+		let r = await acceptBundle({ DB, LINK_BACKEND_PUBLIC: c.backend, LINK_GUILD_POLICY: 'claimed', LINK_CA_PUBLIC: c.ca, LINK_COUNCIL_CHARACTERS }, x.text, { userId: player });
 		assert.equal(r.status, 'linked', `${x.name}: ${r.message}`);
 		assert.deepEqual(r.characters, [b.requester]);
 		// "verified" (the default): only with a confirmer who checked the guild in game.
 		await load(token, b);
-		r = await acceptBundle({ DB, LINK_CA_PUBLIC: c.ca, LINK_COUNCIL_CHARACTERS }, x.text, { userId: player });
+		r = await acceptBundle({ DB, LINK_BACKEND_PUBLIC: c.backend, LINK_CA_PUBLIC: c.ca, LINK_COUNCIL_CHARACTERS }, x.text, { userId: player });
 		if (checked) assert.equal(r.status, 'linked', `${x.name}: ${r.message}`);
 		else assert.equal(r.reason, 'guild-unverified', `${x.name}: ${r.message}`);
 		// The same proofs under another tag: not this code's link.
 		await load(token, b);
 		const other = x.text.replace(`~${b.tag}~`, `~${b.tag === '0'.repeat(16) ? '1'.repeat(16) : '0'.repeat(16)}~`);
-		r = await acceptBundle({ DB, LINK_GUILD_POLICY: 'claimed', LINK_CA_PUBLIC: c.ca, LINK_COUNCIL_CHARACTERS }, other, { userId: player });
+		r = await acceptBundle({ DB, LINK_BACKEND_PUBLIC: c.backend, LINK_GUILD_POLICY: 'claimed', LINK_CA_PUBLIC: c.ca, LINK_COUNCIL_CHARACTERS }, other, { userId: player });
 		assert.equal(r.reason, 'tag', `${x.name}: ${r.message}`);
 		// A councillor's key of the council authority's: not without LINK_CA_PUBLIC, nor without
 		// the councillor on LINK_COUNCIL_CHARACTERS.
 		if (b.proofs.every((p) => byAuthority.has(p.keyId))) {
 			for (const env of [{ LINK_COUNCIL_CHARACTERS }, { LINK_CA_PUBLIC: c.ca }]) {
 				await load(token, b);
-				r = await acceptBundle({ DB, LINK_GUILD_POLICY: 'claimed', ...env }, x.text, { userId: player });
+				r = await acceptBundle({ DB, LINK_BACKEND_PUBLIC: c.backend, LINK_GUILD_POLICY: 'claimed', ...env }, x.text, { userId: player });
 				assert.equal(r.reason, 'not-enough', `${x.name}: ${r.message}`);
 			}
 		}
@@ -277,7 +278,7 @@ test('the reference Worker links the addon\'s sample links, and holds each to it
 	if (players) {
 		const token = await codeOf(c, players);
 		await load({ ...token, mode: 'c', T: '00000000' }, players);
-		const r = await acceptBundle({ DB, LINK_GUILD_POLICY: 'claimed' }, buildBundle(players), { userId: player });
+		const r = await acceptBundle({ DB, LINK_BACKEND_PUBLIC: c.backend, LINK_GUILD_POLICY: 'claimed' }, buildBundle(players), { userId: player });
 		assert.equal(r.reason, 'not-enough', 'a code in mode c takes no player proofs');
 	}
 });

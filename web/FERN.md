@@ -142,7 +142,8 @@ explains in English or Portuguese.
 The checks, each a few lines in `link-core.mjs`: the proof's tag matches the code's own signature
 and the player who typed it (someone who saw the code on a stream gets nothing); the code is
 yours, known, unused and not expired, and used once; every confirmation's Ed25519 signature,
-with a key you registered or one the council authority certified (for a character on
+with a key you registered (its certificate your bot's key's, still running when the proof was
+signed) or one the council authority certified (for a character on
 `LINK_COUNCIL_CHARACTERS`), not revoked, signed within the code's life; the
 confirmer is neither the player nor one of the key owner's characters; a key counts once per
 code; one councillor, or in mode `"a"` three drawn players (the draw is [not 3 of
@@ -318,13 +319,16 @@ Every revocation goes through your admin route or the tool's SQL (step 7).
   end).
 - **A player key**: revoke it the same way; rotate with a new key and `"replace": true`.
 - **Your bot's key**: make a new one and send us its public key (the addon takes two while it
-  changes). Once that release is out, switch `LINK_BACKEND_SEED` and `LINK_BACKEND_PUBLIC`, then
-  renew every key you registered: `{"key_id": "<id>", "renew": true}` to `/api/link/keys` signs
-  its certificate with the new key, and you send that confirmer the new `/oly discord cert` line.
+  changes). Once that release is out, switch `LINK_BACKEND_SEED` and `LINK_BACKEND_PUBLIC`, put
+  the old public key in `LINK_BACKEND_PREVIOUS` (your Worker checks every registered key's
+  certificate, so without it the ones the old key signed stop counting at once), then renew
+  every key you registered: `{"key_id": "<id>", "renew": true}` to `/api/link/keys` signs its
+  certificate with the new key, and you send that confirmer the new `/oly discord cert` line.
   The keys to renew:
   `wrangler d1 execute olympus-link --remote --command "SELECT key_id, character FROM keys WHERE revoked = 0 AND replaced_at IS NULL AND cert_exp IS NOT NULL"`.
-  Tell us when they have their new lines: only then do we take the old key out of the addon,
-  since a certificate the old key signed stops checking in players' addons once it is gone.
+  Once they have their new lines, remove `LINK_BACKEND_PREVIOUS` and tell us: only then do we
+  take the old key out of the addon, since a certificate the old key signed stops checking in
+  players' addons once it is gone.
   High Councillors' certificates are the authority's and do not change. Codes already handed
   out stay good until they expire.
 - **The council authority's key**: `LINK_CA_PUBLIC` takes two, comma-separated, while it changes.

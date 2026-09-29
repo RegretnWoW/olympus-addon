@@ -9,6 +9,8 @@
 //   LINK_DB              the D1 database with web/worker/schema.sql (DB when there is no LINK_DB)
 //   LINK_BACKEND_SEED    secret: your bot's Ed25519 seed, base64url (scripts/link-keys.py backend)
 //   LINK_BACKEND_PUBLIC  its public key, 64 hex: the addon holds the same one (ns.LINK_BACKEND_KEYS)
+//   LINK_BACKEND_PREVIOUS  optional, while you rotate the backend key: the old public key, 64 hex. The
+//                        certificates it signed still count until their confirmers type the renewed ones
 //   LINK_CA_PUBLIC       the council authority's public key, 64 hex (two, comma-separated, while it
 //                        changes): the addon author's client certifies High Councillors' keys with it
 //   LINK_COUNCIL_CHARACTERS  the High Councillors' characters you accept from the council authority
@@ -584,8 +586,10 @@ async function checkConfirmation(env, b, p, code, t) {
 
 // The key a proof is checked with: { key } or { why }. It only reads: nothing about a proof is
 // written before the whole link is accepted (acceptProof). A key registered here (keys) is D1's:
-// the certificate the proof carries must name its public key, tier and character, and D1 says
-// whether it is revoked. A key this Worker never registered counts only as a High Councillor's
+// the certificate the proof carries must name its public key, tier and character, be signed by
+// the backend key (LINK_BACKEND_PUBLIC, or LINK_BACKEND_PREVIOUS while it changes) and still run
+// when the proof was signed, as must the latest certificate D1 recorded for the key (none: the key
+// never got one, and counts for nothing); D1 says whether it is revoked. A key this Worker never registered counts only as a High Councillor's
 // certified by the council authority (the author's client, LINK_CA_PUBLIC): the certificate the
 // proof carries is then checked here (tier c, the key's id the first 12 hex of SHA-256 of it,
 // valid when the proof was signed), its character on LINK_COUNCIL_CHARACTERS (none when that list
@@ -604,6 +608,11 @@ async function proofKey(env, p) {
 		if (row.public_key !== cert.publicHex || row.kind !== cert.tier || row.character !== cert.character) {
 			return { why: "its certificate is not the one registered for this key (public key, tier and character)" };
 		}
+		// Checked as the council authority's are (Konig's review, Codex on #39): whoever holds a
+		// registered key's seed cannot make up its certificate, nor outlive the one it had.
+		if (row.cert_exp === null || row.cert_exp === undefined) return { why: 'no certificate was issued for this key' };
+		if (!(await backendCertificate(env, cert))) return { why: 'its certificate is not signed by the backend key' };
+		if (p.issued >= cert.exp || p.issued >= row.cert_exp) return { why: 'signed after its certificate ended' };
 		return { key: row };
 	}
 	if (!CA_KEYID_RE.test(p.keyId)) return { why: 'unknown key' };
@@ -888,6 +897,22 @@ export async function verifyCertificate(publicHex, text) {
 	const c = typeof text === 'string' ? parseCertificate(text) : text;
 	if (!c || !(await ed25519Verify(publicHex, b64urlDecode(c.sig), enc.encode(c.payload)))) return null;
 	return c;
+}
+
+// A parsed certificate the backend key signed (LINK_BACKEND_PUBLIC, or the previous key while it
+// changes: LINK_BACKEND_PREVIOUS), else null.
+export async function backendCertificate(env, c) {
+	for (const pk of backendKeys(env)) {
+		if (await verifyCertificate(pk, c)) return c;
+	}
+	return null;
+}
+
+export function backendKeys(env) {
+	return [env && env.LINK_BACKEND_PUBLIC, env && env.LINK_BACKEND_PREVIOUS]
+		.flatMap((k) => String(k || '').split(/[\s,]+/))
+		.map((k) => k.toLowerCase())
+		.filter((k) => PUBLIC_HEX_RE.test(k));
 }
 
 // The council authority's public keys (LINK_CA_PUBLIC: one, or two while it changes).
