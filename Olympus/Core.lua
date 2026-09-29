@@ -796,9 +796,16 @@ end
 -- in the Realm shows each name cut short (ns.MaskName), and no council mark, icon or title goes
 -- with a name anywhere else (census rows, person card, Olympus chats), until he clicks the eye
 -- under the council's header. Never saved: every login and /reload starts hidden again.
+-- The council's borders and nameplate marks follow at once (Borders.lua, Nameplates.lua: they
+-- listen for COUNCIL_MASK_CHANGED, fired only when it flips).
 local councilNamesShown = false
 function ns.CouncilNamesShown() return councilNamesShown end
-function ns.SetCouncilNamesShown(on) councilNamesShown = on == true end
+function ns.SetCouncilNamesShown(on)
+	on = on == true
+	if on == councilNamesShown then return end
+	councilNamesShown = on
+	ns.Fire("COUNCIL_MASK_CHANGED")
+end
 function ns.CouncilMasked() return not councilNamesShown and ns.KingsScreen() end
 
 -- A councillor's name while hidden: its first four characters (UTF-8: a character is a lead
@@ -1134,6 +1141,7 @@ StandIn("Dialog", {})
 StandIn("Bank", {})
 StandIn("Link", { "Slash" })
 StandIn("Borders", { "SetEnabled", "Report" })
+StandIn("Nameplates", { "SetEnabled", "Report" })
 
 -- Blizzard's gamepad UI (WoW: Forever's controller mode) is on.
 function ns.GamepadUI()
@@ -1212,7 +1220,7 @@ end
 ns.RegisterEvent("PLAYER_LOGIN", function()
 	ns.CheckFaction()
 	local missing = {}
-	for _, key in ipairs({ "Who", "Channels", "King", "Hop", "Workshop", "Vox", "Court", "Treasury", "Acts", "Dialog", "Bank", "Link", "Borders" }) do
+	for _, key in ipairs({ "Who", "Channels", "King", "Hop", "Workshop", "Vox", "Court", "Treasury", "Acts", "Dialog", "Bank", "Link", "Borders", "Nameplates" }) do
 		if ns[key].missing then missing[#missing + 1] = key .. ".lua" end
 	end
 	if #missing > 0 then
@@ -1246,6 +1254,7 @@ local function Help()
 	print(L.HELP_TREASURER)
 	print(L.HELP_INSPECTION)
 	print(L.HELP_BORDERS)
+	print(L.HELP_NAMEPLATES)
 	print(L.HELP_ISSUE)
 	print(L.HELP_COUNCIL)
 	print(L.HELP_DISCORD)
@@ -1347,8 +1356,13 @@ SlashCmdList.OLYMPUS = function(input)
 			local on = rest:lower()
 			if on == "on" or on == "off" then ns.db.royalInspection = on == "on" end
 			ns.Print(ns.db.royalInspection == false and L.INSPECTION_OPT_OFF or L.INSPECTION_OPT_ON)
+		elseif cmd == "nameplates" then
+			-- The marks left of the names on friendly players' nameplates (Nameplates.lua), alone: on or off.
+			local on = rest:lower()
+			if on == "on" or on == "off" then ns.Nameplates.SetEnabled(on == "on") else ns.Nameplates.Report() end
 		elseif cmd == "borders" then
-			-- The elite borders on the target, focus and your own portrait (Borders.lua): on or off.
+			-- The elite borders on the target, focus and your own portrait (Borders.lua), and the
+			-- nameplate marks with them (Nameplates.lua): on or off.
 			-- The author's preview of a tier round his own portrait (test <tier>|off): his alone;
 			-- anyone else's gets what /oly borders says, and nothing is done.
 			local on = rest:lower()

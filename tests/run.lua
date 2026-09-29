@@ -4794,6 +4794,9 @@ test("files added by an update and not loaded yet: stand-ins keep everything els
 		eq(fresh.Who.missing, true, "Who.lua stood in for")
 		eq(fresh.Channels.missing, true, "Channels.lua stood in for")
 		eq(fresh.Borders.missing, true, "Borders.lua (1.0.1) stood in for")
+		eq(fresh.Nameplates.missing, true, "Nameplates.lua (1.0.0) stood in for")
+		fresh.Nameplates.SetEnabled(false)
+		eq(printed[#printed]:find("reopen the game", 1, true) ~= nil, true, "/oly nameplates says to restart the game")
 		eq(fresh.Who.StatusLines(), nil, "any other call is a quiet no-op")
 		fresh.Who.Search()
 		eq(printed[#printed]:find("reopen the game", 1, true) ~= nil, true, "a search says to restart the game")
@@ -19811,13 +19814,29 @@ do
 				return lines[at], rows
 			end
 			local head, rows = Section()
-			eq(#rows, 6, "one row per tier, the last of the tab")
+			-- (1.0.0, the nameplate marks: a seventh row, the marks' own member star, after the six
+			-- borders; it was six rows, one per border tier.)
+			eq(#rows, 7, "one row per tier and the member star, the last of the tab")
 			assert(head.right:find(ns.L.BORDERS_PREVIEW_NONE, 1, true), "off")
 			for i, t in ipairs(w.B.TIERS) do
 				assert(rows[i].text:find(t.name, 1, true), t.name)
 				assert(rows[i].text:find(ns.L["BORDERS_WHO_" .. t.name:upper():gsub("%-", "_")], 1, true), t.name .. ": who holds it")
 				eq(type(rows[i].onClick), "function"); eq(type(rows[i].tooltip), "function"); eq(rows[i].right, nil)
 			end
+			assert(rows[7].text:find("member", 1, true) and rows[7].text:find(ns.L.BORDERS_WHO_MEMBER, 1, true), rows[7].text)
+			local tip = {}
+			rows[7].tooltip({ AddLine = function(_, text) tip[#tip + 1] = text end })
+			eq(tip[2], ns.L.BORDERS_PREVIEW_TIP_MEMBER, "the star's own tooltip")
+			rows[7].onClick()
+			eq(w.B.Preview(), "member"); eq(w.shown("player"), nil, "the star: no border round his portrait")
+			eq(w.printed[#w.printed], ns.L.BORDERS_PREVIEW_ON_MEMBER)
+			rows[7].onClick()
+			eq(w.B.Preview(), "member", "the lines were built before the click: a fresh click shows it again")
+			head, rows = Section()
+			assert(rows[7].right and rows[7].right:find(ns.L.BORDERS_PREVIEW_SHOWN, 1, true), "marked shown")
+			rows[7].onClick()
+			eq(w.B.Preview(), nil, "clicked again: off")
+			head, rows = Section()
 			rows[5].onClick()
 			eq(w.B.Preview(), "bronze-elite"); eq(w.shown("player"), "bronze-elite", "clicked: shown")
 			eq(w.printed[#w.printed], ns.L.BORDERS_PREVIEW_ON:format("bronze-elite"))
@@ -20116,6 +20135,1093 @@ test("1.0.1 borders: Max's frames ship as 256 x 256 32-bit TGAs with alpha, the 
 	local readme = assert(ReadFile(ROOT .. "README.md"))
 	local credits = readme:match("\n## Credits\n(.-)\n## ")
 	assert(credits and credits:find("\n%- %*%*Art:%*%* Max %(the bronze elite borders"), "README's Credits credit Max for the bronze frames")
+end)
+
+---------------------------------------------------------------------------
+-- 1.0.0: the marks left of the name on friendly players' nameplates (Nameplates.lua)
+---------------------------------------------------------------------------
+
+-- What Nameplates.lua touches, stood in for as Forever 1.60's Blizzard_NamePlates lays it out
+-- (Blizzard_NamePlates.xml, Blizzard_NamePlateBase.lua, Blizzard_NamePlates.lua's driver,
+-- Blizzard_NamePlateUnitFrame.lua's UpdateAnchors and Camelot's NamePlateSetupOptions, and
+-- Blizzard_UnitFrame's CompactUnitFrame_UpdateName and CompactUnitFrame_SetUnit), on top of the
+-- borders' stand-ins (WithBorders: the unit functions, TargetFrame, FocusFrame and PlayerFrame,
+-- hooksecurefunc, combat, secret values, the interface style), Borders.lua and Nameplates.lua
+-- loaded together:
+-- - C_NamePlate.GetNamePlateForUnit and GetNamePlates: the plates shown; a forbidden one only to
+--   the game's own code (includeForbidden), unless w.leakForbidden hands it to us anyway (the
+--   client never does: to show that we would call nothing on it all the same).
+-- - A plate: IsForbidden, and the unit frame it holds while it shows a unit (UnitFrame; read on a
+--   forbidden plate, logged). A unit frame, from the game's pool, the last released first (the
+--   forbidden plates' from a pool of their own): its `name` font string, CreateTexture (ours),
+--   IsForbidden and IsProtected (w.protected), which only answer, the game's UpdateAnchors (the name
+--   across the plate, written centred for names only and above the bar, from the left inside it:
+--   w.layout), `unit` (CompactUnitFrame_SetUnit's), any other method logged. The name: its text
+--   (6 px a letter; the client's GetStringWidth, secret where w.secretWidth says), shown or not,
+--   its justification and its width (180: the plate's, less its insets). A forbidden plate's unit
+--   frame, as addon code meets it: any access but IsForbidden (a field read too) logged, as the
+--   client refuses them all; the game's own stand-in code reads it directly.
+-- - The driver (w.add, w.remove): a unit added: its plate gets a unit frame, UpdateAnchors, the
+--   name (CompactUnitFrame_UpdateName), then NAME_PLATE_UNIT_ADDED to us (ours first where
+--   oursFirst says, before the plate has its unit frame). Removed: the frame's unit cleared, the
+--   frame hidden and back to the pool, then NAME_PLATE_UNIT_REMOVED (or ours first). A forbidden
+--   plate's events are FORBIDDEN_NAME_PLATE_*, which we don't listen to (w.leakForbidden: ours).
+-- - CompactUnitFrame_UpdateName: the unit's name written and shown (its `display` if set), hidden
+--   where w.nameHidden says; hooksecurefunc on a global as on a table.
+-- - UnitIsFriend (not for a unit marked hostile), UnitCanAttack (hostile or attackable), UnitIsUnit
+--   (the same unit), NamePlateSetupOptions.classificationScale (w.scale).
+-- - PlayerFrame.name: the game's PlayerName (justified left), for the preview's marks.
+local PLATE_GLOBALS = { "C_NamePlate", "UnitIsFriend", "UnitCanAttack", "UnitIsUnit", "CompactUnitFrame_UpdateName",
+	"NamePlateSetupOptions" }
+local MARK_STAR = "Interface\\AddOns\\Olympus\\media\\borders\\star"
+local MARK_GOLD, MARK_SILVER = "nameplates-icon-elite-gold", "nameplates-icon-elite-silver"
+local MARK_AUTHOR = BorderUnit("Faladoriel Skylance", "Olympus II", "Member", 3, { realm = "ClassicBetaPvP" })
+
+local function WithNameplates(fn, setup)
+	local saved = {}
+	for _, name in ipairs(PLATE_GLOBALS) do saved[name] = _G[name] end
+	local savedMod, savedSetting, savedRoster = ns.Nameplates, ns.db.nameplates, ns.Roster.byName
+	local ok, err = pcall(WithBorders, function(w)
+		assert(loadfile(ADDON_DIR .. "Nameplates.lua"))("Olympus", w.ns)
+		w.N = w.ns.Nameplates
+		-- A border shown on a frame: the borders' own textures alone (the ARTWORK layer), not the
+		-- preview's marks left of his name on the same container (OVERLAY).
+		w.shownTexture = function(unit)
+			local found
+			for _, tex in ipairs(w.textures) do
+				if tex.owner == CONTAINER_OF[unit] and tex.layer == "ARTWORK" and tex.shown then
+					assert(not found, "two borders at once on " .. unit)
+					found = tex
+				end
+			end
+			return found
+		end
+		fn(w)
+	end, function(w)
+		ns.db.nameplates = nil
+		w.plates, w.order, w.pool, w.forbiddenPool, w.frames, w.plateTex = {}, {}, {}, {}, {}, {}
+		w.layout, w.protected, w.scale, w.nameHidden = "names", false, 1, {}
+		local function Log(entry) w.log[#w.log + 1] = entry end
+		local function Methods(label, t)
+			return setmetatable(t, { __index = function(_, k)
+				if type(k) == "string" and k:find("^%u") then return function() Log(label .. ":" .. k) end end
+			end })
+		end
+		local function NameString(label, justify)
+			local s = { label = label, text = "", shown = true, justify = justify or "CENTER", width = 180 }
+			function s:GetStringWidth() if w.secretWidth then return w.secret end return #self.text * 6 end
+			function s:GetWidth() return self.width end
+			function s:GetJustifyH() return self.justify end
+			function s:IsShown() return self.shown end
+			return Methods(label, s)
+		end
+		local function PlateTexture(frame, layer, sub)
+			local tex = { frame = frame, layer = layer, sub = sub, shown = true, calls = {} }
+			local function Rec(m) tex.calls[#tex.calls + 1] = m; w.seq[#w.seq + 1] = frame.label .. "#mark:" .. m end
+			function tex:SetAtlas(atlas, useSize) Rec("SetAtlas"); self.atlas, self.file, self.useSize = atlas, nil, useSize end
+			function tex:SetTexture(file)
+				Rec("SetTexture")
+				if w.noFile[file] then return false end
+				self.file, self.atlas = file, nil
+				return true
+			end
+			function tex:SetTexCoord(...) Rec("SetTexCoord"); self.coord = table.concat({ ... }, " ") end
+			function tex:SetDesaturated(on) Rec("SetDesaturated"); self.desaturated = on end
+			function tex:SetVertexColor(r, g, b) Rec("SetVertexColor"); self.color = ("%.3f %.3f %.3f"):format(r, g, b) end
+			function tex:SetSize(a, b) Rec("SetSize"); self.size = a .. " " .. b end
+			function tex:ClearAllPoints() Rec("ClearAllPoints"); self.point = nil end
+			function tex:SetPoint(p, rel, rp, x, y) Rec("SetPoint"); self.point = ("%s %s %s %s %s"):format(p, rel and rel.label or "?", rp, x, y) end
+			function tex:Show() Rec("Show"); self.shown = true end
+			function tex:Hide() Rec("Hide"); self.shown = false end
+			function tex:IsProtected() return w.protected end
+			w.plateTex[#w.plateTex + 1] = tex
+			return setmetatable(tex, { __index = function(_, k) if type(k) == "string" and k:find("^%u") then return function() Rec(k) end end end })
+		end
+		-- A forbidden unit frame as addon code meets it: any access but IsForbidden logged (the client
+		-- refuses them all); the game's own code reads it through Game().
+		local inner = setmetatable({}, { __mode = "k" })
+		local function Game(frame) return inner[frame] or frame end
+		w.game = Game
+		local function NewUnitFrame(forbidden)
+			local n = #w.frames + 1
+			local label = (forbidden and "ForbiddenUnitFrame" or "UnitFrame") .. n
+			local f = { label = label, shown = false, forbidden = forbidden or nil }
+			f.name = NameString(label .. ".name")
+			f.CreateTexture = function(self, _, layer, _, sub) Log(label .. ":CreateTexture"); return PlateTexture(self, layer, sub) end
+			f.IsForbidden = function(self) Log(label .. ":IsForbidden?"); return Game(self).forbidden == true end
+			f.IsProtected = function() Log(label .. ":IsProtected?"); return w.protected end
+			f.UpdateAnchors = function(self)
+				w.seq[#w.seq + 1] = label .. ":UpdateAnchors (the game's)"
+				self = Game(self)
+				self.name.justify = w.layout == "inside" and "LEFT" or "CENTER"
+			end
+			Methods(label, f)
+			local seen = f
+			if forbidden then
+				seen = setmetatable({}, {
+					__index = function(_, k)
+						if k ~= "IsForbidden" then Log(label .. "." .. tostring(k) .. " read") end
+						return f[k]
+					end,
+					__newindex = function(_, k, v) Log(label .. "." .. tostring(k) .. " written"); f[k] = v end,
+				})
+				inner[seen] = f
+			end
+			w.frames[n] = seen
+			return seen
+		end
+		local function NewPlate(token)
+			local p = { label = "NamePlate(" .. token .. ")" }
+			p.IsForbidden = function(self) Log(self.label .. ":IsForbidden?"); return rawget(self, "forbidden") == true end
+			return setmetatable(p, { __index = function(t, k)
+				if k == "UnitFrame" then
+					if rawget(t, "forbidden") then Log(t.label .. ":UnitFrame read") end
+					return rawget(t, "frame")
+				end
+				if type(k) == "string" and k:find("^%u") then return function() Log(t.label .. ":" .. k) end end
+			end })
+		end
+		C_NamePlate = {
+			GetNamePlateForUnit = function(token, includeForbidden)
+				local p = w.plates[token]
+				if not p or w.units[token] == nil then return nil end
+				if rawget(p, "forbidden") and not includeForbidden and not w.leakForbidden then return nil end
+				return p
+			end,
+			GetNamePlates = function(includeForbidden)
+				local out = {}
+				for _, token in ipairs(w.order) do
+					local p = w.plates[token]
+					if rawget(p, "frame") and (not rawget(p, "forbidden") or includeForbidden or w.leakForbidden) then out[#out + 1] = p end
+				end
+				return out
+			end,
+		}
+		CompactUnitFrame_UpdateName = function(frame)
+			frame = Game(frame)
+			local u = w.units[frame.unit]
+			if not u or w.nameHidden[frame.unit] then frame.name.shown = false return end
+			frame.name.text, frame.name.shown = u.display or u.name, true
+		end
+		UnitIsFriend = function(a, b)
+			local x, y = w.units[a], w.units[b]
+			return x ~= nil and y ~= nil and not x.hostile and not y.hostile
+		end
+		UnitCanAttack = function(_, b) local y = w.units[b] return y ~= nil and (y.hostile == true or y.attackable == true) end
+		UnitIsUnit = function(a, b) return w.units[a] ~= nil and w.units[a] == w.units[b] end
+		NamePlateSetupOptions = setmetatable({}, { __index = function(_, k) if k == "classificationScale" then return w.scale end end })
+		rawset(PlayerFrame, "name", NameString("PlayerName", "LEFT"))
+		local tableHook = hooksecurefunc
+		hooksecurefunc = function(t, key, post)
+			if type(t) ~= "string" then return tableHook(t, key, post) end
+			local original = _G[t]
+			assert(type(original) == "function", "hooksecurefunc on a function")
+			w.hooks[#w.hooks + 1] = t
+			_G[t] = function(...)
+				local r = { original(...) }
+				key(...)
+				return unpack(r)
+			end
+		end
+		-- The driver's NAME_PLATE_UNIT_ADDED and _REMOVED, as Forever runs them.
+		w.add = function(token, unit, how)
+			how = how or {}
+			w.units[token] = unit
+			local p = w.plates[token]
+			if not p then
+				p = NewPlate(token)
+				w.plates[token], w.order[#w.order + 1] = p, token
+			end
+			rawset(p, "forbidden", how.forbidden or nil)
+			local event = (how.forbidden and not w.leakForbidden) and "FORBIDDEN_NAME_PLATE_UNIT_ADDED" or "NAME_PLATE_UNIT_ADDED"
+			if how.oursFirst then w.fire(event, token) end
+			local pool = how.forbidden and w.forbiddenPool or w.pool
+			local f = table.remove(pool) or NewUnitFrame(how.forbidden)
+			rawset(p, "frame", f)
+			local g = Game(f)
+			g.shown, g.unit = true, token
+			g:UpdateAnchors()
+			CompactUnitFrame_UpdateName(f)
+			if not how.oursFirst then w.fire(event, token) end
+			return f
+		end
+		w.remove = function(token, how)
+			how = how or {}
+			local p = w.plates[token]
+			local event = (rawget(p, "forbidden") and not w.leakForbidden) and "FORBIDDEN_NAME_PLATE_UNIT_REMOVED" or "NAME_PLATE_UNIT_REMOVED"
+			if how.oursFirst then w.fire(event, token) end
+			local f = rawget(p, "frame")
+			local g = Game(f)
+			g.unit, g.shown = nil, false
+			local pool = rawget(p, "forbidden") and w.forbiddenPool or w.pool
+			pool[#pool + 1] = f
+			rawset(p, "frame", nil)
+			w.units[token] = nil
+			if not how.oursFirst then w.fire(event, token) end
+		end
+		-- A unit's faction changing (a duel begun or ended) as Forever sends it: UNIT_FACTION to the
+		-- plate showing it (NamePlateUnitFrameMixin:OnUnitFactionChanged writes its name again with
+		-- CompactUnitFrame_UpdateName, then looks again at whether it is a friend) and to us; ours
+		-- first where oursFirst says. (The game's plates look again at a friend on UNIT_FACTION and
+		-- when a unit comes to them, never on a bare name update.)
+		w.faction = function(token, oursFirst)
+			if oursFirst then w.fire("UNIT_FACTION", token) end
+			local p = w.plates[token]
+			local f = p and rawget(p, "frame")
+			if f then CompactUnitFrame_UpdateName(f) end
+			if not oursFirst then w.fire("UNIT_FACTION", token) end
+		end
+		w.frameOf = function(token) local p = w.plates[token] return p and rawget(p, "frame") end
+		-- Our texture on a unit frame (never two), and the mark it draws by its art.
+		w.texOf = function(frame)
+			local found
+			for _, tex in ipairs(w.plateTex) do
+				if tex.frame == frame then
+					assert(not found, "one texture per unit frame: " .. frame.label)
+					found = tex
+				end
+			end
+			return found
+		end
+		w.kindOf = function(tex)
+			if tex.file == MARK_STAR then return "member" end
+			if tex.atlas == MARK_SILVER and not tex.desaturated then return "silver" end
+			if tex.atlas == MARK_GOLD then return tex.desaturated and "bronze" or "gold" end
+			return "?"
+		end
+		-- The mark seen on the plate showing `token` (its kind, its texture), nil for none.
+		w.mark = function(token)
+			local f = w.frameOf(token)
+			if not f or not Game(f).shown then return nil end
+			local tex = w.texOf(f)
+			if not tex or not tex.shown then return nil end
+			return w.kindOf(tex), tex
+		end
+		-- The mark left of his own name (the preview's), nil for none; never two.
+		w.myMarks = function()
+			local all = {}
+			for _, tex in ipairs(w.textures) do
+				if tex.owner == "PlayerFrame.PlayerFrameContainer" and tex.layer == "OVERLAY" then all[#all + 1] = tex end
+			end
+			return all
+		end
+		w.myMark = function()
+			local found
+			for _, tex in ipairs(w.myMarks()) do
+				if tex.shown then
+					assert(not found, "two marks at once left of his name")
+					found = tex
+				end
+			end
+			return found and w.kindOf(found) or nil, found
+		end
+		w.computedMarks = function() return w.N.stats.computed end
+		if setup then setup(w) end
+	end)
+	for _, name in ipairs(PLATE_GLOBALS) do _G[name] = saved[name] end
+	ns.Nameplates, ns.db.nameplates, ns.Roster.byName = savedMod, savedSetting, savedRoster
+	if not ok then error(err, 0) end
+end
+
+-- Where the mark's right edge is, for a name of `letters` letters centred on the plate: half its
+-- width and 2 px left of the name's centre.
+local function MarkPoint(frame, letters)
+	return ("RIGHT %s CENTER %d 0"):format(frame.name.label, -math.floor(letters * 6 / 2 + 2 + 0.5))
+end
+
+-- Only CreateTexture on the game's objects (and IsForbidden and IsProtected, which only answer).
+local function OnlyOurTextures(w)
+	for _, entry in ipairs(w.log) do
+		assert(entry:find(":CreateTexture$") or entry:find(":IsForbidden%?$") or entry:find(":IsProtected%?$"),
+			"only CreateTexture on the game's objects: " .. entry)
+	end
+end
+
+test("1.0.0 nameplates: a mark left of the name of each friendly player of an Olympus guild, from the borders' tiers: the King gold, the High Council, Lords and Captains silver, Raiders and Veterans bronze, any other member the star; nobody else", function()
+	WithNameplates(function(w)
+		w.internal("LOGIN")
+		local cases = {
+			{ BORDER_KING, "gold", "the King" },
+			{ BorderUnit("Sage Owl", "Wanderers", "Member", 3), "silver", "a High Councillor, in any guild" },
+			{ BorderUnit("Zeusy", "Olympus Zeus", "Zeus", 0), "silver", "a Lord, as his guild's census names him" },
+			{ BorderUnit("Capt", "Olympus Zeus", "Titan", 1), "silver", "a Captain, from the census" },
+			{ BorderUnit("Mate", "Olympus II", "Titan", 1), "silver", "our own guild's officer" },
+			{ BorderUnit("Axe", "Olympus Zeus", "Raider", 4), "bronze", "a Raider" },
+			{ BorderUnit("Vet", "Olympus II", "Veterano", 3), "bronze", "a Veteran of our own guild" },
+			{ BorderUnit("Pleb", "Olympus Zeus", "Peasant", 6), "member", "any other member of an Olympus guild" },
+			{ BorderUnit("Unlisted", "Olympus Zeus", "Titan", 1), "member", "an officer rank the census doesn't name: a member" },
+			{ BorderUnit("Asmongold Asmongler", "Olympus II", "Member", 3), "member", "the King's name in another guild" },
+			{ BorderUnit("Trader", "Stormwind Traders", "Veteran", 3), nil, "another guild's Veteran" },
+			{ BorderUnit("Boss", "Stormwind Traders", "Guild Master", 0), nil, "another guild's master" },
+			{ BorderUnit("Loner", nil, nil, nil), nil, "no guild" },
+			{ BorderUnit("Orc", "Olympus Horde", "Raider", 4, { faction = "Horde" }), nil, "the other faction's Olympus guild" },
+			{ BorderUnit("Duelist", "Olympus Zeus", "Raider", 4, { hostile = true }), nil, "hostile (a duel)" },
+			{ BorderUnit("Mercenary", "Olympus Zeus", "Raider", 4, { attackable = true }), nil, "friendly but attackable (the other faction in our party)" },
+			{ BorderUnit("Hogger", nil, nil, nil, { npc = true }), nil, "a creature" },
+		}
+		for i, c in ipairs(cases) do w.add("nameplate" .. i, c[1]) end
+		for i, c in ipairs(cases) do eq(w.mark("nameplate" .. i), c[2], c[3]) end
+		eq(w.N.stats.computed, 14, "worked out once for each friendly player (the hook and the event both came), never for a hostile one or a creature")
+		-- Each mark's art, its size and where it goes: the game's atlases at our size (16 px, the
+		-- plates' classification scale 1), the bronze its gold without colour and tinted as Max's
+		-- bronze (the mean of the brightest quarter of his plain frame: 158, 118, 86), the star
+		-- Olympus's own file; the right edge 2 px left of the name's first letter.
+		local want = {
+			gold = { atlas = MARK_GOLD, desaturated = false, color = "1.000 1.000 1.000" },
+			silver = { atlas = MARK_SILVER, desaturated = false, color = "1.000 1.000 1.000" },
+			bronze = { atlas = MARK_GOLD, desaturated = true, color = ("%.3f %.3f %.3f"):format(158 / 255, 118 / 255, 86 / 255) },
+			member = { file = MARK_STAR, desaturated = false, color = "1.000 1.000 1.000", coord = "0 1 0 1" },
+		}
+		for i, c in ipairs(cases) do
+			local kind, tex = w.mark("nameplate" .. i)
+			if kind then
+				local art = want[kind]
+				eq(tex.atlas, art.atlas, c[3]); eq(tex.file, art.file, c[3]); eq(tex.useSize, nil, c[3] .. ": our size, not the atlas's")
+				eq(tex.desaturated, art.desaturated, c[3]); eq(tex.color, art.color, c[3]); eq(tex.coord, art.coord, c[3])
+				eq(tex.size, "16 16", c[3]); eq(tex.layer, "OVERLAY", c[3])
+				local f = w.frameOf("nameplate" .. i)
+				eq(tex.point, MarkPoint(f, #(c[1].name)), c[3] .. ": left of the name")
+			end
+		end
+		-- The High Council's gold behind the borders' flag: silver on the plates all the same (the
+		-- King's gold is his alone).
+		w.ns.BORDERS_COUNCIL_GOLD = true
+		w.remove("nameplate2"); w.add("nameplate2", cases[2][1])
+		eq(w.mark("nameplate2"), "silver")
+		w.ns.BORDERS_COUNCIL_GOLD = false
+		-- The game's frames: a texture made on each unit frame, nothing else called; the hooks on the
+		-- game's name updates and on each unit frame's layout.
+		OnlyOurTextures(w)
+		local layoutHooks = 0
+		for _, h in ipairs(w.hooks) do
+			if h:find("^UnitFrame%d+%.UpdateAnchors$") then layoutHooks = layoutHooks + 1 end
+		end
+		eq(layoutHooks, #w.frames, "one layout hook per unit frame")
+		local names = 0
+		for _, h in ipairs(w.hooks) do if h == "CompactUnitFrame_UpdateName" then names = names + 1 end end
+		eq(names, 1, "one hook on the game's name updates")
+	end)
+	-- The King's own screen (his stream): no High Council mark, as no council border; a councillor
+	-- in an Olympus guild is a member there like any other.
+	WithNameplates(function(w)
+		ns.me = "Asmongold Asmongler-Realm"
+		w.internal("LOGIN")
+		w.add("nameplate1", BorderUnit("Sage Owl", "Wanderers", "Member", 3))
+		eq(w.mark("nameplate1"), nil, "a councillor outside Olympus: nothing on his screen")
+		ns.rdb.council.names["pleb"] = true
+		w.add("nameplate2", BorderUnit("Pleb", "Olympus Zeus", "Peasant", 6))
+		eq(w.mark("nameplate2"), "member", "a councillor in an Olympus guild: the star, like any member")
+		ns.rdb.council.names["pleb"] = nil
+	end, function(w) w.units.player = BORDER_KING end)
+	-- (Anyone else's screen: that councillor silver.)
+	WithNameplates(function(w)
+		w.internal("LOGIN")
+		ns.rdb.council.names["pleb"] = true
+		w.add("nameplate1", BorderUnit("Pleb", "Olympus Zeus", "Peasant", 6))
+		eq(w.mark("nameplate1"), "silver")
+		ns.rdb.council.names["pleb"] = nil
+	end)
+	-- The Horde: its own King gold, the Alliance's nothing.
+	WithNameplates(function(w)
+		w.internal("LOGIN")
+		w.add("nameplate1", BorderUnit("Duskmonkey Boneback", "Mudhutters", "Chief", 0, { faction = "Horde" }))
+		w.add("nameplate2", BORDER_KING)
+		w.add("nameplate3", BorderUnit("Axe", "Olympus Horde", "Raider", 4, { faction = "Horde" }))
+		eq(w.mark("nameplate1"), "gold", "the Horde's King"); eq(w.mark("nameplate2"), nil, "the Alliance's")
+		eq(w.mark("nameplate3"), "bronze")
+	end, function(w)
+		ns.faction = "Horde"
+		w.units.player = BorderUnit("Hordie", "Olympus Horde", "Member", 4, { faction = "Horde" })
+	end)
+end)
+
+test("1.0.0 nameplates: the mark sits 2 px left of the name's first letter in every layout (names only and above the bar centred, inside the bar from the left), follows a new name, a new layout and the plates' size, and hides with the name", function()
+	WithNameplates(function(w)
+		w.internal("LOGIN")
+		local capt = BorderUnit("Capt", "Olympus Zeus", "Titan", 1)
+		local f = w.add("nameplate1", capt)
+		local kind, tex = w.mark("nameplate1")
+		eq(kind, "silver")
+		eq(tex.point, "RIGHT UnitFrame1.name CENTER -14 0", "names only: half of \"Capt\" (24 px) and 2 px left of the centre")
+		-- The game writes the name again (its realm shown, say): the mark follows, set in place again.
+		capt.display = "Capt-Faraway"
+		CompactUnitFrame_UpdateName(f)
+		eq(tex.point, "RIGHT UnitFrame1.name CENTER -38 0", "a longer name"); eq(w.mark("nameplate1"), "silver")
+		-- The plate laid out again: inside the bar the name is written from the left.
+		w.layout = "inside"
+		f:UpdateAnchors()
+		eq(tex.point, "RIGHT UnitFrame1.name LEFT -2 0", "inside the bar: at the name's left edge")
+		w.layout = "above"
+		f:UpdateAnchors()
+		eq(tex.point, "RIGHT UnitFrame1.name CENTER -38 0", "above the bar: centred again")
+		-- A name longer than the plate is cut short by the game: the mark at the plate's left.
+		capt.display = ("W"):rep(40)
+		CompactUnitFrame_UpdateName(f)
+		eq(tex.point, "RIGHT UnitFrame1.name CENTER -92 0", "at most the name's own width (180)")
+		capt.display = nil
+		CompactUnitFrame_UpdateName(f)
+		-- Larger plates: the game's classification mark grows, the name too, and so does ours.
+		w.scale = 1.25
+		f:UpdateAnchors()
+		eq(tex.size, "20 20", "at the plates' classification scale")
+		w.scale = 1
+		f:UpdateAnchors()
+		eq(tex.size, "16 16")
+		-- The same place again: not set again.
+		tex.calls = {}
+		CompactUnitFrame_UpdateName(f); f:UpdateAnchors()
+		for _, m in ipairs(tex.calls) do assert(m ~= "SetPoint" and m ~= "SetSize", "set again: " .. m) end
+		-- Hidden with the name (a simplified plate, the names off), back with it.
+		w.nameHidden.nameplate1 = true
+		CompactUnitFrame_UpdateName(f)
+		eq(w.mark("nameplate1"), nil, "no name: no mark")
+		w.nameHidden.nameplate1 = nil
+		CompactUnitFrame_UpdateName(f)
+		eq(w.mark("nameplate1"), "silver", "back with the name")
+		-- A width the client hides: no mark, no error.
+		w.secret, w.secretWidth = {}, true
+		capt.display = "Capt-Hidden"
+		CompactUnitFrame_UpdateName(f)
+		eq(w.mark("nameplate1"), nil, "a secret width")
+		w.secretWidth, capt.display = nil, nil
+		CompactUnitFrame_UpdateName(f)
+		eq(w.mark("nameplate1"), "silver")
+		-- Its layout and name followed by the game's own calls alone: after them, not before.
+		w.seq = {}
+		f:UpdateAnchors()
+		eq(w.seq[1], "UnitFrame1:UpdateAnchors (the game's)")
+		OnlyOurTextures(w)
+	end)
+end)
+
+test("1.0.0 nameplates: hostile players, creatures, our own plate and forbidden plates get nothing; nothing but IsForbidden is called on a forbidden plate, even one handed to us", function()
+	WithNameplates(function(w)
+		w.internal("LOGIN")
+		-- Our own plate (the personal resource display): not ours to mark.
+		w.add("nameplate1", w.units.player)
+		eq(w.mark("nameplate1"), nil, "our own plate")
+		-- A duel: a Raider hostile, then friendly again when it ends (UNIT_FACTION: the game writes
+		-- the name again, and we hear it), whichever of the two runs first.
+		local duel = BorderUnit("Duelist", "Olympus Zeus", "Raider", 4, { hostile = true })
+		w.add("nameplate2", duel)
+		eq(w.mark("nameplate2"), nil, "hostile")
+		duel.hostile = nil
+		w.faction("nameplate2")
+		eq(w.mark("nameplate2"), "bronze", "friendly again")
+		duel.hostile = true
+		w.faction("nameplate2", true)
+		eq(w.mark("nameplate2"), nil, "hostile again")
+		duel.hostile = nil
+		w.faction("nameplate2", true)
+		eq(w.mark("nameplate2"), "bronze", "friendly again, ours first")
+		-- A player mind-controlled (his flags): hostile, then ours again.
+		duel.hostile = true
+		w.fire("UNIT_FLAGS", "nameplate2")
+		eq(w.mark("nameplate2"), nil, "UNIT_FLAGS: hostile")
+		duel.hostile = nil
+		w.fire("UNIT_FLAGS", "nameplate2")
+		eq(w.mark("nameplate2"), "bronze", "UNIT_FLAGS: friendly")
+		-- Our own faction changing: every plate looked at again.
+		local other = BorderUnit("Capt", "Olympus Zeus", "Titan", 1)
+		w.add("nameplate6", other)
+		eq(w.mark("nameplate6"), "silver")
+		duel.hostile, other.hostile = true, true
+		w.fire("UNIT_FACTION", "player")
+		eq(w.mark("nameplate2"), nil, "ours: every plate"); eq(w.mark("nameplate6"), nil, "ours: every plate")
+		duel.hostile, other.hostile = nil, nil
+		w.fire("UNIT_FACTION", "player")
+		eq(w.mark("nameplate2"), "bronze"); eq(w.mark("nameplate6"), "silver")
+		w.remove("nameplate6")
+		duel.hostile = true
+		w.faction("nameplate2")
+		eq(w.mark("nameplate2"), nil, "hostile again, to the end")
+		w.add("nameplate3", BorderUnit("Hogger", "Olympus Zeus", nil, nil, { npc = true }))
+		eq(w.mark("nameplate3"), nil, "a creature")
+		-- A forbidden plate (friendly plates in an instance): the game gives it to its own code only;
+		-- its unit frame still runs the game's name update, which our hook sees.
+		local n = w.computedMarks()
+		local ff = w.add("nameplate4", BORDER_KING, { forbidden = true })
+		eq(w.texOf(ff), nil, "nothing made on it"); eq(w.computedMarks(), n, "nothing worked out")
+		-- Handed to us anyway (the client never does): nothing but IsForbidden on it all the same.
+		w.leakForbidden = true
+		local ff2 = w.add("nameplate5", BorderUnit("Capt", "Olympus Zeus", "Titan", 1), { forbidden = true })
+		w.N.RefreshAll(true)
+		w.internal("DATA_CHANGED"); w.fire("UNIT_NAME_UPDATE", "nameplate5"); w.fire("PLAYER_GUILD_UPDATE", "nameplate5")
+		CompactUnitFrame_UpdateName(ff2)
+		w.remove("nameplate5")
+		eq(w.texOf(ff2), nil, "nothing made on it"); eq(w.computedMarks(), n, "nothing worked out")
+		for _, entry in ipairs(w.log) do
+			if entry:find("Forbidden") or entry:find("nameplate4") or entry:find("nameplate5") then
+				assert(entry:find(":IsForbidden%?$"), "only IsForbidden on a forbidden plate: " .. entry)
+			end
+		end
+		OnlyOurTextures(w)
+	end)
+end)
+
+test("1.0.0 nameplates: a plate the game recycles (removed, then added for another player) shows that player's mark, whichever handler runs first", function()
+	WithNameplates(function(w)
+		w.internal("LOGIN")
+		local f1 = w.add("nameplate1", BORDER_KING)
+		eq(w.mark("nameplate1"), "gold")
+		w.remove("nameplate1")
+		eq(w.texOf(f1).shown, false, "hidden when its unit goes")
+		-- The same unit frame, from the pool, for someone else on another plate.
+		local f2 = w.add("nameplate2", BorderUnit("Pleb", "Olympus Zeus", "Peasant", 6))
+		eq(f2, f1, "the game's pool gave the same unit frame")
+		eq(w.mark("nameplate2"), "member")
+		eq(#w.plateTex, 1, "its texture went with it: one texture")
+		-- And for a stranger: nothing.
+		w.remove("nameplate2")
+		w.add("nameplate1", BorderUnit("Trader", "Stormwind Traders", "Veteran", 3))
+		eq(w.mark("nameplate1"), nil, "a stranger on the plate the King had")
+		-- Our handlers first: the plate has no unit frame yet when we hear of it; the game's name
+		-- update just after puts the mark on. Removed first: hidden all the same.
+		w.remove("nameplate1", { oursFirst = true })
+		eq(w.texOf(f1).shown, false)
+		w.add("nameplate3", BorderUnit("Capt", "Olympus Zeus", "Titan", 1), { oursFirst = true })
+		eq(w.mark("nameplate3"), "silver", "ours first")
+		w.remove("nameplate3", { oursFirst = true })
+		-- The same unit token for another player: his own mark, worked out afresh.
+		w.add("nameplate3", BORDER_KING)
+		eq(w.mark("nameplate3"), "gold", "the same token, another player")
+		-- Several plates at once, frames swapped between them as the game hands them out.
+		local a = w.add("nameplate4", BorderUnit("Axe", "Olympus Zeus", "Raider", 4))
+		local b = w.add("nameplate5", BorderUnit("Zeusy", "Olympus Zeus", "Zeus", 0))
+		w.remove("nameplate4"); w.remove("nameplate5")
+		local c = w.add("nameplate6", BorderUnit("Zeusy", "Olympus Zeus", "Zeus", 0))
+		local d = w.add("nameplate7", BorderUnit("Axe", "Olympus Zeus", "Raider", 4))
+		eq(c, b); eq(d, a)
+		eq(w.mark("nameplate6"), "silver"); eq(w.mark("nameplate7"), "bronze")
+		eq(w.mark("nameplate3"), "gold", "the others as they were")
+		-- Each visible plate once in /oly status.
+		assert(w.N.StatusLine():find("3 plates, marks: gold 1, silver 1, bronze 1", 1, true), w.N.StatusLine())
+		OnlyOurTextures(w)
+	end)
+end)
+
+test("1.0.0 nameplates: census, High Council and roster changes work out again only the plates shown whose mark came from what changed", function()
+	WithNameplates(function(w)
+		local reports = ns.rdb.guilds
+		ns.Roster.byName = {}
+		w.internal("LOGIN")
+		local capt = BorderUnit("Capt", "Olympus Zeus", "Titan", 1)
+		local mate = BorderUnit("Mate", "Olympus II", nil, nil) -- (our own guild, no rank from the server)
+		w.add("nameplate1", capt)
+		w.add("nameplate2", mate)
+		w.add("nameplate3", BorderUnit("Trader", "Stormwind Traders", "Veteran", 3))
+		eq(w.mark("nameplate1"), "silver"); eq(w.mark("nameplate2"), "member"); eq(w.mark("nameplate3"), nil)
+		local n = w.computedMarks()
+		-- Another guild's report: nothing.
+		reports["Olympus Other"] = { guild = "Olympus Other", leader = "X", t = 200 }
+		w.internal("DATA_CHANGED")
+		eq(w.computedMarks(), n, "another guild's report")
+		-- His guild's new report: his plate alone.
+		reports["Olympus Zeus"] = { guild = "Olympus Zeus", leader = "Zeusy", officers = {}, realm = "Realm", t = 300 }
+		w.internal("DATA_CHANGED")
+		eq(w.computedMarks(), n + 1, "his guild's report"); eq(w.mark("nameplate1"), "member", "no longer a Captain")
+		w.internal("DATA_CHANGED")
+		eq(w.computedMarks(), n + 1, "the same report again: nothing")
+		-- Our roster (a new table at each scan): the plate whose rank came from it, alone.
+		ns.Roster.byName = { ["Mate-Realm"] = 1 }
+		w.internal("DATA_CHANGED")
+		eq(w.computedMarks(), n + 2, "our roster: the guildmate the server gave no rank")
+		eq(w.mark("nameplate2"), "silver", "an officer in our roster")
+		-- The borders the same way: his border on the target follows our roster.
+		w.target(mate)
+		eq(w.shown("target"), "silver")
+		ns.Roster.byName = { ["Mate-Realm"] = 3 }
+		w.internal("DATA_CHANGED")
+		eq(w.shown("target"), nil, "the borders follow our roster too"); eq(w.mark("nameplate2"), "member")
+		n = w.computedMarks()
+		-- The High Council's list: every plate shown.
+		ns.rdb.council = { names = { ["trader"] = true } }
+		w.internal("DATA_CHANGED")
+		eq(w.computedMarks(), n + 3, "all three plates"); eq(w.mark("nameplate3"), "silver", "a new High Councillor")
+		-- A plate no longer shown: not worked out again.
+		w.remove("nameplate3")
+		n = w.computedMarks()
+		ns.rdb.council = { names = {} }
+		w.internal("DATA_CHANGED")
+		eq(w.computedMarks(), n + 2, "only the two plates still shown")
+		-- Its name or guild reaching the client: that plate again; another unit's: nothing.
+		n = w.computedMarks()
+		w.fire("UNIT_NAME_UPDATE", "nameplate1"); eq(w.computedMarks(), n + 1)
+		w.fire("UNIT_NAME_UPDATE", "target"); eq(w.computedMarks(), n + 1)
+		w.fire("PLAYER_GUILD_UPDATE", "nameplate2"); eq(w.computedMarks(), n + 2)
+		w.fire("PLAYER_GUILD_UPDATE", "party3"); eq(w.computedMarks(), n + 2)
+		-- Our own guild changing: every plate shown.
+		w.fire("PLAYER_GUILD_UPDATE", "player"); eq(w.computedMarks(), n + 4)
+	end)
+end)
+
+test("1.0.0 nameplates: /oly nameplates on|off (on by default) for the marks alone, /oly borders off hides both; in the help and /oly status, in English and Portuguese", function()
+	WithNameplates(function(w)
+		ns.Borders, ns.Nameplates = w.B, w.N -- (the slash command's: the stand-ins otherwise)
+		w.internal("LOGIN")
+		eq(w.N.Enabled(), true, "on by default")
+		local capt = BorderUnit("Capt", "Olympus Zeus", "Titan", 1)
+		w.add("nameplate1", capt)
+		w.target(capt)
+		eq(w.mark("nameplate1"), "silver"); eq(w.shown("target"), "silver")
+		assert(ns.StatusText():find("nameplates: on  |  1 plates, marks: silver 1  |  worked out 1 times", 1, true), ns.StatusText())
+		SlashCmdList.OLYMPUS("nameplates off")
+		eq(ns.db.nameplates, false); eq(w.printed[#w.printed], ns.L.NAMEPLATES_OFF)
+		eq(w.mark("nameplate1"), nil, "hidden at once"); eq(w.shown("target"), "silver", "the borders stay")
+		local n = w.computedMarks()
+		w.add("nameplate2", BORDER_KING)
+		eq(w.mark("nameplate2"), nil, "off: nothing shown"); eq(w.computedMarks(), n, "nor worked out")
+		assert(ns.StatusText():find("nameplates: off (/oly nameplates on)", 1, true))
+		SlashCmdList.OLYMPUS("nameplates")
+		eq(w.printed[#w.printed], ns.L.NAMEPLATES_OFF, "says which")
+		SlashCmdList.OLYMPUS("nameplates ON")
+		eq(ns.db.nameplates, true); eq(w.printed[#w.printed], ns.L.NAMEPLATES_ON)
+		eq(w.mark("nameplate1"), "silver", "back at once"); eq(w.mark("nameplate2"), "gold")
+		-- The borders' switch: both.
+		SlashCmdList.OLYMPUS("borders off")
+		eq(w.printed[#w.printed], ns.L.BORDERS_OFF)
+		eq(w.mark("nameplate1"), nil); eq(w.mark("nameplate2"), nil); eq(w.shown("target"), nil)
+		w.add("nameplate3", BorderUnit("Axe", "Olympus Zeus", "Raider", 4))
+		eq(w.mark("nameplate3"), nil, "the borders off: no marks")
+		SlashCmdList.OLYMPUS("nameplates")
+		eq(w.printed[#w.printed], ns.L.NAMEPLATES_BORDERS_OFF, "says why")
+		assert(ns.StatusText():find("nameplates: off with the borders (/oly borders on)", 1, true))
+		SlashCmdList.OLYMPUS("borders on")
+		eq(w.mark("nameplate1"), "silver"); eq(w.mark("nameplate3"), "bronze"); eq(w.shown("target"), "silver")
+		-- The help: after the borders' line.
+		local savedPrint, lines = print, {}
+		print = function(m) lines[#lines + 1] = tostring(m) end
+		local ok, err = pcall(SlashCmdList.OLYMPUS, "help")
+		print = savedPrint
+		if not ok then error(err, 0) end
+		local at
+		for i, l in ipairs(lines) do if l == ns.L.HELP_NAMEPLATES then at = i end end
+		assert(at and lines[at - 1] == ns.L.HELP_BORDERS, "in the help, after the borders")
+	end)
+	-- Portuguese.
+	local savedLocale, pt = GetLocale, {}
+	GetLocale = function() return "ptBR" end
+	local ok, err = pcall(function() assert(loadfile(ADDON_DIR .. "Locales.lua"))("Olympus", pt) end)
+	GetLocale = savedLocale
+	if not ok then error(err, 0) end
+	for _, key in ipairs({ "HELP_NAMEPLATES", "NAMEPLATES_ON", "NAMEPLATES_OFF", "NAMEPLATES_BORDERS_OFF", "NAMEPLATES_GAMEPAD",
+		"NAMEPLATES_PREVIEW_WHEN_OFF", "BORDERS_PREVIEW_ON_MEMBER", "BORDERS_PREVIEW_TIP_MEMBER", "BORDERS_WHO_MEMBER" }) do
+		assert(type(ns.L[key]) == "string" and ns.L[key] ~= key, "English " .. key)
+		assert(type(pt.L[key]) == "string" and pt.L[key] ~= ns.L[key], "Portuguese " .. key)
+		assert(not ns.L[key]:find("%", 1, true) and not pt.L[key]:find("%", 1, true), key .. ": nothing to format")
+	end
+	for _, L in ipairs({ ns.L, pt.L }) do
+		assert(L.HELP_NAMEPLATES:find("/oly nameplates on | off", 1, true))
+		assert(L.NAMEPLATES_ON:find("/oly nameplates off", 1, true) and L.NAMEPLATES_ON:find("Shift+V", 1, true))
+		assert(L.NAMEPLATES_OFF:find("/oly nameplates on", 1, true) and L.NAMEPLATES_BORDERS_OFF:find("/oly borders on", 1, true))
+		assert(L.BORDERS_OFF:find("/oly borders on", 1, true) and L.BORDERS_ON:find("/oly nameplates", 1, true))
+		assert(L.BORDERS_PREVIEW_ON_MEMBER:find("/oly borders test off", 1, true))
+	end
+end)
+
+test("1.0.0 nameplates: off with the gamepad UI (no hook, no texture, nothing called), hidden at a switch to it, back with mouse and keyboard", function()
+	WithNameplates(function(w)
+		ns.Borders, ns.Nameplates = w.B, w.N
+		w.style = 1
+		w.internal("LOGIN")
+		w.add("nameplate1", BORDER_KING)
+		w.add("nameplate2", BorderUnit("Axe", "Olympus Zeus", "Raider", 4))
+		eq(#w.log, 0, "nothing called on the game's frames"); eq(#w.hooks, 0, "no hook"); eq(#w.plateTex, 0, "no texture")
+		eq(w.computedMarks(), 0, "nothing worked out")
+		assert(w.N.StatusLine():find("on, hidden with the gamepad UI", 1, true), w.N.StatusLine())
+		SlashCmdList.OLYMPUS("nameplates")
+		eq(w.printed[#w.printed - 1], ns.L.NAMEPLATES_ON); eq(w.printed[#w.printed], ns.L.NAMEPLATES_GAMEPAD)
+		-- To mouse and keyboard: made and shown.
+		w.style = 0
+		w.fire("INPUT_DEVICE_INTERFACE_TRANSITION", 0, 1)
+		eq(w.mark("nameplate1"), "gold"); eq(w.mark("nameplate2"), "bronze")
+		-- Back to the gamepad UI: hidden at once; the hooks and the events call nothing.
+		w.style = 1
+		w.fire("INPUT_DEVICE_INTERFACE_TRANSITION", 1, 0)
+		eq(w.mark("nameplate1"), nil, "hidden at the switch"); eq(w.mark("nameplate2"), nil)
+		local logged, n = #w.log, w.computedMarks()
+		for _, tex in ipairs(w.plateTex) do tex.calls = {} end
+		CompactUnitFrame_UpdateName(w.frameOf("nameplate1")); w.frameOf("nameplate2"):UpdateAnchors()
+		w.add("nameplate3", BorderUnit("Capt", "Olympus Zeus", "Titan", 1))
+		w.remove("nameplate2")
+		w.fire("UNIT_NAME_UPDATE", "nameplate1"); w.internal("DATA_CHANGED"); w.fire("PLAYER_GUILD_UPDATE")
+		eq(w.mark("nameplate1"), nil); eq(w.mark("nameplate3"), nil); eq(w.computedMarks(), n, "nothing worked out")
+		for _, tex in ipairs(w.plateTex) do eq(#tex.calls, 0, "no call on our textures") end
+		eq(#w.log, logged, "nothing called on the game's frames")
+		-- Mouse and keyboard again.
+		w.style = 0
+		w.fire("INPUT_DEVICE_INTERFACE_TRANSITION", 0, 1)
+		eq(w.mark("nameplate1"), "gold"); eq(w.mark("nameplate3"), "silver")
+		OnlyOurTextures(w)
+	end)
+end)
+
+test("1.0.0 nameplates: in combat a nameplate's mark is made, placed and shown (the client doesn't protect nameplates); where it does, the mark waits hidden for the fight to end", function()
+	WithNameplates(function(w)
+		w.internal("LOGIN")
+		w.combat = true
+		-- Unprotected, as Forever's nameplates are: made and placed in combat.
+		local f = w.add("nameplate1", BorderUnit("Capt", "Olympus Zeus", "Titan", 1))
+		eq(w.mark("nameplate1"), "silver", "made in combat")
+		local tex = w.texOf(f)
+		eq(tex.point, MarkPoint(f, 4))
+		w.remove("nameplate1")
+		eq(w.add("nameplate2", BORDER_KING), f)
+		eq(w.mark("nameplate2"), "gold", "a new player on it in combat")
+		eq(tex.point, MarkPoint(f, #BORDER_KING.name), "placed for his name in combat")
+		-- Were they protected: nothing made on a new unit frame, nothing moved, until the fight ends.
+		w.protected = true
+		local g = w.add("nameplate3", BorderUnit("Axe", "Olympus Zeus", "Raider", 4))
+		eq(w.texOf(g), nil, "nothing made on a protected frame in combat"); eq(w.mark("nameplate3"), nil)
+		assert(w.N.StatusLine():find("some wait for combat to end", 1, true), w.N.StatusLine())
+		tex.calls = {}
+		w.remove("nameplate2")
+		eq(w.add("nameplate4", BorderUnit("Pleb", "Olympus Zeus", "Peasant", 6)), f)
+		eq(w.mark("nameplate4"), nil, "its place changed: hidden rather than beside another name")
+		for _, m in ipairs(tex.calls) do
+			assert(m ~= "SetPoint" and m ~= "SetSize" and m ~= "ClearAllPoints", "moved in combat: " .. m)
+		end
+		w.fire("PLAYER_REGEN_ENABLED")
+		eq(w.mark("nameplate3"), nil, "still in combat")
+		w.combat = false
+		w.fire("PLAYER_REGEN_ENABLED")
+		eq(w.mark("nameplate3"), "bronze", "made and shown once the fight is over")
+		eq(w.mark("nameplate4"), "member", "placed and shown once the fight is over")
+		eq(w.texOf(f).point, MarkPoint(f, 4))
+		-- In combat again, protected: the same place (a player of the same name's length) is shown
+		-- with Show and the art alone.
+		w.combat = true
+		w.remove("nameplate4")
+		tex.calls = {}
+		eq(w.add("nameplate5", BorderUnit("Zatk", "Olympus Zeus", "Raider", 4)), f)
+		eq(w.mark("nameplate5"), "bronze")
+		for _, m in ipairs(tex.calls) do
+			assert(m ~= "SetPoint" and m ~= "SetSize" and m ~= "ClearAllPoints", "moved in combat: " .. m)
+		end
+		OnlyOurTextures(w)
+	end)
+end)
+
+test("1.0.0 nameplates preview: the author's /oly borders test <tier> shows that tier's mark on every friendly player's plate and left of his own name on his player frame; member the star alone; off or a /reload ends it", function()
+	WithNameplates(function(w)
+		ns.Borders, ns.Nameplates = w.B, w.N
+		w.internal("LOGIN")
+		w.add("nameplate1", BorderUnit("Trader", "Stormwind Traders", "Veteran", 3))
+		w.add("nameplate2", BORDER_KING)
+		w.add("nameplate3", BorderUnit("Duelist", "Olympus Zeus", "Raider", 4, { hostile = true }))
+		w.add("nameplate4", BorderUnit("Hogger", nil, nil, nil, { npc = true }))
+		eq(w.mark("nameplate1"), nil); eq(w.mark("nameplate2"), "gold"); eq(w.myMark(), nil, "no mark of his own")
+		eq(#w.myMarks(), 0, "nothing made on his frame before a preview")
+		local tiers = { ["gold-elite"] = "gold", ["silver-elite"] = "silver", gold = "silver", silver = "silver",
+			["bronze-elite"] = "bronze", bronze = "bronze", member = "member" }
+		for _, name in ipairs({ "gold-elite", "silver-elite", "gold", "silver", "bronze-elite", "bronze", "member" }) do
+			SlashCmdList.OLYMPUS("borders test " .. name)
+			local want = tiers[name]
+			eq(w.printed[#w.printed], name == "member" and ns.L.BORDERS_PREVIEW_ON_MEMBER or ns.L.BORDERS_PREVIEW_ON:format(name))
+			eq(w.mark("nameplate1"), want, name .. " on a friendly player's plate")
+			eq(w.mark("nameplate2"), want, name .. " on the King's too")
+			eq(w.mark("nameplate3"), nil, "never on a hostile player"); eq(w.mark("nameplate4"), nil, "nor a creature")
+			local kind, mine = w.myMark()
+			eq(kind, want, name .. " left of his own name")
+			eq(mine.point, "RIGHT PlayerName LEFT -2 0", "left of his name, 2 px off"); eq(mine.size, "16 16")
+			eq(mine.layer, "OVERLAY")
+			eq(w.shown("player"), name ~= "member" and name or nil, "his border as the preview's (none for the star)")
+		end
+		-- The art left of his name, as on the plates.
+		SlashCmdList.OLYMPUS("borders test bronze")
+		local _, mine = w.myMark()
+		eq(mine.atlas, MARK_GOLD); eq(mine.desaturated, true)
+		eq(mine.color, ("%s %s %s"):format(158 / 255, 118 / 255, 86 / 255), "Max's bronze")
+		SlashCmdList.OLYMPUS("borders test member")
+		_, mine = w.myMark()
+		eq(mine.file, MARK_STAR)
+		-- A new plate while it is on: the preview's mark.
+		w.add("nameplate5", BorderUnit("Loner", nil, nil, nil))
+		eq(w.mark("nameplate5"), "member")
+		assert(w.N.StatusLine():find("your name: member", 1, true), w.N.StatusLine())
+		-- His name's marks: made once, out of combat, on his frame's container; nothing else there.
+		eq(#w.myMarks(), 4, "the four marks, made once")
+		OnlyOurTextures(w)
+		-- Off: every plate its own mark again, none left of his name.
+		SlashCmdList.OLYMPUS("borders test off")
+		eq(w.printed[#w.printed], ns.L.BORDERS_PREVIEW_OFF)
+		eq(w.mark("nameplate1"), nil); eq(w.mark("nameplate2"), "gold"); eq(w.mark("nameplate5"), nil)
+		eq(w.myMark(), nil)
+		-- The marks off: the borders' preview alone, and says so for the star.
+		SlashCmdList.OLYMPUS("nameplates off")
+		SlashCmdList.OLYMPUS("borders test member")
+		eq(w.printed[#w.printed], ns.L.NAMEPLATES_PREVIEW_WHEN_OFF, "says why")
+		eq(w.myMark(), nil); eq(w.mark("nameplate1"), nil)
+		SlashCmdList.OLYMPUS("nameplates on")
+		eq(w.myMark(), "member", "back with the marks"); eq(w.mark("nameplate1"), "member")
+		SlashCmdList.OLYMPUS("borders test off")
+	end, function(w) w.units.player = MARK_AUTHOR; ns.me = "Faladoriel Skylance-ClassicBetaPvP" end)
+	-- The /reload: loaded afresh, the preview forgotten.
+	WithNameplates(function(w)
+		ns.Borders, ns.Nameplates = w.B, w.N
+		w.internal("LOGIN")
+		w.add("nameplate1", BorderUnit("Trader", "Stormwind Traders", "Veteran", 3))
+		eq(w.B.Preview(), nil); eq(w.mark("nameplate1"), nil); eq(w.myMark(), nil); eq(#w.myMarks(), 0)
+	end, function(w) w.units.player = MARK_AUTHOR; ns.me = "Faladoriel Skylance-ClassicBetaPvP" end)
+	-- In combat: his name's marks wait for the fight to end, then only Show and Hide in combat.
+	WithNameplates(function(w)
+		ns.Borders, ns.Nameplates = w.B, w.N
+		w.combat = true
+		w.internal("LOGIN")
+		SlashCmdList.OLYMPUS("borders test gold-elite")
+		eq(#w.myMarks(), 0, "nothing made on his frame in combat"); eq(w.myMark(), nil)
+		w.combat = false
+		w.fire("PLAYER_REGEN_ENABLED")
+		eq(w.myMark(), "gold", "made and shown once the fight is over")
+		w.combat = true
+		for _, tex in ipairs(w.myMarks()) do tex.calls = {} end
+		for _, name in ipairs({ "silver", "bronze", "member", "gold-elite" }) do
+			SlashCmdList.OLYMPUS("borders test " .. name)
+		end
+		SlashCmdList.OLYMPUS("borders test off")
+		eq(w.myMark(), nil)
+		local calls = 0
+		for _, tex in ipairs(w.myMarks()) do
+			for _, m in ipairs(tex.calls) do
+				calls = calls + 1
+				assert(m == "Show" or m == "Hide", "in combat on his frame: " .. m)
+			end
+		end
+		assert(calls >= 8, "shown and hidden in combat: " .. calls)
+		eq(#w.myMarks(), 4, "nothing more made")
+	end, function(w) w.units.player = MARK_AUTHOR; ns.me = "Faladoriel Skylance-ClassicBetaPvP" end)
+	-- Off with the gamepad UI, as the borders' preview.
+	WithNameplates(function(w)
+		ns.Borders, ns.Nameplates = w.B, w.N
+		w.style = 1
+		w.internal("LOGIN")
+		w.add("nameplate1", BorderUnit("Trader", "Stormwind Traders", "Veteran", 3))
+		SlashCmdList.OLYMPUS("borders test silver")
+		eq(w.myMark(), nil); eq(#w.myMarks(), 0); eq(w.mark("nameplate1"), nil); eq(#w.log, 0)
+	end, function(w) w.units.player = MARK_AUTHOR; ns.me = "Faladoriel Skylance-ClassicBetaPvP" end)
+end)
+
+test("1.0.0 nameplates preview: anyone but the author gets what /oly borders says, and no plate or name of his changes", function()
+	WithNameplates(function(w)
+		ns.Borders, ns.Nameplates = w.B, w.N
+		w.internal("LOGIN")
+		w.add("nameplate1", BorderUnit("Trader", "Stormwind Traders", "Veteran", 3))
+		w.add("nameplate2", BORDER_KING)
+		for _, cmd in ipairs({ "borders test gold-elite", "borders test member", "borders test off" }) do
+			SlashCmdList.OLYMPUS(cmd)
+			eq(w.printed[#w.printed], ns.L.BORDERS_ON, cmd .. ": what /oly borders says")
+			eq(w.mark("nameplate1"), nil, cmd); eq(w.mark("nameplate2"), "gold", cmd)
+		end
+		eq(w.B.SetPreview("member"), false); eq(w.B.Preview(), nil)
+		eq(#w.myMarks(), 0, "nothing made on his frame"); eq(w.myMark(), nil)
+		local lines = {}
+		w.B.PreviewLines(lines)
+		eq(#lines, 0, "no Workshop lines")
+	end)
+end)
+
+-- The game's calls a stretch of code makes (the unit, guild, style and plate functions, secret
+-- value checks, the names' getters of `frames`), and the calls on the game's frames logged
+-- (IsForbidden): how many in all, how many each.
+local PLATE_CALLS = { "UnitExists", "UnitIsPlayer", "UnitIsFriend", "UnitCanAttack", "UnitIsUnit", "UnitGUID", "UnitFactionGroup",
+	"UnitFullName", "GetUnitName", "GetGuildInfo", "IsInGuild", "InCombatLockdown", "issecretvalue" }
+local UNIT_QUERIES = { "UnitExists", "UnitIsPlayer", "UnitIsFriend", "UnitCanAttack", "UnitIsUnit", "UnitGUID", "UnitFactionGroup",
+	"UnitFullName", "GetUnitName", "GetGuildInfo", "IsInGuild", "GetCurrentStyle", "GetNamePlateForUnit", "GetNamePlates" }
+local function PlateCalls(w, frames, fn)
+	local n, by, restore = 0, {}, {}
+	local function Wrap(t, key, label)
+		local original = rawget(t, key)
+		if type(original) ~= "function" then return end
+		restore[#restore + 1] = function() rawset(t, key, original) end
+		rawset(t, key, function(...) n = n + 1; by[label] = (by[label] or 0) + 1; return original(...) end)
+	end
+	for _, name in ipairs(PLATE_CALLS) do Wrap(_G, name, name) end
+	Wrap(C_InputInterfaceStyle, "GetCurrentStyle", "GetCurrentStyle")
+	Wrap(C_NamePlate, "GetNamePlateForUnit", "GetNamePlateForUnit")
+	Wrap(C_NamePlate, "GetNamePlates", "GetNamePlates")
+	Wrap(C_Texture, "GetAtlasInfo", "GetAtlasInfo")
+	for _, f in ipairs(frames) do
+		for _, m in ipairs({ "GetStringWidth", "GetWidth", "GetJustifyH", "IsShown" }) do Wrap(f.name, m, "name:" .. m) end
+	end
+	local logged = #w.log
+	local ok, err = pcall(fn)
+	for i = #restore, 1, -1 do restore[i]() end
+	if not ok then error(err, 0) end
+	return n, by, #w.log - logged
+end
+local function NoUnitQuery(by, what)
+	for _, name in ipairs(UNIT_QUERIES) do eq(by[name], nil, what .. ": " .. name) end
+end
+
+test("1.0.0 nameplates: the game's name updates (every health change, mouseover and target change, on every compact unit frame) ask nothing about a creature's or a hostile player's plate, look only at a marked plate's name, and a raid frame gets IsForbidden alone", function()
+	WithNameplates(function(w)
+		w.internal("LOGIN")
+		local frames, members = {}, {}
+		for i = 1, 20 do frames[#frames + 1] = w.add("nameplate" .. i, BorderUnit("Mob" .. i, nil, nil, nil, { npc = true })) end
+		for i = 1, 20 do
+			local f = w.add("nameplate" .. (20 + i), BorderUnit("Axe" .. i, "Olympus Zeus", "Raider", 4))
+			frames[#frames + 1], members[i] = f, f
+		end
+		local enemy = w.add("nameplate41", BorderUnit("Duelist", "Olympus Zeus", "Raider", 4, { hostile = true }))
+		local stranger = w.add("nameplate42", BorderUnit("Trader", "Stormwind Traders", "Veteran", 3))
+		frames[#frames + 1], frames[#frames + 2] = enemy, stranger
+		eq(w.mark("nameplate1"), nil); eq(w.mark("nameplate21"), "bronze"); eq(w.mark("nameplate41"), nil); eq(w.mark("nameplate42"), nil)
+		-- A raid frame (Blizzard's CompactRaidFrame: a compact unit frame, not a plate's) the same
+		-- hook sees.
+		local raid = { label = "CompactRaidFrame1", unit = "raid1", name = { text = "", shown = true } }
+		raid.IsForbidden = function() w.log[#w.log + 1] = "CompactRaidFrame1:IsForbidden?"; return false end
+		local n, by, logged = PlateCalls(w, frames, function() CompactUnitFrame_UpdateName(frames[1]) end)
+		eq(n, 0, "a creature's plate: nothing asked"); eq(logged, 0)
+		n, by, logged = PlateCalls(w, frames, function() CompactUnitFrame_UpdateName(enemy) end)
+		eq(n, 0, "a hostile player's plate: nothing asked"); eq(logged, 0)
+		n, by, logged = PlateCalls(w, frames, function() CompactUnitFrame_UpdateName(stranger) end)
+		eq(n, 0, "a friendly player outside Olympus: nothing asked"); eq(logged, 0)
+		n, by, logged = PlateCalls(w, frames, function() CompactUnitFrame_UpdateName(members[1]) end)
+		NoUnitQuery(by, "a marked plate"); eq(logged, 0)
+		assert(n <= 8, "a marked plate: its name alone (shown, justified, its width), " .. n .. " calls")
+		n, by, logged = PlateCalls(w, frames, function() CompactUnitFrame_UpdateName(raid) end)
+		eq(n, 0, "a raid frame: nothing asked"); eq(logged, 1, "IsForbidden alone")
+		-- A mouseover (UPDATE_MOUSEOVER_UNIT: every compact unit frame's name again).
+		n, by, logged = PlateCalls(w, frames, function()
+			for _, f in ipairs(frames) do CompactUnitFrame_UpdateName(f) end
+			CompactUnitFrame_UpdateName(raid)
+		end)
+		NoUnitQuery(by, "a mouseover over 42 plates")
+		assert(n <= 20 * 8, "a mouseover over 42 plates: the 20 marked plates' names alone, " .. n .. " calls")
+		eq(logged, 1)
+		-- And the marks as they were, following their names all the same.
+		eq(w.mark("nameplate21"), "bronze"); eq(w.mark("nameplate1"), nil); eq(w.mark("nameplate41"), nil)
+		local u = w.units.nameplate21
+		u.display = u.name .. "-Faraway"
+		CompactUnitFrame_UpdateName(members[1])
+		eq(w.texOf(members[1]).point, MarkPoint(members[1], #u.display), "a longer name followed")
+		OnlyOurTextures(w)
+	end)
+end)
+
+test("1.0.0 nameplates: leaving an Olympus guild hides every mark at once and the game's name updates bring none back; our guild reaching the client brings them", function()
+	WithNameplates(function(w)
+		w.internal("LOGIN")
+		local f = w.add("nameplate1", BORDER_KING)
+		eq(w.mark("nameplate1"), "gold")
+		local me = w.units.player
+		w.units.player = BorderUnit("Tester", "Stormwind Traders", "Hero", 2)
+		w.fire("PLAYER_GUILD_UPDATE", "player")
+		eq(w.mark("nameplate1"), nil, "no longer a member")
+		CompactUnitFrame_UpdateName(f); f:UpdateAnchors()
+		eq(w.mark("nameplate1"), nil, "a name update brings nothing back")
+		w.add("nameplate2", BorderUnit("Axe", "Olympus Zeus", "Raider", 4))
+		eq(w.mark("nameplate2"), nil)
+		w.units.player = me
+		w.fire("PLAYER_GUILD_UPDATE", "player")
+		eq(w.mark("nameplate1"), "gold"); eq(w.mark("nameplate2"), "bronze")
+	end)
+	-- Logged in before the client knows our guild: none; the census coming in once it does (before
+	-- PLAYER_GUILD_UPDATE): every plate.
+	WithNameplates(function(w)
+		w.internal("LOGIN")
+		w.add("nameplate1", BORDER_KING)
+		eq(w.mark("nameplate1"), nil, "our guild not known yet")
+		w.units.player = BORDER_ME
+		w.internal("DATA_CHANGED")
+		eq(w.mark("nameplate1"), "gold")
+	end, function(w) w.units.player = BorderUnit("Tester", nil, nil, nil) end)
+end)
+
+test("1.0.0 nameplates: the King showing or hiding the council's names (the eye, Asmon's view) takes the council's marks and borders off his screen at once, on the plates already up", function()
+	-- The King's own screen: the eye in the Realm (ns.SetCouncilNamesShown).
+	WithNameplates(function(w)
+		local savedFire, fired = ns.Fire, 0
+		ns.Fire = function(name)
+			if name == "COUNCIL_MASK_CHANGED" then fired = fired + 1; w.internal(name) end
+		end
+		local ok, err = pcall(function()
+			w.internal("LOGIN")
+			ns.rdb.council.names["pleb"] = true
+			local sage = BorderUnit("Sage Owl", "Wanderers", "Member", 3)
+			w.add("nameplate1", sage)
+			w.add("nameplate2", BorderUnit("Pleb", "Olympus Zeus", "Peasant", 6))
+			w.add("nameplate3", BorderUnit("Axe", "Olympus Zeus", "Raider", 4))
+			w.target(sage)
+			eq(ns.CouncilMasked(), true, "hidden by default on his screen")
+			eq(w.mark("nameplate1"), nil); eq(w.mark("nameplate2"), "member"); eq(w.mark("nameplate3"), "bronze")
+			eq(w.shown("target"), nil)
+			local n = w.computedMarks()
+			ns.SetCouncilNamesShown(true)
+			eq(fired, 1)
+			eq(w.mark("nameplate1"), "silver", "names shown: the plate up already follows"); eq(w.mark("nameplate2"), "silver")
+			eq(w.mark("nameplate3"), "bronze"); eq(w.shown("target"), "silver-elite")
+			eq(w.computedMarks(), n + 2, "the councillors' plates alone")
+			ns.SetCouncilNamesShown(false)
+			eq(fired, 2)
+			eq(w.mark("nameplate1"), nil, "hidden again: no council mark beside his name on the stream")
+			eq(w.mark("nameplate2"), "member", "a member like any other"); eq(w.shown("target"), nil, "nor his border")
+			assert(not w.N.StatusLine():find("silver", 1, true), w.N.StatusLine())
+			-- The game's updates and the census leave it so.
+			CompactUnitFrame_UpdateName(w.frameOf("nameplate1")); w.frameOf("nameplate2"):UpdateAnchors()
+			w.internal("DATA_CHANGED")
+			eq(w.mark("nameplate1"), nil); eq(w.mark("nameplate2"), "member")
+			-- The same again: nothing fired, nothing worked out.
+			n = w.computedMarks()
+			ns.SetCouncilNamesShown(false)
+			eq(fired, 2); eq(w.computedMarks(), n)
+			ns.rdb.council.names["pleb"] = nil
+		end)
+		ns.Fire = savedFire
+		if not ok then error(err, 0) end
+	end, function(w) w.units.player = BORDER_KING; ns.me = "Asmongold Asmongler-Realm" end)
+	-- The author's Asmon's view (King.SetDevView fires DATA_CHANGED): his screen is the King's.
+	WithNameplates(function(w)
+		local savedFire = ns.Fire
+		ns.Fire = function(name) if name == "DATA_CHANGED" then w.internal(name) end end
+		local ok, err = pcall(function()
+			w.internal("LOGIN")
+			local sage = BorderUnit("Sage Owl", "Wanderers", "Member", 3)
+			w.add("nameplate1", sage)
+			w.target(sage)
+			eq(w.mark("nameplate1"), "silver"); eq(w.shown("target"), "silver-elite")
+			ns.King.SetDevView(true)
+			eq(ns.CouncilMasked(), true, "Asmon's view: the King's screen")
+			eq(w.mark("nameplate1"), nil, "hidden with the view"); eq(w.shown("target"), nil)
+			ns.King.SetDevView(false)
+			eq(w.mark("nameplate1"), "silver", "back without it"); eq(w.shown("target"), "silver-elite")
+		end)
+		ns.Fire = savedFire
+		if not ok then error(err, 0) end
+	end, function(w) w.units.player = MARK_AUTHOR; ns.me = "Faladoriel Skylance-ClassicBetaPvP" end)
+end)
+
+test("1.0.0 nameplates: the member's star ships as a 32 x 32 32-bit TGA with alpha, drawn by scripts/make-borders.py (no ring, clear corners); README and CurseForge list /oly nameplates", function()
+	local path = ADDON_DIR .. "media/borders/star.tga"
+	local data = assert(ReadFile(path), "missing " .. path)
+	local function u16(i) return data:byte(i) + data:byte(i + 1) * 256 end
+	local idLength, width, height, descriptor = data:byte(1), u16(13), u16(15), data:byte(18)
+	eq(data:byte(2), 0, "no colour map"); eq(data:byte(3), 2, "uncompressed true colour")
+	eq(width, 32, "width: a power of two"); eq(height, 32, "height")
+	eq(data:byte(17), 32, "32 bits a pixel"); eq(descriptor % 16, 8, "an 8-bit alpha channel")
+	local start = 19 + idLength
+	assert(#data >= start - 1 + 32 * 32 * 4, "all its pixels")
+	local topDown = math.floor(descriptor / 32) % 2 == 1
+	local function Alpha(x, y) -- (x, y from the top left)
+		local row = topDown and y or (31 - y)
+		return data:byte(start + (row * 32 + x) * 4 + 3)
+	end
+	eq(Alpha(16, 16), 255, "opaque at its heart")
+	for _, c in ipairs({ { 0, 0 }, { 31, 0 }, { 0, 31 }, { 31, 31 } }) do eq(Alpha(c[1], c[2]), 0, "a clear corner") end
+	-- Four points, up, down, left and right, and nothing round it on the diagonals (no ring).
+	for _, p in ipairs({ { 16, 4 }, { 16, 27 }, { 4, 16 }, { 27, 16 } }) do assert(Alpha(p[1], p[2]) > 0, "a point at " .. p[1] .. "," .. p[2]) end
+	for _, d in ipairs({ { 24, 24 }, { 7, 7 }, { 24, 7 }, { 7, 24 }, { 26, 26 }, { 5, 5 } }) do eq(Alpha(d[1], d[2]), 0, "no ring at " .. d[1] .. "," .. d[2]) end
+	local soft = 0
+	for y = 0, 31 do for x = 0, 31 do local a = Alpha(x, y) if a > 0 and a < 255 then soft = soft + 1 end end end
+	assert(soft > 40, "a soft edge (" .. soft .. " pixels between clear and opaque)")
+	-- Drawn by the script, not copied: it names the file it makes.
+	local script = assert(ReadFile(ROOT .. "scripts/make-borders.py"))
+	assert(script:find("def build_star", 1, true) and script:find("STAR = \"star\"", 1, true), "make-borders.py draws the star")
+	-- README's and CurseForge's command tables: a row for the marks.
+	for _, doc in ipairs({ "README.md", "docs/CURSEFORGE.md" }) do
+		local text = assert(ReadFile(ROOT .. doc))
+		assert(text:find("\n| `/oly nameplates on` · `/oly nameplates off` |", 1, true), doc .. ": a row for /oly nameplates")
+	end
 end)
 ---------------------------------------------------------------------------
 -- OfficerSpy's bridge (Bridge.lua): what a companion addon the mods run may read, and that it
