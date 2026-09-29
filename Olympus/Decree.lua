@@ -4,7 +4,10 @@ local L = ns.L
 -- Royal decrees sent to every Olympus guild over OlympusNet:
 --   ARMS   "Call to Arms!"  (Horde attacking here) - raid warning + sound, marker for 5 min
 --   MUSTER "Muster here"    (gather point)          - softer alert, marker for 30 min
--- Only Captains (rank <= ns.CAPTAIN_RANK) can send. Receivers rate-limit per sender.
+-- Only Captains (rank <= ns.CAPTAIN_RANK) can send, and the King's Steward (1.0.0). Receivers
+-- rate-limit per sender and, for senders only the census vouches for, the whole army (the
+-- flood guard). A decree's words are its sender's own text: sent with the logged API (1.0.0),
+-- like a chat line.
 
 local Decree = {}
 ns.Decree = Decree
@@ -52,23 +55,20 @@ local function PinEnter(self)
 	GameTooltip:Show()
 end
 
+-- On the world map a decree is a round icon in a disc of its colour, beside the zone circles
+-- rather than over their numbers (1.0.0, Map.Badge; a square of 34 before). An expired decree's
+-- icon waits for the next one.
+Decree.BADGE = 20
+local COLORS = { ARMS = { 1, 0.25, 0.2 }, MUSTER = { 1, 0.8, 0.2 }, ROYAL = { 0.9, 0.76, 0.36 }, HERALDRY = { 0.35, 0.6, 1 } }
+local spare = {}
+
 local function MakePin(d)
-	local f = CreateFrame("Frame", nil, UIParent)
-	f:SetSize(34, 34)
-	f.icon = f:CreateTexture(nil, "ARTWORK")
-	f.icon:SetAllPoints()
-	f.icon:SetTexture(ICONS[d.kind] or ICONS.MUSTER)
-	f.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-	f.glow = f:CreateTexture(nil, "OVERLAY")
-	f.glow:SetTexture("Interface\\Buttons\\UI-ActionButton-Border")
-	f.glow:SetBlendMode("ADD")
-	f.glow:SetVertexColor(d.kind == "ARMS" and 1 or 1, d.kind == "ARMS" and 0.2 or 0.8, 0.2)
-	f.glow:SetPoint("CENTER")
-	f.glow:SetSize(64, 64)
-	f:EnableMouse(true)
-	f:SetScript("OnEnter", PinEnter)
-	f:SetScript("OnLeave", function() GameTooltip:Hide() end)
-	f.decree = d
+	local f = table.remove(spare) or ns.Map.Badge(Decree.BADGE, true)
+	local c = COLORS[d.kind] or COLORS.MUSTER
+	ns.Map.SetBadge(f, ICONS[d.kind] or ICONS.MUSTER, c[1], c[2], c[3])
+	f.badge.decree, f.since = d, d.t -- (the newest are laid out first: Map.BADGE_MAX)
+	f.badge:SetScript("OnEnter", PinEnter)
+	f.badge:SetScript("OnLeave", function() GameTooltip:Hide() end)
 	return f
 end
 
@@ -88,14 +88,16 @@ local function Show(d)
 	ns.Fire("DECREES_CHANGED")
 end
 
+-- (Not on the world map with the gamepad UI: ns.WorldMapIcons.)
 local function RefreshPinsNow()
 	if not Pins then return end
+	local world = ns.WorldMapIcons(Pins, Decree)
 	for _, d in ipairs(active) do
 		if d.pin then
 			if ns.db.showDecrees then
-				Pins:AddWorldMapIconMap(Decree, d.pin, d.mapID, d.x, d.y, SHOW_FLAG)
+				if world then Pins:AddWorldMapIconMap(Decree, d.pin, d.mapID, d.x, d.y, SHOW_FLAG) end
 			else
-				Pins:RemoveWorldMapIcon(Decree, d.pin)
+				if world then Pins:RemoveWorldMapIcon(Decree, d.pin) end
 				d.pin:Hide()
 			end
 		end
@@ -106,21 +108,28 @@ function Decree.RefreshPins()
 	ns.SafeCall("decree pins", RefreshPinsNow)
 end
 
+-- The King's Steward (1.0.0, King.IsSteward: the signed titles list marks him) sends the Crown's
+-- decrees for the King's guild, whatever his own rank or guild; every client takes them by his
+-- name, as the King's (below).
+local function Steward() return ns.King ~= nil and ns.King.IsSteward ~= nil and ns.King.IsSteward() end
+
 function Decree.CanSend(kind)
+	if Steward() then return true end
 	if CROWN_ONLY[kind] then return ns.IsCrown() end
 	return ns.Roster.IsOfficer()
 end
 
 function Decree.Send(kind, text)
-	if not ns.IsMember() then
+	local steward = Steward()
+	if not steward and not ns.IsMember() then
 		ns.Print(L.MEMBERS_ONLY)
 		return
 	end
-	if CROWN_ONLY[kind] and not ns.IsCrown() then
+	if not steward and CROWN_ONLY[kind] and not ns.IsCrown() then
 		ns.Print(L.CROWN_ONLY)
 		return
 	end
-	if not ns.Roster.IsOfficer() then
+	if not steward and not ns.Roster.IsOfficer() then
 		ns.Print(L.DECREE_OFFICERS_ONLY)
 		return
 	end
@@ -135,9 +144,11 @@ function Decree.Send(kind, text)
 		return
 	end
 	lastSent = now
-	local guild = GetGuildInfo("player") or ""
-	ns.Comm.Send("CHANNEL", ns.Codec.EncodeDecree(kind, mapID, x, y, guild, ns.Roster.MyRank(), text))
-	Show({ kind = kind, mapID = mapID, x = x, y = y, guild = guild, rank = ns.Roster.MyRank(), text = text or "", sender = ns.DisplayName(ns.me), t = now })
+	local guild = steward and ns.KingGuildName() or GetGuildInfo("player") or ""
+	local rank = steward and 0 or ns.Roster.MyRank()
+	-- Logged (1.0.0): the server keeps its words, so abuse can be reported (Comm.Send).
+	ns.Comm.Send("CHANNEL", ns.Codec.EncodeDecree(kind, mapID, x, y, guild, rank, text), nil, nil, true)
+	Show({ kind = kind, mapID = mapID, x = x, y = y, guild = guild, rank = rank, text = text or "", sender = ns.DisplayName(ns.me), t = now })
 end
 
 -- Local-only preview so anyone can see what a decree looks like (nothing is sent).
@@ -148,12 +159,23 @@ function Decree.Preview(kind)
 		text = L.DECREE_PREVIEW_TEXT, sender = ns.DisplayName(ns.me), t = ns.Now() })
 end
 
+-- The 15 s expiry timer also follows a switch of the interface style without a /reload: to the
+-- gamepad UI, the decrees leave the world map at once (not 5 to 60 minutes later, when they
+-- expire); back to mouse and keyboard, they return.
+local lastWorld
 function Decree.Active()
 	local now, out = ns.Now(), {}
+	local world = Pins and ns.WorldMapIcons(Pins, Decree)
+	if Pins and lastWorld == false and world then RefreshPinsNow() end
+	lastWorld = world
 	for i = #active, 1, -1 do
 		local d = active[i]
 		if now > d.expires then
-			if Pins and d.pin then Pins:RemoveWorldMapIcon(Decree, d.pin); d.pin:Hide() end
+			if Pins and d.pin then
+				if world then Pins:RemoveWorldMapIcon(Decree, d.pin) end
+				d.pin:Hide()
+				spare[#spare + 1], d.pin = d.pin, nil
+			end
 			table.remove(active, i)
 		end
 	end
@@ -165,8 +187,18 @@ ns.Comm.Handle("D1", function(dist, sender, text)
 	if dist ~= "CHANNEL" then return end
 	local d = ns.Codec.DecodeDecree(text)
 	if not d or not ns.IsFederation(d.guild) then return end
-	-- Trust the rank we can verify, never the rank written in the message.
-	local rank = ns.Data.KnownRank(sender, d.guild)
+	-- The King by his pinned name (the server stamps it), never by a vote: his decree needs no
+	-- census. So do his Hands' for his guild (his list or a Steward's, King.IsHandName), on every
+	-- client outside it: there they are of his Crown on his word (1.0.0); on its own members'
+	-- clients its roster says who speaks for it. His Steward's (1.0.0: the signed titles list
+	-- names him, King.IsStewardName) on every client, as the King's. Everyone else: the rank we
+	-- can verify, never the rank written in the message.
+	local mine = GetGuildInfo("player")
+	local kings = ns.IsKingGuild(d.guild)
+	local king = kings and ns.IsKingCharacter(sender)
+	local steward = kings and not king and ns.King ~= nil and ns.King.IsStewardName(sender)
+	local hand = kings and not king and not steward and not ns.IsKingGuild(mine) and ns.King ~= nil and ns.King.IsHandName(sender)
+	local rank = (king or steward or hand) and 0 or ns.Data.KnownRank(sender, d.guild)
 	if not rank then
 		ns.Log("decree from %s ignored: rank in %s not verified", sender, d.guild)
 		return
@@ -177,12 +209,28 @@ ns.Comm.Handle("D1", function(dist, sender, text)
 	elseif rank > ns.CAPTAIN_RANK then
 		return
 	end
+	-- The King, his Steward, his Hands and our own guild's officers (our roster: the server's
+	-- word) never wait behind the flood guard, which census ranks (anyone's votes) can fill.
+	-- Anyone else speaks for one guild only, as in the chats (Data.ClaimGuild).
+	local sure = king or steward or hand or (mine ~= nil and d.guild == mine and ns.Roster.RankOf(sender) ~= nil)
+	if not sure and not ns.Data.ClaimGuild(sender, d.guild) then
+		ns.Log("decree from %s ignored: speaks for another guild than %s", sender, d.guild)
+		return
+	end
 	local now = ns.Now()
 	if lastBySender[sender] and now - lastBySender[sender] < PER_SENDER_COOLDOWN then return end
 	for i = #recent, 1, -1 do if now - recent[i] > 60 then table.remove(recent, i) end end
-	if #recent >= MAX_PER_MINUTE then return end
+	if #recent >= MAX_PER_MINUTE and not sure then return end
 	lastBySender[sender] = now
-	recent[#recent + 1] = now
+	if not sure then recent[#recent + 1] = now end
+	-- Its words come through the logged API (the server keeps them, so abuse can be reported),
+	-- as a chat line's do. One sent with the plain API, where this client has both (a sender
+	-- before 1.0.0, or edited code), still shows, without its words (1.0.0).
+	if d.text ~= "" and C_ChatInfo and C_ChatInfo.SendAddonMessageLogged and ns.Comm.DeliveredLogged
+		and not ns.Comm.DeliveredLogged() then
+		ns.Log("decree from %s shown without its text: not sent with the logged API", sender)
+		d.text = ""
+	end
 	d.sender, d.t = ns.DisplayName(sender), now
 	Show(d)
 end)

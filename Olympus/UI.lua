@@ -43,7 +43,7 @@ local TABS = {
 	{ key = "throne", label = "TAB_THRONE", icon = function() return UI.FirstTexture(UI.CROWNS) end },
 	-- The King's and his Hands' questions to the army (Vox.lua), the same way.
 	{ key = "vox", label = "TAB_VOX", icon = function() return UI.FirstTexture(UI.HORNS) end },
-	-- The Treasurer's book, and the King's copy of his report (Treasury.lua), the same way.
+	-- The treasury: its keepers' books together (Treasury.lua), the same way.
 	{ key = "treasury", label = "TAB_TREASURY", icon = "Interface\\Icons\\INV_Misc_Coin_02" },
 	-- The addon author's alone (Workshop.lua), the same way.
 	{ key = "workshop", label = "TAB_WORKSHOP", icon = "Interface\\Icons\\Trade_Engineering" },
@@ -100,7 +100,7 @@ local BUTTONS = {
 		{ "MARK_TARGET", function() ns.Inspect.MarkTarget() end },
 		{ "COPY_BTN", function() UI.ShowCopy(L.INSPECT_TITLE, ns.Inspect.DiscordText()) end },
 	},
-	-- The Throne: the agenda (the King and his Hands), the court (the King's), the letter.
+	-- The Throne: the agenda (the King and his Hands), the court (the King's).
 	-- The roll call lives in the Realm, the inspection in the Tabards (King.RollCallLines...).
 	throne = {
 		{ "THRONE_AGENDA", function() ns.King.AgendaPrompt() end },
@@ -110,14 +110,13 @@ local BUTTONS = {
 				tt:AddLine(L.COURT_TITLE, 1, 0.82, 0)
 				tt:AddLine(L.COURT_BTN_TIP, 1, 1, 1, true)
 			end },
-		{ "THRONE_LETTER_BTN", function() ns.King.Show("letter") end },
 	},
 	vox = {
 		{ "VOX_NEW", function() ns.Vox.Prompt() end },
 		{ "VOX_END", function() ns.Vox.CloseNow() end },
 		{ "VOX_SHOW", function() ns.Vox.ShowLive() end },
 	},
-	-- The Treasury: the book (whoever may see it), the Treasurer's opening balance, a copy.
+	-- The Treasury: the book (whoever may see it), a keeper's own opening balance, a copy.
 	treasury = {
 		{ "TREASURY_BOOK_BTN", function() ns.Treasury.Show(ns.Treasury.mode == "book" and "summary" or "book") end, refresh = true,
 			shown = function() return ns.Treasury.MaySee("book") end,
@@ -128,7 +127,7 @@ local BUTTONS = {
 				tt:AddLine(book and ns.Treasury.SummaryTip() or L.TREASURY_BOOK_BTN_TIP, 1, 1, 1, true)
 			end },
 		{ "TREASURY_OPENING_BTN", function() ns.ShowDialog("OLYMPUS_TREASURY_OPENING") end,
-			shown = function() return ns.Treasury.IsTreasurer() end },
+			shown = function() return ns.Treasury.IsKeeper() end },
 		{ "COPY_BTN", function() UI.ShowCopy(L.TREASURY_TITLE, ns.Treasury.DiscordText()) end,
 			shown = function() return ns.Treasury.Role() ~= "member" end },
 	},
@@ -147,13 +146,17 @@ local RECRUIT_BUTTONS = {
 
 -- Small extra buttons inside the detail box (only where needed).
 local function KingOnly() return ns.King.IsKing() or ns.King.Preview() end
+-- The King and his Steward (1.0.0): the Hands (each his own list) and the treasury's switches,
+-- which the Steward sets in the King's name; never the King's own buttons (his crown on the map,
+-- the court, writs).
+local function KingOrSteward() return ns.King.SetsLists() or ns.King.Preview() end
 
 -- One of the King's treasury switches: its label says whether the army sees that part, its
 -- tooltip who sees it now (hidden: only he and the Treasurer) and what a click does.
 local function TreasuryFlag(what)
 	local key = what:upper()
 	local function shown() return ns.Treasury.Shows(what) end
-	return { "TREASURY_FLAG_" .. key, function() ns.Treasury.SetFlag(what, not shown()) end, refresh = true, shown = KingOnly,
+	return { "TREASURY_FLAG_" .. key, function() ns.Treasury.SetFlag(what, not shown()) end, refresh = true, shown = KingOrSteward,
 		label = function() return L["TREASURY_FLAG_" .. key .. (shown() and "_SHOWN" or "_HIDDEN")] end,
 		tooltip = function(tt)
 			tt:AddLine(L["TREASURY_FLAG_" .. key .. (shown() and "_SHOWN" or "_HIDDEN")], 1, 0.82, 0)
@@ -163,8 +166,8 @@ local function TreasuryFlag(what)
 end
 local DETAIL_BUTTONS = {
 	throne = {
-		-- His Hands: the page to name them.
-		{ "HANDS_BTN", function() ns.King.Show("hands") end, refresh = true, shown = KingOnly },
+		-- His Hands: the page to name them (his; a Steward's own, 1.0.0).
+		{ "HANDS_BTN", function() ns.King.Show("hands") end, refresh = true, shown = KingOrSteward },
 		-- His own button: the crown the army sees, what it does and whether it is on now.
 		{ "THRONE_LOCATION", function() ns.King.ToggleLocation() end, refresh = true, shown = KingOnly,
 			label = function()
@@ -183,8 +186,16 @@ local DETAIL_BUTTONS = {
 			end },
 		{ "THRONE_CANCEL_AGENDA", function() ns.King.CancelAgendaButton() end, shown = function() return ns.King.Agenda() ~= nil end },
 	},
-	-- The author's views, to see and try what only the King or the Treasurer sees.
+	-- The full roll call (0.9.9), right above Roll call: rounds on its own until nearly every addon
+	-- user answered; the same button stops it. Then the author's views, to see and try what only
+	-- the King or the Treasurer sees.
 	workshop = {
+		{ "WORKSHOP_FULL_BTN", function() ns.Workshop.ToggleFull() end, refresh = true,
+			label = function() return ns.Workshop.FullRunning() and L.WORKSHOP_FULL_STOP or L.WORKSHOP_FULL_BTN end,
+			tooltip = function(tt)
+				tt:AddLine(ns.Workshop.FullRunning() and L.WORKSHOP_FULL_STOP or L.WORKSHOP_FULL_BTN, 1, 0.82, 0)
+				tt:AddLine(L.WORKSHOP_FULL_BTN_TIP, 1, 1, 1, true)
+			end },
 		{ "DEV_KING_VIEW", function() ns.King.SetDevView(not ns.King.Preview()) end, refresh = true,
 			label = function() return ns.King.Preview() and L.DEV_KING_VIEW_OFF or L.DEV_KING_VIEW_ON end },
 		{ "DEV_TREASURER_VIEW", function() ns.Treasury.SetDevView(not ns.Treasury.DevView()) end, refresh = true,
@@ -626,6 +637,52 @@ function UI.SideTabsFit(count, tabHeight, height)
 	return SIDE_TOP + count * tabHeight + (count - 1) * SIDE_GAP + SIDE_ART_BELOW <= height
 end
 
+-- Blizzard's help button art, on every client we run on (the Guild & Communities window, the
+-- settings, the help plates): a texture of its own, with itself added faintly as the highlight
+-- (RinglessHelpPlateButtonTemplate).
+UI.HELP_ICON = "Interface\\Common\\help-i"
+
+-- The help button in the title bar, just left of the close button, where Blizzard puts a
+-- window's minimize button (0.9.9, asked for by Max of Asmongold's moderators). A plain button:
+-- a click opens the copy box (UI.ShowHelp), which already keeps to the gamepad UI's rules.
+local function HelpButton(f)
+	local close = f.CloseButton or _G[f:GetName() .. "CloseButton"]
+	local b = CreateFrame("Button", nil, f)
+	-- As big as the close button's art: Forever's is 24 and fills it, Classic's red disc is
+	-- about 20 inside a 32 button, so there it tucks in closer. Told apart by the button, not
+	-- by our window's look: the old window on Forever has Mainline's close button too.
+	local classic = close and (close:GetWidth() or 0) > 28
+	b:SetSize(classic and 20 or 22, classic and 20 or 22)
+	if close then
+		b:SetPoint("RIGHT", close, "LEFT", classic and 4 or 0, 0)
+	else -- (both templates have one; just in case) the title bar's right end
+		b:SetPoint("TOPRIGHT", f, "TOPRIGHT", -28, -2)
+	end
+	-- Over the frame's border like the close button (Forever's metal title bar is a NineSlice
+	-- at +500 and its buttons at 510): at the close button's level, or above the border.
+	local border = f.NineSlice and f.NineSlice.GetFrameLevel and f.NineSlice:GetFrameLevel() or f:GetFrameLevel()
+	b:SetFrameLevel(math.max(border + 10, close and close.GetFrameLevel and close:GetFrameLevel() or 0))
+	b.icon = b:CreateTexture(nil, "ARTWORK")
+	b.icon:SetTexture(UI.HELP_ICON)
+	b.icon:SetAllPoints()
+	b:SetHighlightTexture(UI.HELP_ICON, "ADD")
+	local highlight = b.GetHighlightTexture and b:GetHighlightTexture()
+	if highlight and highlight.SetAlpha then highlight:SetAlpha(0.2) end
+	b:SetScript("OnClick", function() ns.SafeCall("help", UI.ShowHelp) end)
+	-- The title bar still drags the window from there, as it did before the button.
+	b:RegisterForDrag("LeftButton")
+	b:SetScript("OnDragStart", function() f:StartMoving() end)
+	b:SetScript("OnDragStop", function() f:GetScript("OnDragStop")(f) end)
+	b:SetScript("OnEnter", function(self)
+		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+		GameTooltip:AddLine(L.HELP_BTN, 1, 0.82, 0)
+		GameTooltip:AddLine(L.HELP_BTN_TIP, 1, 1, 1, true)
+		GameTooltip:Show()
+	end)
+	b:SetScript("OnLeave", function() GameTooltip:Hide() end)
+	return b
+end
+
 local function CreateMain(style)
 	local g = GEOMETRY[style]
 	local hd = style == "hd"
@@ -677,6 +734,7 @@ local function CreateMain(style)
 			pcall(f.SetPortraitToAsset, f, ns.LOGO)
 		end
 	end
+	f.helpButton = HelpButton(f)
 
 	-- One dark panel over the whole interior, like the Guild window (its inside is near
 	-- black, not the lighter marble of the plain portrait frame).
@@ -762,6 +820,11 @@ local function CreateMain(style)
 	if f.listBox then scroll:SetFrameLevel(f.listBox:GetFrameLevel() + 2) end
 	scroll:SetPoint("BOTTOMRIGHT", f.scrollRight or g.scroll.right, g.scroll.bottom)
 	f.scroll = scroll
+	-- The place a redraw gave the list, once more when the client measures the list again
+	-- (UI.KeepPlace): after Blizzard's own handler, whatever it did with the offset.
+	scroll:HookScript("OnScrollRangeChanged", function(self) ns.SafeCall("list place", UI.HoldPlace, f, self) end)
+	-- The player scrolls with the wheel: the list stays where he puts it (UI.Scrolled).
+	scroll:HookScript("OnMouseWheel", function() ns.SafeCall("list scrolled", UI.Scrolled, f) end)
 	f.views = {}
 	for _, t in ipairs(TABS) do
 		local v = CreateFrame("Frame", nil, scroll)
@@ -1143,13 +1206,16 @@ local function SetButtons(list, defs)
 	if list == main.detailButtons then LayoutDetailButtons() end
 end
 
--- Shows tab `key` in the window in use, and the window if it is closed.
-local function ShowTab(key)
+-- Shows tab `key` in the window in use, and the window if it is closed. `focus`: the id of the
+-- row it opens on (Views.lua: a guild clicked in the Census), in sight (UI.KeepPlace).
+local function ShowTab(key, focus)
 	if key ~= "realm" and ns.Views.CloseChat then ns.Views.CloseChat() end
 	main.tab = key
 	for k, v in pairs(main.views) do v:SetShown(k == key) end
 	main.scroll:SetScrollChild(main.views[key])
 	main.scroll:SetVerticalScroll(0)
+	-- A tab opened: its list starts at the top, or at the row it opens on (UI.KeepPlace).
+	main.page, main.wantScroll, main.focus = nil, nil, focus
 	-- The Throne is a page of parchment with dark ink (the rows use line.font).
 	if key == "throne" and not main.parchment then
 		local p = main.scroll:CreateTexture(nil, "BACKGROUND")
@@ -1200,10 +1266,10 @@ function UI.Clicked()
 end
 
 -- Opening the window picks its look again, from the guild window in use (UI.Style).
--- Called from clicks and slash commands only (UI.Clicked).
-function UI.SelectTab(key)
+-- Called from clicks and slash commands only (UI.Clicked). `focus`: see ShowTab.
+function UI.SelectTab(key, focus)
 	if not (main and main:IsShown()) then UseStyle(UI.Style()) end
-	ShowTab(key)
+	ShowTab(key, focus)
 	UI.Clicked()
 end
 
@@ -1212,6 +1278,100 @@ function UI.CensusName()
 	local group = ns.group or ns.realm
 	if #ns.GroupRealms(group) > 1 then return (group:gsub("%+", " + ")) end
 	return GetRealmName and GetRealmName() or ""
+end
+
+---------------------------------------------------------------------------
+-- The list keeps its place (1.0.0). A redraw (a row opened or closed, "Show more", a report
+-- coming in) leaves the list where it was: the row clicked stays where it was on screen, and
+-- when it opened, its first rows below come into sight if they fell under the list's bottom
+-- edge (the row itself never leaves the top). Only another tab, or another page of one (the
+-- Realm's chats, the Throne's pages, the Treasury's book), starts at the top; a tab opened on
+-- a row (a guild clicked in the Census opens in the Realm) starts at that row.
+---------------------------------------------------------------------------
+
+UI.SHOW_BELOW = 3  -- rows under an opened row brought into sight
+UI.CLICK_KEEP = 2  -- seconds a click waits for the redraw it causes (RefreshSoon, DATA_CHANGED)
+UI.PLACE_HOLD = 1  -- seconds a redraw's place is given again when the client measures the list
+
+-- Which page of its tab the list shows: another one starts at the top.
+local function PageOf(tab, locked)
+	if locked then return "join" end
+	local sub
+	if tab == "realm" then sub = ns.Views.ChatTier and ns.Views.ChatTier() or "tree"
+	elseif tab == "throne" then sub = ns.King and ns.King.mode
+	elseif tab == "treasury" then sub = ns.Treasury and ns.Treasury.mode end
+	return tab .. "/" .. tostring(sub or "")
+end
+
+local function Clamp(v, lo, hi) return math.max(lo, math.min(v, hi)) end
+
+-- The shown row of `content` whose line has id `id`.
+local function RowWithId(content, id)
+	for _, r in ipairs(content.rows or {}) do
+		if r:IsShown() and r.line and r.line.id == id then return r end
+	end
+end
+
+-- The list just drawn in `content` goes back to `offset`, the row clicked (Views.TakeClick) to
+-- where it was on screen; on another page, to the top, or to the row `focus` (the id of the
+-- row the tab opened on, ShowTab) when it and its first rows are not in sight there. The scroll
+-- range is taken from the heights (the client measures it again only when it next draws:
+-- UI.HoldPlace then).
+function UI.KeepPlace(content, offset, click, page, focus)
+	local scroll = main.scroll
+	local view = scroll:GetHeight() or 0
+	local want = 0
+	if page == main.page then
+		want = offset
+		local rows = content.rows or {}
+		local r = click and GetTime() - (click.t or 0) <= UI.CLICK_KEEP and rows[click.index]
+		-- The list moved since the click, and not to the top (where the client throws it): the
+		-- player scrolled (the scroll bar; the wheel forgets the click, UI.Scrolled), and this is
+		-- not the redraw the click caused. His offset stays.
+		if r and click.offset and offset > 0.5 and math.abs(offset - click.offset) > 0.5 then r = nil end
+		if r and r:IsShown() and r.top then
+			-- Where it was on screen when clicked (whatever the offset did since).
+			want = (click.offset or offset) + (r.top - (click.top or 0))
+			-- It opened (the list grew): the rows under it into sight, the row staying in.
+			local n = content.lineCount or 0
+			local last = n > (click.lines or 0) and rows[math.min(click.index + UI.SHOW_BELOW, n)]
+			if last and last.top and view > 0 then
+				local bottom = last.top + (last:GetHeight() or 0)
+				if bottom > want + view then want = math.min(bottom - view, r.top) end
+			end
+		end
+	elseif focus then
+		-- Opened on a row: at the top of the list, unless it and its first rows are in sight
+		-- from the top already.
+		local r = RowWithId(content, focus)
+		if r and r.top then
+			local rows, n = content.rows or {}, content.lineCount or 0
+			local last = r.index and rows[math.min(r.index + UI.SHOW_BELOW, n)] or r
+			local bottom = (last.top or r.top) + (last:GetHeight() or 0)
+			if bottom > view then want = r.top end
+		end
+	end
+	main.page = page
+	want = Clamp(want, 0, math.max(0, (content:GetHeight() or 0) - (scroll:GetHeight() or 0)))
+	main.wantScroll, main.wantAt = want, GetTime()
+	scroll:SetVerticalScroll(want)
+end
+
+-- The client measured the list again (OnScrollRangeChanged, after Blizzard's own handler): the
+-- place the last redraw gave it, if the offset moved away from it, within a moment of that
+-- redraw only (later on, the offset is the player's own scrolling).
+function UI.HoldPlace(frame, scroll)
+	local want = frame == main and frame.wantScroll
+	if not want or GetTime() - (frame.wantAt or 0) > UI.PLACE_HOLD then return end
+	want = Clamp(want, 0, scroll:GetVerticalScrollRange() or 0)
+	if math.abs((scroll:GetVerticalScroll() or 0) - want) > 0.5 then scroll:SetVerticalScroll(want) end
+end
+
+-- The player scrolled the list of `frame` himself (the mouse wheel): no redraw puts it back where
+-- a click, or the last redraw, left it.
+function UI.Scrolled(frame)
+	for _, v in pairs(frame.views or {}) do v.click = nil end
+	frame.wantScroll = nil
 end
 
 function UI.Refresh()
@@ -1244,7 +1404,12 @@ function UI.Refresh()
 			end
 		end
 		FitHeader()
-		ns.Views.Render(main.views[main.tab], lines, not locked and ns.Views.COLUMNS[main.tab] or nil)
+		-- Drawn again where it was (UI.KeepPlace): the offset and the row clicked, taken first.
+		local content = main.views[main.tab]
+		local offset, click, focus = main.scroll:GetVerticalScroll() or 0, ns.Views.TakeClick(content), main.focus
+		main.focus = nil
+		ns.Views.Render(content, lines, not locked and ns.Views.COLUMNS[main.tab] or nil)
+		UI.KeepPlace(content, offset, click, PageOf(main.tab, locked), focus)
 		main.detailTitle:SetText(title or "")
 		main.detailText:SetText(text or "")
 		SetButtons(main.buttons, locked and RECRUIT_BUTTONS or Shown(BUTTONS[main.tab]))
@@ -1571,7 +1736,12 @@ function UI.ShowPerson(p)
 	-- The name, guild and rank may come from other players' reports: plain text, whatever
 	-- they carry (0.9.2; Comm.lua already strips every escape code from what arrives).
 	local name, guild = ns.Codec.Plain(p.name), p.guild and ns.Codec.Plain(p.guild)
-	f.name:SetText(color and ("|c%s%s|r"):format(color.colorStr, name) or name)
+	-- A High Councillor: the mark and their own icon after the name, and their title below
+	-- (0.9.9), for whoever may see the council in the census (ns.CouncilVisible); not on the
+	-- King's screen while the councillors' names are hidden there (ns.CouncilMasked).
+	local full = ns.FullName(p.name, p.realm)
+	local councillor = ns.CouncilVisible() and not ns.CouncilMasked() and ns.IsHighCouncillor(full)
+	f.name:SetText((color and ("|c%s%s|r"):format(color.colorStr, name) or name) .. (councillor and (" " .. ns.CouncilMark(full)) or ""))
 	FitText(f.name, f.nameRoom or (f:GetWidth() - 28), f.nameFonts or { "GameFontNormalLarge", "GameFontNormal" })
 	if f.guild then
 		f.guild:SetText(guild and ("<" .. guild .. ">") or "")
@@ -1583,6 +1753,12 @@ function UI.ShowPerson(p)
 	if p.level or className ~= "" then rows[#rows + 1] = (p.level and (L.LEVEL_N:format(p.level) .. " ") or "") .. className end
 	if p.rank then rows[#rows + 1] = "|cffffd200" .. ns.Codec.Plain(p.rank) .. "|r" end
 	if ns.IsTreasurer(p.name, p.guild) then rows[#rows + 1] = "|cffffd200" .. ns.COIN .. L.TREASURER_TITLE .. "|r" end
+	if councillor then
+		-- "High Councillor - <title> (<department>)", as the signed titles list gives them.
+		local t = ns.CouncilTitle(full) or {}
+		rows[#rows + 1] = ns.HIGH_COUNCIL_MARK .. " |c" .. ns.HIGH_COUNCIL_COLOR .. L.COUNCIL_PERSON
+			.. (t.title and (" - " .. ns.Codec.Plain(t.title)) or "") .. (t.dept and (" (" .. ns.Codec.Plain(t.dept) .. ")") or "") .. "|r"
+	end
 	if p.online then
 		rows[#rows + 1] = "|cff40ff40" .. L.ONLINE_NOW .. "|r" .. (p.zone and ("  -  " .. ns.Zones.NameForKey(p.zone)) or "")
 	elseif p.online == false then
@@ -1615,6 +1791,15 @@ function UI.ShowPerson(p)
 	f:Show()
 	-- Placed again on every show, so it can step above the Issue Reporter every time.
 	ns.SafeCall("issue reporter", ClearOfIssueReporter, function() return StepAboveIssueReporter(f, { f }) end)
+end
+
+-- The King hides the councillors' names again (the eye in the Realm, Views.lua): a councillor's
+-- card left open from while they were shown closes, with the mark and title it carries.
+function UI.CloseCouncilCards()
+	for _, f in pairs(personFrames) do
+		local p = f.person
+		if p and p.name and f:IsShown() and ns.IsHighCouncillor(ns.FullName(p.name, p.realm)) then f:Hide() end
+	end
 end
 
 function UI.IsShown() return main and main:IsShown() end
@@ -1656,6 +1841,19 @@ function UI.RefreshSoon()
 	end)
 end
 
+-- Typed into a tab's search box (Views.SetFilter): that list again, soon. A search that starts
+-- (the box was empty) shows its list from the top; while the player goes on typing, or empties
+-- the box, the list stays where it was scrolled to.
+function UI.FilterChanged(tab, fromTop)
+	if not (main and main:IsShown() and main.tab == tab) then return end
+	-- From the top, and the top is now the place the client's next measure keeps (UI.HoldPlace).
+	if fromTop then
+		main.wantScroll, main.wantAt = 0, GetTime()
+		main.scroll:SetVerticalScroll(0)
+	end
+	UI.RefreshSoon()
+end
+
 ns.On("DATA_CHANGED", function() UI.RefreshSoon() end)
 ns.On("MAP_TOGGLED", function() UI.Refresh() end)
 ns.On("INSPECT_CHANGED", function() if main and main.tab == "heraldry" then UI.RefreshSoon() end end)
@@ -1691,7 +1889,7 @@ ns.RegisterEvent("UI_SCALE_CHANGED", function() ns.SafeCall("relayout", Relayout
 
 ---------------------------------------------------------------------------
 ---------------------------------------------------------------------------
--- Copy box (Discord text, bug report)
+-- Copy box (Discord text, bug report, help)
 ---------------------------------------------------------------------------
 
 local copyFrame
@@ -1699,6 +1897,48 @@ local copyFrame
 function UI.ShowBugReport()
 	local text = ns.BuildBugReport()
 	UI.ShowCopy(L.REPORT_BUG, text, ns.Workshop and ns.Workshop.BugAction and ns.Workshop.BugAction(text) or nil)
+end
+
+-- Where the addon lives: its code and issues (the toc's X-Website), its CurseForge page.
+UI.LINKS = {
+	github = "https://github.com/dnl-gentile/olympus-addon",
+	issues = "https://github.com/dnl-gentile/olympus-addon/issues",
+	curseforge = "https://www.curseforge.com/wow/addons/olympus-guild",
+}
+
+-- The help button's page: the version, the tabs in a line each, then the lines /oly help prints
+-- for the privacy switches and the chats (the same strings, so they never disagree), and the
+-- links. In the copy box, so a link can be copied; its button is Report a bug.
+function UI.ShowHelp()
+	local lines = {
+		L.TITLE .. " " .. tostring(ns.VERSION),
+		"",
+		L.HELP_TABS,
+		"  " .. L.TAB_CENSUS .. ": " .. L.HELP_TAB_CENSUS,
+		"  " .. L.TAB_REALM .. ": " .. L.HELP_TAB_REALM,
+		"  " .. L.TAB_DECREES .. ": " .. L.HELP_TAB_DECREES,
+		"  " .. L.TAB_HERALDRY .. ": " .. L.HELP_TAB_HERALDRY,
+		"  " .. L.HELP_TAB_OTHERS,
+		"",
+		L.HELP_ALL_COMMANDS,
+		"",
+		L.HELP_PRIVACY,
+		L.HELP_LOCATION,
+		L.HELP_ROLLCALL,
+		L.HELP_INSPECTION,
+		"",
+		L.HELP_CHATS,
+		L.HELP_CHAN_ALL,
+		L.HELP_CHAN_CAPTAINS,
+		L.HELP_CHAN_LORDS,
+		L.HELP_CHATWIN,
+		"",
+		L.HELP_LINKS,
+		"  GitHub: " .. UI.LINKS.github,
+		"  " .. L.HELP_ISSUES .. ": " .. UI.LINKS.issues,
+		"  CurseForge: " .. UI.LINKS.curseforge,
+	}
+	UI.ShowCopy(L.HELP_TITLE, table.concat(lines, "\n"), { label = L.REPORT_BUG, fn = function() UI.ShowBugReport() end })
 end
 
 -- action: an optional { label, fn } button at the bottom (fn returns true once done).
@@ -1848,3 +2088,61 @@ ns.On("LOGIN", function()
 	UI.UpdateMinimapButton()
 	ns.Log("ui ready")
 end)
+
+---------------------------------------------------------------------------
+-- Photo mode (1.0.0), the author's, for the store's screenshots: /oly photo hides everything on
+-- the screen but Olympus's own frames, the world map and the tooltip (Olympus's tooltips are
+-- part of the pictures), and /oly photo again, or a /reload, brings it all back. By alpha alone:
+-- each child of UIParent at 0, its own alpha kept and given back as it was, never Hide, Show or
+-- SetPoint on the game's frames. Never in combat, and not with the gamepad UI (its frames are
+-- the game's to handle there); turning it off works with the gamepad UI too.
+---------------------------------------------------------------------------
+
+local photo -- [frame] = its alpha before, while photo mode is on
+-- Children of UIParent walked at most (1.0.0, Konig's review of 1.0.0): a screen with thousands of
+-- frames (some addons make one per thing they show) is walked this far, and the rest left as they are.
+UI.PHOTO_MAX = 1000
+
+-- The author's character, or the author's own test build (Dev.lua, never published).
+function UI.PhotoAllowed()
+	return (ns.Workshop and ns.Workshop.IsAuthor and ns.Workshop.IsAuthor() == true) or ns.devThrone ~= nil or ns.devWorkshop ~= nil
+end
+function UI.PhotoMode() return photo ~= nil end
+
+-- Olympus's own: its named frames, and the few unnamed ones on UIParent it marks (map icons).
+local function Ours(f)
+	local name = f.GetName and f:GetName()
+	return f.olympus == true or (type(name) == "string" and name:find("^Olympus") ~= nil)
+end
+
+local function PhotoOff()
+	local was = photo
+	photo = nil
+	for f, alpha in pairs(was or {}) do pcall(f.SetAlpha, f, alpha) end
+end
+
+function UI.TogglePhoto()
+	if not UI.PhotoAllowed() then return ns.Print(L.PHOTO_ONLY_AUTHOR) end
+	if InCombatLockdown and InCombatLockdown() then return ns.Print(L.PHOTO_COMBAT) end
+	if photo then
+		PhotoOff()
+		return ns.Print(L.PHOTO_OFF)
+	end
+	if ns.GamepadUI() then return ns.Print(L.PHOTO_GAMEPAD) end
+	ns.Print(L.PHOTO_ON) -- (first: the chat goes too)
+	photo = {}
+	local children = { UIParent:GetChildren() }
+	if #children > UI.PHOTO_MAX then ns.Log("photo mode: %d frames on the screen, the first %d walked", #children, UI.PHOTO_MAX) end
+	for i = 1, math.min(#children, UI.PHOTO_MAX) do
+		local f = children[i]
+		local keep = f == WorldMapFrame or f == GameTooltip or (f.IsForbidden and f:IsForbidden()) or Ours(f)
+		local alpha = not keep and f.GetAlpha and f:GetAlpha()
+		if type(alpha) == "number" and alpha > 0 then
+			photo[f] = alpha
+			f:SetAlpha(0)
+		end
+	end
+end
+
+-- A /reload (or logging out) gives every alpha back first: another addon may save its frame's.
+ns.RegisterEvent("PLAYER_LOGOUT", function() if photo then PhotoOff() end end)

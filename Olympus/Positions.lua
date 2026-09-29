@@ -38,6 +38,7 @@ end
 
 local function Dot(size)
 	local f = CreateFrame("Frame", nil, UIParent)
+	f.olympus = true -- (ours: photo mode leaves it shown, UI.TogglePhoto)
 	f:SetSize(size, size)
 	f.edge = f:CreateTexture(nil, "BACKGROUND")
 	f.edge:SetTexture("Interface\\CHARACTERFRAME\\TempPortraitAlphaMask")
@@ -67,11 +68,13 @@ end
 
 local function RefreshNow()
 	if not Pins then return end
+	-- The world map's dots only with mouse and keyboard (ns.WorldMapIcons); the minimap's always.
+	local world = ns.WorldMapIcons(Pins, Positions)
 	local now = ns.Now()
 	for name, p in pairs(pins) do
 		local m = mates[name]
 		if not m or now - m.t > EXPIRE or not ns.db.showMates then
-			Pins:RemoveWorldMapIcon(Positions, p.world)
+			if world then Pins:RemoveWorldMapIcon(Positions, p.world) end
 			Pins:RemoveMinimapIcon(Positions, p.mini)
 			p.world:Hide()
 			p.mini:Hide()
@@ -87,7 +90,7 @@ local function RefreshNow()
 		end
 		Color(p.world, name, m.class)
 		Color(p.mini, name, m.class)
-		Pins:AddWorldMapIconMap(Positions, p.world, m.mapID, m.x, m.y, SHOW_FLAG)
+		if world then Pins:AddWorldMapIconMap(Positions, p.world, m.mapID, m.x, m.y, SHOW_FLAG) end
 		Pins:AddMinimapIconMap(Positions, p.mini, m.mapID, m.x, m.y, true, false)
 	end
 end

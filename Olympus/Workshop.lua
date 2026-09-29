@@ -7,6 +7,9 @@ local L = ns.L
 --     the versions of the guild's addon users, counted by its reporter from their hellos).
 --   * A roll call on demand: each addon answers with its version, client, window and what
 --     works (V1/V2); when the army is large, only a share of them answers.
+--   * Every answer, searchable by name, guild or version, 25 at a time (0.9.9); a full roll
+--     call, one roll call every ROLL_EVERY until nearly every addon user answered; and one
+--     player asked alone by whisper, on the channel or not (0.9.9 and newer answer it).
 --   * A report to copy for Discord.
 --   * "Please update", to a player on an old version: a fixed text, nothing else (V3).
 --   * The author's presence (V4): players can send him their bug report from the Report a
@@ -16,6 +19,7 @@ local L = ns.L
 -- Classic realms no name has a space: nobody else can carry his. Receivers answer a roll call
 -- once per ROLL_GAP, and show "please update" once per UPDATE_GAP, only when really behind.
 --   V1~<id>~<share 1-100>                                              (channel)
+--   V1~<id>~100    the author asks this player alone (0.9.9; 0.9.8 takes V1 from the channel only)  (whisper)
 --   V2~<id>~<version>~<guild>~<client>~<window>~<flags>~<errors>~<level>~<class>   (whisper)
 --   V3~<latest version>                                                (whisper)
 --   V4~<version>                                                       (channel)
@@ -32,7 +36,8 @@ Workshop.ROLL_EVERY = 5 * 60    -- the author asks at most this often
 Workshop.ROLL_OPEN = 5 * 60     -- answers count this long after the ask
 Workshop.ROLL_SPREAD = 30       -- answers are spread over this many seconds
 Workshop.ROLL_TARGET = 300      -- answers wanted, however large the army (the share)
-Workshop.MAX_ANSWERS = 3000
+Workshop.MAX_ANSWERS = 3000     -- answers kept (a full roll call keeps more: Cap)
+Workshop.MAX_ANSWERS_FULL = 10000 -- ...never more than this: 95% of a larger army is more than it can count
 Workshop.UPDATE_GAP = 10 * 60   -- "please update" at most this often, both ways
 Workshop.PRESENCE_EVERY = 5 * 60
 Workshop.PRESENCE_FRESH = 11 * 60
@@ -46,13 +51,26 @@ Workshop.MAX_PIECES = 25
 Workshop.MAX_REPORTS = 30
 Workshop.MAX_SHOWN = 30
 Workshop.MAX_ASK = 15           -- "please update" whispers per click (the send queue holds 60)
+Workshop.ROLL_PAGE = 25         -- answers listed, 25 more a click (the window stays light)
+Workshop.ROLL_ROUNDS = 20       -- a full roll call stops after this many rounds...
+Workshop.ROLL_ENOUGH = 95       -- ...or once this share (%) of the addon users the census counts answered
+Workshop.ASK_ONE_EVERY = 10     -- the author asks one player by whisper at most this often
+Workshop.ASK_ONE_SPREAD = 2     -- ...and that player's addon answers within 1 + this many seconds
 
 -- Swappable in tests.
 Workshop.random = math.random
 Workshop.after = function(seconds, where, fn) ns.After(seconds, where, fn) end
 
-local roll            -- the author's roll calls: { id, t, share, answers = { [sender] = answer }, count }
-                      -- answers stay from one roll call to the next (a newer answer replaces)
+local roll            -- the author's roll calls: { id, t, share, ids = { [id] = asked at }, alone = { [id] = folded name },
+                      -- answers = { [sender] = answer }, count }
+                      -- answers stay from one roll call to the next (a newer answer replaces);
+                      -- each ask's id (a roll call, a player asked alone) takes answers for ROLL_OPEN
+local full            -- the full roll call: { running, started, round, users, nextAt, reason, token }
+local search = ""     -- the tab's search box, as typed
+local shownAnswers = Workshop.ROLL_PAGE -- answers listed ("Show more", "Show all", "Show fewer")
+local menuFor         -- the answer whose actions are open under its row
+local askedOne = {}   -- [folded Name-Realm] = when the author asked them alone
+local lastAskOne = -math.huge
 local reports = {}    -- bug reports received: { from, t, text }, newest last
 local pieces = {}     -- [sender#id] = { n, got, parts, t }
 local bugsFrom = {}   -- [sender] = times of their reports this hour
@@ -181,6 +199,27 @@ function Workshop.SetAnswers(on)
 end
 
 ---------------------------------------------------------------------------
+-- Text for the search and "Ask <name>" (0.9.9)
+---------------------------------------------------------------------------
+
+local function TrimText(s) return (tostring(s or ""):gsub("^%s+", ""):gsub("%s+$", "")) end
+
+-- Letters folded for the search (ns.Fold, Core.lua: the tabs' searches fold them the same way).
+local Fold = ns.Fold
+Workshop.Fold = Fold
+
+-- A player's name as the author may type it: letters (any, UTF-8 ones too), Forever's "First
+-- Surname" with its one space, with "-Realm" or not. A version or a guild with digits is not one.
+local function NameLike(s)
+	if type(s) ~= "string" or #s < 2 or #s > 48 then return false end
+	local name, realm = s:match("^([^%-]+)%-([^%-]+)$")
+	name = name or s
+	if realm and realm:find("[%s~|%c]") then return false end
+	return name:find("^[%a\128-\255]+$") ~= nil or name:find("^[%a\128-\255]+ [%a\128-\255]+$") ~= nil
+end
+Workshop.NameLike = NameLike
+
+---------------------------------------------------------------------------
 -- Roll call
 ---------------------------------------------------------------------------
 
@@ -200,27 +239,54 @@ function Workshop.ReportedUsers()
 	return n
 end
 
+-- A new ask (a roll call, or one player asked alone): its id takes answers for ROLL_OPEN. The
+-- answers so far stay: a newer one replaces a player's older one.
+local function NewAsk(now)
+	roll = roll or { answers = {}, count = 0, ids = {}, alone = {} }
+	for id, t in pairs(roll.ids) do
+		if now - t > Workshop.ROLL_OPEN then roll.ids[id], roll.alone[id] = nil, nil end
+	end
+	local id = Workshop.random(1, 99999)
+	roll.ids[id], roll.alone[id] = now, nil
+	return id
+end
+
+-- A roll call on the channel, to the share of the army `users` asks for (0.9.8 clients take it
+-- as ever: the format never changes).
+local function SendRoll(users, now)
+	lastRoll = now
+	local share = Workshop.Share(users)
+	local id = NewAsk(now)
+	roll.id, roll.t, roll.share = id, now, share
+	ns.Comm.Send("CHANNEL", ("V1~%d~%d"):format(id, share), "rollcall")
+	return share
+end
+
+-- Before the census is in, the army's size is unknown: every addon would answer.
+local function CensusIn(now)
+	local users = Workshop.ReportedUsers()
+	if users == 0 or now - (ns.Comm.loginAt or 0) < Workshop.ROLL_AFTER then return nil end
+	return users
+end
+
 function Workshop.RollCall()
 	if not Workshop.Visible() then return end
 	local now = ns.Now()
 	if now - lastRoll < Workshop.ROLL_EVERY then
 		return ns.Print(L.WORKSHOP_ROLL_WAIT:format(math.ceil((Workshop.ROLL_EVERY - (now - lastRoll)) / 60)))
 	end
-	-- Before the census is in, the army's size is unknown: every addon would answer.
-	local users = Workshop.ReportedUsers()
-	if users == 0 or now - (ns.Comm.loginAt or 0) < Workshop.ROLL_AFTER then return ns.Print(L.WORKSHOP_ROLL_EARLY) end
-	lastRoll = now
-	local share = Workshop.Share(users)
-	-- The answers so far stay: a newer one replaces a player's older one.
-	local answers, count = roll and roll.answers or {}, roll and roll.count or 0
-	roll = { id = Workshop.random(1, 99999), t = now, share = share, answers = answers, count = count }
-	ns.Comm.Send("CHANNEL", ("V1~%d~%d"):format(roll.id, share), "rollcall")
-	ns.Print(L.WORKSHOP_ROLL_SENT:format(share))
+	local users = CensusIn(now)
+	if not users then return ns.Print(L.WORKSHOP_ROLL_EARLY) end
+	ns.Print(L.WORKSHOP_ROLL_SENT:format(SendRoll(users, now)))
 	Changed()
 end
 
+-- A roll call reaches us on the channel (a share of the army answers), or by whisper (0.9.9:
+-- the author asks this player alone, V1~<id>~100). Either way the author's alone, once per
+-- ROLL_GAP; asked alone, the answer goes within ASK_ONE_SPREAD seconds or so.
 function Workshop.HandleRoll(dist, sender, text)
-	if dist ~= "CHANNEL" or not IsAuthorName(sender) or Workshop.IsAuthor() or not Workshop.Answers() then return end
+	local alone = dist == "WHISPER"
+	if (dist ~= "CHANNEL" and not alone) or not IsAuthorName(sender) or Workshop.IsAuthor() or not Workshop.Answers() then return end
 	local id, share = text:match("^V1~(%d+)~(%d+)$")
 	id, share = tonumber(id), tonumber(share)
 	if not id or not share then return end
@@ -231,29 +297,202 @@ function Workshop.HandleRoll(dist, sender, text)
 	if Workshop.random(1, 100) > math.max(1, math.min(100, share)) then return end
 	lastRollAnswer = now
 	-- Spread over ROLL_SPREAD: a thousand answers do not arrive in the same second.
-	Workshop.after(1 + Workshop.random() * Workshop.ROLL_SPREAD, "roll call answer", function()
+	local spread = alone and Workshop.ASK_ONE_SPREAD or Workshop.ROLL_SPREAD
+	Workshop.after(1 + Workshop.random() * spread, "roll call answer", function()
 		ns.Comm.Whisper(ns.FullName(sender), Answer(id), "rollanswer")
 	end)
 end
 
+---------------------------------------------------------------------------
+-- The full roll call (0.9.9): a roll call every ROLL_EVERY, each to the share a single one asks
+-- (Share: never more answers than one roll call), until ROLL_ENOUGH % of the addon users the
+-- census counts answered, ROLL_ROUNDS rounds went out, or the author stops it.
+---------------------------------------------------------------------------
+
+-- The players who answered since it began, of the addon users the census counts (the latest
+-- count while it runs), and the share of them in %.
+local function FullCount()
+	local n = 0
+	for _, a in pairs(roll and roll.answers or {}) do
+		if (a.t or 0) >= full.started then n = n + 1 end
+	end
+	if full.running then
+		local users = Workshop.ReportedUsers()
+		if users > 0 then full.users = users end
+	end
+	local m = math.max(1, full.users or 1)
+	return n, m, math.min(100, math.floor(n * 100 / m))
+end
+
+-- The answers kept: MAX_ANSWERS; while a full roll call runs, room for its census and a tenth
+-- more (players who answered before it began, or joined since), MAX_ANSWERS_FULL at most.
+local function Cap()
+	if not (full and full.running) then return Workshop.MAX_ANSWERS end
+	return math.min(Workshop.MAX_ANSWERS_FULL, math.max(Workshop.MAX_ANSWERS, math.ceil((full.users or 0) * 1.1)))
+end
+Workshop.Cap = Cap
+
+-- ROLL_ENOUGH % of `users` is more answers than a full roll call can keep: it could never end
+-- on its own, so it does not run (or stops, the census having grown).
+local function TooMany(users)
+	return math.ceil(Workshop.ROLL_ENOUGH * (tonumber(users) or 0) / 100) > Workshop.MAX_ANSWERS_FULL
+end
+
+local function FinishFull(reason)
+	full.running, full.reason, full.nextAt = false, reason, nil
+	local n, m, pct = FullCount()
+	ns.Print(L["WORKSHOP_FULL_" .. reason:upper()]:format(full.round, n, m, pct, Workshop.ROLL_ENOUGH, Workshop.MAX_ANSWERS_FULL))
+	Changed()
+end
+
+-- Enough answered: it ends there.
+local function FullEnough()
+	local n, m = FullCount()
+	if n * 100 < Workshop.ROLL_ENOUGH * m then return false end
+	FinishFull("enough")
+	return true
+end
+
+-- One round, then the next one ROLL_EVERY later, while this full roll call (token) runs. The
+-- last round's answers get their ROLL_EVERY too before it ends.
+local function FullRound(token)
+	if not full or full.token ~= token or not full.running then return end
+	if FullEnough() then return end
+	if full.round >= Workshop.ROLL_ROUNDS then return FinishFull("rounds") end
+	local now = ns.Now()
+	local users = Workshop.ReportedUsers()
+	if users > 0 then full.users = users end
+	if TooMany(full.users) then return FinishFull("large") end
+	SendRoll(full.users, now)
+	full.round, full.nextAt = full.round + 1, now + Workshop.ROLL_EVERY
+	Workshop.after(Workshop.ROLL_EVERY, "full roll call", function() FullRound(token) end)
+	Changed()
+end
+
+function Workshop.FullRunning() return full ~= nil and full.running == true end
+function Workshop.Full() return full end
+
+function Workshop.StartFull()
+	if not Workshop.Visible() or Workshop.FullRunning() then return false end
+	local now = ns.Now()
+	local users = CensusIn(now)
+	if not users then
+		ns.Print(L.WORKSHOP_ROLL_EARLY)
+		return false
+	end
+	if TooMany(users) then
+		ns.Print(L.WORKSHOP_FULL_TOO_MANY:format(Workshop.ROLL_ENOUGH, users, Workshop.MAX_ANSWERS_FULL))
+		return false
+	end
+	local token = {}
+	full = { running = true, started = now, round = 0, users = users, token = token }
+	ns.Print(L.WORKSHOP_FULL_START:format(Workshop.ROLL_ENOUGH, users, Workshop.ROLL_ROUNDS))
+	if roll and now - lastRoll < Workshop.ROLL_EVERY then
+		-- A roll call went out moments ago: it is the first round, the next one ROLL_EVERY after it.
+		full.round, full.started, full.nextAt = 1, lastRoll, lastRoll + Workshop.ROLL_EVERY
+		Workshop.after(full.nextAt - now, "full roll call", function() FullRound(token) end)
+		Changed()
+	else
+		FullRound(token)
+	end
+	return true
+end
+
+function Workshop.StopFull()
+	if not Workshop.FullRunning() then return false end
+	FinishFull("stopped")
+	return true
+end
+
+-- The Workshop's button: starts one, or stops the one running.
+function Workshop.ToggleFull()
+	if Workshop.FullRunning() then return Workshop.StopFull() end
+	return Workshop.StartFull()
+end
+
+-- The ask `id` went to this player alone ("Ask <name>"), by that name.
+local function AskedAlone(id, sender) return roll.alone[id] ~= nil and roll.alone[id] == Fold(ns.ShortName(sender)) end
+
+-- A new answer and the answers kept already fill the Cap: room for it, or false. The answers of
+-- players asked alone stay (the author looked for them: they may be off the channel, where the
+-- rounds never reach them).
+--   * A full roll call counts the answers since it began: the older ones go, once per full
+--     roll call (none can be older than it afterwards).
+--   * The player the author asked alone, by name: the oldest answer goes, so the one he looks
+--     for always shows. Anyone else's answer to that id is not kept.
+local function MakeRoom(id, sender)
+	if full and full.running and roll.pruned ~= full.token then
+		roll.pruned = full.token
+		for name, a in pairs(roll.answers) do
+			if (a.t or 0) < full.started and not a.alone then roll.answers[name], roll.count = nil, roll.count - 1 end
+		end
+		if roll.count < Cap() then return true end
+	end
+	if not AskedAlone(id, sender) then return false end
+	local oldest, oldestAny
+	for _, a in pairs(roll.answers) do
+		if not oldestAny or (a.t or 0) < (oldestAny.t or 0) then oldestAny = a end
+		if not a.alone and (not oldest or (a.t or 0) < (oldest.t or 0)) then oldest = a end
+	end
+	oldest = oldest or oldestAny
+	if oldest then roll.answers[oldest.name], roll.count = nil, roll.count - 1 end
+	return true
+end
+
 function Workshop.HandleAnswer(dist, sender, text)
 	if dist ~= "WHISPER" or not Workshop.Visible() or not roll then return end
-	if ns.Now() - roll.t > Workshop.ROLL_OPEN then return end
 	local id, version, guild, client, window, flags, errors, level, class =
 		text:match("^V2~(%d+)~([^~]*)~([^~]*)~([^~]*)~([^~]*)~([^~]*)~(%d+)~(%d+)~([^~]*)$")
-	if tonumber(id) ~= roll.id then return end
+	id = tonumber(id)
+	local now = ns.Now()
+	local at = id and roll.ids[id]
+	if not at or now - at > Workshop.ROLL_OPEN then return end
 	sender = ns.FullName(sender)
 	local before = roll.answers[sender]
-	if before and before.roll == roll.id then return end
-	if not before and roll.count >= Workshop.MAX_ANSWERS then return end
+	if before and before.roll == id then return end
+	if not before and roll.count >= Cap() and not MakeRoom(id, sender) then return end
 	if not before then roll.count = roll.count + 1 end
-	roll.answers[sender] = {
-		name = sender, roll = roll.id, version = Version(version), guild = Clean(guild, 40),
+	local a = {
+		name = sender, roll = id, version = Version(version), guild = Clean(guild, 40),
 		client = CLIENTS[client] and client or "?", window = WINDOWS[window] and window or "?",
 		flags = (flags or ""):gsub("[^crkmp]", ""):sub(1, 5), errors = math.min(tonumber(errors) or 0, 999),
-		level = math.min(tonumber(level) or 0, 99), class = Clean(class, 2), t = ns.Now(),
+		level = math.min(tonumber(level) or 0, 99), class = Clean(class, 2), t = now,
+		alone = AskedAlone(id, sender) or (before and before.alone) or nil,
 	}
+	-- Folded once for the search (thousands of answers at each letter typed): the name as shown
+	-- (for the order), the whole Name-Realm, the guild.
+	a.foldedName, a.foldedFull, a.foldedGuild = Fold(ns.DisplayName(sender)), Fold(sender), Fold(a.guild)
+	roll.answers[sender] = a
+	if Workshop.FullRunning() then FullEnough() end
 	Changed()
+end
+
+---------------------------------------------------------------------------
+-- One player asked alone (0.9.9): "Ask <name>", from the search or an answer's actions. A roll
+-- call by whisper, V1~<id>~100: their addon answers within seconds, on the channel or not (a
+-- moderator's may not be). 0.9.8 and older take roll calls from the channel only and ignore it.
+---------------------------------------------------------------------------
+
+-- The name a whisper goes to, and asks are remembered by.
+local function AskKey(name) return ns.FullName(ns.Normal(TrimText(name))) end
+
+function Workshop.AskOne(name)
+	if not Workshop.Visible() or not NameLike(TrimText(name)) then return false end
+	local now = ns.Now()
+	if now - lastAskOne < Workshop.ASK_ONE_EVERY then
+		ns.Print(L.WORKSHOP_ASK_ONE_WAIT:format(math.ceil(Workshop.ASK_ONE_EVERY - (now - lastAskOne))))
+		return false
+	end
+	lastAskOne = now
+	local key = AskKey(name)
+	local id = NewAsk(now)
+	roll.t = roll.t or now
+	roll.alone[id] = Fold(ns.ShortName(key)) -- (their answer is kept whatever the cap: MakeRoom)
+	askedOne[Fold(key)] = now
+	ns.Comm.Whisper(key, ("V1~%d~100"):format(id), "rollask:" .. key) -- (one queued per player)
+	ns.Print(L.WORKSHOP_ASK_ONE_SENT:format(ns.DisplayName(key)))
+	Changed()
+	return true
 end
 
 ---------------------------------------------------------------------------
@@ -481,21 +720,240 @@ local function Problems(a, latest)
 	return out
 end
 
-local function RollLines(lines)
-	lines[#lines + 1] = { header = true, text = L.WORKSHOP_ROLL, right = roll and Grey(ns.Ago(roll.t)) or nil }
+-- The guilds the author knows players by: an answer carries none since 0.9.2 (Answer), so a
+-- player's guild is the one his own roster puts them in (the server's word, first), or the one
+-- the census's reports name them leader, officer or reporter of. Returns [folded Name-Realm] =
+-- { name, folded }, and every guild name the census and his roster know, folded (a guild's
+-- name is nobody to ask alone).
+local function KnownGuilds()
+	local byPlayer, names, byGuild = {}, {}, {}
+	local function Put(who, guild)
+		if type(who) ~= "string" or who == "" then return end
+		local g = byGuild[guild]
+		if not g then
+			g = { name = guild, folded = Fold(guild) }
+			byGuild[guild], names[g.folded] = g, true
+		end
+		local key = Fold(who)
+		byPlayer[key] = byPlayer[key] or g
+	end
+	local mine = GetGuildInfo and GetGuildInfo("player")
+	if type(mine) == "string" and mine ~= "" then
+		names[Fold(mine)] = true
+		for who in pairs(ns.Roster and ns.Roster.byName or {}) do Put(who, mine) end
+	end
+	for guild, g in pairs(ns.rdb and ns.rdb.guilds or {}) do
+		if type(guild) == "string" and type(g) == "table" then
+			names[Fold(guild)] = true
+			local home = g.realm or ns.realm
+			if type(g.leader) == "string" then Put(ns.FullName(g.leader, home), guild) end
+			for _, o in ipairs(type(g.officers) == "table" and g.officers or {}) do
+				if type(o) == "table" and type(o.name) == "string" then Put(ns.FullName(o.name, home), guild) end
+			end
+			Put(g.reporterFull, guild)
+		end
+	end
+	return byPlayer, names
+end
+
+-- An answer's guild, and folded: the one the author knows them by, or the one a client older
+-- than 0.9.2 sent.
+local function GuildOf(a, known)
+	local g = known and known[a.foldedFull]
+	if g then return g.name, g.folded end
+	return a.guild, a.foldedGuild
+end
+
+-- The tab's search, as typed in its box: a new search lists from the top, its actions closed.
+function Workshop.SetSearch(text)
+	text = tostring(text or "")
+	if text == search then return end
+	search, shownAnswers, menuFor = text, Workshop.ROLL_PAGE, nil
+	ns.Fire("WORKSHOP_CHANGED")
+end
+function Workshop.Search() return search end
+
+-- How many answers the list shows ("Show more", "Show all", "Show fewer").
+function Workshop.ShowAnswers(n)
+	shownAnswers = math.max(Workshop.ROLL_PAGE, tonumber(n) or Workshop.ROLL_PAGE)
+	ns.Fire("WORKSHOP_CHANGED")
+end
+
+-- An answer's actions, opened (or closed) under its row by a click.
+function Workshop.ToggleMenu(name)
+	menuFor = menuFor ~= name and name or nil
+	ns.Fire("WORKSHOP_CHANGED")
+end
+
+-- Problems first, then by name (any case).
+local function SortAnswers(list, latest)
+	local bad = {}
+	for _, a in ipairs(list) do bad[a] = #Problems(a, latest) > 0 end
+	table.sort(list, function(a, b)
+		if bad[a] ~= bad[b] then return bad[a] end
+		if a.foldedName ~= b.foldedName then return a.foldedName < b.foldedName end
+		return a.name < b.name
+	end)
+	local n = 0
+	for _, isBad in pairs(bad) do if isBad then n = n + 1 end end
+	return n
+end
+
+-- "Ask <name>": a roll call to that player alone, by whisper.
+local function AskLine(name, indent)
+	local who = ns.DisplayName(AskKey(name))
+	local at = askedOne[Fold(AskKey(name))]
+	return {
+		indent = indent, noReport = true,
+		text = Gold("> " .. L.WORKSHOP_ASK_ONE:format(who)),
+		right = at and Grey(L.WORKSHOP_ASK_ONE_AGO:format(ns.Ago(at))) or nil,
+		onClick = function() Workshop.AskOne(name) end,
+		tooltip = function(tt)
+			tt:AddLine(L.WORKSHOP_ASK_ONE:format(who), 1, 0.82, 0)
+			tt:AddLine(L.WORKSHOP_ASK_ONE_TIP, 1, 1, 1, true)
+		end,
+	}
+end
+
+-- One answer's row: the player and guild (GuildOf); the version (red when behind), the game client
+-- and window, its flags (Workshop.Flags), and what is wrong (off the channel in red, errors). A click
+-- opens its actions under it: ask again by whisper, ask to update (when behind), the player's card.
+local function AnswerLines(lines, a, latest, open, known)
+	local guild = GuildOf(a, known)
+	local outdated = Workshop.Newer(latest, a.version)
+	local right = { a.version == "?" and Grey("?") or (outdated and Red or Green)(a.version) }
+	if a.client ~= "?" then right[#right + 1] = Grey(a.client) end
+	if a.window ~= "?" then right[#right + 1] = Grey(a.window) end
+	if a.flags ~= "" then right[#right + 1] = Grey(a.flags) end
+	if not a.flags:find("c", 1, true) then right[#right + 1] = Red(L.WORKSHOP_NO_CHANNEL) end
+	if a.errors > 0 then right[#right + 1] = Red(L.WORKSHOP_ERRORS:format(a.errors)) end
+	local who = ns.DisplayName(a.name)
+	lines[#lines + 1] = {
+		key = a.name, indent = 1,
+		text = who .. (guild ~= "" and ("  " .. Grey("<" .. guild .. ">")) or ""),
+		right = table.concat(right, "  "),
+		onClick = function() Workshop.ToggleMenu(a.name) end,
+		tooltip = function(tt)
+			tt:AddLine(who, 1, 0.82, 0)
+			tt:AddLine(("%s  ·  %s  ·  %s  ·  %s"):format(a.version, a.client, a.window, a.flags ~= "" and a.flags or "-"), 1, 1, 1)
+			if guild ~= "" then tt:AddLine("<" .. guild .. ">", 0.6, 0.6, 0.6) end
+			tt:AddLine(L.WORKSHOP_ANSWERED:format(ns.Ago(a.t)), 0.6, 0.6, 0.6)
+			tt:AddLine(L.WORKSHOP_ROW_TIP, 0.25, 1, 0.25, true)
+		end,
+	}
+	if not open then return end
+	lines[#lines + 1] = AskLine(a.name, 2)
+	if outdated then
+		lines[#lines + 1] = {
+			indent = 2, noReport = true, text = Gold("> " .. L.WORKSHOP_ASK_BTN),
+			onClick = function() ns.ShowDialog("OLYMPUS_WORKSHOP_ASK", who, nil, a.name) end,
+			tooltip = function(tt)
+				tt:AddLine(L.WORKSHOP_ASK_BTN, 1, 0.82, 0)
+				tt:AddLine(L.WORKSHOP_CLICK_ASK, 1, 1, 1, true)
+			end,
+		}
+	end
+	lines[#lines + 1] = {
+		indent = 2, noReport = true, text = Gold("> " .. L.WORKSHOP_CARD),
+		onClick = function() ns.UI.ShowPerson({ name = who, level = a.level, class = a.class ~= "" and a.class or nil, guild = guild ~= "" and guild or nil }) end,
+	}
+end
+
+-- A list of answers, ROLL_PAGE at a time with "Show more", "Show all" and "Show fewer" (the
+-- leaderboards' way). The copy for Discord: the first page and how many more.
+local function AnswerList(lines, list, latest, report, known)
+	local shown = report and Workshop.ROLL_PAGE or shownAnswers
+	for i = 1, math.min(#list, shown) do
+		AnswerLines(lines, list[i], latest, not report and menuFor == list[i].name, known)
+	end
+	local total, page = #list, Workshop.ROLL_PAGE
+	if report then
+		if total > shown then lines[#lines + 1] = { indent = 1, text = Grey(L.AND_MORE:format(total - shown)) } end
+		return
+	end
+	if total > shown then
+		lines[#lines + 1] = { indent = 1, noReport = true, text = Grey(L.SHOW_MORE:format(math.min(page, total - shown), shown, total)),
+			onClick = function() Workshop.ShowAnswers(shown + page) end }
+		lines[#lines + 1] = { indent = 1, noReport = true, text = Grey(L.SHOW_ALL:format(total)),
+			onClick = function() Workshop.ShowAnswers(math.huge) end }
+	end
+	if shown > page and total > page then
+		lines[#lines + 1] = { indent = 1, noReport = true, text = Grey(L.SHOW_FEWER), onClick = function() Workshop.ShowAnswers(page) end }
+	end
+end
+
+-- How the full roll call goes (or went).
+local function FullLines(lines)
+	if not full then return end
+	local n, m, pct = FullCount()
+	local right
+	if full.running then
+		right = full.nextAt and Grey(L.WORKSHOP_FULL_NEXT:format(math.max(1, math.ceil((full.nextAt - ns.Now()) / 60)))) or nil
+	else
+		right = (full.reason == "enough" and Green or Grey)(L["WORKSHOP_FULL_END_" .. full.reason:upper()])
+	end
+	lines[#lines + 1] = {
+		text = L.WORKSHOP_FULL_PROGRESS:format(full.round, n, m, pct), right = right,
+		tooltip = function(tt)
+			tt:AddLine(L.WORKSHOP_FULL_BTN, 1, 0.82, 0)
+			tt:AddLine(L.WORKSHOP_FULL_BTN_TIP, 1, 1, 1, true)
+		end,
+	}
+end
+
+-- What the search finds: every answer whose name, guild (GuildOf) or version holds the text (any
+-- case), problems or not. A name nobody answered under: "Ask <name>" below (not for the name of a
+-- player who answered, nor for a guild's name or a piece of one an answer's guild holds).
+local function SearchLines(lines, text, latest, known, guildNames)
+	-- (The name with its realm: "Ann" and "Ann-Realm" find her alike, and are her exactly.)
+	local query, exact = Fold(text), Fold(AskKey(text))
+	local list, noAsk = {}, guildNames[query] == true
+	for _, a in pairs(roll and roll.answers or {}) do
+		local _, foldedGuild = GuildOf(a, known)
+		local byName, byGuild = a.foldedFull:find(query, 1, true) ~= nil, foldedGuild:find(query, 1, true) ~= nil
+		if byName or byGuild or a.version:find(query, 1, true) then list[#list + 1] = a end
+		if a.foldedFull == exact or (byGuild and not byName) then noAsk = true end
+	end
+	SortAnswers(list, latest)
+	lines[#lines + 1] = { header = true, text = L.WORKSHOP_MATCHES:format(#list) }
+	if #list == 0 then lines[#lines + 1] = { indent = 1, text = Grey(L.WORKSHOP_NO_MATCH) } end
+	AnswerList(lines, list, latest, false, known)
+	if not noAsk and NameLike(text) then lines[#lines + 1] = AskLine(text, 1) end
+	lines[#lines].gapAfter = true
+end
+
+-- The roll call: its search box on top, the full roll call's progress, then what the search
+-- finds, or the answers' summary and everyone who answered. `report`: the copy for Discord
+-- (no box, no search, the first page).
+local function RollLines(lines, report)
+	lines[#lines + 1] = { header = true, text = L.WORKSHOP_ROLL, right = roll and roll.t and Grey(ns.Ago(roll.t)) or nil }
+	if not report then
+		lines[#lines + 1] = {
+			text = L.WORKSHOP_SEARCH, noReport = true, input = { text = search, onChange = Workshop.SetSearch },
+			tooltip = function(tt)
+				tt:AddLine(L.WORKSHOP_SEARCH, 1, 0.82, 0)
+				tt:AddLine(L.WORKSHOP_SEARCH_TIP, 1, 1, 1, true)
+			end,
+		}
+	end
+	FullLines(lines)
+	local latest = Workshop.Latest()
+	local text = report and "" or TrimText(search)
+	local known, guildNames = KnownGuilds()
+	if text ~= "" then return SearchLines(lines, text, latest, known, guildNames) end
 	if not roll then
 		lines[#lines + 1] = { text = Grey(L.WORKSHOP_ROLL_NONE), gapAfter = true }
 		return
 	end
 	local versions, clients, windows, noChannel, withErrors = {}, {}, {}, 0, 0
-	local latest, list = Workshop.Latest(), {}
+	local list = {}
 	for _, a in pairs(roll.answers) do
 		Count(versions, a.version)
 		Count(clients, a.client)
 		Count(windows, a.window)
 		if not a.flags:find("c", 1, true) then noChannel = noChannel + 1 end
 		if a.errors > 0 then withErrors = withErrors + 1 end
-		if #Problems(a, latest) > 0 then list[#list + 1] = a end
+		list[#list + 1] = a
 	end
 	local function Join(map)
 		local parts = {}
@@ -503,40 +961,21 @@ local function RollLines(lines)
 		table.sort(parts)
 		return #parts > 0 and table.concat(parts, "  ·  ") or "-"
 	end
-	lines[#lines + 1] = { text = L.WORKSHOP_ANSWERS:format(roll.count, roll.share) }
+	-- (Players asked alone, and no roll call yet: no share to tell.)
+	lines[#lines + 1] = { text = roll.share and L.WORKSHOP_ANSWERS:format(roll.count, roll.share) or L.WORKSHOP_ANSWERS_ALONE:format(roll.count) }
 	lines[#lines].right = Grey(L.WORKSHOP_LAST:format(ns.Ago(roll.t)))
 	lines[#lines + 1] = { indent = 1, text = L.WORKSHOP_VERSIONS .. ": " .. Versions(versions) }
 	lines[#lines + 1] = { indent = 1, text = L.WORKSHOP_CLIENTS .. ": " .. Join(clients) }
 	lines[#lines + 1] = { indent = 1, text = L.WORKSHOP_WINDOWS .. ": " .. Join(windows) }
 	lines[#lines + 1] = { indent = 1, text = L.WORKSHOP_HEALTH:format(noChannel, withErrors), gapAfter = true }
-	table.sort(list, function(a, b)
-		if a.errors ~= b.errors then return a.errors > b.errors end
-		return a.name < b.name
-	end)
-	lines[#lines + 1] = { header = true, text = L.WORKSHOP_ATTENTION:format(#list) }
-	if #list == 0 then lines[#lines + 1] = { text = Grey(L.WORKSHOP_ALL_GOOD) } end
-	for i = 1, math.min(Workshop.MAX_SHOWN, #list) do
-		local a = list[i]
-		local outdated = Workshop.Newer(latest, a.version)
-		lines[#lines + 1] = {
-			key = a.name, indent = 1,
-			text = ns.DisplayName(a.name) .. "  " .. Grey("<" .. (a.guild ~= "" and a.guild or "?") .. ">"),
-			right = table.concat(Problems(a, latest), "  "),
-			onClick = function()
-				if outdated then
-					ns.ShowDialog("OLYMPUS_WORKSHOP_ASK", ns.DisplayName(a.name), nil, a.name)
-				else
-					ns.UI.ShowPerson({ name = ns.DisplayName(a.name), level = a.level, class = a.class ~= "" and a.class or nil, guild = a.guild })
-				end
-			end,
-			tooltip = function(tt)
-				tt:AddLine(ns.DisplayName(a.name), 1, 0.82, 0)
-				tt:AddLine(("%s  ·  %s  ·  %s  ·  %s"):format(a.version, a.client, a.window, a.flags ~= "" and a.flags or "-"), 1, 1, 1)
-				if outdated then tt:AddLine(L.WORKSHOP_CLICK_ASK, 0.25, 1, 0.25, true) end
-			end,
-		}
+	local bad = SortAnswers(list, latest)
+	lines[#lines + 1] = { header = true, text = L.WORKSHOP_EVERYONE:format(#list), right = bad > 0 and Red(L.WORKSHOP_ATTENTION:format(bad)) or nil }
+	if #list == 0 then
+		lines[#lines + 1] = { indent = 1, text = Grey(L.WORKSHOP_NO_ANSWERS) }
+	elseif bad == 0 then
+		lines[#lines + 1] = { indent = 1, text = Grey(L.WORKSHOP_ALL_GOOD) }
 	end
-	if #list > Workshop.MAX_SHOWN then lines[#lines + 1] = { indent = 1, text = Grey(L.AND_MORE:format(#list - Workshop.MAX_SHOWN)) } end
+	AnswerList(lines, list, latest, report, known)
 	lines[#lines].gapAfter = true
 end
 
@@ -570,23 +1009,30 @@ local function BugLines(lines)
 	end
 end
 
-function Workshop.Build()
+-- The tab's lines; `report`: for the copy (Workshop.ReportText). Nothing for anyone else (the tab
+-- is hidden from them; 0.9.9: not even drawn before it is).
+function Workshop.Build(report)
+	if not Workshop.Visible() then return {}, L.TAB_WORKSHOP, "" end
 	local lines = {}
 	if Workshop.Preview() then lines[#lines + 1] = { text = Grey(L.WORKSHOP_PREVIEW), gapAfter = true } end
 	InstallLines(lines)
-	RollLines(lines)
+	RollLines(lines, report)
 	BugLines(lines)
+	-- The elite borders' preview round his own portrait (Borders.lua, 1.0.0): not in the copy.
+	if not report then ns.Borders.PreviewLines(lines) end
 	return lines, L.TAB_WORKSHOP, L.WORKSHOP_HINT
 end
 
--- The copyable report for Discord.
+-- The copyable report for Discord (the tab's lines, without its box and its clickable rows).
 function Workshop.ReportText()
 	local out = { "```", L.WORKSHOP_REPORT_TITLE:format(ns.VERSION, date and date("%Y-%m-%d %H:%M") or "") }
-	for _, line in ipairs((Workshop.Build())) do
-		local text = (line.text or ""):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
-		local right = (line.right or ""):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
-		if line.header then out[#out + 1] = "" end
-		out[#out + 1] = (" "):rep(2 * (line.indent or 0)) .. text .. (right ~= "" and ("  " .. right) or "")
+	for _, line in ipairs((Workshop.Build(true))) do
+		if not line.noReport then
+			local text = (line.text or ""):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+			local right = (line.right or ""):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+			if line.header then out[#out + 1] = "" end
+			out[#out + 1] = (" "):rep(2 * (line.indent or 0)) .. text .. (right ~= "" and ("  " .. right) or "")
+		end
 	end
 	out[#out + 1] = "```"
 	return table.concat(out, "\n")
@@ -597,9 +1043,10 @@ function Workshop.State() return roll end
 
 -- Tests start from a clean state.
 function Workshop.Reset()
-	roll, authorAt, authorName, answeredRoll, sending = nil, nil, nil, nil, nil
-	wipe(reports); wipe(pieces); wipe(bugsFrom); wipe(asked)
+	roll, authorAt, authorName, answeredRoll, sending, full, menuFor = nil, nil, nil, nil, nil, nil, nil
+	wipe(reports); wipe(pieces); wipe(bugsFrom); wipe(asked); wipe(askedOne)
 	lastRoll, lastRollAnswer, lastUpdateShown, lastBug, lastAsk = -math.huge, -math.huge, -math.huge, -math.huge, -math.huge
+	search, shownAnswers, lastAskOne = "", Workshop.ROLL_PAGE, -math.huge
 	changePending = false
 end
 
@@ -612,12 +1059,199 @@ end
 --   HS1~<time>~<realm group>~<First Surname>,...~<signature>   (signed: all before the last ~)
 -- On the channel it travels as HS~<the signed list> (0.9.8): Comm hands a message to its
 -- handler only when "~" follows the two letters of its type, and the list starts "HS1~".
+-- Departments and titles (0.9.9, Max's) come in a second signed list, so 0.9.8 clients keep
+-- the name list they know; it travels as HT~<the signed list>, taken and passed along the same
+-- way, and shows titles for names on the name list only (Core.lua):
+--   HT1~<time>~<realm group>~<public 0|1>~<departments>~<signature>
+--   <departments>: <name>^<icon>^<First Surname>=<title>,...;<name>^<icon>^...
+-- A department's name may be empty (councillors outside any department: the council's own);
+-- its icon is what ns.CouncilIconValue takes, or nothing. "public" says whether the army sees
+-- the council in the census yet (ns.CouncilVisible).
+-- The King's Steward (1.0.0, Core.lua: ns.ReadStewards, ns.IsSteward) rides the same list, in an
+-- entry of its own among the departments with three "^" (a department has two, so 0.9.9 and
+-- ReadDepartments leave it out, and 0.9.9 still takes, shows and passes on the whole list):
+--   ^steward^<Alliance|Horde>^<First Surname-Realm>,...
+-- A client that lacks the lists asks for them (0.9.9, a moderator's report: a councillor's
+-- client that never got the list had no "My council icon", and relays alone can take hours):
+--   HQ~<time of the name list it holds, or 0>~<time of the titles list it holds, or 0>
+-- A client holding a newer list answers as a relay sends (HS~, then HT~), with the lists newer
+-- than the asker's only. 0.9.8 clients drop HQ unread (Comm hands a type it has no handler for
+-- to nobody, and logs nothing).
+-- Across realms (1.0.0, a moderator on PvP 2 who never got the lists: each realm of WoW:
+-- Forever has an OlympusNet of its own, and nobody on his had them). Our guild reaches its
+-- members on every realm, so the lists travel over GUILD too, taken with the same checks
+-- (only a newer list, the same signature budget): a relay now and then (RelayGuild), the
+-- author's client at login, and answers to asks there (a client whose guild has addon users on
+-- another realm asks over GUILD too). A client that takes a newer list from its guild puts it
+-- on its own realm's channel once (PassOn). Versions before 1.0.0 put nothing together from
+-- pieces over GUILD and take the lists from the channel alone: they never see these.
 ---------------------------------------------------------------------------
 
 Workshop.COUNCIL_MAX = 30
 Workshop.RELAY_EVERY = 1800 -- a client passes the list along about every 30 minutes...
 Workshop.RELAYS = 3         -- ...and about this many clients do, whatever the army's size
 local lastCouncilSent = -math.huge
+local lastGuildSent = -math.huge -- our last relay over GUILD (1.0.0: RelayGuild)
+
+-- Asking: once LIST_ASK_AFTER to LIST_ASK_AFTER + LIST_ASK_SPREAD seconds after login, then,
+-- while still without the name list (or holding a list older than one heard of), again
+-- LIST_ASK_AGAIN after an ask nobody answered (no list newer than ours heard since), or
+-- LIST_ASK_EVERY after one somebody did; LIST_ASKS times a session at most. An answer goes to
+-- the whole channel: while someone else's ask for as much (or more) is under LIST_ASK_HOLD old
+-- (its answer can still be on its way), ours waits.
+Workshop.LIST_ASK_AFTER, Workshop.LIST_ASK_SPREAD, Workshop.LIST_ASK_HOLD = 45, 45, 40
+Workshop.LIST_ASK_AGAIN, Workshop.LIST_ASK_EVERY, Workshop.LIST_ASKS = 150, 600, 3
+-- Answering, each kind of list (names, titles) on its own: after LIST_ANSWER_MIN to
+-- LIST_ANSWER_MIN + LIST_ANSWER_SPREAD seconds, left out when the same list went out from
+-- someone else meanwhile; once per LIST_ANSWER_GAP after we sent it, whatever the number of
+-- asks. About LIST_ANSWERS clients take an ask up, whatever the army's size: one draw per
+-- LIST_DRAW_GAP (an ask that soon after the one we drew for is covered by its answer), none
+-- while the census counts nobody but us (right after a server restart every client would
+-- count itself alone, and all of them answer), and one sender's asks count once per
+-- LIST_ASK_FROM (a client asks LIST_ASK_AGAIN apart at the soonest).
+-- The author's client answers sooner, always, once per AUTHOR_ANSWER_GAP.
+-- A handful of answers (1.0.0, Konig's review of 1.0.0: one ask drew some 15 to 45 messages on the
+-- channel, every drawn client sending both lists, each 5 to 14 pieces long). The clients drawn go
+-- in turn, in the order of their draws over LIST_ANSWER_SPREAD; one that hears another's answer
+-- begin (its first piece: Comm.pieceHook) waits for it, the time its pieces take (LIST_HOLD_PIECE
+-- each, LIST_HOLD_SLACK more) and its own turn again, and leaves out what it heard whole. It
+-- waits LIST_HOLD_MAX past its turn at most: a forged first piece holds an answer back, never
+-- silences it. On the channel the draw counts at least our guild's addon users on our realm
+-- (their hellos), whatever the census counts: a census still coming in (after a restart) drew
+-- most of the channel.
+Workshop.LIST_ANSWER_MIN, Workshop.LIST_ANSWER_SPREAD, Workshop.LIST_ANSWER_GAP = 3, 12, 120
+Workshop.LIST_DRAW_GAP, Workshop.LIST_ANSWERS, Workshop.LIST_ASK_FROM = 30, 3, 120
+Workshop.LIST_HOLD_PIECE, Workshop.LIST_HOLD_SLACK, Workshop.LIST_HOLD_MAX = 1.2, 6, 45
+Workshop.AUTHOR_ANSWER_MIN, Workshop.AUTHOR_ANSWER_SPREAD, Workshop.AUTHOR_ANSWER_GAP = 1, 2, 60
+-- Passing a list taken from our guild on to our channel (1.0.0, PassOn): our guild's reporter on
+-- this realm PASS_MIN to PASS_MIN + PASS_SPREAD seconds after; its runner-up PASS_HOLD after the
+-- reporter's copy would be in (the lists go out one piece each SEND_EVERY); anyone else, about
+-- RELAYS of our guild's addon users on this realm, as long again after the runner-up's turn and
+-- up to PASS_HOLD more. Each only when the same list was not heard on the channel meanwhile.
+Workshop.PASS_MIN, Workshop.PASS_SPREAD, Workshop.PASS_HOLD, Workshop.SEND_EVERY = 1, 3, 15, 1.2
+local LIST_STORE = { HS = "council", HT = "councilTitles" }
+local advertised = { HS = 0, HT = 0 } -- the newest list times heard of this session
+local listAsks, lastListAsk, askArmed = 0, -math.huge, false
+local listHeardAt = -math.huge -- the last list newer than ours heard on the channel
+local heardAsk        -- someone else's asks heard lately: { names, titles, t }, the lowest times
+-- Answers go back where the ask came from, the channel or our guild (1.0.0), each lane on its
+-- own clock: an answer waiting { names, titles, heard = { HS, HT }, mine }, our last answer of
+-- each list, our last draw for each list (won or not), and sender -> when its ask last counted.
+local function NewLane()
+	return { answering = nil, answeredAt = { HS = -math.huge, HT = -math.huge }, drawnAt = { HS = -math.huge, HT = -math.huge },
+		askedFrom = {}, askedFromCount = 0 }
+end
+local lanes = { CHANNEL = NewLane(), GUILD = NewLane() }
+local passing         -- lists taken from our guild, on their way to our channel: { HS = blob, HT = blob, send }
+
+-- The list of a kind ("HS" names, "HT" titles) we hold, as signed, and its time (0: none).
+local function HeldList(kind)
+	local l = ns.rdb and ns.rdb[LIST_STORE[kind]]
+	if type(l) ~= "table" then return nil, 0 end
+	return type(l.blob) == "string" and l.blob or nil, tonumber(l.at) or 0
+end
+
+-- A list of that kind newer than `than`, when we hold one.
+local function NewerList(kind, than)
+	local blob, at = HeldList(kind)
+	return blob and at > than and blob or nil
+end
+
+-- A list time heard of (someone's ask, or a relay the signature budget left unchecked).
+local function Advertise(kind, at)
+	if at and at > advertised[kind] then advertised[kind] = at end
+end
+
+-- A list heard from someone else, on the channel or over GUILD (1.0.0): the very one our answer
+-- there would send, so the asker has it (the author's answer goes anyway); on the channel, the
+-- one we were to pass on to it (PassOn). Only the list we hold, byte for byte: a forged one
+-- with the same time never silences anyone. One newer than ours (taken or not) answers our
+-- ask: the next one waits LIST_ASK_EVERY.
+local function HeardList(kind, blob, dist)
+	local at = tonumber(blob:match("^" .. kind .. "1~(%d+)~"))
+	local _, held = HeldList(kind)
+	if at and at > held then listHeardAt = ns.Now() end
+	local mine = blob == (HeldList(kind))
+	local lane = lanes[dist]
+	local answering = lane and lane.answering
+	if answering and not answering.mine and mine then answering.heard[kind] = true end
+	if dist == "CHANNEL" and passing and passing[kind] == blob then passing[kind] = nil end
+end
+
+local function AuthorLists() return ns.COUNCIL_SIGNED ~= nil or ns.COUNCIL_TITLES ~= nil end
+
+-- On the channel, or over GUILD (1.0.0).
+local function SendLists(names, titles, dist)
+	dist = dist == "GUILD" and "GUILD" or nil
+	if names then ns.Comm.SendChunked("HS~" .. names, nil, dist) end
+	if titles then ns.Comm.SendChunked("HT~" .. titles, nil, dist) end
+end
+
+-- Our guild's addon users on other realms than ours, online now (1.0.0; Comm counts them from
+-- their hellos).
+local function GuildSpansRealms()
+	return ns.Comm.SpansRealms ~= nil and ns.Comm.SpansRealms() == true
+end
+
+-- Our guild's addon users online, ourselves included (on this realm alone: sameRealm).
+local function GuildUsers(sameRealm)
+	return (ns.Comm.PeerCount and ns.Comm.PeerCount(sameRealm) or 0) + 1
+end
+
+-- The pieces a list goes out in (as "HS~" or "HT~" and the list).
+local function Pieces(blob)
+	return math.ceil((#blob + 3) / ns.Codec.CHUNK)
+end
+
+-- A list newer than ours taken from our guild (1.0.0): a guildmate on another realm may have
+-- sent it, and our realm's channel may not have it (each realm has an OlympusNet of its own).
+-- We put it on our channel once, the way a relay sends it, unless the same list is heard there
+-- first. Every guildmate on this realm takes the same list at once, so not all of them: our
+-- guild's reporter here soon, its runner-up once the reporter's copy of the lists taken should
+-- have come, and a few others after that (see PASS_*). Taken lists of both kinds go out
+-- together (the second one taken meanwhile moves the others' turn by the time it takes to send).
+local function PassOn(kind, blob)
+	local p = passing
+	if p then
+		p[kind], p.pieces[kind] = blob, Pieces(blob)
+		return
+	end
+	local reporter, runnerUp = ns.Comm.isReporter == true, ns.Comm.isRunnerUp == true
+	p = { [kind] = blob, pieces = { [kind] = Pieces(blob) }, at = ns.Now(), send = true }
+	passing = p
+	local extra = 0
+	if reporter then
+		extra = Workshop.random() * Workshop.PASS_SPREAD
+	elseif not runnerUp then
+		extra = Workshop.random() * Workshop.PASS_HOLD
+		p.send = Workshop.random() <= math.min(1, Workshop.RELAYS / GuildUsers(true))
+	end
+	local function Due()
+		if reporter then return p.at + Workshop.PASS_MIN + extra end
+		local n = 0
+		for _, count in pairs(p.pieces) do n = n + count end
+		local later = Workshop.PASS_HOLD + n * Workshop.SEND_EVERY
+		return p.at + (runnerUp and later or 2 * later + extra)
+	end
+	local function Try()
+		if passing ~= p then return end
+		local left = Due() - ns.Now()
+		if left > 0.05 then
+			Workshop.after(left, "council pass on", Try)
+			return
+		end
+		passing = nil
+		if not p.send then return end
+		-- Only the lists we still hold: a newer one taken meanwhile has its own turn.
+		local names = p.HS and p.HS == (HeldList("HS")) and p.HS or nil
+		local titles = p.HT and p.HT == (HeldList("HT")) and p.HT or nil
+		if not names and not titles then return end
+		lastCouncilSent = ns.Now()
+		ns.Log("High Council: passing the lists from our guild on to our channel")
+		SendLists(names, titles)
+	end
+	Workshop.after(Due() - p.at, "council pass on", Try)
+end
 
 local function CouncilNames()
 	local c = ns.rdb and ns.rdb.council
@@ -632,24 +1266,55 @@ Workshop.CouncilNames = CouncilNames
 -- A signature check is the heaviest thing the addon does (0.9.8, Konig's review): lists heard on
 -- the channel are checked at most once a minute per sender and VERIFY_MAX times a minute in all,
 -- and a list already found false is not checked again. The author's own file is not limited.
+-- Once a minute per sender and per kind of list (0.9.9): a relay sends the names and the titles
+-- one after the other, and one gap for both would leave the titles unchecked at every relay.
+-- Two budgets (1.0.0, Konig's review of 1.0.0: three strangers sending a forged list of each kind
+-- spent the whole minute's checks, and nothing relayed was checked meanwhile, a councillor's
+-- removal included): lists from our guild (over GUILD, or on the channel from a guildmate our
+-- roster knows: the server names the sender) have VERIFY_MAX checks a minute of their own, which
+-- nobody outside our guild can spend. And a signature that can't be the author's (not 512 hex
+-- digits: Sign.Plausible) is refused before it costs anything, never checked, never asked for.
+-- The author's own relays and answers (1.0.0, Konig's second look: "exempt your own relays from
+-- the shared cap") are outside both budgets: on a realm where no guildmate our roster knows is
+-- his, full-length forgeries from three strangers still spent the channel's checks every minute,
+-- and the author's relay removing a councillor waited behind them. His name is the server's word
+-- (IsAuthorName), never the sender's. His lists still keep the gap per kind of list (two checks a
+-- minute at most: his client relays each 10 minutes and answers an ask once per
+-- AUTHOR_ANSWER_GAP) and a list found false is never checked again.
 Workshop.VERIFY_GAP, Workshop.VERIFY_MAX = 60, 6
-local verifiedFrom, verifyTimes, falseLists, falseCount = {}, {}, {}, 0
-local function MayVerify(sender, blob, now)
+local verifiedFrom, falseLists, falseCount = {}, {}, 0
+local verifyTimes = { channel = {}, guild = {} } -- each budget's checks in the last minute
+local function MayVerify(sender, kind, blob, now, guild)
 	if falseLists[blob] then return false end
-	if sender and now - (verifiedFrom[sender] or -math.huge) < Workshop.VERIFY_GAP then return false end
-	for i = #verifyTimes, 1, -1 do if now - verifyTimes[i] >= 60 then table.remove(verifyTimes, i) end end
-	if #verifyTimes >= Workshop.VERIFY_MAX then return false end
-	if sender then verifiedFrom[sender] = now end
-	verifyTimes[#verifyTimes + 1] = now
+	local key = sender and (sender .. "~" .. kind)
+	if key and now - (verifiedFrom[key] or -math.huge) < Workshop.VERIFY_GAP then return false end
+	if not IsAuthorName(sender) then
+		local times = guild and verifyTimes.guild or verifyTimes.channel
+		for i = #times, 1, -1 do if now - times[i] >= 60 then table.remove(times, i) end end
+		if #times >= Workshop.VERIFY_MAX then return false end
+		times[#times + 1] = now
+	end
+	if key then verifiedFrom[key] = now end
 	return true
 end
 local function RememberFalse(blob)
 	if falseCount >= 100 then wipe(falseLists); falseCount = 0 end
 	falseLists[blob], falseCount = true, falseCount + 1
 end
-function Workshop.ResetVerify() wipe(verifiedFrom); wipe(verifyTimes); wipe(falseLists); falseCount = 0 end -- tests
+function Workshop.ResetVerify() -- tests (the list times heard of go too)
+	wipe(verifiedFrom); wipe(verifyTimes.channel); wipe(verifyTimes.guild); wipe(falseLists); falseCount = 0
+	if Workshop.ResetListAsk then Workshop.ResetListAsk() end
+end
 
-function Workshop.TakeCouncil(blob, sender)
+-- A list heard from our guild (1.0.0, Konig's review): over GUILD, or on the channel from a
+-- guildmate (our roster: the server's word, never the sender's).
+local function FromGuild(dist, sender)
+	return dist == "GUILD" or (sender ~= nil and ns.Roster ~= nil and ns.Roster.RankOf(sender) ~= nil)
+end
+
+-- sender: nil for the author's own file (never limited); the author's name (a relay from his
+-- client) outside both budgets; guild: charged to our guild's budget.
+function Workshop.TakeCouncil(blob, sender, guild)
 	if type(blob) ~= "string" or #blob > 2000 then return false end
 	local text, at, realm, list, sig = blob:match("^(HS1~(%d+)~([^~]*)~([^~]*))~(%x+)$")
 	at = tonumber(at)
@@ -658,7 +1323,11 @@ function Workshop.TakeCouncil(blob, sender)
 	-- client a signature check for nothing (0.9.8).
 	local c = ns.rdb.council
 	if type(c) == "table" and (tonumber(c.at) or 0) >= at then return false end
-	if sender and not MayVerify(sender, blob, ns.Now()) then return false end
+	if not ns.Sign or not ns.Sign.Plausible(sig) then return false end -- (costs nothing: Konig's review)
+	if sender and not MayVerify(sender, "HS", blob, ns.Now(), guild) then
+		if not falseLists[blob] then Advertise("HS", at) end -- (not checked: asked for later)
+		return false
+	end
 	if not ns.Sign or not ns.Sign.Verify(text, sig) then
 		if sender then
 			RememberFalse(blob)
@@ -677,19 +1346,109 @@ function Workshop.TakeCouncil(blob, sender)
 	return true
 end
 
+-- From the channel, or from our guild (1.0.0): the same checks either way.
 function Workshop.HandleCouncil(dist, sender, text)
-	if dist ~= "CHANNEL" or type(text) ~= "string" then return end
-	Workshop.TakeCouncil(text:match("^HS~(HS1~.*)$") or text, ns.FullName(sender))
+	if (dist ~= "CHANNEL" and dist ~= "GUILD") or type(text) ~= "string" then return end
+	local blob = text:match("^HS~(HS1~.*)$") or text
+	sender = ns.FullName(sender)
+	if Workshop.TakeCouncil(blob, sender, FromGuild(dist, sender)) and dist == "GUILD" then PassOn("HS", blob) end
+	HeardList("HS", blob, dist)
 end
 ns.Comm.Handle("HS", function(...) Workshop.HandleCouncil(...) end)
 
--- Passing the list along: the author's client each 10 minutes; any other one now and then, so
--- about RELAYS clients a half hour, whatever the army's size.
+-- The departments and titles (0.9.9): what the addon keeps of them, whatever the list says. A
+-- signed list never breaks these (the signing script refuses it first); past them, the rest is
+-- left out: TITLES_BLOB bytes in all (or none of it), COUNCIL_MAX councillors, DEPTS_MAX named
+-- departments of DEPT_NAME bytes, titles of TITLE_MAX bytes; a councillor once, the first time.
+Workshop.TITLES_BLOB, Workshop.DEPTS_MAX, Workshop.DEPT_NAME, Workshop.TITLE_MAX = 3000, 8, 40, 48
+local function Trim(s) return (s:gsub("^%s+", ""):gsub("%s+$", "")) end
+local function ReadDepartments(text)
+	local depts, named, count, seen = {}, 0, 0, {}
+	for entry in text:gmatch("[^;]+") do
+		local name, icon, list = entry:match("^([^%^]*)%^([^%^]*)%^([^%^]*)$")
+		name = name and Trim(name)
+		if name and #name <= Workshop.DEPT_NAME and (name == "" or named < Workshop.DEPTS_MAX) then
+			if name ~= "" then named = named + 1 end
+			local d = { name = name, icon = ns.CouncilIconValue(icon), members = {} }
+			for m in list:gmatch("[^,]+") do
+				local who, title = m:match("^([^=]*)=([^=]*)$")
+				who, title = who and Trim(who), title and Trim(title)
+				if who and who ~= "" and #who <= 48 and #title <= Workshop.TITLE_MAX and not seen[who:lower()]
+					and count < Workshop.COUNCIL_MAX then
+					seen[who:lower()], count = true, count + 1
+					d.members[#d.members + 1] = { name = who, title = title ~= "" and title or nil }
+				end
+			end
+			depts[#depts + 1] = d
+		end
+	end
+	return depts, count
+end
+
+-- A signed titles list, from the author's file or the channel: checked and kept like the names
+-- (only a newer one; the same budgets of signature checks).
+function Workshop.TakeTitles(blob, sender, guild)
+	if type(blob) ~= "string" or #blob > Workshop.TITLES_BLOB then return false end
+	local text, at, realm, public, list, sig = blob:match("^(HT1~(%d+)~([^~]*)~([01])~([^~]*))~(%x+)$")
+	at = tonumber(at)
+	if not at then return false end
+	local t = ns.rdb.councilTitles
+	if type(t) == "table" and (tonumber(t.at) or 0) >= at then return false end
+	if not ns.Sign or not ns.Sign.Plausible(sig) then return false end
+	if sender and not MayVerify(sender, "HT", blob, ns.Now(), guild) then
+		if not falseLists[blob] then Advertise("HT", at) end
+		return false
+	end
+	if not ns.Sign or not ns.Sign.Verify(text, sig) then
+		if sender then
+			RememberFalse(blob)
+			ns.Log("High Council: a titles list from %s failed its signature", tostring(sender))
+		end
+		return false
+	end
+	local depts, n = ReadDepartments(list)
+	-- The King's Steward (1.0.0, ns.ReadStewards): an entry of its own among the departments,
+	-- which ReadDepartments (and 0.9.9) leave out. This client is told when it becomes his or ends.
+	local function Steward() return type(ns.King) == "table" and type(ns.King.IsSteward) == "function" and ns.King.IsSteward() end
+	local was = Steward()
+	local stewards = ns.ReadStewards(list)
+	ns.rdb.councilTitles = { at = at, public = public == "1", realm = realm ~= "" and realm or nil, depts = depts, blob = blob, stewards = stewards }
+	local named = 0
+	for _, names in pairs(stewards) do named = named + #names end
+	ns.Log("High Council: a signed titles list of %d names in %d parts, %d Steward(s) (%s)", n, #depts, named, tostring(at))
+	local now = Steward()
+	if now and not was then
+		ns.Print(L.STEWARD_YOU:format(ns.KingName(ns.KingCharacter())))
+		ns.PlayAlert("soft")
+	elseif was and not now then
+		ns.Print(L.STEWARD_NO_LONGER)
+	end
+	-- The list of Hands of each Steward it no longer names ends with him for good, heard or kept,
+	-- his own client's too (King.StewardsChanged).
+	if type(ns.King) == "table" and type(ns.King.StewardsChanged) == "function" then ns.King.StewardsChanged() end
+	ns.Fire("DATA_CHANGED")
+	return true
+end
+
+function Workshop.HandleTitles(dist, sender, text)
+	if (dist ~= "CHANNEL" and dist ~= "GUILD") or type(text) ~= "string" then return end
+	local blob = text:match("^HT~(HT1~.*)$") or text
+	sender = ns.FullName(sender)
+	if Workshop.TakeTitles(blob, sender, FromGuild(dist, sender)) and dist == "GUILD" then PassOn("HT", blob) end
+	HeardList("HT", blob, dist)
+end
+ns.Comm.Handle("HT", function(...) Workshop.HandleTitles(...) end)
+
+-- Passing the lists along, the names and the titles together: the author's client each 10
+-- minutes; any other one now and then, so about RELAYS clients a half hour, whatever the
+-- army's size.
 function Workshop.RelayCouncil(force)
-	local c = ns.rdb and ns.rdb.council
-	if type(c) ~= "table" or type(c.blob) ~= "string" then return end
+	local c, t = ns.rdb and ns.rdb.council, ns.rdb and ns.rdb.councilTitles
+	local names = type(c) == "table" and type(c.blob) == "string" and c.blob or nil
+	local titles = type(t) == "table" and type(t.blob) == "string" and t.blob or nil
+	if not names and not titles then return end
 	local now = ns.Now()
-	local mine = ns.COUNCIL_SIGNED ~= nil
+	local mine = AuthorLists()
 	local every = mine and 600 or Workshop.RELAY_EVERY
 	if not force and now - lastCouncilSent < every then return end
 	lastCouncilSent = now
@@ -697,12 +1456,238 @@ function Workshop.RelayCouncil(force)
 		local users = ns.King and ns.King.AddonsOnline and ns.King.AddonsOnline() or 1
 		if Workshop.random() > math.min(1, Workshop.RELAYS / users) then return end
 	end
-	ns.Comm.SendChunked("HS~" .. c.blob)
+	SendLists(names, titles)
 end
 
+-- The same over GUILD (1.0.0), to our guildmates on other realms: only while our guild has addon
+-- users online on another realm, at most once each RELAY_EVERY, and about RELAYS of our guild's
+-- addon users each time (a guild of a thousand sends a handful), when our send queue has room
+-- (the census report comes first). force: now, whatever these (the author's client at login).
+Workshop.GUILD_QUEUE = 30
+function Workshop.RelayGuild(force)
+	local names, titles = HeldList("HS"), (HeldList("HT"))
+	if not names and not titles then return false end
+	local now = ns.Now()
+	if not force then
+		if now - lastGuildSent < Workshop.RELAY_EVERY or not GuildSpansRealms() then return false end
+		if ns.Comm.QueueSize and ns.Comm.QueueSize() > Workshop.GUILD_QUEUE then return false end
+	end
+	lastGuildSent = now
+	if not force and Workshop.random() > math.min(1, Workshop.RELAYS / GuildUsers()) then return false end
+	SendLists(names, titles, "GUILD")
+	return true
+end
+
+-- Whether we should ask: no name list at all, or one older than a list heard of.
+function Workshop.NeedLists()
+	if type(ns.rdb and ns.rdb.council) ~= "table" then return true end
+	local _, names = HeldList("HS")
+	local _, titles = HeldList("HT")
+	return names < advertised.HS or titles < advertised.HT
+end
+
+-- Our ask, when due (the first one waits for its time after login: askArmed). It tries again
+-- LIST_ASK_AGAIN later, for an ask nobody answers (the council's ticker tries each minute).
+function Workshop.AskLists()
+	if not askArmed or not Workshop.NeedLists() or listAsks >= Workshop.LIST_ASKS then return false end
+	local now = ns.Now()
+	local wait = listHeardAt > lastListAsk and Workshop.LIST_ASK_EVERY or Workshop.LIST_ASK_AGAIN
+	if now - lastListAsk < wait then return false end
+	local _, names = HeldList("HS")
+	local _, titles = HeldList("HT")
+	local h = heardAsk
+	if h and now - h.t < Workshop.LIST_ASK_HOLD and h.names <= names and h.titles <= titles then return false end
+	listAsks, lastListAsk = listAsks + 1, now
+	local ask = ("HQ~%s~%s"):format(names, titles)
+	ns.Comm.Send("CHANNEL", ask, "councillists")
+	-- Our guild too (1.0.0) while it has addon users online on another realm: they may hold the
+	-- lists where nobody on our realm does.
+	if GuildSpansRealms() then ns.Comm.Send("GUILD", ask, "councillistsguild") end
+	if listAsks < Workshop.LIST_ASKS then
+		Workshop.after(Workshop.LIST_ASK_AGAIN, "council lists", function() Workshop.AskLists() end)
+	end
+	return true
+end
+
+-- Someone else's answer beginning (1.0.0, Konig's review): the first piece of a list of a kind our
+-- waiting answer on that lane would send, at least as new as ours. Our answer waits for it (see
+-- LIST_HOLD_*). Comm hands us the pieces only while an answer of ours waits (Comm.pieceHook).
+local function Waiting()
+	for _, lane in pairs(lanes) do if lane.answering then return true end end
+	return false
+end
+local function OnPiece(dist, sender, text)
+	local lane = lanes[dist == "GUILD" and "GUILD" or "CHANNEL"]
+	local a = lane and lane.answering
+	if not a or a.mine or type(text) ~= "string" then return end
+	local n, body = text:match("^C%w+:1:(%d+):(.*)$")
+	n = tonumber(n)
+	if not n then return end
+	local kind, at = body:match("^(HS)~HS1~(%d+)~")
+	if not kind then kind, at = body:match("^(HT)~HT1~(%d+)~") end
+	at = tonumber(at)
+	if not at then return end
+	local than = kind == "HS" and a.names or a.titles
+	local _, held = HeldList(kind)
+	if not NewerList(kind, than) or at < held then return end
+	local now = ns.Now()
+	local hold = now + n * Workshop.LIST_HOLD_PIECE + Workshop.LIST_HOLD_SLACK + a.turn * Workshop.LIST_ANSWER_SPREAD
+	a.holdUntil = math.min(a.dueAt + Workshop.LIST_HOLD_MAX, math.max(a.holdUntil or 0, hold))
+end
+local function HookPieces()
+	if ns.Comm then ns.Comm.pieceHook = Waiting() and OnPiece or nil end
+end
+
+-- Someone's ask: taken up when we hold a newer list and it is our turn (see LIST_ANSWER_*).
+-- An answer already waiting covers the asks that come meanwhile. Each list is drawn for and
+-- sent on a clock of its own: an ask for the titles alone never holds the names back, and a
+-- draw lost (or an answer left out) holds a client back LIST_DRAW_GAP only.
+-- dist (1.0.0): where the ask came from, and where the answer goes: the channel (about
+-- LIST_ANSWERS of the addons the census counts take it up) or our guild (about LIST_ANSWERS of
+-- its addon users), each on its own clock.
+function Workshop.AnswerAsk(names, titles, dist)
+	dist = dist == "GUILD" and "GUILD" or "CHANNEL"
+	local lane = lanes[dist]
+	if lane.answering then
+		local a = lane.answering
+		a.names, a.titles = math.min(a.names, names), math.min(a.titles, titles)
+		return false
+	end
+	local now, mine = ns.Now(), AuthorLists()
+	local gap = mine and Workshop.AUTHOR_ANSWER_GAP or Workshop.LIST_ANSWER_GAP
+	local kinds = {}
+	for kind, than in pairs({ HS = names, HT = titles }) do
+		if NewerList(kind, than) and now - lane.answeredAt[kind] >= gap
+			and (mine or now - lane.drawnAt[kind] >= Workshop.LIST_DRAW_GAP) then
+			kinds[#kinds + 1] = kind
+		end
+	end
+	if #kinds == 0 then return false end
+	local turn = 0
+	if not mine then
+		-- A census that counts nobody but us is not in yet (whoever asked is online too).
+		local users = dist == "GUILD" and GuildUsers() or (ns.King and ns.King.AddonsOnline and ns.King.AddonsOnline() or 1)
+		if users <= 1 then return false end
+		-- (The channel: our guild's addon users on our realm at least, Konig's review.)
+		if dist ~= "GUILD" then users = math.max(users, GuildUsers(true)) end
+		for _, kind in ipairs(kinds) do lane.drawnAt[kind] = now end
+		local share, draw = math.min(1, Workshop.LIST_ANSWERS / users), Workshop.random()
+		if draw > share then return false end
+		turn = draw / share -- our place among those drawn: 0 first, 1 last
+	end
+	local wait = mine and Workshop.AUTHOR_ANSWER_MIN + Workshop.random() * Workshop.AUTHOR_ANSWER_SPREAD
+		or Workshop.LIST_ANSWER_MIN + turn * Workshop.LIST_ANSWER_SPREAD
+	local pending = { names = names, titles = titles, heard = {}, mine = mine, turn = turn, dueAt = now + wait }
+	lane.answering = pending
+	HookPieces()
+	local function Due()
+		if lane.answering ~= pending then return end
+		local at = ns.Now()
+		-- Someone else's answer began meanwhile: its time, then our turn again (OnPiece).
+		if pending.holdUntil and pending.holdUntil - at > 0.05 then
+			Workshop.after(pending.holdUntil - at, "council answer", Due)
+			return
+		end
+		lane.answering = nil
+		HookPieces()
+		local send = {}
+		for kind, than in pairs({ HS = pending.names, HT = pending.titles }) do
+			if not pending.heard[kind] and at - lane.answeredAt[kind] >= gap then send[kind] = NewerList(kind, than) end
+		end
+		if send.HS then lane.answeredAt.HS = at end
+		if send.HT then lane.answeredAt.HT = at end
+		SendLists(send.HS, send.HT, dist)
+	end
+	Workshop.after(wait, "council answer", Due)
+	return true
+end
+
+-- An ask on the channel, or over GUILD from a guildmate (1.0.0, maybe on another realm).
+function Workshop.HandleListAsk(dist, sender, text)
+	if (dist ~= "CHANNEL" and dist ~= "GUILD") or type(text) ~= "string" or #text > 40 then return end
+	sender = ns.FullName(sender)
+	if type(sender) ~= "string" or sender == ns.me then return end
+	local names, titles = text:match("^HQ~(%d+)~(%d+)$")
+	names, titles = tonumber(names), tonumber(titles)
+	if not names or not titles then return end
+	-- One sender's asks count once per LIST_ASK_FROM (on each lane: a client whose guild spans
+	-- realms asks both): a character sending asks without end brings no more draws than that (a
+	-- client of ours asks LIST_ASK_AGAIN apart at the soonest).
+	local now, lane = ns.Now(), lanes[dist]
+	local askedFrom = lane.askedFrom
+	if now - (askedFrom[sender] or -math.huge) < Workshop.LIST_ASK_FROM then return end
+	if not askedFrom[sender] then
+		if lane.askedFromCount >= 200 then -- (the table stays small: the old ones go first)
+			for name, t in pairs(askedFrom) do
+				if now - t >= Workshop.LIST_ASK_FROM then askedFrom[name], lane.askedFromCount = nil, lane.askedFromCount - 1 end
+			end
+			if lane.askedFromCount >= 200 then wipe(askedFrom); lane.askedFromCount = 0 end
+		end
+		lane.askedFromCount = lane.askedFromCount + 1
+	end
+	askedFrom[sender] = now
+	Advertise("HS", names)
+	Advertise("HT", titles)
+	-- (Its answer reaches us wherever it goes: the channel we are on, or our guild.)
+	local h = heardAsk
+	if h and now - h.t < Workshop.LIST_ASK_HOLD then
+		h.names, h.titles = math.min(h.names, names), math.min(h.titles, titles)
+	else
+		heardAsk = { names = names, titles = titles, t = now }
+	end
+	Workshop.AnswerAsk(names, titles, dist)
+end
+ns.Comm.Handle("HQ", function(...) Workshop.HandleListAsk(...) end)
+
+-- Tests start from a clean state.
+function Workshop.ResetListAsk()
+	advertised.HS, advertised.HT = 0, 0
+	listAsks, lastListAsk, askArmed, heardAsk, listHeardAt = 0, -math.huge, false, nil, -math.huge
+	-- (In place: an answer or a pass-on still waiting finds nothing left to send.)
+	for _, lane in pairs(lanes) do
+		for k, v in pairs(NewLane()) do lane[k] = v end
+		lane.answering = nil
+	end
+	HookPieces()
+	passing, lastGuildSent = nil, -math.huge
+end
+
+-- /oly council (list): the names in chat; on the King's screen while the councillors' names are
+-- hidden there (his stream, ns.CouncilMasked), each cut short as in the Realm (0.9.9).
 function Workshop.EditCouncil(verb)
 	local names = CouncilNames()
+	if ns.CouncilMasked() then
+		for i, name in ipairs(names) do names[i] = ns.MaskName(name) end
+	end
 	ns.Print(L.COUNCIL_LIST:format(#names > 0 and table.concat(names, ", ") or "-"))
+end
+
+-- The council as the census shows it (0.9.9, Views.lua): the councillors outside any department
+-- first (the titles list's own, then anyone on the name list it leaves out, by name), then each
+-- department in the list's order with its councillors in theirs. Names on the name list only;
+-- a department left with nobody is left out.
+--   loose = { { name, title }, ... }, depts = { { name, icon, members = { { name, title }, ... } }, ... }
+function Workshop.CouncilTree()
+	local loose, depts, placed = {}, {}, {}
+	local t = ns.CouncilTitles()
+	for _, d in ipairs(t and t.depts or {}) do
+		local own = type(d) == "table" and d.name == ""
+		local into = own and loose or {}
+		for _, m in ipairs(type(d) == "table" and type(d.members) == "table" and d.members or {}) do
+			local key = type(m) == "table" and type(m.name) == "string" and m.name:lower()
+			if key and not placed[key] and ns.IsHighCouncillor(m.name) then
+				placed[key] = true
+				into[#into + 1] = { name = m.name, title = type(m.title) == "string" and m.title ~= "" and m.title or nil }
+			end
+		end
+		if not own and #into > 0 and type(d.name) == "string" then
+			depts[#depts + 1] = { name = d.name, icon = ns.CouncilIconValue(d.icon), members = into }
+		end
+	end
+	for _, name in ipairs(CouncilNames()) do
+		if not placed[name:lower()] and ns.IsHighCouncillor(name) then loose[#loose + 1] = { name = name } end
+	end
+	return loose, depts
 end
 
 -- Asking a High Councillor for help (Max's): the councillors who opted in (/oly council help on)
@@ -804,14 +1789,15 @@ StaticPopupDialogs["OLYMPUS_COUNCIL_ASK"] = {
 }
 
 ---------------------------------------------------------------------------
--- The councillors' own icons (0.9.8, the High Council's wish): each councillor picks the icon
--- before their name in the Olympus chats from the game's icons, as the macro window does (in a
+-- The councillors' own icons (0.9.8, the High Council's wish): each councillor picks an icon
+-- for their name in the Olympus chats from the game's icons, as the macro window does (in a
 -- window of ours: Blizzard's macro icon window, opened from addon code, would run tainted). Their
 -- client says which on the channel when it changes, then about every ICON_EVERY. Every client
 -- keeps it for councillors only (ns.IsHighCouncillor of the sender the server stamped), and only
 -- a file number or a plain icon name under Interface\Icons (ns.CouncilIconValue): nothing else
--- can reach the chat line. None heard yet: the default skull (Core.lua).
---   HI~<file number or icon name>   |   HI~0   (back to the default skull)
+-- can reach the chat line. Since 0.9.9 it is optional flavour after the council's fixed mark
+-- (Core.lua); none heard yet: the mark alone.
+--   HI~<file number or icon name>   |   HI~0   (no icon: the mark alone)
 ---------------------------------------------------------------------------
 
 Workshop.ICON_EVERY = 1200 -- about every 20 minutes (the council ticker runs once a minute)
@@ -823,8 +1809,8 @@ local gameIcons       -- the game's icons while it is open (let go when it close
 local shownIcons      -- the ones the filter leaves
 local iconPage, iconChoice = 1, nil
 
--- Our own icon (per character, like the council's names), or nil for the default skull. False
--- is the default chosen on purpose: it is still said ("0"), so the old one fades everywhere.
+-- Our own icon (per character, like the council's names), or nil for none. False is "none"
+-- chosen on purpose: it is still said ("0"), so the old one fades everywhere.
 local function MyIcon()
 	local mine = ns.db and ns.db.councilIcons
 	return ns.CouncilIconValue(type(mine) == "table" and ns.me and mine[ns.me] or nil)
@@ -832,7 +1818,7 @@ end
 Workshop.MyIcon = MyIcon
 
 -- Our icon on the channel: at once when forced (a change), else every ICON_EVERY. Only a
--- councillor's client says it, and only once they picked one (or the default back).
+-- councillor's client says it, and only once they picked one (or none, on purpose).
 function Workshop.SayIcon(force)
 	if not ns.IsHighCouncillor(ns.me) then return false end
 	local mine = ns.db and ns.db.councilIcons
@@ -844,8 +1830,8 @@ function Workshop.SayIcon(force)
 	return true
 end
 
--- A councillor's choice (the picker's OK): kept on this character and said at once; nil puts
--- the default skull back.
+-- A councillor's choice (the picker's OK): kept on this character and said at once; nil takes
+-- the icon away (the mark stays).
 function Workshop.SetCouncilIcon(v)
 	if not ns.IsHighCouncillor(ns.me) then
 		ns.Print(L.COUNCIL_ICON_ONLY)
@@ -956,14 +1942,16 @@ function Workshop.RefreshIconPicker()
 	picker.prev:SetEnabled(iconPage > 1)
 	picker.next:SetEnabled(iconPage < pages)
 	picker.empty:SetShown(#list == 0)
-	-- The preview: the icon large, and our name as the chats will show it.
-	local texture = ns.CouncilIconTexture(iconChoice) or ns.HIGH_COUNCIL_SKULL
-	picker.preview:SetTexture(texture)
-	picker.sample:SetText("[" .. L.CHAN_ALL .. "] [|T" .. texture .. ":0|t|c" .. ns.HIGH_COUNCIL_COLOR .. (ns.DisplayName(ns.me) or "?") .. "|r]")
-	picker.chosenName:SetText(iconChoice and IconLabel(iconChoice) or L.COUNCIL_ICON_DEFAULT)
+	-- The preview: the icon large (the mark when none is picked), and our name as the chats will
+	-- show it: the mark always, the icon after it (0.9.9).
+	local texture = ns.CouncilIconTexture(iconChoice)
+	picker.preview:SetTexture(texture or ns.HIGH_COUNCIL_SKULL)
+	picker.sample:SetText("[" .. L.CHAN_ALL .. "] [" .. ns.HIGH_COUNCIL_MARK .. (texture and ("|T" .. texture .. ":0|t") or "")
+		.. "|c" .. ns.HIGH_COUNCIL_COLOR .. (ns.DisplayName(ns.me) or "?") .. "|r]")
+	picker.chosenName:SetText(iconChoice and IconLabel(iconChoice) or L.COUNCIL_ICON_MARK_ONLY)
 end
 
--- A click on an icon (or the default skull, nil): the preview only, until OK.
+-- A click on an icon (or No icon, nil): the preview only, until OK.
 function Workshop.PickIcon(icon)
 	iconChoice = ns.CouncilIconValue(icon)
 	Workshop.RefreshIconPicker()
@@ -1098,7 +2086,7 @@ local function MakePicker()
 	f.next:SetScript("OnClick", function() ns.SafeCall("council icon page", Workshop.IconPage, iconPage + 1) end)
 	f.page = f:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
 	f.page:SetPoint("TOP", 0, gridBottom - 13)
-	-- The default skull, Cancel and OK. OK with nothing changed only closes.
+	-- No icon (the mark alone), Cancel and OK. OK with nothing changed only closes.
 	f.default = PickerButton(f, L.COUNCIL_ICON_DEFAULT, 120)
 	f.default:SetPoint("BOTTOMLEFT", 24, 18)
 	f.default:SetScript("OnClick", function() ns.SafeCall("council icon pick", Workshop.PickIcon, nil) end)
@@ -1156,19 +2144,33 @@ function Workshop.ResetIcons()
 	lastIconSent = -math.huge
 end
 
--- At login. The author's machine holds the signed list (CouncilList.lua, never published): his
--- client takes it and sends the newest it holds at once. Any other client passes the list
--- along a whole RELAY_EVERY after login at the earliest (0.9.8): until the census says how
--- many addons are online, each would count itself alone and relay for sure, the whole army
--- at once after a server restart.
+-- At login. The author's machine holds the signed lists (CouncilList.lua, never published: the
+-- names, and the titles since 0.9.9): his client takes them and sends the newest it holds at
+-- once. Any other client passes the lists along a whole RELAY_EVERY after login at the earliest
+-- (0.9.8): until the census says how many addons are online, each would count itself alone and
+-- relay for sure, the whole army at once after a server restart. A client without the lists
+-- asks for them (0.9.9): first LIST_ASK_AFTER to LIST_ASK_AFTER + LIST_ASK_SPREAD after login,
+-- then when due (Workshop.AskLists), the council's ticker trying too.
+-- Over GUILD (1.0.0) the same: the author's client sends his lists to his guildmates on every
+-- realm at once too, any other client a whole RELAY_EVERY after login at the earliest (RelayGuild).
 function Workshop.CouncilLogin()
-	lastCouncilSent = ns.Now()
-	if ns.COUNCIL_SIGNED then
-		Workshop.TakeCouncil(ns.COUNCIL_SIGNED)
-		ns.After(15, "council", function() Workshop.RelayCouncil(true) end)
+	lastCouncilSent, lastGuildSent = ns.Now(), ns.Now()
+	if ns.COUNCIL_SIGNED then Workshop.TakeCouncil(ns.COUNCIL_SIGNED) end
+	if ns.COUNCIL_TITLES then Workshop.TakeTitles(ns.COUNCIL_TITLES) end
+	if ns.COUNCIL_SIGNED or ns.COUNCIL_TITLES then
+		ns.After(15, "council", function()
+			Workshop.RelayCouncil(true)
+			Workshop.RelayGuild(true)
+		end)
 	end
+	ns.After(Workshop.LIST_ASK_AFTER + Workshop.random() * Workshop.LIST_ASK_SPREAD, "council lists", function()
+		askArmed = true
+		Workshop.AskLists()
+	end)
 	ns.Every(60, "council", function()
 		Workshop.RelayCouncil()
+		Workshop.RelayGuild()
+		Workshop.AskLists()
 		Workshop.SayAvailable()
 		Workshop.SayIcon()
 	end)

@@ -3,6 +3,9 @@ local ADDON, ns = ...
 -- GUILD: "hello" pings so members with the addon know each other and elect one reporter.
 -- CHANNEL (hidden "OlympusNet"): the elected reporter of each guild broadcasts its summary.
 -- Chat lines of the channels (Channels.lua) ride the same hidden channel in a lane of their own.
+-- One reporter per guild on each realm (1.0.0): on WoW: Forever each realm has an OlympusNet of
+-- its own, while GUILD reaches a guild's members on every realm, so the election counts the
+-- peers of our realm (see Electable).
 
 local Comm = {}
 ns.Comm = Comm
@@ -22,7 +25,12 @@ local KEY_ASK_EVERY = 600 -- at most one key request this often while a sealed r
 local WITNESS_EVERY = 600 -- the runner-up of the election reports this often (see MaybeBroadcast)
 local JOIN_BY = 15        -- seconds after login we join the channel at the latest (see JoinSoon)
 local ASK_AFTER = 4       -- seconds after joining we ask the channel for the census (Q1)...
+local ASK_SPREAD = 41     -- ...at a second drawn up to this much later (1.0.0: 4 to 45 s)...
+local ASK_HELD = 30       -- ...unless someone else asked this recently (its answers reach us too)...
 local ASK_AGAIN = 65      -- ...and once more this later, for the reporters that had just answered
+local SHARED_FOR = 3600   -- our guild's report from a guildmate of another realm this recently: the channel is shared
+local QUIET_TOTAL = 10    -- members of a guild who keep saying hello (Comm.Hello), whatever its realms...
+local QUIET_MIN = 3       -- ...and at least this many on each realm
 local ANSWER_GAP = BROADCAST_EVERY -- a reporter answers census requests at most this often
 local WITNESS_ANSWER_GAP = 300     -- the runner-up at most this often
 local ANSWER_MIN_AGE = 45 -- ...and only when its last report is at least this old
@@ -36,15 +44,19 @@ local queue = {}
 local chatQueue = {}  -- chat lines (Channels.lua): { msg, done, t }
 local lastWasChat = false
 local asm = Codec.NewAssembler()
+local guildAsm = Codec.NewAssembler() -- pieces over GUILD (1.0.0)...
+local GUILD_PIECES = { HS = true, HT = true } -- ...put together for these types alone: the High Council's lists
 local msgId = 0
 local lastBroadcast = 0
 local early -- { every, due }: the report due then went out early, as a census answer (see Q1)
 local channelIndex = 0
 local stats = { sent = 0, recv = 0, reports = 0, fails = 0, bad = 0, partial = 0, echo = 0, byType = {},
-	raw = { ch = {}, g = {} }, rawSample = {}, reportRealms = {}, otherChannel = 0, asked = 0, answered = 0 }
+	raw = { ch = {}, g = {} }, rawSample = {}, reportRealms = {}, otherChannel = 0, asked = 0, answered = 0, askSkipped = 0 }
 local deliveredLogged = false -- true while a CHAT_MSG_ADDON_LOGGED message is being handled
 local lastAnswer = -math.huge
 local askTries = 0 -- census requests tried while the channel was not joined (Comm.AskCensus)
+local heardAsk = -math.huge -- someone else's census request last heard on our channel (Comm.AskCensus)
+local askedAgain = false    -- the second census request is on its way, or went (Comm.AskCensus)
 local joinedName -- name of the channel we joined (set by Comm.JoinChannel)
 local peerRealm = {} -- guild peer -> realm from its hello, "old" for versions that send none
 local peerVersion = {} -- guild peer -> the addon version its hello named
@@ -57,6 +69,9 @@ local heardOwn = {}
 local benched = {}   -- guild peer -> time it may be elected again
 local watch          -- { name, since }: the peer we elected while we are on the channel
 local lastKeyAsk     -- when MaybeBroadcast last asked our guild for the key
+-- 1.0.0: when our channel last carried our guild's report from a guildmate whose hello named
+-- another realm (Comm.ElectsAcrossRealms). This session's alone, never saved.
+local crossedAt = -math.huge
 
 -- count[key] + 1, with at most MAX_KEYS distinct keys (senders choose some of them).
 local function Count(t, key)
@@ -68,10 +83,12 @@ local function Count(t, key)
 	t[key] = (t[key] or 0) + 1
 end
 
-function Comm.PeerCount()
+-- Our guild's addon users counted now, on every realm; sameRealm (1.0.0): those whose hello
+-- named our realm alone.
+function Comm.PeerCount(sameRealm)
 	local now, n = ns.Now(), 0
-	for _, t in pairs(peers) do
-		if now - t <= COUNT_WINDOW then n = n + 1 end
+	for name, t in pairs(peers) do
+		if now - t <= COUNT_WINDOW and (not sameRealm or peerRealm[name] == ns.realm) then n = n + 1 end
 	end
 	return n
 end
@@ -109,6 +126,7 @@ function Comm.Stats()
 		if t > now then out[#out + 1] = ns.DisplayName(name) end
 	end
 	table.sort(out)
+	local r = Comm.lastReport
 	return {
 		channelName = joinedName, sealed = ns.rdb and ns.rdb.realmKey ~= nil,
 		channel = channelIndex, peers = Comm.PeerCount(), reporter = Comm.reporterName,
@@ -118,17 +136,21 @@ function Comm.Stats()
 		chanArgs = stats.chanArgs, asked = stats.asked, answered = stats.answered, runnerUp = Comm.isRunnerUp, pending = (function() local n = 0 for _ in pairs(asm.buf) do n = n + 1 end return n end)(),
 		raw = stats.raw, rawSample = stats.rawSample, reportRealms = stats.reportRealms, shared = ns.rdb and ns.rdb.shared,
 		peerRealms = PeerRealms(now), heardOwn = lastOwn and ns.DisplayName(lastOwn), heardOwnAt = lastOwn and lastOwnAt,
-		benched = out, guard = Comm.GuardStats and Comm.GuardStats(),
+		benched = out, guard = Comm.GuardStats and Comm.GuardStats(), askSkipped = stats.askSkipped,
+		-- 1.0.0: whom the election counts (our realm's peers, or every realm's on a shared channel),
+		-- how many before us keep us quiet, our guild's realms, and what our report's new fields say.
+		electAll = Comm.ElectsAcrossRealms(now), quietAfter = Comm.QuietAfter(now), presence = Comm.PresenceRealms(now),
+		reportSt = r and r.st, reportCap = r and r.cap, reportPres = r and r.pres,
 	}
 end
 
 -- urgent: ahead of everything waiting (a player waits for the answer: a layer ask, an offer,
 -- a vote), behind the other urgent ones.
-local function Enqueue(dist, msg, key, target, urgent)
+local function Enqueue(dist, msg, key, target, urgent, logged)
 	if key then
 		for _, item in ipairs(queue) do
 			if item[3] == key then
-				item[2], item[4] = msg, target
+				item[2], item[4], item[6] = msg, target, logged or nil
 				return
 			end
 		end
@@ -141,7 +163,7 @@ local function Enqueue(dist, msg, key, target, urgent)
 		end
 		table.remove(queue, drop)
 	end
-	local item = { dist, msg, key, target, urgent or nil }
+	local item = { dist, msg, key, target, urgent or nil, logged or nil }
 	if urgent then
 		local at = 1
 		while queue[at] and queue[at][5] do at = at + 1 end
@@ -152,12 +174,14 @@ local function Enqueue(dist, msg, key, target, urgent)
 end
 
 -- Other modules send small messages through here and register a handler per type.
---   Comm.Send("GUILD" | "CHANNEL", msg, dedupeKey)
+--   Comm.Send("GUILD" | "CHANNEL", msg, dedupeKey, urgent, logged)
 --   Comm.Handle("P1", function(dist, sender, text) ... end)
+-- logged (1.0.0): a player's own words (a decree's), sent with the logged API where the client
+-- has it (SendNow), as chat lines are: the server keeps them, so abuse can be reported.
 local handlers = {}
-function Comm.Send(dist, msg, key, urgent)
+function Comm.Send(dist, msg, key, urgent, logged)
 	if dist == "GUILD" and not IsInGuild() then return end
-	Enqueue(dist, msg, key, nil, urgent)
+	Enqueue(dist, msg, key, nil, urgent, logged)
 end
 -- An addon message to one player only (answers to the King, Throne tab).
 function Comm.Whisper(target, msg, key, urgent)
@@ -168,13 +192,20 @@ function Comm.Handle(msgType, fn)
 	handlers[msgType] = fn
 end
 -- Long payloads (> 255 bytes) go through the same chunking as reports; urgent ones (a
--- question to the army) ahead of the census, their pieces still in order.
-function Comm.SendChunked(payload, urgent)
+-- question to the army) ahead of the census, their pieces still in order. On the channel, or
+-- over GUILD (1.0.0), where only the types in GUILD_PIECES are put together again.
+function Comm.SendChunked(payload, urgent, dist)
+	dist = dist == "GUILD" and "GUILD" or "CHANNEL"
+	if dist == "GUILD" and not IsInGuild() then return end
 	msgId = (msgId + 1) % 1000
-	for _, c in ipairs(Codec.Chunk(payload, tostring(msgId))) do Enqueue("CHANNEL", c, nil, nil, urgent) end
+	for _, c in ipairs(Codec.Chunk(payload, tostring(msgId))) do Enqueue(dist, c, nil, nil, urgent) end
 end
 function Comm.ChannelReady()
 	return channelIndex > 0
+end
+-- Messages waiting to go out, one each SEND_INTERVAL (chat lines apart).
+function Comm.QueueSize()
+	return #queue
 end
 
 -- Chat lines wait in a short lane of their own: they never go through Enqueue, so they can
@@ -261,9 +292,9 @@ local function Pump()
 		end
 	end
 	if not index then return end
-	local dist, msg, target = queue[index][1], queue[index][2], queue[index][4]
+	local dist, msg, target, logged = queue[index][1], queue[index][2], queue[index][4], queue[index][6]
 	table.remove(queue, index)
-	SendNow(dist, msg, false, target)
+	SendNow(dist, msg, logged == true, target)
 end
 Comm.Pump = Pump -- for tests
 
@@ -511,7 +542,7 @@ local function Unlocked(g)
 	ns.Log("channel %s open to us again after %d tries", g.name, g.locked.tries)
 	g.locked = nil
 	askTries = 0
-	ns.After(ASK_AFTER, "census request", Comm.AskCensus)
+	ns.After(Comm.AskWait(), "census request", Comm.AskCensus)
 end
 
 -- CHAT_MSG_CHANNEL_NOTICE and CHAT_MSG_CHANNEL_NOTICE_USER: (notice type, player, language,
@@ -626,6 +657,7 @@ function Comm.JoinChannel()
 		-- and its reporters have not heard our census request.
 		if ns.Data and ns.Data.ForgetVotes then ns.Data.ForgetVotes() end
 		askTries = 0
+		heardAsk = -math.huge -- (the answers to an ask heard there went there)
 		ns.After(10, "census request", Comm.AskCensus)
 	end
 	if joinedName and joinedName ~= name and GetChannelName(joinedName) > 0 then
@@ -689,18 +721,107 @@ function Comm.SetRealmKey(secret)
 	Comm.JoinChannel()
 end
 
+---------------------------------------------------------------------------
+-- Realms (1.0.0). WoW: Forever's PvP and PvP 2 each have an OlympusNet of their own, and a
+-- guild has members on both: a reporter on one realm is never heard on the other one's
+-- channel, and a guild that elected a single reporter was missing from the other realm's
+-- census (older versions left that reporter out after GUARD_AFTER unheard, one name at a time).
+-- So each realm elects its own reporter among the peers whose hello names that realm, and
+-- those whose realm we don't know (versions before 0.7.11), unless the server stamps another
+-- realm on their name (see Electable). While our guild's report, sent by a guildmate of another
+-- realm, reaches our channel (the channel is shared: Comm.ElectsAcrossRealms), one reporter for
+-- all, as before.
+---------------------------------------------------------------------------
+
+-- A realm's code in our report (field 27): three letters or digits.
+function Comm.RealmCode(realm)
+	return Hash36(tostring(realm)):sub(1, 3)
+end
+
+-- The realms our guild's addon users play on now (hellos counted within COUNT_WINDOW), ours
+-- included, sorted by name.
+function Comm.PresenceRealms(now)
+	now = now or ns.Now()
+	local set, out = { [tostring(ns.realm)] = true }, {}
+	for name, t in pairs(peers) do
+		local realm = peerRealm[name]
+		if now - t <= COUNT_WINDOW and realm and realm ~= "old" then set[realm] = true end
+	end
+	for realm in pairs(set) do out[#out + 1] = realm end
+	table.sort(out)
+	return out
+end
+
+-- The same as codes, sorted, each once: `pres`, field 27 of our report.
+function Comm.Presence(now)
+	local out, seen = {}, {}
+	for _, realm in ipairs(Comm.PresenceRealms(now)) do
+		local code = Comm.RealmCode(realm)
+		if not seen[code] then seen[code], out[#out + 1] = true, code end
+	end
+	table.sort(out)
+	return out
+end
+
+-- Does our guild have addon users online on another realm than ours?
+function Comm.SpansRealms(now)
+	return #Comm.PresenceRealms(now) > 1
+end
+
+-- Our census reaches no other role than reporting yet: "a" in field 26 of our report (the
+-- census layer's clients will say "b" or "c").
+Comm.CAPABILITY = "a"
+
+-- Our channel crosses realms: our guild's report, sent by a guildmate whose hello over GUILD
+-- (where the server vouches for our guild) named another realm, was heard on it within
+-- SHARED_FOR, in this session. Every realm's peers hear one reporter there then, and the
+-- election counts them all. Nothing else proves it: the realm a report names (field 21, `from`;
+-- ns.rdb.shared in /oly status) is whatever its sender wrote, and anyone on the public channel
+-- may send one; a flag saved by an earlier session proves nothing of this one.
+function Comm.ElectsAcrossRealms(now)
+	return (now or ns.Now()) - crossedAt <= SHARED_FOR
+end
+
+-- The realm, not ours, that the hello of this guildmate named (counted now), or nil. The channel
+-- may send a name of another realm without it (see heardOwn): matched by the short name then,
+-- unless the full name is a peer of its own. Only a realm the server stamped on the hello's
+-- sender too (1.0.0, Konig's review of 1.0.0): a guildmate of our realm whose hello named another
+-- one, sending our guild's report on our channel, made our election cross realms, and our guild's
+-- reporter then played on another realm's channel, off our realm's census.
+local function OtherRealm(name, now)
+	local t, realm = peers[name], peerRealm[name]
+	if t and now - t <= COUNT_WINDOW and realm and realm ~= "old" and realm ~= ns.realm and ns.RealmOf(name) == realm then
+		return realm
+	end
+end
+local function PeerOfOtherRealm(sender, now)
+	if peers[sender] then return OtherRealm(sender, now) end
+	local short = ns.ShortName(sender)
+	for name in pairs(peers) do
+		local realm = ns.ShortName(name) == short and OtherRealm(name, now)
+		if realm then return realm end
+	end
+end
+
 -- In a full guild, 1000 members saying hello every minute would be ~16 messages per second.
--- Only names that could win the reporter election need to keep talking: once 10 members
--- that sort before us are known, we go quiet (still one hello per 10 minutes to be counted).
+-- Only names that could win the reporter election need to keep talking: once this many
+-- members that sort before us (and may be elected with us) are known, we go quiet (still one
+-- hello per 10 minutes to be counted). With a reporter per realm (1.0.0), each realm keeps its
+-- share of the QUIET_TOTAL talking, QUIET_MIN at least.
+function Comm.QuietAfter(now)
+	if Comm.ElectsAcrossRealms(now) then return QUIET_TOTAL end
+	return math.max(QUIET_MIN, math.ceil(QUIET_TOTAL / #Comm.PresenceRealms(now)))
+end
+
 local lastHello = 0
 -- force: now, whatever the above (the player changed what the hello says).
 function Comm.Hello(force)
 	if not IsInGuild() then return end
 	local now, before = ns.Now(), 0
-	for name, t in pairs(peers) do
-		if now - t <= PEER_WINDOW and name < (ns.me or "") and (benched[name] or 0) <= now then before = before + 1 end
+	for name, t in pairs(Comm.Electable(now)) do
+		if now - t <= PEER_WINDOW and name < (ns.me or "") then before = before + 1 end
 	end
-	if not force and before >= 10 and now - lastHello < 600 then return end
+	if not force and before >= Comm.QuietAfter(now) and now - lastHello < 600 then return end
 	lastHello = now
 	-- Our realm rides along: guildmates on another realm show in /oly status (topology). So does
 	-- our channel: without the key we can't hear a reporter on the sealed one (MaybeBroadcast).
@@ -727,14 +848,26 @@ function Comm.SharesZone(name)
 	return false
 end
 
--- The peers that may be elected: every one, but those left out by the guard below.
+-- The peers that may be elected (1.0.0): those on our realm and those of a realm we don't know
+-- (a hello without one: "old", on no other realm by the server's stamp), or every realm's while
+-- the channel is shared (see Realms, above); never one left out by the guard below. The
+-- runner-up is drawn from the same pool.
+-- The server's stamp on a peer's name counts first, whatever its hello says (1.0.0, Konig's
+-- review of 1.0.0): a guildmate the server places on PvP 2 whose hello named no realm, or one
+-- we can't read ("old"), was elected on ours, never heard on our channel, and our guild was off
+-- our realm's census while the guard left him out (GUARD_AFTER), then his next alt. A peer of
+-- another realm by the server's stamp is left out here unless the channel is shared; "old"
+-- stays what the runner-up's pick reads it as (a version that sends no runner-up report).
 local function Electable(now)
-	local pool = {}
+	local all, pool = Comm.ElectsAcrossRealms(now), {}
 	for name, t in pairs(peers) do
-		if (benched[name] or 0) <= now then pool[name] = t end
+		local realm, stamped = peerRealm[name], ns.RealmOf(name)
+		local ours = (realm == nil or realm == "old" or realm == ns.realm) and (stamped == nil or stamped == ns.realm)
+		if (benched[name] or 0) <= now and (all or ours) then pool[name] = t end
 	end
 	return pool
 end
+Comm.Electable = Electable
 
 -- When our last report counts as sent, for a sender reporting every `every` seconds: a census
 -- answer sends the next due report early (Q1 below), and the one after it then waits a full
@@ -823,6 +956,10 @@ end
 -- within BROADCAST_EVERY).
 -- Tries again a little later while the channel is not joined yet (at most 3 times), and once
 -- more after the channel changes (the realm key arrived).
+-- After a server restart thousands log in within minutes (1.0.0): each asks at a second of its
+-- own (Comm.AskWait), and leaves its ask out when someone else asked within ASK_HELD, since
+-- every guild's answer to that ask reaches the whole channel. A left-out ask counts as ours for
+-- the second one: asked ASK_AGAIN later unless a report came.
 function Comm.AskCensus()
 	if not ns.IsMember() then return end
 	if channelIndex == 0 then
@@ -834,9 +971,14 @@ function Comm.AskCensus()
 	local now = ns.Now()
 	if Comm.lastAsk and now - Comm.lastAsk < 60 then return end
 	Comm.lastAsk = now
-	stats.asked = stats.asked + 1
-	Enqueue("CHANNEL", "Q1~", "censusreq")
-	if stats.asked == 1 then
+	if now - heardAsk < ASK_HELD then
+		stats.askSkipped = stats.askSkipped + 1
+	else
+		stats.asked = stats.asked + 1
+		Enqueue("CHANNEL", "Q1~", "censusreq")
+	end
+	if not askedAgain then
+		askedAgain = true
 		local heard = stats.reports
 		ns.After(ASK_AGAIN, "census request", function()
 			if stats.reports > heard then return end
@@ -845,15 +987,22 @@ function Comm.AskCensus()
 	end
 end
 
+-- When our census request goes, seconds after we joined the channel: ASK_AFTER to
+-- ASK_AFTER + ASK_SPREAD (1.0.0; swappable in tests).
+Comm.random = math.random
+function Comm.AskWait()
+	return ASK_AFTER + Comm.random() * ASK_SPREAD
+end
+
 -- We join as soon as the game's own channels are in (General is /1 for two seconds), so
 -- General/Trade/LocalDefense keep their usual numbers (/1, /2...), and at JOIN_BY whatever
--- happens. The census request follows ASK_AFTER later, once the channel has its number.
+-- happens. The census request follows (Comm.AskWait), once the channel has its number.
 function Comm.JoinSoon(t, seenAt)
 	local _, first = GetChannelName(1)
 	if first and first ~= "" then seenAt = seenAt or t end
 	if t >= JOIN_BY or (seenAt and t - seenAt >= 2) then
 		Comm.JoinChannel()
-		ns.After(ASK_AFTER, "census request", Comm.AskCensus)
+		ns.After(Comm.AskWait(), "census request", Comm.AskCensus)
 		return
 	end
 	ns.After(1, "join channel", function() Comm.JoinSoon(t + 1, seenAt) end)
@@ -906,7 +1055,9 @@ end
 -- due report sent early (LastReport), and the reporter still sends one report per
 -- BROADCAST_EVERY, the runner-up one per WITNESS_EVERY, however many ask.
 Comm.Handle("Q1", function(dist, sender, text)
-	if dist ~= "CHANNEL" or not Comm.lastReport or not (Comm.isReporter or Comm.isRunnerUp) then return end
+	if dist ~= "CHANNEL" then return end
+	heardAsk = ns.Now() -- (our own ask waits on it: Comm.AskCensus)
+	if not Comm.lastReport or not (Comm.isReporter or Comm.isRunnerUp) then return end
 	local now = ns.Now()
 	local every = Comm.isReporter and BROADCAST_EVERY or WITNESS_EVERY
 	local gap = Comm.isReporter and ANSWER_GAP or WITNESS_ANSWER_GAP
@@ -1000,6 +1151,10 @@ local function OnAddonMessage(prefix, text, dist, sender, target, zoneChannelID,
 	if ns.db.blocked[sender:lower()] then return end
 	if not Comm.Admit(sender, ns.Now()) then return end
 	stats.recv = stats.recv + 1
+	-- Olympus Link (0.9.10): a High Councillor's addon waiting to hear the author (Link.HeardFrom)
+	-- sees who speaks; only while it waits: otherwise nil, and no message pays for it.
+	local hook = Comm.senderHook
+	if hook then ns.SafeCall("link author", hook, sender, dist) end
 	local kind = (dist == "CHANNEL" and "ch:" or "g:") .. (text:match("^C%w+:") and "chunk" or text:sub(1, 2))
 	Count(stats.byType, kind) -- (unknown prefixes fold into "other": a flood of them stays small)
 	local now = ns.Now()
@@ -1027,7 +1182,12 @@ local function OnAddonMessage(prefix, text, dist, sender, target, zoneChannelID,
 	if dist == "GUILD" and text:sub(1, 3) == "H1~" then
 		if not peers[sender] then ns.Log("peer %s (%s)", sender, text:sub(4)) end
 		peers[sender] = now
-		peerRealm[sender] = Codec.RealmField(text:match("^H1~[^~]*~([^~]+)")) or "old"
+		-- The realm the hello names, unless the server stamped another one than ours on its sender:
+		-- then the server's (1.0.0, Konig's review of 1.0.0: a guildmate's hello naming our realm
+		-- from another one was elected our realm's reporter, never heard on our channel).
+		local named, stamped = Codec.RealmField(text:match("^H1~[^~]*~([^~]+)")) or "old", ns.RealmOf(sender)
+		if named ~= "old" and stamped and stamped ~= ns.realm then named = stamped end
+		peerRealm[sender] = named
 		peerVersion[sender] = text:match("^H1~(%d+%.%d+%.%d+)") or "?"
 		local sealed = text:match("^H1~[^~]*~[^~]*~([^~]*)")
 		peerSealed[sender] = (sealed == "s" or sealed == "p") and sealed or nil
@@ -1039,11 +1199,29 @@ local function OnAddonMessage(prefix, text, dist, sender, target, zoneChannelID,
 		handler(dist, sender, text)
 		return
 	end
+	-- A piece, while the High Council's lists wait to answer an ask (1.0.0, Workshop.lua: an answer
+	-- heard beginning holds ours back); nil otherwise, and no piece pays for it.
+	local pieceHook = Comm.pieceHook
+	if pieceHook and (dist == "GUILD" or dist == "CHANNEL") then ns.SafeCall("list piece", pieceHook, dist, sender, text) end
+	if dist == "GUILD" then
+		-- Pieces over GUILD (1.0.0): the High Council's lists cross to guildmates on other realms.
+		-- Only those are put together; versions before 1.0.0 put nothing together from GUILD.
+		local full = Codec.Feed(guildAsm, sender, text, now)
+		local whole = full and full:sub(1, 2)
+		if whole and GUILD_PIECES[whole] and full:sub(3, 3) == "~" and handlers[whole] then handlers[whole](dist, sender, full) end
+		return
+	end
 	if dist == "CHANNEL" then
 		local full = Codec.Feed(asm, sender, text, now)
 		if not full then return end
 		local fullHandler = handlers[full:sub(1, 2)]
 		if fullHandler and full:sub(3, 3) == "~" then
+			-- Put together from pieces: whether it came logged is known of the piece that ended it
+			-- alone, so the whole never counts as logged (1.0.0). A chat line or a decree's words
+			-- in plain pieces with an empty last piece logged were shown; no version sends either
+			-- in pieces (Comm.SendChat, Comm.Send), so such a decree shows without its words and
+			-- such a line is dropped (Decree.lua, Channels.lua).
+			deliveredLogged = false
 			fullHandler(dist, sender, full)
 			return
 		end
@@ -1054,7 +1232,8 @@ local function OnAddonMessage(prefix, text, dist, sender, target, zoneChannelID,
 			return
 		end
 		stats.reports = stats.reports + 1
-		-- A report from a reporter on another realm proves the channel crosses realms.
+		-- A report naming another realm: the channel may cross realms (/oly status). Its sender
+		-- wrote that realm, so it never turns the election (Comm.ElectsAcrossRealms).
 		Count(stats.reportRealms, r.from or "old")
 		if r.from and r.from ~= ns.realm then ns.rdb.shared = { realm = r.from, to = ns.realm, t = now } end
 		-- Our guild's reporter is heard: the election guard (MaybeBroadcast) leaves it in.
@@ -1065,6 +1244,8 @@ local function OnAddonMessage(prefix, text, dist, sender, target, zoneChannelID,
 			for name in pairs(benched) do
 				if ns.ShortName(name) == short then benched[name] = nil end
 			end
+			-- Sent by a guildmate of another realm: our channel crosses realms (1.0.0).
+			if PeerOfOtherRealm(sender, now) then crossedAt = now end
 		end
 		if ns.Data.Receive(r, sender) then
 			ns.Log("report %s from %s: %d members, %d online", r.guild, sender, r.total, r.online)
@@ -1077,7 +1258,7 @@ end
 function Comm.CheckMembership()
 	if ns.IsMember() then
 		-- Joined an Olympus guild after login: ask for the census once we are on the channel.
-		if stats.asked == 0 then
+		if stats.asked + stats.askSkipped == 0 then
 			askTries = 0
 			Comm.AskCensus()
 		end
@@ -1117,6 +1298,7 @@ ns.On("LOGIN", function()
 	ns.Every(SEND_INTERVAL, "send pump", Pump)
 	ns.Every(60, "housekeeping", function()
 		local dropped, sample = Codec.Gc(asm, ns.Now())
+		Codec.Gc(guildAsm, ns.Now())
 		if dropped > 0 then
 			stats.partial = stats.partial + dropped
 			ns.Log("incomplete report dropped: %s", tostring(sample))

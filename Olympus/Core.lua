@@ -2,7 +2,7 @@ local ADDON, ns = ...
 local L = ns.L
 
 ns.NAME = "Olympus"
-ns.VERSION = "0.9.8"
+ns.VERSION = "1.0.0"
 ns.PREFIX = "OLYMPUS"        -- addon message prefix (max 16 chars)
 ns.CHANNEL = "OlympusNet"    -- hidden chat channel shared by every Olympus guild (Alliance)
 ns.CHANNEL_HORDE = "OlympusNetH" -- the Horde's: the two factions never see each other's guilds
@@ -416,6 +416,26 @@ function ns.Pins()
 	return nil
 end
 
+-- Whether `ref` (Map, Decree, King, Positions) puts its icons on the world map (0.9.9). Every
+-- add or remove there goes through the pin library into the map's canvas (MarkCanvasDirty,
+-- which clears its current zoom), from Olympus's code. With Blizzard's gamepad UI (Forever) the
+-- gamepad map then zooms, builds its button bar and closes with B in our taint, and the game
+-- blocks it until a /reload. There no icon of ours goes on the world map; the minimap is not the
+-- gamepad UI's, its icons stay. Icons `ref` put on the world map before a switch to the gamepad
+-- UI (without a /reload) are taken off, once. With mouse and keyboard: true, as always.
+local worldMapIconsOf = {} -- [ref] = true: may have icons on the world map
+function ns.WorldMapIcons(pins, ref)
+	if not ns.GamepadUI() then
+		worldMapIconsOf[ref] = true
+		return true
+	end
+	if worldMapIconsOf[ref] then
+		worldMapIconsOf[ref] = nil
+		pins:RemoveAllWorldMapIcons(ref)
+	end
+	return false
+end
+
 -- Round logo button with the exact geometry of minimap buttons (LibDBIcon layout at 31px,
 -- scaled to the requested size): gold tracking ring, dark disc, round logo.
 function ns.MakeRoundButton(name, parent, size)
@@ -480,6 +500,25 @@ function ns.IsTreasurer(name, guild)
 	return type(name) == "string" and type(guild) == "string" and ns.ShortName(name) == ns.TREASURER and guild:lower() == "olympus"
 		and OfGroup(name, ns.TREASURER_REALM)
 end
+-- The Treasurer's characters that keep a book of the treasury (1.0, Treasury.lua): the Treasurer
+-- himself (ns.TREASURER, his name for display: he is the Treasurer only in the guild Olympus,
+-- ns.IsTreasurer) and his hunter, where the treasury's mail goes (his word: "all the mail goes
+-- to that; I want the gold mailed to count as well"). The hunter is his mail character, in
+-- whatever guild or none, so no guild is checked for it: the server stamps the sender of an
+-- addon message and of a mail (nobody can write another's name there), and a Forever name is
+-- one across its realm group, so this full name on his realm group (ns.TREASURER_REALM's) can
+-- only be his. The same name on another realm group is someone else.
+ns.TREASURER_CHARACTERS = { "Pyralis Ashandar", "Pyralis Andarai" }
+-- One of the Treasurer's pinned characters other than the Treasurer himself (his mail's): by
+-- its exact name on his realm group, in any guild or none.
+function ns.IsTreasurerMail(name)
+	if type(name) ~= "string" or name == "" then return false end
+	local short = ns.ShortName(name)
+	for _, pin in ipairs(ns.TREASURER_CHARACTERS) do
+		if pin ~= ns.TREASURER and short == pin then return OfGroup(name, ns.TREASURER_REALM) end
+	end
+	return false
+end
 -- The King's name on the lines and the crown: the army's name for him on the Alliance side,
 -- his character's on the Horde (whose <Olympus> has a guild master of its own).
 function ns.KingName(leader)
@@ -542,27 +581,31 @@ function ns.LearnKingRealm(sender)
 	ns.Log("the Horde's King is on %s (learned from his first message)", realm)
 end
 
--- The High Council: the Olympus moderators, shown with their icon and their colour in the Olympus
+-- The High Council: the Olympus moderators, shown with their mark and their colour in the Olympus
 -- chats. No name is written in this code (it is public, and names get sniped on launch realms):
 -- the list is signed by the author on his own computer and checked by every client (Sign.lua,
 -- Workshop.lua).
--- Each councillor picks their own icon from the game's (0.9.8, Workshop.lua); until one is
--- heard, a skull from the game's icons (the raid marker's before 0.9.8).
-ns.HIGH_COUNCIL_SKULL = "Interface\\Icons\\INV_Misc_Bone_HumanSkull_01"
-ns.HIGH_COUNCIL_ICON = "|T" .. ns.HIGH_COUNCIL_SKULL .. ":0|t"
+-- The mark (0.9.9, Max's): the game's target-frame skull, the one nameplates show. Fixed: nobody
+-- picks or changes it. Each councillor's own icon (0.9.8, Workshop.lua) is flavour after it; a
+-- councillor who never picked one shows the mark alone.
+ns.HIGH_COUNCIL_SKULL = "Interface\\TargetingFrame\\UI-TargetingFrame-Skull"
+ns.HIGH_COUNCIL_MARK = "|T" .. ns.HIGH_COUNCIL_SKULL .. ":0|t"
 ns.HIGH_COUNCIL_COLOR = "ffb048f8"
+-- Names are one per realm group: a signed list counts on the group of whoever published it.
+-- The list names it "A+B": any realm of it, as this client groups realms (0.9.8: a realm linked
+-- to that group since, which makes our group "A+B+C", no longer loses the list). None: anywhere.
+local function OfListGroup(name, group)
+	if group == nil then return true end
+	for _, realm in ipairs(ns.GroupRealms(group)) do
+		if OfGroup(name, realm) then return true end
+	end
+	return false
+end
 function ns.IsHighCouncillor(name)
 	local c = ns.rdb and ns.rdb.council
 	if type(name) ~= "string" or type(c) ~= "table" or type(c.names) ~= "table" then return false end
 	if not c.names[ns.ShortName(name):lower()] then return false end
-	-- Names are one per realm group: the list counts on the group of whoever published it.
-	-- The list names it "A+B": any realm of it, as this client groups realms (0.9.8: a realm
-	-- linked to that group since, which makes our group "A+B+C", no longer loses the list).
-	if c.realm == nil then return true end
-	for _, realm in ipairs(ns.GroupRealms(c.realm)) do
-		if OfGroup(name, realm) then return true end
-	end
-	return false
+	return OfListGroup(name, c.realm)
 end
 
 -- A councillor's icon as it travels and is kept (0.9.8): a file number, or a plain icon name
@@ -587,9 +630,12 @@ function ns.CouncilIconTexture(v)
 	return v
 end
 
--- The icon before a councillor's name in the Olympus chats: our own choice for our lines, what
--- their client announced for anyone else's (Workshop.lua keeps it), else the default skull.
--- Checked again here: the ones heard are kept in the SavedVariables too.
+-- A councillor's own icon, after the mark: our own choice for our lines, what their client
+-- announced for anyone else's (Workshop.lua keeps it), else "" (0.9.9: no default icon any
+-- more, the mark says it). Checked again here: the ones heard are kept in the SavedVariables
+-- too. A name without its realm, or with another realm of the group (the titles list, a census
+-- row), finds the one heard under that name: names are one per realm group, and only
+-- councillors' icons are kept.
 function ns.CouncilIcon(name)
 	local v
 	local who = type(name) == "string" and ns.FullName(name) or nil
@@ -599,17 +645,226 @@ function ns.CouncilIcon(name)
 	elseif who then
 		local heard = ns.rdb and ns.rdb.councilIcons
 		local e = type(heard) == "table" and heard[who]
+		if type(e) ~= "table" and type(heard) == "table" then
+			local short = ns.ShortName(who):lower()
+			for k, x in pairs(heard) do
+				if type(k) == "string" and ns.ShortName(k):lower() == short then e = x break end
+			end
+		end
 		v = type(e) == "table" and e.icon or nil
 	end
 	local texture = ns.CouncilIconTexture(v)
-	return texture and ("|T" .. texture .. ":0|t") or ns.HIGH_COUNCIL_ICON
+	return texture and ("|T" .. texture .. ":0|t") or ""
 end
 
--- The Crown: guild masters of any Olympus guild, and the officers of the King's guild.
+-- What goes with a councillor's name: the mark, then their own icon if they picked one. ""
+-- for anyone not on the council.
+function ns.CouncilMark(name)
+	if not ns.IsHighCouncillor(name) then return "" end
+	return ns.HIGH_COUNCIL_MARK .. ns.CouncilIcon(name)
+end
+
+-- The council's departments and titles (0.9.9, Workshop.TakeTitles), signed apart from the
+-- names: nil when none reached us, or when it is another realm group's (like the names).
+function ns.CouncilTitles()
+	local t = ns.rdb and ns.rdb.councilTitles
+	if type(t) ~= "table" or type(t.depts) ~= "table" then return nil end
+	if not OfListGroup(ns.me, t.realm) then return nil end
+	return t
+end
+
+-- A councillor's place in that list: { title, dept, icon } (the department's icon), each of
+-- them nil when the list gives none; nil for anyone not on the council's name list, or not in
+-- the titles. Kept in the SavedVariables: checked again here.
+function ns.CouncilTitle(name)
+	local t = ns.IsHighCouncillor(name) and ns.CouncilTitles()
+	if not t then return nil end
+	local short = ns.ShortName(name):lower()
+	for _, d in ipairs(t.depts) do
+		for _, m in ipairs(type(d) == "table" and type(d.members) == "table" and d.members or {}) do
+			if type(m) == "table" and type(m.name) == "string" and m.name:lower() == short then
+				local dept = type(d.name) == "string" and d.name ~= "" and d.name or nil
+				local title = type(m.title) == "string" and m.title ~= "" and m.title or nil
+				return { title = title, dept = dept, icon = dept and ns.CouncilIconValue(d.icon) or nil }
+			end
+		end
+	end
+	return nil
+end
+
+-- The King's Steward (1.0.0): a character the author marks in the signed titles list, who names
+-- Hands of his own beside the King's, sets up for the King what only the King could set up before
+-- (the treasury's keepers and switches) and sends the Crown's decrees on every client (King.lua,
+-- Treasury.lua, Decree.lua).
+-- The titles list names him in an entry of its own among the departments, one per faction:
+--   ^steward^<Alliance|Horde>^<First Surname-Realm>,...
+-- Three "^": a client of 0.9.9 reads a department as two (<name>^<icon>^<members>), leaves this
+-- entry out unread, and still takes, shows and passes on the rest (the signature covers every
+-- byte, the entry too). A Steward acts for the King of his own faction, where a King is named
+-- (ns.KingCharacter): the Alliance's, and on the Horde only when the list names one there.
+-- Nobody else is ever a Steward: no name is written in this code, no census vote counts, and a
+-- newer signed list without him ends it at once.
+ns.STEWARDS_MAX = 3
+local STEWARD_FACTIONS = { Alliance = true, Horde = true }
+
+-- A Steward's name as the entry gives it and the addon keeps it: "First Surname-Realm" (that
+-- realm's group), or "First Surname" (any realm of the list's group); nil for anything else.
+local function StewardName(s)
+	s = tostring(s or ""):gsub("^%s+", ""):gsub("%s+$", "")
+	local short, realm = s:match("^([^%-]+)%-([^%-]+)$")
+	short = short or s
+	if #short > 48 or not short:match("^[%a\128-\255]+ ?[%a\128-\255]*$") then return nil end
+	if realm and (#realm > 40 or not realm:match("^[%w\128-\255]+$")) then return nil end
+	return realm and (short .. "-" .. realm) or short
+end
+
+-- The Stewards a titles list names (its departments' field, as signed): { Alliance = { name,
+-- ... }, Horde = { ... } }, a faction left out when it names none (ns.STEWARDS_MAX each).
+function ns.ReadStewards(text)
+	local out = {}
+	for entry in tostring(text or ""):gmatch("[^;]+") do
+		local faction, list = entry:match("^%^steward%^(%a+)%^([^%^]*)$")
+		if faction and STEWARD_FACTIONS[faction] then
+			local names = out[faction] or {}
+			for n in list:gmatch("[^,]+") do
+				local name = StewardName(n)
+				if name and #names < ns.STEWARDS_MAX then names[#names + 1] = name end
+			end
+			out[faction] = names
+		end
+	end
+	return out
+end
+
+-- The Stewards of the titles list we hold, for our faction, where a King is named: { name, ... }.
+-- Read when the list was taken; a list taken by a version before 1.0.0 (which left the entry
+-- out) is read again from its signed text, which this client checked then.
+function ns.Stewards()
+	local t = ns.CouncilTitles()
+	if not t or not ns.KingCharacter() then return {} end
+	if type(t.stewards) ~= "table" then
+		t.stewards = ns.ReadStewards(type(t.blob) == "string" and t.blob:match("^HT1~%d+~[^~]*~[01]~([^~]*)~%x+$") or "")
+	end
+	local list = t.stewards[ns.faction or "Alliance"]
+	return type(list) == "table" and list or {}
+end
+
+-- Is this character (a sender's name, which the server sets) a Steward of our King?
+function ns.IsSteward(name)
+	if type(name) ~= "string" or name == "" then return false end
+	local t = ns.CouncilTitles()
+	if not t then return false end
+	local full = ns.FullName(name)
+	if not OfListGroup(full, t.realm) then return false end
+	local short = ns.ShortName(full):lower()
+	for _, s in ipairs(ns.Stewards()) do
+		if type(s) == "string" and ns.ShortName(s):lower() == short then
+			local realm = ns.RealmOf(s)
+			if realm == nil or OfGroup(full, realm) then return true end
+		end
+	end
+	return false
+end
+
+-- The King's guild as a Steward's decree names it: ours when we are in it, else its own name.
+function ns.KingGuildName()
+	local mine = GetGuildInfo and GetGuildInfo("player")
+	if ns.IsKingGuild(mine) then return mine end
+	local want = ns.KING_GUILD[ns.faction or "Alliance"] or ""
+	return want:sub(1, 1):upper() .. want:sub(2)
+end
+
+-- The King's own screen (0.9.9, the author's, for Asmon's stream): the King's client, or the
+-- author's "Asmon's view" (King.Preview) so he can try it. Nobody else's.
+function ns.KingsScreen()
+	local K = ns.King
+	if type(K) ~= "table" or type(K.IsKing) ~= "function" then return false end
+	return K.IsKing() == true or (type(K.Preview) == "function" and K.Preview() == true)
+end
+
+-- Who sees the High Council in the census, its marks there and its titles (0.9.9, the author's
+-- call): until launch the councillors themselves, the author's own client (the one holding the
+-- signed lists, CouncilList.lua) and the King's (names hidden, below); everyone once the signed
+-- titles list says it is public. The Olympus chats show the mark to everyone, as in 0.9.8.
+function ns.CouncilVisible()
+	if ns.COUNCIL_SIGNED ~= nil or ns.COUNCIL_TITLES ~= nil or ns.IsHighCouncillor(ns.me) or ns.KingsScreen() then return true end
+	local t = ns.CouncilTitles()
+	return t ~= nil and t.public == true
+end
+
+-- The King streams: on his screen the councillors' names stay hidden (0.9.9). The High Council
+-- in the Realm shows each name cut short (ns.MaskName), and no council mark, icon or title goes
+-- with a name anywhere else (census rows, person card, Olympus chats), until he clicks the eye
+-- under the council's header. Never saved: every login and /reload starts hidden again.
+-- The council's borders and nameplate marks follow at once (Borders.lua, Nameplates.lua: they
+-- listen for COUNCIL_MASK_CHANGED, fired only when it flips).
+local councilNamesShown = false
+function ns.CouncilNamesShown() return councilNamesShown end
+function ns.SetCouncilNamesShown(on)
+	on = on == true
+	if on == councilNamesShown then return end
+	councilNamesShown = on
+	ns.Fire("COUNCIL_MASK_CHANGED")
+end
+function ns.CouncilMasked() return not councilNamesShown and ns.KingsScreen() end
+
+-- A councillor's name while hidden: its first four characters (UTF-8: a character is a lead
+-- byte and the continuation bytes after it), or all of a shorter name, then "****".
+function ns.MaskName(name)
+	local s, chars, cut = tostring(name or ""), 0, nil
+	for i = 1, #s do
+		local b = s:byte(i)
+		if b < 0x80 or b >= 0xC0 then
+			chars = chars + 1
+			if chars > 4 then cut = i - 1 break end
+		end
+	end
+	return (cut and s:sub(1, cut) or s) .. "****"
+end
+
+-- Letters folded for a search (the Workshop's, 0.9.9; the tabs', 1.0.0), byte by byte: A-Z, and
+-- Latin-1's accented capitals (À to Þ but ×, in UTF-8 C3 80-9E, their small letters C3 A0-BE).
+-- Not the C library's lower(): its idea of a letter can change with the locale and split a UTF-8
+-- letter. Any other letter stays whole.
+function ns.Fold(s)
+	s = tostring(s or ""):gsub("[A-Z]", function(c) return string.char(c:byte() + 32) end)
+	return (s:gsub("\195([\128-\158])", function(c)
+		if c == "\151" then return nil end
+		return "\195" .. string.char(c:byte() + 32)
+	end))
+end
+
+-- A text as a search reads it: only what a row shows (its colour codes, textures and a link's
+-- data left out, the link's [text] kept, an escaped "||" one "|" and no code), folded (ns.Fold).
+function ns.Searchable(s)
+	s = tostring(s or ""):gsub("||", "\1"):gsub("|H.-|h(.-)|h", "%1"):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""):gsub("|T.-|t", "")
+	return ns.Fold((s:gsub("\1", "|")))
+end
+
+-- Does one of the texts hold `query` (folded, ns.Fold), as a search reads it (ns.Searchable)?
+-- As plain text, never a Lua pattern. No query (nil or ""): everything does.
+function ns.Holds(query, ...)
+	if not query or query == "" then return true end
+	for i = 1, select("#", ...) do
+		local s = select(i, ...)
+		if type(s) == "string" and s ~= "" and ns.Searchable(s):find(query, 1, true) then return true end
+	end
+	return false
+end
+
+-- The Crown: guild masters of any Olympus guild, and the officers of the King's guild. Those
+-- officers only on the clients of the King's guild's own members (1.0.0), where their rank is
+-- the server's word (our roster: Data.KnownRank and Channels.VerifiedLevel read our own guild
+-- from it, never from the census). Anywhere else the census alone could name them, and three
+-- outsiders' reports were enough to add one of their own: there they are Captains like any
+-- guild's officers, and the Crown of the King's guild is the King himself (his pinned name) and
+-- the Hands his list or a Steward's own names (King.IsHandName: their word, never a vote), who
+-- speak for his guild with his Crown there (Decree.lua, Channels.VerifiedLevel) besides his
+-- tools (King.Authorized).
 function ns.IsCrownRank(guild, rankIndex)
 	if not guild or not rankIndex then return false end
 	if rankIndex == 0 then return true end
-	return ns.IsKingGuild(guild) and rankIndex <= ns.CAPTAIN_RANK
+	return ns.IsKingGuild(guild) and rankIndex <= ns.CAPTAIN_RANK and ns.IsKingGuild(GetGuildInfo("player"))
 end
 
 function ns.IsCrown()
@@ -823,6 +1078,8 @@ ns.RegisterEvent("ADDON_LOADED", function(name)
 	end
 	-- v0.7.9: demo data is gone (testers took it for real data). Forget the old setting.
 	db.demo = nil
+	-- 1.0.0: the author's letter on the Throne is gone, and with it whether the King read it.
+	db.throneLetterRead = nil
 	if db.configVersion < 3 then db.configVersion = 3 end
 	-- Guild reports and the realm key belong to one realm group (ns.GroupOf): realms whose
 	-- guilds span each other (PvP and PvP 2 in the beta) share them, any other realm keeps
@@ -882,6 +1139,9 @@ StandIn("Treasury", {})
 StandIn("Acts", { "WritPrompt" })
 StandIn("Dialog", {})
 StandIn("Bank", {})
+StandIn("Link", { "Slash" })
+StandIn("Borders", { "SetEnabled", "Report" })
+StandIn("Nameplates", { "SetEnabled", "Report" })
 
 -- Blizzard's gamepad UI (WoW: Forever's controller mode) is on.
 function ns.GamepadUI()
@@ -960,7 +1220,7 @@ end
 ns.RegisterEvent("PLAYER_LOGIN", function()
 	ns.CheckFaction()
 	local missing = {}
-	for _, key in ipairs({ "Who", "Channels", "King", "Hop", "Workshop", "Vox", "Court", "Treasury", "Acts", "Dialog", "Bank" }) do
+	for _, key in ipairs({ "Who", "Channels", "King", "Hop", "Workshop", "Vox", "Court", "Treasury", "Acts", "Dialog", "Bank", "Link", "Borders", "Nameplates" }) do
 		if ns[key].missing then missing[#missing + 1] = key .. ".lua" end
 	end
 	if #missing > 0 then
@@ -993,8 +1253,11 @@ local function Help()
 	print(L.HELP_ROLLCALL)
 	print(L.HELP_TREASURER)
 	print(L.HELP_INSPECTION)
+	print(L.HELP_BORDERS)
+	print(L.HELP_NAMEPLATES)
 	print(L.HELP_ISSUE)
 	print(L.HELP_COUNCIL)
+	print(L.HELP_DISCORD)
 	print("  /oly decrees - decrees")
 	print("  /oly arms [text] | /oly muster [text] - decree (officers; 'test' = local preview)")
 	print(L.HELP_CHAN_ALL)
@@ -1017,8 +1280,18 @@ end
 
 SLASH_OLYMPUS1 = "/olympus"
 SLASH_OLYMPUS2 = "/oly"
+-- What an error report names as the command: the command itself, with what followed it for
+-- all but /oly discord (0.9.10: a Discord code, a confirmer's key: never in a report or the log).
+local function SlashWhere(input)
+	input = tostring(input)
+	local cmd = input:match("^%s*(%S*)") or ""
+	if cmd:lower() == "discord" then return "slash discord" end
+	return "slash " .. input
+end
+ns.SlashWhere = SlashWhere -- tests
+
 SlashCmdList.OLYMPUS = function(input)
-	ns.SafeCall("slash " .. tostring(input), function()
+	ns.SafeCall(SlashWhere(input), function()
 		local cmd, rest = (input or ""):match("^%s*(%S*)%s*(.-)%s*$")
 		cmd = (cmd or ""):lower()
 		if cmd == "" then
@@ -1036,7 +1309,6 @@ SlashCmdList.OLYMPUS = function(input)
 			ns.Map.SetEnabled(not ns.db.showMap)
 		elseif cmd == "throne" or cmd == "trono" then
 			if ns.King.Visible and ns.King.Visible() then
-				if rest == "letter" or rest == "carta" then ns.King.Show("letter") end
 				ns.UI.SelectTab("throne")
 			else
 				ns.Print(ns.L.THRONE_ONLY_KING)
@@ -1057,7 +1329,7 @@ SlashCmdList.OLYMPUS = function(input)
 			ns.UI.SelectTab("decrees")
 		elseif cmd == "arms" or cmd == "muster" then
 			local kind = cmd == "arms" and "ARMS" or "MUSTER"
-			if rest == "test" or not ns.Roster.IsOfficer() then ns.Decree.Preview(kind) else ns.Decree.Send(kind, rest) end
+			if rest == "test" or not ns.Decree.CanSend(kind) then ns.Decree.Preview(kind) else ns.Decree.Send(kind, rest) end
 		elseif cmd == "mates" then
 			ns.Positions.SetEnabled(not ns.db.showMates)
 		elseif cmd == "share" then
@@ -1084,8 +1356,21 @@ SlashCmdList.OLYMPUS = function(input)
 			local on = rest:lower()
 			if on == "on" or on == "off" then ns.db.royalInspection = on == "on" end
 			ns.Print(ns.db.royalInspection == false and L.INSPECTION_OPT_OFF or L.INSPECTION_OPT_ON)
+		elseif cmd == "nameplates" then
+			-- The marks left of the names on friendly players' nameplates (Nameplates.lua), alone: on or off.
+			local on = rest:lower()
+			if on == "on" or on == "off" then ns.Nameplates.SetEnabled(on == "on") else ns.Nameplates.Report() end
+		elseif cmd == "borders" then
+			-- The elite borders on the target, focus and your own portrait (Borders.lua), and the
+			-- nameplate marks with them (Nameplates.lua): on or off.
+			-- The author's preview of a tier round his own portrait (test <tier>|off): his alone;
+			-- anyone else's gets what /oly borders says, and nothing is done.
+			local on = rest:lower()
+			local tier = on:match("^test%s+(%S+)$") or (on == "test" and "" or nil)
+			if on == "on" or on == "off" then ns.Borders.SetEnabled(on == "on")
+			elseif not (tier and ns.Borders.SetPreview(tier) == true) then ns.Borders.Report() end
 		elseif cmd == "treasurer" then
-			-- The Treasurer's yes to sharing his book and the guild bank (Treasury.lua).
+			-- A keeper's yes to sharing his book and the guild bank (Treasury.lua).
 			local on = rest:lower()
 			if on == "on" or on == "off" then
 				ns.Treasury.SetConsent(on == "on")
@@ -1145,6 +1430,9 @@ SlashCmdList.OLYMPUS = function(input)
 		elseif cmd == "minimap" then
 			ns.db.hideMinimap = not ns.db.hideMinimap
 			ns.UI.UpdateMinimapButton()
+		elseif cmd == "photo" then
+			-- The author's photo mode for the store's screenshots (UI.TogglePhoto, 1.0.0).
+			ns.UI.TogglePhoto()
 		elseif cmd == "debug" then
 			ns.db.debug = not ns.db.debug
 			ns.Print("debug = " .. tostring(ns.db.debug))
@@ -1162,6 +1450,9 @@ SlashCmdList.OLYMPUS = function(input)
 			ns.Channels.ToggleMute(rest)
 		elseif cmd == "chatwindow" then
 			ns.Channels.ChooseWindow(rest)
+		elseif cmd == "discord" then
+			-- Olympus Link (Link.lua): this character's Discord role; confirmers' keys; watchers.
+			ns.Link.Slash(rest)
 		else
 			Help()
 		end

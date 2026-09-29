@@ -7,12 +7,16 @@ local L = ns.L
 --   { text, right, indent, header, color, onClick, tooltip = function(tt) end }
 -- or a table row { cols = { ... } } drawn with the tab's column layout. `key` (a player's
 -- name) marks a line that opens a person: the HD window keeps it lit while it is open.
+-- `input = { text, onChange = function(text) end }`: a text box after the line's text (the
+-- Workshop's search, 0.9.9; the tabs' searches on top of their lists, 1.0.0), one per list,
+-- with an "x" that empties it.
 
 local Views = {}
 ns.Views = Views
 
 local ROW_H = 16
 local ROW_H_HD = 20 -- the Guild & Communities roster's rows (CommunitiesMemberList.xml)
+local ROW_H_INPUT = 24 -- a row with a text box (line.input): the box and its border
 local ITEM, ITEM_GAP = 30, 2 -- an item on an items row (line.items) without the game's button template (37 with it)
 local expanded = {}
 local CROWN = "|TInterface\\GroupFrame\\UI-Group-LeaderIcon:13:13|t "
@@ -34,12 +38,13 @@ local function ClassColored(name, classFile)
 	return c and ("|c%s%s|r"):format(c.colorStr, name) or name
 end
 
-local function Presence(online, days)
-	if online then return Green(L.ONLINE_NOW) end
+-- `dim`: what an old report said (older than Data.FRESH), all grey, as its guild is in the tree.
+local function Presence(online, days, dim)
+	if online then return (dim and Grey or Green)(L.ONLINE_NOW) end
 	if not days or days < 1 then return Grey(L.OFFLINE_TODAY) end
 	local d = math.floor(days)
 	local text = L.OFFLINE_DAYS:format(d)
-	if d >= (ns.db.warnDays or 3) then return Red(text .. " !") end
+	if d >= (ns.db.warnDays or 3) then return (dim and Grey or Red)(text .. " !") end
 	return Grey(text)
 end
 
@@ -102,11 +107,21 @@ local function Row(content, i)
 		fs:SetWordWrap(false)
 		r.cols[c] = fs
 	end
+	r.index = i
 	r:SetScript("OnClick", function(self)
 		if not self.line then return end
 		-- HD: the person opened stays lit, like the roster's selected member.
 		if content.style == "hd" and self.line.key then ns.SafeCall("view select", Views.Select, content, self.line.key) end
-		if self.line.onClick then ns.SafeCall("view click", self.line.onClick) end
+		-- Where the row was clicked, for the redraw its click causes (UI.lua keeps it in place):
+		-- its place in the list, the list's offset then (the list is the scroll frame's child).
+		-- A row with nothing to do on a click (a tooltip, a heading) causes no redraw.
+		if self.line.onClick then
+			local scroll = content:GetParent()
+			local offset = scroll and scroll.GetVerticalScroll and scroll:GetVerticalScroll()
+			content.click = { index = self.index, top = self.top or 0, lines = content.lineCount or 0, t = GetTime(),
+				offset = type(offset) == "number" and offset or nil }
+			ns.SafeCall("view click", self.line.onClick)
+		end
 		if ns.UI.Clicked then ns.UI.Clicked() end
 	end)
 	r:SetScript("OnEnter", function(self)
@@ -231,14 +246,105 @@ end
 
 function Views.ClearSelection(content) Views.Select(content, nil) end
 
+-- The "x" at the end of a box that holds text (1.0.0): a click empties it and lets go of the
+-- keyboard. A button of its own, never a focus change.
+local function ClearButton(eb)
+	local x = CreateFrame("Button", nil, eb)
+	x:SetSize(16, 16)
+	x:SetPoint("RIGHT", eb, "RIGHT", -2, 0)
+	x.label = x:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+	x.label:SetPoint("CENTER", x, "CENTER", 0, 1)
+	x.label:SetText("x")
+	x:SetScript("OnClick", function()
+		local input = eb.line and eb.line.input
+		eb:SetText("")
+		eb:ClearFocus()
+		x:Hide()
+		if input and input.onChange then ns.SafeCall("view input", input.onChange, "") end
+	end)
+	x:SetScript("OnEnter", function(self)
+		self.label:SetTextColor(1, 1, 1)
+		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+		GameTooltip:AddLine(L.SEARCH_CLEAR, 1, 0.82, 0)
+		GameTooltip:Show()
+	end)
+	x:SetScript("OnLeave", function(self)
+		self.label:SetTextColor(1, 0.82, 0)
+		GameTooltip:Hide()
+	end)
+	x:Hide()
+	return x
+end
+
+-- The list's text box (line.input): one per list, made the first time a line asks for one and
+-- moved onto that line's row at each redraw, so typing goes on while the list changes under it.
+-- Like the council icon picker's filter, it never takes the keyboard by itself (the gamepad UI's
+-- rule, ns.Focus): the player clicks into it; Enter, Escape or its list hiding let go of it.
+local function InputBox(content)
+	if content.input then return content.input end
+	local ok, eb = pcall(CreateFrame, "EditBox", nil, content, "InputBoxTemplate")
+	if not ok or not eb then eb = CreateFrame("EditBox", nil, content) end
+	eb:SetAutoFocus(false)
+	eb:Hide()
+	eb:SetHeight(20)
+	eb:SetMaxLetters(40)
+	eb:SetFontObject("ChatFontNormal")
+	eb:SetTextInsets(0, 18, 0, 0) -- (the typing stops short of the "x")
+	eb.olympusBox = true
+	eb.clear = ClearButton(eb)
+	eb:SetScript("OnTextChanged", function(self)
+		local text = self:GetText() or ""
+		self.clear:SetShown(text ~= "")
+		local input = self.line and self.line.input
+		if input and input.onChange then ns.SafeCall("view input", input.onChange, text) end
+	end)
+	eb:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
+	eb:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+	eb:SetScript("OnHide", function(self) self:ClearFocus() end)
+	eb:SetScript("OnEnter", function(self)
+		if not (self.line and self.line.tooltip) then return end
+		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+		ns.SafeCall("view tooltip", self.line.tooltip, GameTooltip)
+		GameTooltip:Show()
+	end)
+	eb:SetScript("OnLeave", function() GameTooltip:Hide() end)
+	content.input = eb
+	return eb
+end
+
+-- The box on `r`, the row of its line: after the line's text, to the row's end. Its text is set
+-- only when it is not the line's already (what was typed stays, the cursor where it is).
+local function PlaceInput(content, r)
+	local eb = content.input
+	if not r then
+		if eb then
+			eb.line = nil
+			eb:Hide()
+		end
+		return
+	end
+	eb = InputBox(content)
+	eb.line = r.line
+	eb:ClearAllPoints()
+	eb:SetPoint("LEFT", r.left, "RIGHT", 12, 0)
+	eb:SetPoint("RIGHT", r, "RIGHT", -8, 0)
+	eb:SetFrameLevel(r:GetFrameLevel() + 2)
+	local text = tostring(r.line.input.text or "")
+	if (eb:GetText() or "") ~= text then eb:SetText(text) end
+	eb.clear:SetShown(text ~= "")
+	eb:Show()
+end
+
 function Views.Render(content, lines, layout)
 	local width = content:GetWidth()
 	local hd = content.style == "hd"
 	local rowH = hd and ROW_H_HD or ROW_H
 	local y = -2
+	local inputRow
 	for i, line in ipairs(lines) do
 		local r = Row(content, i)
 		r.line = line
+		r.top = -y -- how far down the list the row starts (UI.lua keeps the list's place)
 		r:ClearAllPoints()
 		r:SetPoint("TOPLEFT", content, "TOPLEFT", 0, y)
 		r:SetWidth(width)
@@ -285,7 +391,12 @@ function Views.Render(content, lines, layout)
 			r.right:SetFontObject(font or "GameFontHighlightSmall")
 			r.left:ClearAllPoints()
 			r.left:SetPoint("LEFT", 4 + (line.indent or 0) * 12, 0)
-			r.left:SetPoint("RIGHT", r.right, "LEFT", -6, 0)
+			-- A text box's line: its text as wide as it is, the box after it (PlaceInput).
+			if line.input and not inputRow then
+				inputRow, height = r, ROW_H_INPUT
+			else
+				r.left:SetPoint("RIGHT", r.right, "LEFT", -6, 0)
+			end
 			r.left:SetText(line.text or "")
 			r.right:SetText(line.right or "")
 		end
@@ -301,8 +412,122 @@ function Views.Render(content, lines, layout)
 		if line.gapAfter then y = y - 6 end
 	end
 	for i = #lines + 1, #(content.rows or {}) do content.rows[i]:Hide() end
+	PlaceInput(content, inputRow)
+	content.lineCount = #lines
 	content:SetHeight(-y + 8)
 end
+
+-- The last row clicked in `content` ({ index, top, lines, t }: where it started, how many lines
+-- the list had, when), once: taken by the redraw that follows (UI.lua).
+function Views.TakeClick(content)
+	local click = content.click
+	content.click = nil
+	return click
+end
+
+-- The id of a guild's row in the Realm tree (line.id): a tab opened on it shows it (UI.SelectTab).
+function Views.GuildId(name) return "guild:" .. tostring(name) end
+
+---------------------------------------------------------------------------
+-- The tabs' searches (1.0.0): the Workshop's box (line.input) on top of the Census, the Realm,
+-- the Tabards and the Treasury. What is typed stays with its tab for the session, never saved,
+-- and changes only what the list shows: the copy for Discord, what is sent and what is kept are
+-- the same whatever it holds. Nothing typed (or spaces only): the list as ever.
+---------------------------------------------------------------------------
+
+local filters = {} -- [tab] = the text in its box, as typed
+local folded = {}  -- [guild name or COUNCIL_ROW] = true: opened by the search, closed by a click (until the text changes)
+-- The Realm's search opens the guilds where it finds a Lord, a Captain or a member a page of
+-- rows at a time (a first letter is in someone of nearly every guild: all of them opened would
+-- be thousands of rows, as Expand all), the rest on a click; a new text, its first page.
+Views.SEARCH_ROWS = 200
+local searchRows = Views.SEARCH_ROWS
+
+local function Trim(s) return (tostring(s or ""):gsub("^%s+", ""):gsub("%s+$", "")) end
+
+-- A name as the search reads it (ns.Searchable) as its row shows it (Plain), and a /who name as
+-- its row shows it (Views.MembersOf), kept: the Realm's search reads every Lord, Captain and
+-- player seen at each letter typed and at each redraw, and a name reads the same each time.
+-- Emptied past SEARCH_NAMES_KEPT, a long session's worth.
+Views.SEARCH_NAMES_KEPT = 20000
+local searchNames, seenNames, namesKept = {}, {}, 0
+local function Kept()
+	namesKept = namesKept + 1
+	if namesKept > Views.SEARCH_NAMES_KEPT then
+		wipe(searchNames)
+		wipe(seenNames)
+		namesKept = 1
+	end
+end
+local function SearchName(s)
+	local k = searchNames[s]
+	if not k then
+		Kept()
+		k = ns.Searchable(Plain(s))
+		searchNames[s] = k
+	end
+	return k
+end
+local function SeenName(name)
+	local shown = seenNames[name]
+	if not shown then
+		Kept()
+		shown = ns.DisplayName(ns.FullName(name)) or ""
+		seenNames[name] = shown
+	end
+	return shown
+end
+-- Does `name` hold the search `q`, as its row shows it?
+local function NameHolds(q, name)
+	return type(name) == "string" and name ~= "" and SearchName(name):find(q, 1, true) ~= nil
+end
+
+function Views.Filter(tab) return filters[tab] or "" end
+
+-- The text a tab's list is filtered by, folded (ns.Fold), or nil when nothing is typed.
+function Views.Query(tab)
+	local text = Trim(filters[tab])
+	if text == "" then return nil end
+	return ns.Fold(text)
+end
+
+-- Typed into a tab's box: its list again, from its first page, and from its top when a search
+-- starts (while the player goes on typing, the list stays where it is: UI.FilterChanged).
+function Views.SetFilter(tab, text)
+	text = tostring(text or "")
+	local before = filters[tab] or ""
+	if text == before then return end
+	filters[tab] = text ~= "" and text or nil
+	if tab == "realm" then
+		wipe(folded)
+		searchRows = Views.SEARCH_ROWS
+	end
+	if tab == "treasury" and ns.Treasury and ns.Treasury.FirstPage then ns.Treasury.FirstPage() end
+	if ns.UI and ns.UI.FilterChanged then ns.UI.FilterChanged(tab, Trim(before) == "" and Trim(text) ~= "") end
+end
+
+-- Tests start from nothing typed.
+function Views.ClearFilters()
+	wipe(filters)
+	wipe(folded)
+	searchRows = Views.SEARCH_ROWS
+	wipe(searchNames)
+	wipe(seenNames)
+	namesKept = 0
+end
+
+-- The box's line, on top of a tab's list; `tip`: what it finds there (L.SEARCH_TIP_...).
+local function SearchLine(tab, tip)
+	return {
+		text = L.SEARCH, input = { text = Views.Filter(tab), onChange = function(text) Views.SetFilter(tab, text) end },
+		tooltip = function(tt)
+			tt:AddLine(L.SEARCH, 1, 0.82, 0)
+			tt:AddLine(L["SEARCH_TIP_" .. tip], 1, 1, 1, true)
+		end,
+	}
+end
+
+local function NoMatch() return { text = Grey(L.SEARCH_NO_MATCH) } end
 
 ---------------------------------------------------------------------------
 -- Shared tooltips
@@ -384,8 +609,60 @@ function Views.SortBy(key)
 	end
 end
 
-local function CensusLines(s)
+-- A reported guild's row: its name, members, online and Lord; a click opens it in the Realm,
+-- whose box it empties: a search left there could miss that guild and show nothing of it.
+local function CensusRow(e)
+	local g = e.g
+	local leader = g.leader and ((g.leaderOnline and "|cff40ff40" or "|cff9d9d9d") .. Plain(g.leader) .. "|r") or Grey("?")
+	return {
+		cols = { Plain(e.name), ns.FormatNumber(g.total), Green(ns.FormatNumber(g.online)), leader },
+		dim = not e.fresh,
+		tooltip = GuildTooltip(e),
+		onClick = function()
+			-- Opened in the Realm, and the Realm opens on it (UI.KeepPlace), whatever its box held.
+			Views.SetFilter("realm", "")
+			expanded[e.name] = true
+			ns.UI.SelectTab("realm", Views.GuildId(e.name))
+		end,
+	}
+end
+
+-- A guild seen with /who that nobody reports: grey, after every reported guild, and in no
+-- total (Data.Summary keeps them apart). Members and Lord are unknown.
+local function SeenRow(e)
+	local online = ns.FormatNumber(e.online) .. (e.capped and "+" or "")
+	return { cols = { Grey(e.name), Grey("?"), Grey(online), Grey(L.NO_ADDON) }, tooltip = SeenTooltip(e) }
+end
+
+-- The reported guilds in the order the column titles say, fresh reports first.
+local function SortedGuilds(list)
+	local get = SORTERS[Views.sort.key] or SORTERS.members
+	local guilds = {}
+	for i, e in ipairs(list) do guilds[i] = e end
+	table.sort(guilds, function(a, b)
+		if a.fresh ~= b.fresh then return a.fresh end
+		local va, vb = get(a), get(b)
+		if va == vb then return a.name < b.name end
+		if Views.sort.desc then return va > vb end
+		return va < vb
+	end)
+	return guilds
+end
+
+-- `q`, the search (Views.Query): only the guilds whose name or Lord holds it, the reported ones
+-- then the ones only seen (by name: nobody knows their Lord), in the same order as ever.
+local function CensusLines(s, q)
 	local lines = {}
+	if q then
+		for _, e in ipairs(SortedGuilds(s.guilds)) do
+			if ns.Holds(q, Plain(e.name), e.g.leader and Plain(e.g.leader)) then lines[#lines + 1] = CensusRow(e) end
+		end
+		for _, e in ipairs(s.seen or {}) do
+			if ns.Holds(q, Plain(e.name)) then lines[#lines + 1] = SeenRow(e) end
+		end
+		if #lines == 0 then lines[1] = NoMatch() end
+		return lines
+	end
 	-- The King's Agenda, for the whole army (King.lua).
 	local a = ns.King and ns.King.Agenda and ns.King.Agenda()
 	if a then
@@ -396,36 +673,9 @@ local function CensusLines(s)
 	if court then lines[#lines + 1] = court end
 	-- While the King is online: one click asks for an invite to his layer (Hop.lua).
 	for _, hop in ipairs(ns.Hop and ns.Hop.KingLines and ns.Hop.KingLines() or {}) do lines[#lines + 1] = hop end
-	local get = SORTERS[Views.sort.key] or SORTERS.members
-	local guilds = {}
-	for i, e in ipairs(s.guilds) do guilds[i] = e end
-	table.sort(guilds, function(a, b)
-		if a.fresh ~= b.fresh then return a.fresh end
-		local va, vb = get(a), get(b)
-		if va == vb then return a.name < b.name end
-		if Views.sort.desc then return va > vb end
-		return va < vb
-	end)
-	for _, e in ipairs(guilds) do
-		local g = e.g
-		local leader = g.leader and ((g.leaderOnline and "|cff40ff40" or "|cff9d9d9d") .. Plain(g.leader) .. "|r") or Grey("?")
-		lines[#lines + 1] = {
-			cols = { Plain(e.name), ns.FormatNumber(g.total), Green(ns.FormatNumber(g.online)), leader },
-			dim = not e.fresh,
-			tooltip = GuildTooltip(e),
-			onClick = function()
-				expanded[e.name] = true
-				ns.UI.SelectTab("realm")
-			end,
-		}
-	end
+	for _, e in ipairs(SortedGuilds(s.guilds)) do lines[#lines + 1] = CensusRow(e) end
 	if #lines == 0 then lines[1] = { text = Grey(L.EMPTY) } end
-	-- Guilds seen with /who that nobody reports: grey, after every reported guild, and in no
-	-- total (Data.Summary keeps them apart). Members and Lord are unknown.
-	for _, e in ipairs(s.seen or {}) do
-		local online = ns.FormatNumber(e.online) .. (e.capped and "+" or "")
-		lines[#lines + 1] = { cols = { Grey(e.name), Grey("?"), Grey(online), Grey(L.NO_ADDON) }, tooltip = SeenTooltip(e) }
-	end
+	for _, e in ipairs(s.seen or {}) do lines[#lines + 1] = SeenRow(e) end
 	if #(s.seen or {}) > 0 then
 		lines[#lines].gapAfter = true
 		lines[#lines + 1] = { text = Grey(L.SEEN_HINT) }
@@ -480,9 +730,10 @@ end
 -- opened, Who.SearchGuild). Reports carry no member lists: a thousand names per guild would
 -- not fit on the channel. { name, level, class (code), zone (key), rank } each, by rank then
 -- level.
+-- `swept` (SweptByGuild): the round's players by guild, for a search through every guild at once.
 Views.MAX_MEMBERS = 25
 local allMembers = {} -- [guild] = true: its whole list shown ("... and N more" clicked)
-function Views.MembersOf(guild, g)
+function Views.MembersOf(guild, g, swept)
 	local skip = {}
 	if g and g.leader then skip[ns.ShortName(g.leader)] = true end
 	for _, o in ipairs(g and g.officers or {}) do if o.name then skip[ns.ShortName(o.name)] = true end end
@@ -495,7 +746,8 @@ function Views.MembersOf(guild, g)
 	end
 	local sweep = ns.Who and ns.Who.sweep
 	local own = ns.Who and ns.Who.GuildSeen and ns.Who.GuildSeen(guild)
-	for _, source in ipairs({ own or {}, sweep and sweep.list or {} }) do
+	local round = swept and (swept[guild] or {}) or (sweep and sweep.list) or {}
+	for _, source in ipairs({ own or {}, round }) do
 		for _, p in ipairs(source) do
 			local short = p.name and ns.ShortName(p.name)
 			if p.guild == guild and short and not skip[short] then
@@ -520,6 +772,7 @@ end
 local chatTier -- the channel shown instead of the Realm tree, or nil
 
 function Views.ChatShown() return chatTier ~= nil end
+function Views.ChatTier() return chatTier end
 -- Another tab opened: the Realm opens on its tree again next time.
 function Views.CloseChat() chatTier = nil end
 function Views.ShowChat(tier)
@@ -537,7 +790,9 @@ end
 
 -- Every line the history keeps (Channels.HISTORY): lines kept but never shown were lost all the same.
 Views.CHAT_SHOWN = ns.Channels and ns.Channels.HISTORY or 100
-local function ChatLines()
+-- `q`, the Realm's search (Views.Query): the way back and the channels stay, and of the lines
+-- only those whose writer, guild or words hold it.
+local function ChatLines(q)
 	local C = ns.Channels
 	local lines = { { text = Gold(L.CHATS_BACK), onClick = function() Views.ShowChat(nil) end, gapAfter = true } }
 	local tiers = ChatTiers()
@@ -559,51 +814,290 @@ local function ChatLines()
 	end
 	lines[#lines].gapAfter = true
 	local tierDef = C.TIERS[chatTier]
-	lines[#lines + 1] = {
-		text = Green(L.CHATS_WRITE:format(L[tierDef.label])),
-		onClick = function()
-			-- (The gamepad UI: an Olympus window, the game's chat box would be blocked; UI.lua.)
-			if ns.GamepadUI() then return ns.UI.ChatWindow(chatTier, L[tierDef.label]) end
-			if ChatFrame_OpenChat then ChatFrame_OpenChat(tierDef.slash .. " ") end
-		end,
-		gapAfter = true,
-	}
+	if not q then
+		lines[#lines + 1] = {
+			text = Green(L.CHATS_WRITE:format(L[tierDef.label])),
+			onClick = function()
+				-- (The gamepad UI: an Olympus window, the game's chat box would be blocked; UI.lua.)
+				if ns.GamepadUI() then return ns.UI.ChatWindow(chatTier, L[tierDef.label]) end
+				if ChatFrame_OpenChat then ChatFrame_OpenChat(tierDef.slash .. " ") end
+			end,
+			gapAfter = true,
+		}
+	end
 	local history = C.History(chatTier)
-	if #history == 0 then lines[#lines + 1] = { text = Grey(L.CHATS_EMPTY) } end
+	if #history == 0 and not q then lines[#lines + 1] = { text = Grey(L.CHATS_EMPTY) } end
+	local found = 0
 	for i = #history, math.max(1, #history - Views.CHAT_SHOWN + 1), -1 do
 		local e = history[i]
 		local who = ns.DisplayName(e.sender) or "?"
-		lines[#lines + 1] = {
-			text = C.FormatLine(chatTier, e.sender, e.guild, e.class, e.text),
-			right = Grey(ns.Ago(e.t)),
-			onClick = not e.mine and function()
-				if ns.GamepadUI() then return ns.UI.WhisperWindow(ns.TellName(e.sender) or who) end
-				if ChatFrame_SendTell then ChatFrame_SendTell(ns.TellName(e.sender) or who) end
-			end or nil,
-			tooltip = function(tt)
-				tt:AddLine(who .. "  <" .. Plain(e.guild or "?") .. ">", 1, 0.82, 0)
-				tt:AddLine(ns.Codec.SanitizeChat(e.text), 1, 1, 1, true)
-				if not e.mine then tt:AddLine(L.CHATS_LINE_TIP:format(who), 0.6, 0.6, 0.6) end
-			end,
-		}
+		if not q or ns.Holds(q, who, Plain(e.guild or ""), ns.Codec.SanitizeChat(e.text)) then
+			found = found + 1
+			lines[#lines + 1] = {
+				text = C.FormatLine(chatTier, e.sender, e.guild, e.class, e.text),
+				right = Grey(ns.Ago(e.t)),
+				onClick = not e.mine and function()
+					if ns.GamepadUI() then return ns.UI.WhisperWindow(ns.TellName(e.sender) or who) end
+					if ChatFrame_SendTell then ChatFrame_SendTell(ns.TellName(e.sender) or who) end
+				end or nil,
+				tooltip = function(tt)
+					tt:AddLine(who .. "  <" .. Plain(e.guild or "?") .. ">", 1, 0.82, 0)
+					tt:AddLine(ns.Codec.SanitizeChat(e.text), 1, 1, 1, true)
+					if not e.mine then tt:AddLine(L.CHATS_LINE_TIP:format(who), 0.6, 0.6, 0.6) end
+				end,
+			}
+		end
 	end
+	if q and found == 0 then lines[#lines + 1] = NoMatch() end
 	return lines
 end
 
-local function RealmLines(s)
-	if chatTier then return ChatLines() end
+---------------------------------------------------------------------------
+-- The High Council in the Realm (0.9.9, Max's): under the King and the Treasurer, the
+-- moderators by department with their titles (Workshop.CouncilTree), for whoever may see them
+-- (ns.CouncilVisible: until launch, the councillors and the author alone).
+---------------------------------------------------------------------------
+
+local COUNCIL_ROW = {} -- its open/closed key in `expanded`: no guild's name can be a table
+-- The eye that shows the councillors' names on the King's screen (a game icon, Interface\Icons).
+Views.EYE_ICON = "Interface\\Icons\\INV_Misc_Eye_01"
+
+-- What the census knows of these names (a set of short names, lower case): each guild's Lord
+-- and Captains from a fresh report, then who was seen online (our roster, /who), then the Lords
+-- and Captains of older reports, the first found. (An old report last: days old, it must not
+-- hide someone seen online now.) Short name -> a person as the rows open them, and the set of
+-- those only an old report knows.
+local function Known(s, wanted)
+	local out, old = {}, {}
+	local function Add(guild, p, stale)
+		local key = type(p.name) == "string" and ns.ShortName(p.name):lower()
+		if key and wanted[key] and not out[key] then
+			p.guild = guild
+			out[key], old[key] = p, stale or nil
+		end
+	end
+	local function Reports(fresh)
+		for _, e in ipairs(s.guilds) do
+			local g = e.g
+			if e.fresh == fresh then
+				if g.leader then
+					Add(e.name, { name = g.leader, realm = g.realm, class = g.leaderClass, level = g.leaderLevel, zone = g.leaderZone,
+						rank = L.LORD, online = g.leaderOnline, days = g.leaderDays }, not fresh)
+				end
+				for _, o in ipairs(g.officers or {}) do
+					Add(e.name, { name = o.name, realm = g.realm, class = o.class, level = o.level, zone = o.zone, rank = L.CAPTAIN,
+						online = o.online, days = o.days }, not fresh)
+				end
+			end
+		end
+	end
+	Reports(true)
+	local mine = GetGuildInfo("player")
+	for _, m in ipairs(mine and ns.Roster.online or {}) do
+		Add(mine, { name = m.name, class = m.class, level = m.level, zone = m.zone, rank = m.rank, online = true })
+	end
+	-- (As Views.MembersOf reads /who: the guild's own search, then the round.)
+	local sweep = ns.Who and ns.Who.sweep
+	for _, e in ipairs(s.guilds) do
+		local own = ns.Who and ns.Who.GuildSeen and ns.Who.GuildSeen(e.name)
+		for _, source in ipairs({ own or {}, sweep and sweep.list or {} }) do
+			for _, p in ipairs(source) do
+				if p.guild == e.name and p.name then
+					Add(e.name, { name = ns.DisplayName(ns.FullName(p.name)), level = p.level, class = ns.Roster.ClassCode(p.class),
+						zone = p.zone and ns.Zones.KeyForName(p.zone), online = true })
+				end
+			end
+		end
+	end
+	Reports(false)
+	return out, old
+end
+
+local function Council(s) return "|c" .. ns.HIGH_COUNCIL_COLOR .. s .. "|r" end
+
+-- `q`, the Realm's search (Views.Query): only the councillors whose name as their row shows it
+-- holds it (on the King's stream, the first four characters: never what is hidden), under the
+-- council's header (opened for it) and their department's; how many, 0 for none (nothing drawn).
+local function CouncilLines(lines, s, q)
+	local loose, depts = ns.Workshop.CouncilTree()
+	local n = #loose
+	for _, d in ipairs(depts) do n = n + #d.members end
+	if n == 0 then return 0 end
+	-- The King's screen (his stream): the names hidden until he clicks the eye, and hidden again
+	-- on the next click (ns.CouncilMasked, Core.lua).
+	local masked = ns.CouncilMasked()
+	local function Hit(m)
+		if not q then return true end
+		local shown = masked and ns.MaskName(Plain(m.name)):sub(1, -5) or Plain(m.name)
+		return ns.Holds(q, shown)
+	end
+	local hits = 0
+	for _, m in ipairs(loose) do if Hit(m) then hits = hits + 1 end end
+	for _, d in ipairs(depts) do for _, m in ipairs(d.members) do if Hit(m) then hits = hits + 1 end end end
+	if q and hits == 0 then return 0 end
+	local open = expanded[COUNCIL_ROW]
+	if q then open = not folded[COUNCIL_ROW] end
+	lines[#lines + 1] = {
+		text = (open and "[-] " or "[+] ") .. ns.HIGH_COUNCIL_MARK .. " " .. Council(L.COUNCIL_CENSUS:format(n)),
+		onClick = function()
+			if q then
+				folded[COUNCIL_ROW] = not folded[COUNCIL_ROW] or nil
+			else
+				expanded[COUNCIL_ROW] = not expanded[COUNCIL_ROW] or nil
+			end
+			ns.UI.Refresh()
+		end,
+		tooltip = function(tt)
+			tt:AddLine(L.COUNCIL_CENSUS:format(n), 0.69, 0.28, 0.97)
+			tt:AddLine(L.COUNCIL_CENSUS_TIP, 1, 1, 1, true)
+		end,
+	}
+	if not open then return hits end
+	if ns.KingsScreen() and not q then
+		local label = masked and L.COUNCIL_NAMES_SHOW or L.COUNCIL_NAMES_HIDE
+		lines[#lines + 1] = {
+			indent = 1,
+			text = "|T" .. Views.EYE_ICON .. ":0|t " .. Gold(label),
+			onClick = function()
+				local show = not ns.CouncilNamesShown()
+				ns.SetCouncilNamesShown(show)
+				if not show and ns.UI.CloseCouncilCards then ns.UI.CloseCouncilCards() end
+				ns.UI.Refresh()
+			end,
+			tooltip = function(tt)
+				tt:AddLine(label, 1, 0.82, 0)
+				tt:AddLine(L.COUNCIL_NAMES_TIP, 1, 1, 1, true)
+			end,
+		}
+	end
+	local wanted = {}
+	for _, m in ipairs(loose) do wanted[m.name:lower()] = true end
+	for _, d in ipairs(depts) do for _, m in ipairs(d.members) do wanted[m.name:lower()] = true end end
+	local known, old = Known(s, wanted)
+	-- "<mark><own icon> Name - Title": where the census knows them, when they were last on, and a
+	-- click opens what it knows. Hidden (the King's stream): "<mark> Name****", the title, where
+	-- they are, and no click (the card would carry the whole name).
+	local function Member(m, indent)
+		local p = known[m.name:lower()]
+		local person = p or { name = m.name }
+		lines[#lines + 1] = {
+			key = not masked and person.name or nil,
+			indent = indent,
+			text = (masked and (ns.HIGH_COUNCIL_MARK .. " " .. Council(ns.MaskName(Plain(m.name))))
+					or (ns.CouncilMark(m.name) .. " " .. Council(Plain(m.name))))
+				.. (m.title and (" - " .. Grey(Plain(m.title))) or ""),
+			right = p and Presence(p.online, p.days, old[m.name:lower()]) or nil,
+			onClick = not masked and function() ns.UI.ShowPerson(person) end or nil,
+		}
+	end
+	for _, m in ipairs(loose) do if Hit(m) then Member(m, 1) end end
+	for _, d in ipairs(depts) do
+		local any = not q
+		for _, m in ipairs(d.members) do any = any or Hit(m) end
+		if any then
+			local icon = ns.CouncilIconTexture(d.icon)
+			lines[#lines + 1] = { indent = 1, text = (icon and ("|T" .. icon .. ":0|t ") or "") .. Gold(Plain(d.name)) }
+			for _, m in ipairs(d.members) do if Hit(m) then Member(m, 2) end end
+		end
+	end
+	return hits
+end
+
+-- The /who round's players by guild (Views.MembersOf's `swept`), in the round's order: the
+-- search looks into every guild, and the round can list thousands.
+local function SweptByGuild()
+	local out = {}
+	local sweep = ns.Who and ns.Who.sweep
+	for _, p in ipairs(sweep and sweep.list or {}) do
+		if p.guild then
+			out[p.guild] = out[p.guild] or {}
+			table.insert(out[p.guild], p)
+		end
+	end
+	return out
+end
+
+-- The guilds where the Realm's search `q` finds a player seen online (Views.MembersOf's sources:
+-- our roster for our own guild `own`, /who's round for the others), before any member list is
+-- made: [guild] = true.
+local function SeenHits(q, own)
+	local hit = {}
+	local sweep = ns.Who and ns.Who.sweep
+	for _, p in ipairs(sweep and sweep.list or {}) do
+		local guild = p.guild
+		if guild and guild ~= own and not hit[guild] and p.name and NameHolds(q, SeenName(p.name)) then hit[guild] = true end
+	end
+	if own then
+		for _, m in ipairs(ns.Roster.online or {}) do
+			if NameHolds(q, m.name) then
+				hit[own] = true
+				break
+			end
+		end
+	end
+	return hit
+end
+
+-- What of a guild the Realm's search finds, its name aside: its Lord, its Captains and the
+-- members seen online (our roster, /who), each by name as its row shows it. `ctx`: the search
+-- (q, own, hits: SeenHits, swept: SweptByGuild once needed). The member list (Views.MembersOf
+-- makes a table for each player and sorts them) is made only for a guild where someone is found
+-- and only when `rows` (the guild will show): otherwise `n` counts a member found as one.
+local function GuildMatches(e, ctx, rows)
+	local g, q = e.g, ctx.q
+	local found = { lord = NameHolds(q, g.leader), officers = {}, members = {}, all = {} }
+	for _, o in ipairs(g.officers or {}) do
+		if NameHolds(q, o.name) then found.officers[#found.officers + 1] = o end
+	end
+	local seen = ctx.hits[e.name]
+	if not seen and e.name ~= ctx.own then
+		for _, p in ipairs(ns.Who and ns.Who.GuildSeen and ns.Who.GuildSeen(e.name) or {}) do
+			if p.guild == e.name and p.name and NameHolds(q, SeenName(p.name)) then
+				seen = true
+				break
+			end
+		end
+	end
+	if seen and rows then
+		ctx.swept = ctx.swept or SweptByGuild()
+		local members, fromWho = Views.MembersOf(e.name, g, ctx.swept)
+		for _, m in ipairs(members) do
+			if NameHolds(q, m.name) then found.members[#found.members + 1] = m end
+		end
+		found.all, found.fromWho = members, fromWho
+	end
+	found.n = (found.lord and 1 or 0) + #found.officers + (rows and #found.members or seen and 1 or 0)
+	return found
+end
+
+-- `q`, the search (Views.Query): the High Council's names (for whoever may see it), then each
+-- guild whose name holds it, whole, and each whose Lord, Captains or members seen do, opened on
+-- those alone; "No match" for none. The chats' link stays (they are searched there). Nothing
+-- else: the King's lines, the level race, recruiting and the layers show once it is emptied.
+local function RealmLines(s, q)
+	if chatTier then return ChatLines(q) end
 	local lines = {}
-	-- The King holds court in our zone (Court.lua), then his layer (Hop.lua).
-	local court = ns.Court and ns.Court.Line and ns.Court.Line()
-	if court then lines[#lines + 1] = court end
-	for _, hop in ipairs(ns.Hop and ns.Hop.KingLines and ns.Hop.KingLines() or {}) do lines[#lines + 1] = hop end
-	-- The King (and his Hands): Summon the Lords, and who answered (King.lua). While it is
-	-- fresh, each Lord and Captain in the tree carries a ready-check mark.
-	for _, l in ipairs(ns.King and ns.King.RollCallLines and ns.King.RollCallLines() or {}) do lines[#lines + 1] = l end
+	-- A councillor's mark and own icon after their name in the rows below (0.9.9), for whoever
+	-- may see the council here; none on the King's screen while the names are hidden (his
+	-- stream: a whole name next to the mark would give the councillor away).
+	local councilShown = ns.CouncilVisible()
+	local councilTagged = councilShown and not ns.CouncilMasked()
+	local function Tag(name, home)
+		local full = ns.FullName(name, home)
+		if not councilTagged or not ns.IsHighCouncillor(full) then return "" end
+		return " " .. ns.CouncilMark(full)
+	end
 	local function Mark(name, home, online)
 		return ns.King and ns.King.RollCallMark and ns.King.RollCallMark(ns.FullName(name, home), online) or ""
 	end
-	local king = King(s.guilds)
+	-- The King holds court in our zone (Court.lua), then his layer (Hop.lua).
+	local court = not q and ns.Court and ns.Court.Line and ns.Court.Line()
+	if court then lines[#lines + 1] = court end
+	for _, hop in ipairs(not q and ns.Hop and ns.Hop.KingLines and ns.Hop.KingLines() or {}) do lines[#lines + 1] = hop end
+	-- The King (and his Hands): Summon the Lords, and who answered (King.lua). While it is
+	-- fresh, each Lord and Captain in the tree carries a ready-check mark.
+	for _, l in ipairs(not q and ns.King and ns.King.RollCallLines and ns.King.RollCallLines() or {}) do lines[#lines + 1] = l end
+	local king = not q and King(s.guilds)
 	if king then
 		lines[#lines + 1] = {
 			header = true,
@@ -631,6 +1125,8 @@ local function RealmLines(s)
 			if type(shared) == "string" then lines[#lines + 1] = { indent = 1, text = Grey(shared) } end
 		end
 	end
+	-- The High Council, under them (0.9.9).
+	local found = councilShown and CouncilLines(lines, s, q) or 0
 	-- The Olympus chats, one click away (the channels our rank reads), above the guilds.
 	if #ChatTiers() > 0 then
 		if lines[#lines] then lines[#lines].gapAfter = true end
@@ -643,14 +1139,21 @@ local function RealmLines(s)
 			end,
 		}
 	end
-	if #s.guilds == 0 then lines[#lines + 1] = { text = Grey(L.EMPTY) } end
-	for _, e in ipairs(s.guilds) do
+	if #s.guilds == 0 and not q then lines[#lines + 1] = { text = Grey(L.EMPTY) } end
+	-- A guild's header and, opened, its rows. `only`: what the search found in it (GuildMatches),
+	-- its rows alone under the headers they belong to; nil: all of them. `folds`: its click
+	-- closes and opens what the search opened, instead of the guild itself.
+	local function Guild(e, open, only, folds)
 		local g = e.g
-		local open = expanded[e.name]
 		lines[#lines + 1] = {
+			id = Views.GuildId(e.name),
 			text = (open and "[-] " or "[+] ") .. Green("<" .. Plain(e.name) .. ">") .. " " .. Plain(g.leader or "?"),
 			right = Presence(g.leaderOnline, g.leaderDays),
 			onClick = function()
+				if folds then
+					folded[e.name] = not folded[e.name] or nil
+					return ns.UI.Refresh()
+				end
 				expanded[e.name] = not expanded[e.name] or nil
 				-- Opened: a /who for that guild alone lists who of it is online (a click, so the
 				-- game allows it). Our own guild is in our roster already.
@@ -660,33 +1163,38 @@ local function RealmLines(s)
 			tooltip = GuildTooltip(e),
 			color = e.fresh and "GameFontHighlightSmall" or "GameFontDisableSmall",
 		}
-		if open then
-			if g.leader then
-				local lord = { name = g.leader, realm = g.realm, class = g.leaderClass, level = g.leaderLevel, zone = g.leaderZone,
-					guild = e.name, rank = L.LORD, online = g.leaderOnline, days = g.leaderDays }
-				lines[#lines + 1] = {
-					key = g.leader,
-					indent = 1, text = Mark(g.leader, g.realm, g.leaderOnline) .. CROWN .. Gold(L.LORD) .. "  " .. ClassColored(g.leader, lord.class and ns.CLASS_FILES[lord.class]),
-					right = Presence(g.leaderOnline, g.leaderDays),
-					onClick = function() ns.UI.ShowPerson(lord) end,
-				}
-			end
-			local officers = g.officers or {}
-			lines[#lines + 1] = { indent = 1, text = Gold(L.CAPTAINS:format(#officers)) }
-			for _, o in ipairs(officers) do
-				local person = { name = o.name, realm = g.realm, class = o.class, level = o.level, zone = o.zone, guild = e.name,
-					rank = L.CAPTAIN, online = o.online, days = o.days }
-				lines[#lines + 1] = {
-					key = o.name,
-					indent = 2, text = Mark(o.name, g.realm, o.online) .. ASSIST .. ClassColored(o.name, o.class and ns.CLASS_FILES[o.class])
-						.. (ns.IsTreasurer(o.name, e.name) and ("  " .. ns.COIN .. Grey(L.TREASURER)) or ""),
-					right = (o.level and Grey(L.LEVEL_N:format(o.level)) .. "  " or "") .. Presence(o.online, o.days),
-					onClick = function() ns.UI.ShowPerson(person) end,
-				}
-			end
-			if #officers == 0 then lines[#lines + 1] = { indent = 2, text = Grey(L.NONE_REPORTED) } end
-			-- Everyone else online: our roster, or /who for other guilds.
-			local members, fromWho = Views.MembersOf(e.name, g)
+		if not open then return end
+		if g.leader and (not only or only.lord) then
+			local lord = { name = g.leader, realm = g.realm, class = g.leaderClass, level = g.leaderLevel, zone = g.leaderZone,
+				guild = e.name, rank = L.LORD, online = g.leaderOnline, days = g.leaderDays }
+			lines[#lines + 1] = {
+				key = g.leader,
+				indent = 1, text = Mark(g.leader, g.realm, g.leaderOnline) .. CROWN .. Gold(L.LORD) .. "  " .. ClassColored(g.leader, lord.class and ns.CLASS_FILES[lord.class])
+					.. Tag(g.leader, g.realm),
+				right = Presence(g.leaderOnline, g.leaderDays),
+				onClick = function() ns.UI.ShowPerson(lord) end,
+			}
+		end
+		local officers = g.officers or {}
+		local listed = only and only.officers or officers
+		if #listed > 0 or not only then lines[#lines + 1] = { indent = 1, text = Gold(L.CAPTAINS:format(#officers)) } end
+		for _, o in ipairs(listed) do
+			local person = { name = o.name, realm = g.realm, class = o.class, level = o.level, zone = o.zone, guild = e.name,
+				rank = L.CAPTAIN, online = o.online, days = o.days }
+			lines[#lines + 1] = {
+				key = o.name,
+				indent = 2, text = Mark(o.name, g.realm, o.online) .. ASSIST .. ClassColored(o.name, o.class and ns.CLASS_FILES[o.class])
+					.. Tag(o.name, g.realm) .. (ns.IsTreasurer(o.name, e.name) and ("  " .. ns.COIN .. Grey(L.TREASURER)) or ""),
+				right = (o.level and Grey(L.LEVEL_N:format(o.level)) .. "  " or "") .. Presence(o.online, o.days),
+				onClick = function() ns.UI.ShowPerson(person) end,
+			}
+		end
+		if #officers == 0 and not only then lines[#lines + 1] = { indent = 2, text = Grey(L.NONE_REPORTED) } end
+		-- Everyone else online: our roster, or /who for other guilds.
+		local members, fromWho
+		if only then members, fromWho = only.all, only.fromWho else members, fromWho = Views.MembersOf(e.name, g) end
+		listed = only and only.members or members
+		if #listed > 0 or not only then
 			lines[#lines + 1] = {
 				indent = 1, text = Gold((fromWho and L.MEMBERS_SEEN or L.MEMBERS_ONLINE):format(#members)),
 				tooltip = function(tt)
@@ -694,38 +1202,83 @@ local function RealmLines(s)
 					tt:AddLine(fromWho and L.MEMBERS_SEEN_TIP or L.MEMBERS_ONLINE_TIP, 1, 1, 1, true)
 				end,
 			}
-			local shown = allMembers[e.name] and #members or math.min(Views.MAX_MEMBERS, #members)
-			for i = 1, shown do
-				local m = members[i]
-				local person = { name = m.name, class = m.class, level = m.level, zone = m.zone, guild = e.name, rank = m.rank, online = true }
-				lines[#lines + 1] = {
-					key = m.name,
-					indent = 2, text = ClassColored(m.name, m.class and ns.CLASS_FILES[m.class]) .. (m.rank and ("  " .. Grey(m.rank)) or "")
-						.. (ns.IsTreasurer(m.name, e.name) and ("  " .. ns.COIN .. Grey(L.TREASURER)) or ""),
-					right = m.level and Grey(L.LEVEL_N:format(m.level)) or nil,
-					onClick = function() ns.UI.ShowPerson(person) end,
-				}
-			end
-			-- The rest on a click, and back again.
-			if #members > shown then
-				lines[#lines + 1] = {
-					indent = 2, text = Gold(L.MEMBERS_MORE:format(#members - shown)),
-					onClick = function() allMembers[e.name] = true; ns.UI.Refresh() end,
-				}
-			elseif allMembers[e.name] and #members > Views.MAX_MEMBERS then
-				lines[#lines + 1] = {
-					indent = 2, text = Gold(L.MEMBERS_FEWER),
-					onClick = function() allMembers[e.name] = nil; ns.UI.Refresh() end,
-				}
-			end
-			if #members == 0 then lines[#lines + 1] = { indent = 2, text = Grey(fromWho and L.MEMBERS_NONE_SEEN or L.MEMBERS_NONE) } end
-			lines[#lines + 1] = { indent = 1, text = Gold(L.RANKS) }
-			for i, rank in ipairs(g.ranks or {}) do
-				lines[#lines + 1] = { indent = 2, text = ("%d. %s"):format(i, Plain(rank.name)), right = ns.FormatNumber(rank.count) }
-			end
-			if #(g.ranks or {}) == 0 then lines[#lines + 1] = { indent = 2, text = Grey(L.NONE_REPORTED) } end
-			lines[#lines + 1] = { indent = 1, text = Grey(L.INACTIVE_LINE:format(g.inactive7 or 0, g.inactive30 or 0)), gapAfter = true }
 		end
+		-- (The search's members a page at a time too.)
+		local shown = allMembers[e.name] and #listed or math.min(Views.MAX_MEMBERS, #listed)
+		for i = 1, shown do
+			local m = listed[i]
+			local person = { name = m.name, class = m.class, level = m.level, zone = m.zone, guild = e.name, rank = m.rank, online = true }
+			lines[#lines + 1] = {
+				key = m.name,
+				indent = 2, text = ClassColored(m.name, m.class and ns.CLASS_FILES[m.class]) .. Tag(m.name) .. (m.rank and ("  " .. Grey(m.rank)) or "")
+					.. (ns.IsTreasurer(m.name, e.name) and ("  " .. ns.COIN .. Grey(L.TREASURER)) or ""),
+				right = m.level and Grey(L.LEVEL_N:format(m.level)) or nil,
+				onClick = function() ns.UI.ShowPerson(person) end,
+			}
+		end
+		-- The rest on a click, and back again.
+		if #listed > shown then
+			lines[#lines + 1] = {
+				indent = 2, text = Gold(L.MEMBERS_MORE:format(#listed - shown)),
+				onClick = function() allMembers[e.name] = true; ns.UI.Refresh() end,
+			}
+		elseif allMembers[e.name] and #listed > Views.MAX_MEMBERS then
+			lines[#lines + 1] = {
+				indent = 2, text = Gold(L.MEMBERS_FEWER),
+				onClick = function() allMembers[e.name] = nil; ns.UI.Refresh() end,
+			}
+		end
+		if only then
+			lines[#lines].gapAfter = true
+			return
+		end
+		if #members == 0 then lines[#lines + 1] = { indent = 2, text = Grey(fromWho and L.MEMBERS_NONE_SEEN or L.MEMBERS_NONE) } end
+		lines[#lines + 1] = { indent = 1, text = Gold(L.RANKS) }
+		for i, rank in ipairs(g.ranks or {}) do
+			lines[#lines + 1] = { indent = 2, text = ("%d. %s"):format(i, Plain(rank.name)), right = ns.FormatNumber(rank.count) }
+		end
+		if #(g.ranks or {}) == 0 then lines[#lines + 1] = { indent = 2, text = Grey(L.NONE_REPORTED) } end
+		lines[#lines + 1] = { indent = 1, text = Grey(L.INACTIVE_LINE:format(g.inactive7 or 0, g.inactive30 or 0)), gapAfter = true }
+	end
+	-- (The guilds opened for a Lord, Captain or member found: `searchRows` of their rows, the
+	-- guilds past them counted in `more`, shown on a click.)
+	local ctx, rows, more
+	if q then
+		local own = GetGuildInfo("player")
+		ctx, rows, more = { q = q, own = own, hits = SeenHits(q, own) }, 0, 0
+	end
+	for _, e in ipairs(s.guilds) do
+		if not q or NameHolds(q, e.name) then
+			-- (Found by its name: the guild as ever, opened or not.)
+			if q then found = found + 1 end
+			Guild(e, expanded[e.name])
+		else
+			local room = rows < searchRows
+			local only = GuildMatches(e, ctx, room)
+			if only.n > 0 then
+				found = found + only.n
+				if room then
+					local before = #lines
+					Guild(e, not folded[e.name], only, true)
+					rows = rows + #lines - before
+				else
+					more = more + 1
+				end
+			end
+		end
+	end
+	if q then
+		if more > 0 then
+			lines[#lines + 1] = {
+				text = Gold(L.SEARCH_MORE_GUILDS:format(more)),
+				onClick = function()
+					searchRows = searchRows + Views.SEARCH_ROWS
+					ns.UI.Refresh()
+				end,
+			}
+		end
+		if found == 0 then lines[#lines + 1] = NoMatch() end
+		return lines
 	end
 
 	local racers = {}
@@ -830,8 +1383,10 @@ local function RealmDetail(s)
 	return L.TAB_REALM, L.REALM_DETAIL:format(lords, captains, ns.FormatNumber(inactive)) .. "\n" .. Grey(L.CLICK_EXPAND)
 end
 
+-- (While a search is typed, the guilds it opened close and open with them.)
 function Views.ExpandAll(on)
-	for _, e in ipairs(ns.Data.Summary().guilds) do expanded[e.name] = on or nil end
+	for _, e in ipairs(ns.Data.Summary().guilds) do expanded[e.name], folded[e.name] = on or nil, not on or nil end
+	expanded[COUNCIL_ROW], folded[COUNCIL_ROW] = on or nil, not on or nil -- (the High Council's too)
 end
 
 ---------------------------------------------------------------------------
@@ -895,11 +1450,13 @@ Views.RACE_MAX, Views.RACE_PAGE = 100, 25 -- the level race: its top 100, 25 at 
 Views.raceShown = Views.RACE_PAGE
 Views.INSPECT_ROWS = 200 -- inspected players listed on the Tabards page
 
-local function HeraldryLines()
+-- `q`, the search (Views.Query): the untabarded and the inspected players whose name or guild
+-- holds it, each list under its header, a page as ever; "No match" for none. Nothing else.
+local function HeraldryLines(q)
 	local s = ns.Inspect.Summary()
 	-- The King (and his Hands): the Royal Inspection, and what the patrols reported (King.lua).
 	local lines = {}
-	for _, l in ipairs(ns.King and ns.King.InspectionLines and ns.King.InspectionLines() or {}) do lines[#lines + 1] = l end
+	for _, l in ipairs(not q and ns.King and ns.King.InspectionLines and ns.King.InspectionLines() or {}) do lines[#lines + 1] = l end
 	-- The untabarded: the King sees his own list (and whether the army sees it); everyone else
 	-- sees it only while he shares it.
 	local king = ns.King and (ns.King.IsKing() or ns.King.Preview())
@@ -907,7 +1464,23 @@ local function HeraldryLines()
 	if king then
 		shame = { list = ns.Inspect.ShameList(), mine = true }
 	end
-	if not ns.Inspect.ShameOpen() then
+	local players = s.players
+	if q then
+		local list = {}
+		for _, p in ipairs(ns.Inspect.ShameOpen() and shame and shame.list or {}) do
+			if ns.Holds(q, p.name, p.guild) then list[#list + 1] = p end
+		end
+		-- (Only a list with someone found in it, headed as ever.)
+		shame = #list > 0 and { list = list, mine = shame.mine, by = shame.by, t = shame.t } or nil
+		players = {}
+		for _, p in ipairs(s.players) do
+			if ns.Holds(q, ns.ShortName(p.name), p.guild) then players[#players + 1] = p end
+		end
+		if not shame and #players == 0 then return { NoMatch() } end
+	end
+	if q and not shame then
+		-- (The search found none of the untabarded: their header goes too.)
+	elseif not ns.Inspect.ShameOpen() then
 		-- Closed until the tabard rule is in force (Inspect.lua): a countdown.
 		local left = ns.Inspect.ShameOpensIn()
 		local wait = ("%dh %02dm"):format(math.floor(left / 3600), math.floor(left % 3600 / 60))
@@ -935,24 +1508,28 @@ local function HeraldryLines()
 		if #shame.list > 12 then lines[#lines + 1] = { indent = 1, text = Grey(L.AND_MORE:format(#shame.list - 12)) } end
 		lines[#lines].gapAfter = true
 	end
-	lines[#lines + 1] = { header = true, text = L.GUILDS }
-	for i = 1, math.min(8, #s.guilds) do
-		local g = s.guilds[i]
-		lines[#lines + 1] = {
-			text = (g.marked and Red("! ") or "") .. Green("<" .. g.name .. ">"),
-			right = L.GUILD_BAD:format(g.bad, g.total),
-			onClick = function() ns.Inspect.ToggleGuildMark(g.name) end,
-			tooltip = function(tt) tt:AddLine("<" .. g.name .. ">", 0.25, 1, 0.25); tt:AddLine(L.CLICK_MARK_GUILD, 0.8, 0.8, 0.8) end,
-		}
+	if not q then
+		lines[#lines + 1] = { header = true, text = L.GUILDS }
+		for i = 1, math.min(8, #s.guilds) do
+			local g = s.guilds[i]
+			lines[#lines + 1] = {
+				text = (g.marked and Red("! ") or "") .. Green("<" .. g.name .. ">"),
+				right = L.GUILD_BAD:format(g.bad, g.total),
+				onClick = function() ns.Inspect.ToggleGuildMark(g.name) end,
+				tooltip = function(tt) tt:AddLine("<" .. g.name .. ">", 0.25, 1, 0.25); tt:AddLine(L.CLICK_MARK_GUILD, 0.8, 0.8, 0.8) end,
+			}
+		end
+		if #s.guilds == 0 then lines[#lines + 1] = { text = Grey(L.INSPECT_EMPTY) } end
+		lines[#lines].gapAfter = true
+	elseif #players == 0 then
+		return lines
 	end
-	if #s.guilds == 0 then lines[#lines + 1] = { text = Grey(L.INSPECT_EMPTY) } end
-	lines[#lines].gapAfter = true
 	lines[#lines + 1] = { header = true, text = L.INSPECTED_PLAYERS }
 	-- A line (and a frame) each: the first INSPECT_ROWS, marked and caught players first
 	-- (Inspect.Summary), the rest counted.
-	local rows = math.min(#s.players, Views.INSPECT_ROWS)
+	local rows = math.min(#players, Views.INSPECT_ROWS)
 	for i = 1, rows do
-		local p = s.players[i]
+		local p = players[i]
 		lines[#lines + 1] = {
 			key = p.name,
 			cols = {
@@ -977,7 +1554,7 @@ local function HeraldryLines()
 			end,
 		}
 	end
-	if #s.players > rows then lines[#lines + 1] = { text = Grey(L.AND_MORE:format(#s.players - rows)) } end
+	if #players > rows then lines[#lines + 1] = { text = Grey(L.AND_MORE:format(#players - rows)) } end
 	return lines
 end
 
@@ -1038,16 +1615,24 @@ end
 -- Entry point used by UI.lua
 ---------------------------------------------------------------------------
 
+-- The search box on top of a list (1.0.0).
+local function Searched(lines, tab, tip)
+	table.insert(lines, 1, SearchLine(tab, tip))
+	return lines
+end
+
 -- Each tab's lines, detail title and detail text. A tab missing here (a new one being
 -- added) is an empty list.
 local BUILD = {
 	census = function(s)
 		local title, text = CensusDetail(s)
-		return CensusLines(s), title, text
+		return Searched(CensusLines(s, Views.Query("census")), "census", "CENSUS"), title, text
 	end,
 	realm = function(s)
 		local title, text = RealmDetail(s)
-		return RealmLines(s), title, text
+		local lines = RealmLines(s, Views.Query("realm"))
+		-- (One box for the tab: the chats' lines are searched with it while they show.)
+		return Searched(lines, "realm", chatTier and "CHAT" or "REALM"), title, text
 	end,
 	decrees = function()
 		local title, text = DecreeDetail()
@@ -1057,7 +1642,7 @@ local BUILD = {
 	end,
 	heraldry = function()
 		local title, text = HeraldryDetail()
-		return HeraldryLines(), title, text
+		return Searched(HeraldryLines(Views.Query("heraldry")), "heraldry", "HERALDRY"), title, text
 	end,
 	throne = function(s)
 		if not (ns.King and ns.King.Build) then return {}, nil, nil end
@@ -1069,10 +1654,15 @@ local BUILD = {
 		local lines, title, text = ns.Vox.Build()
 		return lines or {}, title, text
 	end,
+	-- (The box where a list of donors shows: the ranking, the book. Without it, nothing typed
+	-- earlier filters what shows.)
 	treasury = function()
 		if not (ns.Treasury and ns.Treasury.Build) then return {}, nil, nil end
-		local lines, title, text = ns.Treasury.Build()
-		return lines or {}, title, text
+		local searched = ns.Treasury.Searchable and ns.Treasury.Searchable()
+		local lines, title, text = ns.Treasury.Build(searched and Views.Query("treasury") or nil)
+		lines = lines or {}
+		if searched then Searched(lines, "treasury", "TREASURY") end
+		return lines, title, text
 	end,
 	workshop = function()
 		if not (ns.Workshop and ns.Workshop.Build) then return {}, nil, nil end

@@ -45,7 +45,8 @@ function ns.CaptureError(where, err)
 	ns.Log("ERROR in %s: %s", where, msg)
 	if not warnedThisSession then
 		warnedThisSession = true
-		ns.Print("|cffff4040" .. L.ERROR_CAUGHT .. "|r")
+		-- (With the gamepad UI not "type /oly bug": a command typed there can set off a block.)
+		ns.Print("|cffff4040" .. (ns.GamepadUI() and L.ERROR_CAUGHT_GAMEPAD or L.ERROR_CAUGHT) .. "|r")
 	end
 end
 
@@ -251,6 +252,12 @@ local function NamesLines(c)
 	}
 end
 
+-- "ClassicBetaPvP,ClassicBetaPvP2", two realms named at most (then "+n"), or "-".
+local function RealmList(list)
+	if type(list) ~= "table" or #list == 0 then return "-" end
+	return table.concat(list, ",", 1, math.min(#list, 2)) .. (#list > 2 and (",+" .. (#list - 2)) or "")
+end
+
 -- Does the channel cross realms (a report sent from another realm reached us), where do our
 -- guildmates with the addon play, and is our guild's reporter heard?
 local function TopologyLines(c)
@@ -262,6 +269,12 @@ local function TopologyLines(c)
 		("topology: guild peers by realm %s"):format(CountList(c.peerRealms)),
 		("topology: own guild's report heard from %s"):format(c.heardOwn and (c.heardOwn .. " " .. ns.Ago(c.heardOwnAt)) or "nobody yet"),
 		("topology: left out of the election: %s"):format(c.benched and #c.benched > 0 and table.concat(c.benched, ", ") or "none"),
+		-- 1.0.0: a reporter per realm (or one for all while the channel is shared), and what our
+		-- own report says of our guild's realms (fields 25-27).
+		("topology: reporter elected on %s  |  quiet after %s before us"):format(
+			c.electAll and "every realm (channel shared)" or "this realm", tostring(c.quietAfter or "?")),
+		("topology: guild on %s  |  report st=%s cap=%s pres=%s"):format(RealmList(c.presence), tostring(c.reportSt or "-"),
+			tostring(c.reportCap or "-"), type(c.reportPres) == "table" and #c.reportPres > 0 and table.concat(c.reportPres, ".", 1, math.min(#c.reportPres, 4)) or "-"),
 	}
 end
 
@@ -320,8 +333,8 @@ function ns.StatusText()
 			for i = 1, #list, stride do parts[#parts + 1] = ("%s %s"):format(tostring(list[i]), tostring(list[i + 1])) end
 			add("chat channels: %s", table.concat(parts, ", "))
 		end
-		add("other channels dropped: %d  |  census asked %d, answered %d  |  runner-up: %s  |  first channel msg: %s",
-			c.otherChannel or 0, c.asked or 0, c.answered or 0, tostring(c.runnerUp), tostring(c.chanArgs))
+		add("other channels dropped: %d  |  census asked %d (left out %d), answered %d  |  runner-up: %s  |  first channel msg: %s",
+			c.otherChannel or 0, c.asked or 0, c.askSkipped or 0, c.answered or 0, tostring(c.runnerUp), tostring(c.chanArgs))
 		for _, line in ipairs(NamesLines(c)) do add("%s", line) end
 		for _, line in ipairs(TopologyLines(c)) do add("%s", line) end
 		local ch = ns.Channels and ns.Channels.Stats()
@@ -335,15 +348,19 @@ function ns.StatusText()
 		add("privacy: zone and layer %s  |  channel %s  |  chat warning accepted: %s",
 			ns.Layers and ns.Layers.SharingState and ns.Layers.SharingState() or "?", c.sealed and "sealed (key holders)" or "public (anyone)",
 			ch and ch.warned and #ch.warned > 0 and table.concat(ch.warned, ",") or "none")
-		if ns.Treasury and ns.Treasury.IsTreasurer and ns.Treasury.IsTreasurer() then
+		if ns.Treasury and ns.Treasury.RealKeeper and ns.Treasury.RealKeeper() then
 			local v = ns.Treasury.Consent()
-			add("treasurer: book and bank %s (/oly treasurer on|off)", v == true and "shared" or (v == false and "private" or "not chosen (private)"))
+			local b = ns.Treasury.BookOf and ns.Treasury.BookOf(ns.me)
+			add("treasury keeper: book and bank %s (/oly treasurer on|off), book of %s opened at %s copper",
+				v == true and "shared" or (v == false and "private" or "not chosen (private)"), tostring(b and b.epoch or "-"), tostring(b and b.opening or "-"))
 		end
 		if ns.faction == "Horde" then
 			add("Horde King: %s, realm %s", tostring(ns.KING_CHARACTER.Horde), tostring(ns.KingRealm and ns.KingRealm() or "?"))
 		end
 		add("royal inspection: %s (/oly inspection on|off)", ns.db.royalInspection == false and "not taking part" or "taking part when sampled")
 		add("author's roll call: %s (/oly rollcall on|off)", ns.Workshop and ns.Workshop.Answers and (ns.Workshop.Answers() and "answered" or "refused") or "?")
+		-- Olympus Link (0.9.10): the key's id and tier only, never the key.
+		add("discord link: %s", ns.Link and ns.Link.StatusLine and ns.Link.StatusLine() or "not loaded")
 	end
 	local n = 0
 	for _ in pairs(ns.rdb.guilds) do n = n + 1 end
@@ -357,6 +374,12 @@ function ns.StatusText()
 	for _ in pairs(ns.rdb.seen or {}) do seen = seen + 1 end
 	add("who: %s  |  guilds seen=%d", ns.Who and ns.Who.StatusLine() or "not loaded", seen)
 	add("hop: %s", ns.Hop and ns.Hop.StatusLine and ns.Hop.StatusLine() or "not loaded")
+	-- (1.0.0) The King as this client knows him: why his layer can or can't be asked for.
+	add("king: %s", ns.Hop and ns.Hop.KingStatusLine and ns.Hop.KingStatusLine() or "not loaded")
+	-- (1.0.0) The King's Steward as the signed titles list names him here, and the Hands held.
+	add("steward: %s", ns.King and ns.King.StewardStatusLine and ns.King.StewardStatusLine() or "not loaded")
+	add("borders: %s", ns.Borders and ns.Borders.StatusLine and ns.Borders.StatusLine() or "not loaded")
+	add("nameplates: %s", ns.Nameplates and ns.Nameplates.StatusLine and ns.Nameplates.StatusLine() or "not loaded")
 	-- The gamepad UI and what the game refused us this session; what its code reads, as now.
 	local refused = type(ns.db.actionsBlocked) == "table" and ns.db.actionsBlocked or {}
 	add("gamepad UI: %s  |  blocked this session: %d  |  blocked calls kept: %d%s", ns.GamepadUI() and "on" or "off", blocked, #refused,

@@ -115,6 +115,13 @@ function Channels.VerifiedLevel(sender, guild)
 		return 0, false -- not in our roster: not one of us
 	end
 	if rank then return 0, false end -- a guildmate of ours speaking for another guild
+	-- The King by his pinned name (the server stamps it), never by a census vote, his Steward (the
+	-- signed titles list, King.IsStewardName) and the Hands the King's list or a Steward's own
+	-- names (King.IsHandName): of his Crown for his guild here, outside it (1.0.0).
+	if ns.IsKingGuild(guild) and (ns.IsKingCharacter(who)
+		or (ns.King ~= nil and (ns.King.IsStewardName(who) or ns.King.IsHandName(who)))) then
+		return Channels.LevelOf(guild, 0), true
+	end
 	if not ns.Data.ClaimGuild(who, guild) then return 0, false end
 	local known = ns.Data.KnownRank(who, guild)
 	if known == nil then return 1, false end
@@ -133,9 +140,14 @@ function Channels.FormatLine(tier, sender, guild, class, text)
 	local file = class and ns.CLASS_FILES[class]
 	local color = file and RAID_CLASS_COLORS and RAID_CLASS_COLORS[file]
 	if color and color.colorStr then name = "|c" .. color.colorStr .. name .. "|r" end
-	-- The High Council (the moderators, Core.lua): their own icon (a skull until they pick one,
-	-- 0.9.8) and their colour.
-	if ns.IsHighCouncillor(sender) then name = ns.CouncilIcon(sender) .. "|c" .. ns.HIGH_COUNCIL_COLOR .. ns.DisplayName(sender) .. "|r" end
+	-- The High Council (the moderators, Core.lua): the fixed mark, their own icon after it if
+	-- they picked one (0.9.9), and their colour. For everyone, as in 0.9.8, but the King while
+	-- the councillors' names are hidden on his screen (his stream, ns.CouncilMasked): a plain line.
+	if ns.IsHighCouncillor(sender) and not ns.CouncilMasked() then
+		name = ns.CouncilMark(sender) .. "|c" .. ns.HIGH_COUNCIL_COLOR .. ns.DisplayName(sender) .. "|r"
+	end
+	-- The Treasurer: the gold coin he carries in tooltips and the census (0.9.9).
+	if ns.IsTreasurer(sender, guild) then name = ns.COIN:gsub(" $", "") .. name end
 	return "[" .. Label(tier) .. "] |Hplayer:" .. (ns.TellName(sender) or "?") .. "|h[" .. name .. "]|h <"
 		.. tostring(guild or "?"):gsub("|", "||") .. ">: " .. Codec.SanitizeChat(text)
 end
@@ -340,9 +352,19 @@ local function AddHistory(tier, e)
 	while #list > HISTORY do table.remove(list, 1) end
 end
 
-local function Accept(tier, sender, guild, class, text, mine)
+-- Every line kept goes through here, whether it is then shown, muted or held back by the flood
+-- guard: into the history the Realm tab shows (CHAT_CHANGED) and, from someone else, already
+-- checked and sanitized, to a companion reading along (CHAT_LINE, for
+-- OlympusBridge.RegisterChatObserver). The mute and the flood guard only decide what this chat
+-- frame shows.
+local function Keep(tier, sender, guild, class, text, mine)
 	AddHistory(tier, { sender = sender, guild = guild, class = class, text = text, mine = mine or nil })
 	ns.Fire("CHAT_CHANGED", tier)
+	if not mine then ns.Fire("CHAT_LINE", tier, sender, text) end
+end
+
+local function Accept(tier, sender, guild, class, text, mine)
+	Keep(tier, sender, guild, class, text, mine)
 	if Muted()[tier] then return false, "muted" end
 	Show(tier, sender, guild, class, text)
 	stats.shown = stats.shown + 1
@@ -593,11 +615,10 @@ function Channels.Receive(dist, sender, text, now)
 	end
 	-- A muted channel only goes to history, so it takes nothing from the flood guard. A line
 	-- the guard keeps off the chat frame still goes to the history (the Realm tab's chats stay
-	-- whole for everyone), and the player is told (Channels.FloodNotice).
+	-- whole for everyone, and a companion hears it), and the player is told (Channels.FloodNotice).
 	if not Muted()[m.tier] and Flooded(m.tier, sender, now) then
 		stats.flood = stats.flood + 1
-		AddHistory(m.tier, { sender = sender, guild = m.guild, class = m.class, text = m.text })
-		ns.Fire("CHAT_CHANGED", m.tier)
+		Keep(m.tier, sender, m.guild, m.class, m.text, false)
 		Held(m.tier, now)
 		return false, "flood"
 	end

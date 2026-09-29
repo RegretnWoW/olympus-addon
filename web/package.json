@@ -1,0 +1,13 @@
+{
+  "name": "olympus-link-web",
+  "private": true,
+  "description": "Olympus Link: the static page (GitHub Pages), the core the bot imports, the reference Worker and the watcher's inbox tool. No dependencies.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "test": "node --test test"
+  }
+}

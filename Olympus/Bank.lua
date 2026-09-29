@@ -4,14 +4,19 @@ local L = ns.L
 -- The guild bank of <Olympus>, as its Treasury tab shows it: whoever of that guild opens the
 -- bank with the addon on (the Treasurer, the King, an officer who may see it) takes a
 -- snapshot of what it holds, tab by tab (item and count, the bank's gold), kept in the saved
--- variables with when it was taken. The Treasurer's client sends its snapshot on the channel
--- (T9, in pieces), so the King and the army see the bank as he last saw it; anyone else's
--- snapshot stays on their own screen. Nothing is ever moved or touched in the bank.
+-- variables with when it was taken. A keeper of the treasury's client (the Treasurer, the
+-- King, a character the King named: Treasury.lua) sends its snapshot on the channel (T9, in
+-- pieces), once he said yes to sharing, so the King and the army see the bank as a keeper
+-- last saw it (the newest); anyone else's snapshot stays on their own screen. Nothing is ever
+-- moved or touched in the bank.
 --   T9~<guild>~<time>~<copper>~<tab name>;<id>x<count>,.<empty slots>,<id>x<count>...~<tab name>;...
 -- (items in slot order; ".3" is three empty slots before the next one: the tab is drawn as
 -- the bank shows it, slot by slot)
--- Clients without a guild bank (Classic Era) have none of the API: this file then only shows
--- what the Treasurer sends.
+-- The bank's window opens on GUILDBANKFRAME_OPENED on older clients, and through the game's
+-- interaction manager on the newer ones (WoW: Forever: PLAYER_INTERACTION_MANAGER_FRAME_SHOW
+-- with the guild banker's type, 1.0): both are heard. Clients without a guild bank (Classic
+-- Era) have none of the API: this file then only shows what a keeper sends, and the tab says
+-- this client has no guild bank.
 
 local Bank = {}
 ns.Bank = Bank
@@ -35,8 +40,10 @@ local sharePending = false
 -- (A tab's name ends at the first ";": only the message's separators and escapes go.)
 local function Clean(s, n) return ns.Cut((tostring(s or ""):gsub("[~;|%c]", " ")), n) end
 local function HasBank() return type(GetNumGuildBankTabs) == "function" and type(GetGuildBankItemInfo) == "function" end
+Bank.HasAPI = HasBank
 
--- Our own snapshot (this character's guild's bank), and the Treasurer's as it reached us.
+-- Our own snapshot (this character's guild's bank), and a keeper's as it reached us (while he
+-- is one: a character the King took off the treasury no longer shows the bank).
 function Bank.Own() return ns.rdb and ns.rdb.bank or nil end
 function Bank.Report()
 	local r = ns.rdb and ns.rdb.bankReport
@@ -45,6 +52,7 @@ function Bank.Report()
 		ns.rdb.bankReport = nil
 		return nil
 	end
+	if ns.Treasury and ns.Treasury.IsKeeperName and not ns.Treasury.IsKeeperName(r.by, r.guild) then return nil end
 	return r
 end
 -- What the Treasury tab shows: the newest of the two, when ours is the King's guild's bank.
@@ -85,8 +93,8 @@ function Bank.Read()
 	return snap, total
 end
 
--- Only the real Treasurer's client sends (never the author's view).
-local function CanSend() return ns.Treasury and ns.Treasury.CanSend and ns.Treasury.CanSend() end -- his yes too (0.9.3)
+-- Only a real keeper's client sends (never the author's view), with his yes (0.9.3).
+local function CanSend() return ns.Treasury and ns.Treasury.CanSend and ns.Treasury.CanSend() end
 
 -- What one message may carry (the channel's pieces), a little short of it.
 local function Room() return (ns.Codec.CHUNK or 220) * (ns.Codec.MAX_CHUNKS or 30) - 40 end
@@ -142,13 +150,14 @@ function Bank.Share(force)
 	return true
 end
 
--- The Treasurer's snapshot (from him alone, by his name, speaking for the King's guild: no
--- census vote, which forged ones could turn against him).
+-- A keeper's snapshot (from a keeper alone, by his name, speaking for the King's guild: no
+-- census vote, which forged ones could turn against him). The newest one is kept: a keeper
+-- repeating an older snapshot doesn't replace a newer one of another's.
 function Bank.HandleReport(dist, sender, text)
 	if dist ~= "CHANNEL" then return end
 	local guild, when, money, rest = text:match("^T9~([^~]*)~(%d+)~(%d+)~(.*)$")
 	if not guild or not ns.IsKingGuild(guild) then return end
-	if not ns.IsTreasurer(sender, guild) then return end
+	if not (ns.Treasury and ns.Treasury.IsKeeperName and ns.Treasury.IsKeeperName(sender, guild)) then return end
 	local now = ns.Now()
 	local r = { t = math.min(tonumber(when) or now, now), guild = guild, by = ns.FullName(sender), money = math.min(tonumber(money) or 0, 2147483647), tabs = {} }
 	local total = 0
@@ -171,6 +180,8 @@ function Bank.HandleReport(dist, sender, text)
 		end
 	end
 	if #r.tabs == 0 then return end
+	local kept = ns.rdb.bankReport
+	if type(kept) == "table" and (tonumber(kept.t) or 0) > r.t and not (ns.Treasury.SameChar and ns.Treasury.SameChar(kept.by, r.by)) then return end
 	ns.rdb.bankReport = r
 	ns.Fire("TREASURY_CHANGED")
 	ns.Fire("DATA_CHANGED")
@@ -249,26 +260,45 @@ function Bank.Closed()
 	open = false
 end
 
+-- The newer clients' interaction manager (WoW: Forever): the guild banker's window opens and
+-- closes with the others; only its type is ours. A client that also says GUILDBANKFRAME_OPENED
+-- opens one visit, not two (whichever came first).
+local function GuildBanker(kind)
+	local want = Enum and Enum.PlayerInteractionType and Enum.PlayerInteractionType.GuildBanker or 10
+	return tonumber(kind) == want
+end
+local openedAt = -math.huge
+local function OpenedOnce()
+	local now = GetTime and GetTime() or 0
+	if open and now - openedAt < 1 then return end
+	openedAt = now
+	Bank.Opened()
+end
+function Bank.InteractionShow(kind) if GuildBanker(kind) then OpenedOnce() end end
+function Bank.InteractionHide(kind) if GuildBanker(kind) then Bank.Closed() end end
+
 ns.On("LOGIN", function()
 	if not HasBank() then return end
 	local events = {
-		GUILDBANKFRAME_OPENED = Bank.Opened,
+		GUILDBANKFRAME_OPENED = OpenedOnce,
 		GUILDBANKBAGSLOTS_CHANGED = Bank.Changed,
 		GUILDBANK_UPDATE_TABS = Bank.Changed,
 		GUILDBANK_UPDATE_MONEY = Bank.Changed,
 		GUILDBANKFRAME_CLOSED = Bank.Closed,
+		PLAYER_INTERACTION_MANAGER_FRAME_SHOW = Bank.InteractionShow,
+		PLAYER_INTERACTION_MANAGER_FRAME_HIDE = Bank.InteractionHide,
 	}
 	for event, fn in pairs(events) do
-		pcall(ns.RegisterEvent, event, function() ns.SafeCall("bank " .. event, fn) end)
+		pcall(ns.RegisterEvent, event, function(...) ns.SafeCall("bank " .. event, fn, ...) end)
 	end
-	-- Repeated for late logins (the Treasurer's), while the bank is not open.
+	-- Repeated for late logins (a keeper's), while the bank is not open.
 	ns.Every(300, "bank share", function() if not open then Bank.Share() end end)
 end)
 
 -- Tests start from a clean state.
 function Bank.Reset()
 	open, readPending, lastShare, lastSent = false, false, -math.huge, nil
-	firstChange, lastChange, sharePending = 0, 0, false
+	firstChange, lastChange, sharePending, openedAt = 0, 0, false, -math.huge
 	wipe(queried)
 	if ns.rdb then ns.rdb.bank, ns.rdb.bankReport = nil, nil end
 end

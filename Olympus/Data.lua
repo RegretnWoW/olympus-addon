@@ -121,12 +121,21 @@ function Data.RecordSightings(players, capped)
 end
 ns.Who.Listen(Data.RecordSightings)
 
+-- The server's clock (1.0.0), the same second on every realm, where ns.Now() is this computer's:
+-- nil on a client without it.
+function Data.ServerTime()
+	if type(GetServerTime) ~= "function" then return nil end
+	local ok, t = pcall(GetServerTime)
+	return ok and type(t) == "number" and t > 0 and t or nil
+end
+
 function Data.SetLocal(r)
 	r.t = ns.Now()
+	r.st = Data.ServerTime() -- field 25 of our report: when it was made, by the server's clock
 	r.reporter = ns.DisplayName(ns.me)
 	r.reporterFull = ns.me
 	r.realm = ns.realm
-	r.from = ns.realm -- travels in the report: whoever hears it on another realm knows the channel is shared
+	r.from = ns.realm -- travels in the report: whoever hears it on another realm sees the channel shared (/oly status)
 	r.heardOn = ns.realm -- see Data.Receive
 	r.mine = true
 	ns.rdb.guilds[r.guild] = r
@@ -295,6 +304,8 @@ end
 -- soft: for what only shows (the King's layer line and crown), one report naming them is
 -- enough while no other one disagrees; the Crown's powers need two. Both wait CROWN_AFTER
 -- after login, when the real reports have come in (a lone forged one would be alone then).
+-- Another guild's rank comes with the number of senders of the leading picture naming them,
+-- theirs included (1.0.0: the borders ask two for any rank, Borders.lua).
 function Data.KnownRank(sender, guild, soft)
 	local who = ns.FullName(sender)
 	if guild == GetGuildInfo("player") then return ns.Roster.RankOf(who) end
@@ -341,7 +352,7 @@ function Data.KnownRank(sender, guild, soft)
 		if named < 2 and not soft then return nil end
 		if now - (ns.Comm and ns.Comm.loginAt or 0) < Data.CROWN_AFTER then return nil end
 	end
-	return rank
+	return rank, named
 end
 
 function Data.Summary()
