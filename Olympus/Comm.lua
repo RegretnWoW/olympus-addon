@@ -1190,6 +1190,10 @@ local function OnAddonMessage(prefix, text, dist, sender, target, zoneChannelID,
 		handler(dist, sender, text)
 		return
 	end
+	-- A piece, while the High Council's lists wait to answer an ask (1.0.0, Workshop.lua: an answer
+	-- heard beginning holds ours back); nil otherwise, and no piece pays for it.
+	local pieceHook = Comm.pieceHook
+	if pieceHook and (dist == "GUILD" or dist == "CHANNEL") then ns.SafeCall("list piece", pieceHook, dist, sender, text) end
 	if dist == "GUILD" then
 		-- Pieces over GUILD (1.0.0): the High Council's lists cross to guildmates on other realms.
 		-- Only those are put together; versions before 1.0.0 put nothing together from GUILD.

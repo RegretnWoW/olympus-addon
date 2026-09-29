@@ -11975,10 +11975,14 @@ end)
 -- As on WoW: Forever, the channel reaches the sender's realm alone (each realm has an OlympusNet
 -- of its own) and GUILD the sender's guildmates on every realm; a whisper reaches everyone here.
 -- Comm counts a client's guildmates among the test's clients (PeerCount, SpansRealms).
+-- Pieces (1.0.0, net.pieces = true): a list goes out as Comm sends it, one piece (Codec.CHUNK
+-- bytes) each 1.2 s after what the same client queued before; its first piece reaches the others'
+-- Comm.pieceHook as it goes, the whole list their handler with its last piece; net.sentPieces
+-- counts the pieces sent. Otherwise a list arrives whole at once.
 local function CouncilNet(fn)
 	local dialogs = {}
 	for k, v in pairs(StaticPopupDialogs) do dialogs[k] = v end
-	local net = { clock = 1800000100, users = 3, sent = {}, clients = {} }
+	local net = { clock = 1800000100, users = 3, sent = {}, clients = {}, sentPieces = 0 }
 	local function Reaches(from, c, dist)
 		if dist == "CHANNEL" then return c.realm == (from.realm or "Realm") end
 		if dist == "GUILD" then return c.guild == (from.guild or "G") end
@@ -12008,10 +12012,28 @@ local function CouncilNet(fn)
 		cns.After = function(delay, _, f) c.timers[#c.timers + 1] = { at = net.clock + delay, fn = f } end
 		cns.Every = function(every, _, f) c.timers[#c.timers + 1] = { at = net.clock + every, every = every, fn = f } end
 		cns.King = { AddonsOnline = function() return net.users end }
+		local function Pieces(msg, dist)
+			local n = math.max(1, math.ceil(#msg / ns.Codec.CHUNK))
+			local start = math.max(net.clock, c.sendFree or -math.huge)
+			c.sendFree = start + n * 1.2
+			net.sentPieces = net.sentPieces + n
+			local first = ns.Codec.Chunk(msg, tostring(net.sentPieces))[1]
+			local function Begin()
+				for _, o in ipairs(net.clients) do
+					local hook = o ~= c and Reaches(c, o, dist) and o.ns.Comm.pieceHook
+					if hook then hook(dist, c.name, first) end
+				end
+			end
+			if start <= net.clock then Begin() else c.timers[#c.timers + 1] = { at = start, fn = Begin } end
+			c.timers[#c.timers + 1] = { at = start + (n - 1) * 1.2, fn = function() Post(c, dist, msg) end }
+		end
 		cns.Comm = {
 			Handle = function(kind, f) c.handlers[kind] = f end,
 			Send = function(dist, msg) Post(c, dist, msg) end,
-			SendChunked = function(msg, _, dist) Post(c, dist or "CHANNEL", msg) end,
+			SendChunked = function(msg, _, dist)
+				if net.pieces then return Pieces(msg, dist or "CHANNEL") end
+				Post(c, dist or "CHANNEL", msg)
+			end,
 			Whisper = function() end,
 			PeerCount = function(sameRealm) return Guildmates(c, sameRealm) end,
 			SpansRealms = function() return Guildmates(c) > Guildmates(c, true) end,
@@ -12304,6 +12326,104 @@ test("0.9.9 the author's client answers an ask in 1 to 3 s, even when someone se
 			eq(net.Types(author), "HS HT", "at 3 s"); eq(net.Types(h), "", "the holder's, due at 3 s too, left out")
 		end)
 	end)
+end)
+
+-- Konig's review of 1.0.0: one ask drew some 15 to 45 messages on the channel. About LIST_ANSWERS
+-- clients took it up, each sending both lists in pieces, and one was left out only once another's
+-- whole list had come, by when the others had begun theirs. And a census still coming in (after a
+-- restart) counted a few addons where the channel held many: most of them drew. Now those drawn go
+-- in turn; one that hears another's answer begin waits for it, and the channel's draw counts our
+-- guild's addon users on our realm at least.
+test("1.0.0 one ask draws one answer: the drawn go in turn, an answer heard beginning holds the next back, the draw counts our realm's guildmates", function()
+	WithTestCouncil(function()
+		local function Pieces(blob) return math.ceil((#blob + 3) / ns.Codec.CHUNK) end
+		local both = Pieces(COUNCIL_TEST_NAMES4) + Pieces(COUNCIL_TEST_TITLES)
+		CouncilNet(function(net)
+			net.pieces = true
+			-- Three holders, all drawn (the census counts three), in the order of their draws.
+			local h = {}
+			for i, draw in ipairs({ 0, 0.4, 0.8 }) do
+				h[i] = CouncilHolder(net, "Holder" .. i .. "-Realm")
+				h[i].W.random = function() return draw end
+			end
+			net.Hear("Asker-Realm", "HQ~0~0")
+			net.Run(120)
+			eq(net.Types(h[1]), "HS HT", "the first drawn answers, 3 s after the ask")
+			eq(net.Types(h[2]), "", "the second heard it begin: left out")
+			eq(net.Types(h[3]), "", "the third too")
+			eq(net.sentPieces, both, "one answer's pieces, no more")
+		end)
+		CouncilNet(function(net)
+			-- A census still coming in counts 3 addons; twelve guildmates of ours hold the lists on
+			-- our realm (their hellos): three of them are drawn, and one answers.
+			net.pieces = true
+			local h, took = {}, {}
+			for i = 1, 12 do
+				h[i] = CouncilHolder(net, "Holder" .. i .. "-Realm")
+				h[i].W.random = function() return i / 12 end
+				local after = h[i].W.after
+				h[i].W.after = function(delay, what, f)
+					if what == "council answer" then took[i] = true end
+					return after(delay, what, f)
+				end
+			end
+			net.Hear("Asker-Realm", "HQ~0~0")
+			net.Run(120)
+			local drawn, answered = {}, {}
+			for i, c in ipairs(h) do
+				if took[i] then drawn[#drawn + 1] = i end
+				if net.Types(c) ~= "" then answered[#answered + 1] = i end
+			end
+			eq(table.concat(drawn, ","), "1,2,3", "3 in 12 take the ask up (before: all twelve, the census counting 3)")
+			eq(table.concat(answered, ","), "1", "one answer, from the first drawn")
+			eq(net.sentPieces, both)
+		end)
+		CouncilNet(function(net)
+			-- A forged first piece (and more every 5 s) holds an answer back LIST_HOLD_MAX at most,
+			-- never silences it.
+			net.pieces = true
+			local h = CouncilHolder(net, "Holder-Realm")
+			h.W.random = function() return 0 end
+			local start = net.clock
+			net.Hear("Asker-Realm", "HQ~0~0")
+			local forged = ns.Codec.Chunk("HS~HS1~9999999999~Realm~Faker~" .. ("ab"):rep(256), "7")[1]
+			for _ = 1, 20 do
+				local hook = h.ns.Comm.pieceHook
+				if hook then hook("CHANNEL", "Forger-Realm", forged) end
+				net.Run(5)
+			end
+			eq(net.Types(h), "HS HT", "answered all the same")
+			local at
+			for _, m in ipairs(net.sent) do if m.client == h and not at then at = m.t end end
+			local limit = (h.W.LIST_ANSWER_MIN or 3) + (h.W.LIST_HOLD_MAX or 45) + 10
+			assert(at - start <= limit, "held back " .. (at - start) .. " s")
+			assert(at - start > 20, "held back while the forged pieces came: " .. (at - start) .. " s")
+			eq(h.ns.Comm.pieceHook, nil, "no piece handed over once nothing waits")
+		end)
+	end)
+end)
+
+test("1.0.0 Comm hands each piece on the channel and over GUILD to Comm.pieceHook while one is set, and still puts the list together", function()
+	local savedChannel = GetChannelName
+	local ok, err = pcall(function()
+		GetChannelName = function() return 5 end
+		local cns, Deliver = FreshComm()
+		cns.Comm.JoinChannel()
+		local got, lists = {}, {}
+		cns.Comm.Handle("HS", function(dist, sender, text) lists[#lists + 1] = dist .. " " .. text:sub(1, 7) end)
+		cns.Comm.pieceHook = function(dist, sender, text) got[#got + 1] = dist .. " " .. sender .. " " .. text:match("^C%w+:(%d+:%d+):") end
+		local pieces = ns.Codec.Chunk("HS~" .. COUNCIL_TEST_NAMES4, "5")
+		for _, c in ipairs(pieces) do Deliver("CHANNEL", "Relay-Realm", c) end
+		Deliver("GUILD", "Mate-Realm", pieces[1])
+		eq(#got, #pieces + 1)
+		eq(got[1], "CHANNEL Relay-Realm 1:" .. #pieces); eq(got[#got], "GUILD Mate-Realm 1:" .. #pieces)
+		eq(lists[1], "CHANNEL HS~HS1~", "the list itself as before")
+		cns.Comm.pieceHook = nil
+		for _, c in ipairs(ns.Codec.Chunk("HS~" .. COUNCIL_TEST_NAMES4, "6")) do Deliver("CHANNEL", "Relay-Realm", c) end
+		eq(#got, #pieces + 1, "none without a hook"); eq(#lists, 2)
+	end)
+	GetChannelName, C_ChatInfo = savedChannel, nil
+	if not ok then error(err, 0) end
 end)
 
 test("0.9.9 a councillor without the list asks, takes a holder's answer, and gets the My council icon button", function()
