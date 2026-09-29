@@ -126,6 +126,7 @@ local function KingSender(sender, guild, soft)
 	if ns.KingCharacter() then
 		if not ns.IsKingCharacter(sender) then return false end
 		ns.LearnKingRealm(sender) -- (the Horde's, while unknown: from the server's name)
+		if ns.Hop and ns.Hop.HeardKing then ns.Hop.HeardKing(sender) end -- (his realm: his own word, 1.0.0)
 		return true
 	end
 	return soft == true and ns.Data.KnownRank(sender, guild, true) == 0

@@ -304,6 +304,8 @@ end
 -- soft: for what only shows (the King's layer line and crown), one report naming them is
 -- enough while no other one disagrees; the Crown's powers need two. Both wait CROWN_AFTER
 -- after login, when the real reports have come in (a lone forged one would be alone then).
+-- Another guild's rank comes with the number of senders of the leading picture naming them,
+-- theirs included (1.0.0: the borders ask two for any rank, Borders.lua).
 function Data.KnownRank(sender, guild, soft)
 	local who = ns.FullName(sender)
 	if guild == GetGuildInfo("player") then return ns.Roster.RankOf(who) end
@@ -350,7 +352,7 @@ function Data.KnownRank(sender, guild, soft)
 		if named < 2 and not soft then return nil end
 		if now - (ns.Comm and ns.Comm.loginAt or 0) < Data.CROWN_AFTER then return nil end
 	end
-	return rank
+	return rank, named
 end
 
 function Data.Summary()

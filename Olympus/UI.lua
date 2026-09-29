@@ -2099,6 +2099,9 @@ end)
 ---------------------------------------------------------------------------
 
 local photo -- [frame] = its alpha before, while photo mode is on
+-- Children of UIParent walked at most (1.0.0, Konig's review of 1.0.0): a screen with thousands of
+-- frames (some addons make one per thing they show) is walked this far, and the rest left as they are.
+UI.PHOTO_MAX = 1000
 
 -- The author's character, or the author's own test build (Dev.lua, never published).
 function UI.PhotoAllowed()
@@ -2128,7 +2131,10 @@ function UI.TogglePhoto()
 	if ns.GamepadUI() then return ns.Print(L.PHOTO_GAMEPAD) end
 	ns.Print(L.PHOTO_ON) -- (first: the chat goes too)
 	photo = {}
-	for _, f in ipairs({ UIParent:GetChildren() }) do
+	local children = { UIParent:GetChildren() }
+	if #children > UI.PHOTO_MAX then ns.Log("photo mode: %d frames on the screen, the first %d walked", #children, UI.PHOTO_MAX) end
+	for i = 1, math.min(#children, UI.PHOTO_MAX) do
+		local f = children[i]
 		local keep = f == WorldMapFrame or f == GameTooltip or (f.IsForbidden and f:IsForbidden()) or Ours(f)
 		local alpha = not keep and f.GetAlpha and f:GetAlpha()
 		if type(alpha) == "number" and alpha > 0 then

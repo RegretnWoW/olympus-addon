@@ -8651,6 +8651,59 @@ test("1.0.0 the King's line says why his layer is unknown: his crown is hidden, 
 	end)
 end)
 
+-- Konig's review of 1.0.0: the realm Hop.King gave the King was his census row's, the realm of
+-- whoever sent the last report of <Olympus>. One report from a character of another realm of our
+-- group, naming him its leader, placed him there: "he plays on another realm", and his layer could
+-- not be asked for, his own crown and layer coming from our realm. Now the King pinned by name is
+-- where his own messages say (the server stamps their sender's realm).
+test("1.0.0 one forged report can't place the King on another realm: his realm and his layer come from his own messages", function()
+	WithHop(function(w, H)
+		local savedPrint, savedLinks = ns.Print, ns.db.links
+		local said = {}
+		local ok, err = pcall(function()
+			ns.King.Reset()
+			ns.rdb.guilds = {}
+			ns.Print = function(m) said[#said + 1] = m end
+			local king = ns.KingCharacter()
+			-- One report of <Olympus>, sent from another realm, naming him (by his name, as a report
+			-- does) its leader online; nobody else's. The census has him online.
+			local forged = { guild = "Olympus", total = 1000, online = 200, leader = king, leaderOnline = true, users = 5,
+				zones = {}, officers = {}, ranks = {}, top = {}, faction = "Alliance" }
+			eq(ns.Data.Receive(forged, "Forger-OtherRealm"), true, "(taken: nothing to outvote it)")
+			local k = H.King()
+			assert(k, "the census has him online")
+			eq(H.KingOtherRealm(k), false, "a report never places him on another realm")
+			eq(k.realm, nil, "nothing of his heard yet: his realm is not known")
+			H.AskKing()
+			eq(said[#said], ns.L.HOP_KING_HIDDEN:format("Asmon"), "not 'he plays on another realm'")
+			-- His crown and his layer, from his own client on our realm: his layer can be asked for.
+			ns.King.HandleCommand("CHANNEL", king .. "-Realm", "T1~P~3~Olympus~1453~420~510")
+			ns.Layers.Receive(king .. "-Realm", { mapID = 1453, zoneUID = 9, rank = 0, guild = "Olympus" })
+			k = H.King()
+			eq(k.realm, "Realm"); eq(k.zoneUID, 9)
+			eq(H.KingOtherRealm(k), false)
+			H.AskKing()
+			eq(w.sent[#w.sent], "CHANNEL LQ~1~1453~9", "his layer asked for")
+			assert(H.KingStatusLine():find("realm Realm (ours)", 1, true), H.KingStatusLine())
+			-- Someone else's layer in his guild's name changes nothing.
+			ns.Layers.Receive("Forger-OtherRealm", { mapID = 1453, zoneUID = 5, rank = 0, guild = "Olympus" })
+			eq(H.King().zoneUID, 9); eq(H.King().realm, "Realm")
+			-- His own messages from another realm of his group (a channel shared across realms): there.
+			ns.db.links = { Realm = "OtherRealm+Realm", OtherRealm = "OtherRealm+Realm" }
+			ns.Layers.Receive(king .. "-OtherRealm", { mapID = 1453, zoneUID = 7, rank = 0, guild = "Olympus" })
+			k = H.King()
+			eq(k.realm, "OtherRealm"); eq(H.KingOtherRealm(k), true, "his own word")
+			H.AskKing()
+			eq(said[#said], ns.L.HOP_KING_OTHER_REALM:format("Asmon", "OtherRealm"))
+		end)
+		ns.Print, ns.db.links = savedPrint, savedLinks
+		ns.King.Reset()
+		ns.Layers.Reset()
+		ns.rdb.guilds = {}
+		if not ok then error(err, 0) end
+	end)
+end)
+
 -- 1.0.0: a player's "the King's layer doesn't work" came with a /oly bug that said nothing of the
 -- King. Now one line says what this client knows of him: whether the census has him online (and
 -- how sure), the realm it places him on, his layer and his crown, and how long ago each was heard.
@@ -10584,6 +10637,141 @@ test("0.9.9 the High Council's lists: relayed together, and a relay of both from
 	end)
 end)
 
+-- Konig's review of 1.0.0: since 0.9.9 the gap is per sender and kind of list, so three strangers
+-- each sending a forged names list and a forged titles list spent the VERIFY_MAX checks of the
+-- minute, before Sign.Verify refused a signature of one digit. Meanwhile nothing relayed was
+-- checked, a councillor's removal included. Now a signature that can't be the author's costs
+-- nothing, and our guild's lists (over GUILD, or a guildmate's relay on the channel) have a
+-- budget of their own.
+test("1.0.0 three strangers' forged lists never stall the council's lists: a signature of the wrong length costs nothing, our guild has its own budget", function()
+	WithTestCouncil(function()
+		local W, S = ns.Workshop, ns.Sign
+		local verify, checks, clock = S.Verify, 0, 1000000
+		local savedRoster = ns.Roster.byName
+		local ok, err = pcall(function()
+			ns.Now = function() return clock end
+			ns.After = function() end
+			ns.Comm.SendChunked = function() end
+			S.Verify = function(...) checks = checks + 1 return verify(...) end
+			ns.rdb.council, ns.rdb.councilTitles = nil, nil
+			-- Three strangers, a forged list of each kind each, their signature one digit long.
+			local function Forge(i, sig)
+				W.HandleCouncil("CHANNEL", "Stranger" .. i .. "-Realm", ("HS~HS1~%d~Realm~Fake Name~%s"):format(1900000000 + i, sig))
+				W.HandleTitles("CHANNEL", "Stranger" .. i .. "-Realm", ("HT~HT1~%d~Realm~1~^^Fake Name=Boss~%s"):format(1900000000 + i, sig))
+			end
+			for i = 1, 3 do Forge(i, "1") end
+			eq(checks, 0, "no check spent on a signature that can't be the author's")
+			-- The real lists relayed by a stranger in the same minute: checked and taken.
+			W.HandleCouncil("CHANNEL", "Relay Guy-Realm", "HS~" .. COUNCIL_TEST_NAMES4)
+			W.HandleTitles("CHANNEL", "Relay Guy-Realm", "HT~" .. COUNCIL_TEST_TITLES)
+			eq(checks, 2)
+			eq(ns.rdb.council and ns.rdb.council.blob, COUNCIL_TEST_NAMES4, "the names taken")
+			eq(ns.rdb.councilTitles and ns.rdb.councilTitles.blob, COUNCIL_TEST_TITLES, "the titles taken")
+			eq(W.NeedLists(), false, "nothing to ask for: the forged lists' times were never taken as heard of")
+			-- A minute on, forgeries of the full length from three strangers spend the channel's
+			-- budget: a stranger's relay waits for the next minute...
+			clock = clock + 61
+			for i = 4, 6 do Forge(i, ("ab"):rep(256)) end
+			eq(checks, 2 + W.VERIFY_MAX, "the channel's budget spent")
+			W.HandleCouncil("CHANNEL", "Other Relay-Realm", "HS~" .. COUNCIL_TEST_NAMES2)
+			eq(checks, 2 + W.VERIFY_MAX, "a stranger's relay waits")
+			eq(ns.rdb.council.blob, COUNCIL_TEST_NAMES4)
+			-- ...but a guildmate's relay on the channel (our roster knows him) is checked, the removal
+			-- of two councillors taken at once, and so is a list from our guild over GUILD.
+			ns.Roster.byName = { ["Mate-Realm"] = 3 }
+			W.HandleCouncil("CHANNEL", "Mate-Realm", "HS~" .. COUNCIL_TEST_NAMES2)
+			eq(checks, 3 + W.VERIFY_MAX, "our guild's budget")
+			eq(ns.rdb.council.blob, COUNCIL_TEST_NAMES2, "Third Mod and Fourth Mod removed")
+			eq(ns.IsHighCouncillor("Fourth Mod-Realm"), false)
+			W.HandleTitles("GUILD", "Far Mate-OtherRealm", "HT~" .. COUNCIL_TEST_PUBLIC)
+			eq(checks, 4 + W.VERIFY_MAX)
+			eq(ns.rdb.councilTitles.blob, COUNCIL_TEST_PUBLIC, "from our guild over GUILD")
+		end)
+		ns.Roster.byName, S.Verify = savedRoster, verify
+		if not ok then error(err, 0) end
+	end)
+end)
+
+-- Konig's second look at the fix above: he asked to "exempt your own relays from the shared
+-- cap", and the fix exempted our guildmates' relays instead. On a client whose roster doesn't
+-- know the author, three strangers' full-length forgeries still spent the channel's checks every
+-- minute, and the author's relay removing two councillors (or his answer to an ask, which comes
+-- the same way) was never checked. His relays are outside the cap now (his name: the server's
+-- word); the gap per kind of list and the lists found false still hold for them.
+test("1.0.0 the author's own relays are outside the shared cap: three strangers' full-length forgeries never hold back his names or titles", function()
+	WithTestCouncil(function()
+		local W, S = ns.Workshop, ns.Sign
+		local verify, checks, clock = S.Verify, 0, 1000000
+		local savedRoster = ns.Roster.byName
+		local ok, err = pcall(function()
+			ns.Now = function() return clock end
+			ns.After = function() end
+			ns.Comm.SendChunked = function() end
+			S.Verify = function(...) checks = checks + 1 return verify(...) end
+			ns.Roster.byName = {} -- our guild is not the author's: our roster doesn't know him
+			eq(W.TakeCouncil(COUNCIL_TEST_NAMES4), true, "four councillors held")
+			eq(W.TakeTitles(COUNCIL_TEST_TITLES), true, "their titles held, not public yet")
+			local author = ns.AUTHOR .. "-" .. ns.AUTHOR_REALM
+			eq(W.IsAuthorName(author), true)
+			local function Forge(minute)
+				for i = 1, 3 do
+					local sig = ("%02x"):format(minute * 10 + i):rep(256)
+					W.HandleCouncil("CHANNEL", "Stranger" .. i .. "-Realm", ("HS~HS1~%d~Realm~Fake Name~%s"):format(1900000000 + minute * 10 + i, sig))
+					W.HandleTitles("CHANNEL", "Stranger" .. i .. "-Realm", ("HT~HT1~%d~Realm~1~^^Fake Name=Boss~%s"):format(1900000000 + minute * 10 + i, sig))
+				end
+			end
+			-- Every minute the strangers spend the channel's budget first.
+			clock = clock + 61
+			local before = checks
+			Forge(1)
+			eq(checks - before, W.VERIFY_MAX, "the channel's budget spent")
+			W.HandleCouncil("CHANNEL", "Other Relay-Realm", "HS~" .. COUNCIL_TEST_NAMES2)
+			eq(checks - before, W.VERIFY_MAX, "a stranger's relay still waits")
+			eq(ns.IsHighCouncillor("Fourth Mod-Realm"), true)
+			-- The author's relay of the list removing Third Mod and Fourth Mod: checked and taken.
+			W.HandleCouncil("CHANNEL", author, "HS~" .. COUNCIL_TEST_NAMES2)
+			eq(checks - before, W.VERIFY_MAX + 1, "the author's relay checked")
+			eq(ns.rdb.council.blob, COUNCIL_TEST_NAMES2)
+			eq(ns.IsHighCouncillor("Fourth Mod-Realm"), false, "Fourth Mod is no longer a councillor")
+			eq(ns.IsHighCouncillor("Third Mod-Realm"), false)
+			-- And his titles list (the council made public), right after it.
+			W.HandleTitles("CHANNEL", author, "HT~" .. COUNCIL_TEST_PUBLIC)
+			eq(checks - before, W.VERIFY_MAX + 2, "the author's titles checked")
+			eq(ns.rdb.councilTitles.blob, COUNCIL_TEST_PUBLIC, "his titles taken")
+			eq(ns.rdb.councilTitles.public, true)
+			-- His checks never come out of the strangers' budget: it is spent, and stays spent.
+			W.HandleCouncil("CHANNEL", "Other Relay-Realm", ("HS~HS1~1950000000~Realm~Fake Name~%s"):format(("cd"):rep(256)))
+			eq(checks - before, W.VERIFY_MAX + 2)
+			-- Only the author's name as the server stamps it: the same name on a realm outside his
+			-- realm group is a stranger's, and waits.
+			local elsewhere = ns.AUTHOR .. "-Elsewhere"
+			eq(W.IsAuthorName(elsewhere), false)
+			W.HandleCouncil("CHANNEL", elsewhere, ("HS~HS1~1950000001~Realm~Fake Name~%s"):format(("ce"):rep(256)))
+			eq(checks - before, W.VERIFY_MAX + 2, "not the author: the channel's budget")
+			-- The next minutes the same: forgeries spend the channel's checks, the author's own lists
+			-- are checked. A list under his name found false is never checked again, and his names
+			-- are checked once a minute at most (the gap per kind of list).
+			clock = clock + 61
+			before = checks
+			Forge(2)
+			eq(checks - before, W.VERIFY_MAX)
+			local forged = ("HS~HS1~1960000000~Realm~Fake Name~%s"):format(("ef"):rep(256))
+			W.HandleCouncil("CHANNEL", author, forged)
+			eq(checks - before, W.VERIFY_MAX + 1, "a list under his name is checked")
+			eq(ns.rdb.council.blob, COUNCIL_TEST_NAMES2, "and refused")
+			W.HandleCouncil("CHANNEL", author, ("HS~HS1~1960000001~Realm~Fake Name~%s"):format(("f0"):rep(256)))
+			eq(checks - before, W.VERIFY_MAX + 1, "his names once a minute at most")
+			clock = clock + 61
+			before = checks
+			Forge(3)
+			W.HandleCouncil("CHANNEL", author, forged)
+			eq(checks - before, W.VERIFY_MAX, "a list found false is never checked again")
+		end)
+		ns.Roster.byName, S.Verify = savedRoster, verify
+		if not ok then error(err, 0) end
+	end)
+end)
+
 test("0.9.9 the High Council's titles cross the channel under their own type", function()
 	WithTestCouncil(function()
 		CouncilOnChannel(function(_, Hear)
@@ -11870,10 +12058,14 @@ end)
 -- As on WoW: Forever, the channel reaches the sender's realm alone (each realm has an OlympusNet
 -- of its own) and GUILD the sender's guildmates on every realm; a whisper reaches everyone here.
 -- Comm counts a client's guildmates among the test's clients (PeerCount, SpansRealms).
+-- Pieces (1.0.0, net.pieces = true): a list goes out as Comm sends it, one piece (Codec.CHUNK
+-- bytes) each 1.2 s after what the same client queued before; its first piece reaches the others'
+-- Comm.pieceHook as it goes, the whole list their handler with its last piece; net.sentPieces
+-- counts the pieces sent. Otherwise a list arrives whole at once.
 local function CouncilNet(fn)
 	local dialogs = {}
 	for k, v in pairs(StaticPopupDialogs) do dialogs[k] = v end
-	local net = { clock = 1800000100, users = 3, sent = {}, clients = {} }
+	local net = { clock = 1800000100, users = 3, sent = {}, clients = {}, sentPieces = 0 }
 	local function Reaches(from, c, dist)
 		if dist == "CHANNEL" then return c.realm == (from.realm or "Realm") end
 		if dist == "GUILD" then return c.guild == (from.guild or "G") end
@@ -11903,10 +12095,28 @@ local function CouncilNet(fn)
 		cns.After = function(delay, _, f) c.timers[#c.timers + 1] = { at = net.clock + delay, fn = f } end
 		cns.Every = function(every, _, f) c.timers[#c.timers + 1] = { at = net.clock + every, every = every, fn = f } end
 		cns.King = { AddonsOnline = function() return net.users end }
+		local function Pieces(msg, dist)
+			local n = math.max(1, math.ceil(#msg / ns.Codec.CHUNK))
+			local start = math.max(net.clock, c.sendFree or -math.huge)
+			c.sendFree = start + n * 1.2
+			net.sentPieces = net.sentPieces + n
+			local first = ns.Codec.Chunk(msg, tostring(net.sentPieces))[1]
+			local function Begin()
+				for _, o in ipairs(net.clients) do
+					local hook = o ~= c and Reaches(c, o, dist) and o.ns.Comm.pieceHook
+					if hook then hook(dist, c.name, first) end
+				end
+			end
+			if start <= net.clock then Begin() else c.timers[#c.timers + 1] = { at = start, fn = Begin } end
+			c.timers[#c.timers + 1] = { at = start + (n - 1) * 1.2, fn = function() Post(c, dist, msg) end }
+		end
 		cns.Comm = {
 			Handle = function(kind, f) c.handlers[kind] = f end,
 			Send = function(dist, msg) Post(c, dist, msg) end,
-			SendChunked = function(msg, _, dist) Post(c, dist or "CHANNEL", msg) end,
+			SendChunked = function(msg, _, dist)
+				if net.pieces then return Pieces(msg, dist or "CHANNEL") end
+				Post(c, dist or "CHANNEL", msg)
+			end,
 			Whisper = function() end,
 			PeerCount = function(sameRealm) return Guildmates(c, sameRealm) end,
 			SpansRealms = function() return Guildmates(c) > Guildmates(c, true) end,
@@ -12199,6 +12409,104 @@ test("0.9.9 the author's client answers an ask in 1 to 3 s, even when someone se
 			eq(net.Types(author), "HS HT", "at 3 s"); eq(net.Types(h), "", "the holder's, due at 3 s too, left out")
 		end)
 	end)
+end)
+
+-- Konig's review of 1.0.0: one ask drew some 15 to 45 messages on the channel. About LIST_ANSWERS
+-- clients took it up, each sending both lists in pieces, and one was left out only once another's
+-- whole list had come, by when the others had begun theirs. And a census still coming in (after a
+-- restart) counted a few addons where the channel held many: most of them drew. Now those drawn go
+-- in turn; one that hears another's answer begin waits for it, and the channel's draw counts our
+-- guild's addon users on our realm at least.
+test("1.0.0 one ask draws one answer: the drawn go in turn, an answer heard beginning holds the next back, the draw counts our realm's guildmates", function()
+	WithTestCouncil(function()
+		local function Pieces(blob) return math.ceil((#blob + 3) / ns.Codec.CHUNK) end
+		local both = Pieces(COUNCIL_TEST_NAMES4) + Pieces(COUNCIL_TEST_TITLES)
+		CouncilNet(function(net)
+			net.pieces = true
+			-- Three holders, all drawn (the census counts three), in the order of their draws.
+			local h = {}
+			for i, draw in ipairs({ 0, 0.4, 0.8 }) do
+				h[i] = CouncilHolder(net, "Holder" .. i .. "-Realm")
+				h[i].W.random = function() return draw end
+			end
+			net.Hear("Asker-Realm", "HQ~0~0")
+			net.Run(120)
+			eq(net.Types(h[1]), "HS HT", "the first drawn answers, 3 s after the ask")
+			eq(net.Types(h[2]), "", "the second heard it begin: left out")
+			eq(net.Types(h[3]), "", "the third too")
+			eq(net.sentPieces, both, "one answer's pieces, no more")
+		end)
+		CouncilNet(function(net)
+			-- A census still coming in counts 3 addons; twelve guildmates of ours hold the lists on
+			-- our realm (their hellos): three of them are drawn, and one answers.
+			net.pieces = true
+			local h, took = {}, {}
+			for i = 1, 12 do
+				h[i] = CouncilHolder(net, "Holder" .. i .. "-Realm")
+				h[i].W.random = function() return i / 12 end
+				local after = h[i].W.after
+				h[i].W.after = function(delay, what, f)
+					if what == "council answer" then took[i] = true end
+					return after(delay, what, f)
+				end
+			end
+			net.Hear("Asker-Realm", "HQ~0~0")
+			net.Run(120)
+			local drawn, answered = {}, {}
+			for i, c in ipairs(h) do
+				if took[i] then drawn[#drawn + 1] = i end
+				if net.Types(c) ~= "" then answered[#answered + 1] = i end
+			end
+			eq(table.concat(drawn, ","), "1,2,3", "3 in 12 take the ask up (before: all twelve, the census counting 3)")
+			eq(table.concat(answered, ","), "1", "one answer, from the first drawn")
+			eq(net.sentPieces, both)
+		end)
+		CouncilNet(function(net)
+			-- A forged first piece (and more every 5 s) holds an answer back LIST_HOLD_MAX at most,
+			-- never silences it.
+			net.pieces = true
+			local h = CouncilHolder(net, "Holder-Realm")
+			h.W.random = function() return 0 end
+			local start = net.clock
+			net.Hear("Asker-Realm", "HQ~0~0")
+			local forged = ns.Codec.Chunk("HS~HS1~9999999999~Realm~Faker~" .. ("ab"):rep(256), "7")[1]
+			for _ = 1, 20 do
+				local hook = h.ns.Comm.pieceHook
+				if hook then hook("CHANNEL", "Forger-Realm", forged) end
+				net.Run(5)
+			end
+			eq(net.Types(h), "HS HT", "answered all the same")
+			local at
+			for _, m in ipairs(net.sent) do if m.client == h and not at then at = m.t end end
+			local limit = (h.W.LIST_ANSWER_MIN or 3) + (h.W.LIST_HOLD_MAX or 45) + 10
+			assert(at - start <= limit, "held back " .. (at - start) .. " s")
+			assert(at - start > 20, "held back while the forged pieces came: " .. (at - start) .. " s")
+			eq(h.ns.Comm.pieceHook, nil, "no piece handed over once nothing waits")
+		end)
+	end)
+end)
+
+test("1.0.0 Comm hands each piece on the channel and over GUILD to Comm.pieceHook while one is set, and still puts the list together", function()
+	local savedChannel = GetChannelName
+	local ok, err = pcall(function()
+		GetChannelName = function() return 5 end
+		local cns, Deliver = FreshComm()
+		cns.Comm.JoinChannel()
+		local got, lists = {}, {}
+		cns.Comm.Handle("HS", function(dist, sender, text) lists[#lists + 1] = dist .. " " .. text:sub(1, 7) end)
+		cns.Comm.pieceHook = function(dist, sender, text) got[#got + 1] = dist .. " " .. sender .. " " .. text:match("^C%w+:(%d+:%d+):") end
+		local pieces = ns.Codec.Chunk("HS~" .. COUNCIL_TEST_NAMES4, "5")
+		for _, c in ipairs(pieces) do Deliver("CHANNEL", "Relay-Realm", c) end
+		Deliver("GUILD", "Mate-Realm", pieces[1])
+		eq(#got, #pieces + 1)
+		eq(got[1], "CHANNEL Relay-Realm 1:" .. #pieces); eq(got[#got], "GUILD Mate-Realm 1:" .. #pieces)
+		eq(lists[1], "CHANNEL HS~HS1~", "the list itself as before")
+		cns.Comm.pieceHook = nil
+		for _, c in ipairs(ns.Codec.Chunk("HS~" .. COUNCIL_TEST_NAMES4, "6")) do Deliver("CHANNEL", "Relay-Realm", c) end
+		eq(#got, #pieces + 1, "none without a hook"); eq(#lists, 2)
+	end)
+	GetChannelName, C_ChatInfo = savedChannel, nil
+	if not ok then error(err, 0) end
 end)
 
 test("0.9.9 a councillor without the list asks, takes a holder's answer, and gets the My council icon button", function()
@@ -16054,6 +16362,61 @@ test("1.0.0 world map: the Muster and the crown in Stormwind are round, smaller,
 	end)
 end)
 
+-- Konig's review of 1.0.0: every badge on the map tried each place round its circle against every
+-- other badge, a few times a second (Map.LayoutBadges), however many decrees were up: enough of them
+-- stalled the world map. Now BADGE_MAX are laid out, the crown and the newest decrees; the rest stay
+-- on their own spot.
+test("1.0.0 world map: however many decrees are up, BADGE_MAX badges at most are laid out, the crown and the newest first", function()
+	WithMapIcons(function(env)
+		local lib = RecordingPins()
+		WithGamepadUI(false, function()
+			local w = LoadMapModules(lib)
+			MapIconsStart(w) -- (a muster, the King's crown, the zone circles)
+			local g = w.ns
+			local savedNow, clock = ns.Now, ns.Now()
+			local ok, err = pcall(function()
+				ns.Now = function() return clock end
+				for _ = 1, 60 do
+					clock = clock + 1
+					g.Decree.Preview("MUSTER")
+				end
+			end)
+			ns.Now = savedNow
+			if not ok then error(err, 0) end
+			local decrees = g.Decree.Active() -- (the newest first)
+			eq(#decrees, 61)
+			local crown, sw
+			for _, f in ipairs(env.frames) do
+				if f.badge and f.badge.icon.texture == ns.CROWN_ICON then crown = f end
+				if f.key == "m1453" and f.shown then sw = f end
+			end
+			assert(crown and sw, "the crown and Stormwind's circle")
+			local function Place(f, x, y)
+				f.IsVisible = function() return true end
+				f.GetCenter = function() return x, y end
+				f.GetEffectiveScale = function() return 1 end
+			end
+			-- All of them in the middle of Stormwind's circle, over its number.
+			Place(sw, 500, 400); Place(crown, 501, 399)
+			for _, d in ipairs(decrees) do Place(d.pin, 502, 401) end
+			local place, laidOut = g.Map.PlaceBadges, nil
+			g.Map.PlaceBadges = function(list, circles) laidOut = #list return place(list, circles) end
+			local done, lerr = pcall(g.Map.LayoutBadges)
+			g.Map.PlaceBadges = place
+			if not done then error(lerr, 0) end
+			eq(laidOut, g.Map.BADGE_MAX, "no more than BADGE_MAX laid out, whatever the number of decrees")
+			local function Moved(f)
+				local p = f.badge.anchor
+				return p ~= nil and (p[4] ~= 0 or p[5] ~= 0)
+			end
+			assert(Moved(crown), "the crown, first, beside the circle")
+			for i = 1, g.Map.BADGE_MAX - 1 do assert(Moved(decrees[i].pin), "the newest decrees: " .. i) end
+			for i = g.Map.BADGE_MAX, #decrees do eq(Moved(decrees[i].pin), false, "an older one on its spot: " .. i) end
+			for _, d in ipairs(decrees) do eq(d.pin.badge.level, d.pin.level + 3, "over the circles") end
+		end)
+	end)
+end)
+
 ---------------------------------------------------------------------------
 -- 1.0.0: the author's photo mode for the store's screenshots (/oly photo).
 ---------------------------------------------------------------------------
@@ -16132,6 +16495,34 @@ test("1.0.0 photo mode: the author's /oly photo hides all but Olympus and the wo
 	end)
 	UIParent, WorldMapFrame, GameTooltip, InCombatLockdown = saved.UIParent, saved.WorldMapFrame, saved.GameTooltip, saved.combat
 	ns.Print, ns.me, ns.devThrone, ns.devWorkshop, ns.UI = saved.print, saved.me, saved.devThrone, saved.devWorkshop, saved.UI
+	if not ok then error(err, 0) end
+end)
+
+-- Konig's review of 1.0.0 (H-1, the author's client only): /oly photo walked every child of
+-- UIParent, however many a screen holds. Now PHOTO_MAX at most; the rest are left as they are.
+test("1.0.0 photo mode walks PHOTO_MAX children of UIParent at most, and gives back what it changed", function()
+	local UI = LoadUI()
+	local saved = { UIParent = UIParent, combat = InCombatLockdown, print = ns.Print, me = ns.me, devThrone = ns.devThrone, UI = ns.UI }
+	local ok, err = pcall(function()
+		ns.UI = UI
+		ns.Print = function() end
+		InCombatLockdown = function() return false end
+		local cap = UI.PHOTO_MAX or 1000 -- (1000 before it was a setting: the walk had no cap)
+		local children = {}
+		for i = 1, cap + 5 do children[i] = PhotoFrame("Frame" .. i, 1) end
+		UIParent = { GetChildren = function() return unpack(children) end }
+		ns.me, ns.devThrone = "Tester-Realm", { Tester = true } -- (the author's test build)
+		SlashCmdList.OLYMPUS("photo")
+		eq(UI.PhotoMode(), true)
+		local hidden = 0
+		for _, f in ipairs(children) do if f.alpha == 0 then hidden = hidden + 1 end end
+		eq(hidden, cap, "PHOTO_MAX walked")
+		for i = cap + 1, #children do eq(children[i].sets, 0, "left as it is: " .. i) end
+		SlashCmdList.OLYMPUS("photo")
+		eq(UI.PhotoMode(), false)
+		for i, f in ipairs(children) do eq(f.alpha, 1, "given back: " .. i) end
+	end)
+	UIParent, InCombatLockdown, ns.Print, ns.me, ns.devThrone, ns.UI = saved.UIParent, saved.combat, saved.print, saved.me, saved.devThrone, saved.UI
 	if not ok then error(err, 0) end
 end)
 ---------------------------------------------------------------------------
@@ -18367,6 +18758,88 @@ do
 		end)
 	end)
 
+	-- Konig's review of 1.0.0: the realm a hello names is whatever its sender writes. A guildmate of
+	-- our realm whose hello named PvP 2 and who sent our guild's report on our channel made our
+	-- election cross realms: Aa, of PvP 2, was elected, never heard on our channel, and our guild
+	-- was off our realm's census (then Ab, Ac... each left out in turn). And a guildmate of PvP 2
+	-- whose hello named our realm was elected our realm's reporter. The server stamps the sender's
+	-- realm: its word counts first.
+	test("1.0.0 a guildmate's hello naming another realm than the server's never pulls our guild off our realm's census", function()
+		Guarded(function(Open)
+			local cns, Deliver, Report = Open()
+			local C = cns.Comm
+			local ours = { guild = MY_GUILD, total = 1000, online = 300, zones = {} }
+			local far = { "Aa", "Ab", "Ac" }
+			local function Tick(seconds)
+				cns.clock = cns.clock + (seconds or 0)
+				for _, n in ipairs(far) do Deliver("GUILD", n .. "-" .. P2, "H1~1.0.0~" .. P2 .. "~p") end
+				-- Mallory plays on our realm (the server sends his name without a realm), and his hello
+				-- names PvP 2.
+				Deliver("GUILD", "Mallory", "H1~1.0.0~" .. P2 .. "~p")
+				C.MaybeBroadcast(ours)
+			end
+			Tick()
+			eq(C.isReporter, true)
+			-- He sends our guild's report on our channel, naming PvP 2, every half hour.
+			for _ = 1, 4 do
+				Report("Mallory", { guild = MY_GUILD, total = 1000, online = 300, zones = {}, from = P2 })
+				eq(C.ElectsAcrossRealms(), false, "his hello's realm is not the server's: no proof the channel crosses realms")
+				Tick(1800)
+				eq(C.isReporter, true, "we keep reporting our guild on our realm")
+			end
+			eq(#C.Stats().benched, 0, "nobody of PvP 2 elected, nobody left out")
+			-- A guildmate of PvP 2 (the server stamps it) whose hello names our realm, sorting first:
+			-- not our realm's reporter.
+			Deliver("GUILD", "Aaa-" .. P2, "H1~1.0.0~Realm~p")
+			C.MaybeBroadcast(ours)
+			eq(C.isReporter, true, "Aaa plays on PvP 2, whatever his hello says")
+			assert(C.Stats().peerRealms[P2] ~= nil, "counted on PvP 2")
+			-- Still: a guildmate the server places on PvP 2, heard on our channel, shows it shared.
+			Report("Ab-" .. P2, { guild = MY_GUILD, total = 1000, online = 300, zones = {}, from = P2 })
+			eq(C.ElectsAcrossRealms(), true)
+		end)
+	end)
+
+	-- Konig's second look at the test above: the server's stamp counted only when the hello named
+	-- a realm. A guildmate the server places on PvP 2 whose hello names none ("H1~1.0.0"), or one we
+	-- can't read, was stored as "old", and "old" peers were electable on every realm: he won our
+	-- realm's election, was never heard on our channel, and our guild was off our realm's census
+	-- for GUARD_AFTER, then again with his next alt. The server's stamp counts, whatever the hello.
+	test("1.0.0 a guildmate the server places on another realm is never our realm's reporter, whether his hello names no realm or one we can't read", function()
+		for _, hello in ipairs({ "H1~1.0.0", "H1~1.0.0~x y~p", "H1~0.7.10" }) do
+			Guarded(function(Open)
+				local cns, Deliver, Report = Open()
+				local C = cns.Comm
+				local ours = { guild = MY_GUILD, total = 1000, online = 300, zones = {} }
+				local alts = { "Aaa", "Aab", "Aac" }
+				local function Tick(seconds)
+					cns.clock = cns.clock + (seconds or 0)
+					for _, n in ipairs(alts) do Deliver("GUILD", n .. "-" .. P2, hello) end
+					C.MaybeBroadcast(ours)
+				end
+				Tick()
+				eq(C.isReporter, true, hello .. ": the server places them on PvP 2")
+				for _ = 1, 6 do
+					Tick(200)
+					eq(C.isReporter, true, hello .. ": we keep reporting our guild on our realm")
+				end
+				eq(#C.Stats().benched, 0, hello .. ": nobody of PvP 2 elected, nobody left out")
+				-- A guildmate of our realm with the same hello (the server sends his name without a
+				-- realm) who sorts first is still elected: his realm is ours.
+				Deliver("GUILD", "Abe", hello)
+				C.MaybeBroadcast(ours)
+				eq(C.isReporter, false); eq(C.reporterName, "Abe", hello .. ": a guildmate of our realm")
+				-- While the channel is shared (our guild's report from a guildmate the server places on
+				-- PvP 2 heard on it), one reporter for all realms, as before: Aaa sorts first.
+				Deliver("GUILD", "Ac-" .. P2, "H1~1.0.0~" .. P2 .. "~p")
+				Report("Ac-" .. P2, { guild = MY_GUILD, total = 1000, online = 300, zones = {}, from = P2 })
+				eq(C.ElectsAcrossRealms(), true)
+				Tick()
+				eq(C.reporterName, "Aaa-" .. P2, hello .. ": the channel shared, every realm's peers count")
+			end)
+		end
+	end)
+
 	test("1.0.0 the hello quiet rule counts our realm: 10 guildmates before us on one realm, 5 on each of two, 3 at least", function()
 		Guarded(function(Open)
 			local cns, Deliver, Report = Open()
@@ -18848,7 +19321,7 @@ do
 		end)
 	end)
 
-	test("1.0.0 the High Council's lists from our guild: the same checks as on the channel (a newer list only, one signature budget)", function()
+	test("1.0.0 the High Council's lists from our guild: the same checks as on the channel (a newer list only), on a signature budget of their own", function()
 		WithTestCouncil(function()
 			local W, S = ns.Workshop, ns.Sign
 			local verify, checks, clock, passes = S.Verify, 0, 1000000, 0
@@ -18882,13 +19355,15 @@ do
 			W.HandleTitles("GUILD", "Faker-" .. P2, forged)
 			W.HandleTitles("GUILD", "Other Faker-" .. P2, forged)
 			eq(checks, 4); eq(passes, 3)
-			-- VERIFY_MAX checks a minute in all, from our guild and the channel together.
+			-- VERIFY_MAX checks a minute from our guild, VERIFY_MAX more from the channel's strangers
+			-- (Konig's review of 1.0.0: one budget for both let three strangers stall our guild's
+			-- lists; before, 10 senders on the two lanes got VERIFY_MAX checks in all).
 			clock = clock + 61
-			for i = 1, 10 do
+			for i = 1, 20 do
 				W.HandleCouncil(i % 2 == 0 and "GUILD" or "CHANNEL", "Bot" .. i .. "-Realm",
 					("HS~HS1~%d~Realm~Fake Name~%s"):format(2000000000 + i, ("ab"):rep(256)))
 			end
-			eq(checks, 4 + W.VERIFY_MAX, "a few a minute in all")
+			eq(checks, 4 + 2 * W.VERIFY_MAX, "a few a minute on each lane")
 			-- Nothing but the channel and our guild.
 			ns.rdb.councilTitles = nil
 			clock = clock + 61
@@ -19693,6 +20168,38 @@ test("1.0.1 borders: a census report never gives its own sender a Lord's or a Ca
 		end)
 		ns.Now = savedNow
 		if not ok then error(err, 0) end
+	end)
+end)
+
+-- Konig's review of 1.0.0: the borders read the census softly (Data.KnownRank, soft), so one other
+-- character's report naming a player an officer (or the guild master) of a guild nobody else
+-- reports gave him a Captain's silver (or a Lord's gold) on every screen. Now, as the Crown asks
+-- it: two senders naming him, for a guild master and for a Captain alike.
+test("1.0.0 borders: one other character's report never gives a Captain's silver or a Lord's gold: two senders must name him", function()
+	WithBorders(function(w)
+		local D, LEVELS = ns.Data, "~0,0,0,0,0,0,0~~"
+		local function Report(guild, leader, officers, sender)
+			return D.Receive(Codec.DecodeReport("R2~" .. guild .. "~40~9~" .. leader .. "~1~1~~" .. LEVELS .. officers), sender)
+		end
+		w.internal("LOGIN")
+		local function Tier(unit) w.target(unit) return w.shown("target") end
+		-- A guild nobody reports: one character's report names Victim its officer and Boss its master.
+		local victim = BorderUnit("Victim", "Olympus Quill", "Peasant", 6)
+		local boss = BorderUnit("Quillboss", "Olympus Quill", "Guild Master", 0)
+		eq(Report("Olympus Quill", "Quillboss", "Victim:1:0", "Stranger-Realm"), true, "taken: nobody else reports it")
+		eq(Tier(victim), nil, "one other character's report: no Captain's silver")
+		eq(Tier(boss), nil, "nor a Lord's gold")
+		-- A second sender names them the same: the borders show.
+		eq(Report("Olympus Quill", "Quillboss", "Victim:1:0", "Second-Realm"), true)
+		w.target(nil)
+		eq(Tier(victim), "silver", "two senders name him an officer")
+		eq(Tier(boss), "gold", "and him its master")
+		-- An officer on his own report and one other's: two senders, as the Crown counts them.
+		eq(Report("Olympus Quill2", "Quillboss2", "Quillcapt:1:0", "Quillcapt-Realm"), true)
+		eq(Tier(BorderUnit("Quillcapt", "Olympus Quill2", "Titan", 1)), nil, "his own word alone")
+		eq(Report("Olympus Quill2", "Quillboss2", "Quillcapt:1:0", "Quillrunner-Realm"), true)
+		w.internal("DATA_CHANGED")
+		eq(w.shown("target"), "silver", "named by his runner-up too")
 	end)
 end)
 

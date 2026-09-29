@@ -163,9 +163,14 @@ function Sign.Open(sigHex)
 end
 
 -- Is sigHex the author's signature of text? A signature is exactly as long as the key (512
--- hex digits, RFC 8017 8.2.2): one spelling each, as the signing script writes it.
+-- hex digits, RFC 8017 8.2.2): one spelling each, as the signing script writes it. Any other
+-- length is refused unread (Sign.Plausible: the channel's lists ask no signature check for it).
+Sign.HEX = 512
+function Sign.Plausible(sigHex)
+	return type(sigHex) == "string" and #sigHex == Sign.HEX and sigHex:find("^%x+$") ~= nil
+end
 function Sign.Verify(text, sigHex)
-	if type(text) ~= "string" or type(sigHex) ~= "string" or #sigHex ~= 512 then return false end
+	if type(text) ~= "string" or not Sign.Plausible(sigHex) then return false end
 	local m = Open(sigHex)
 	if not m then return false end
 	local hash = Sign.SHA256(text)

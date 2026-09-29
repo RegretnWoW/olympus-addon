@@ -66,7 +66,7 @@ local function MakePin(d)
 	local f = table.remove(spare) or ns.Map.Badge(Decree.BADGE, true)
 	local c = COLORS[d.kind] or COLORS.MUSTER
 	ns.Map.SetBadge(f, ICONS[d.kind] or ICONS.MUSTER, c[1], c[2], c[3])
-	f.badge.decree = d
+	f.badge.decree, f.since = d, d.t -- (the newest are laid out first: Map.BADGE_MAX)
 	f.badge:SetScript("OnEnter", PinEnter)
 	f.badge:SetScript("OnLeave", function() GameTooltip:Hide() end)
 	return f

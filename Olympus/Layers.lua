@@ -206,8 +206,10 @@ function Layers.InSample()
 	return h % 8 == 0
 end
 
--- The King's character as Hop.King reads it: the leader of his guild the census names.
+-- The King's character as Hop.King reads it: the one pinned by name (1.0.0: his own messages, on
+-- whatever realm the server names), or the leader of his guild the census names.
 local function FromKing(sender)
+	if ns.IsKingCharacter(sender) then return true end
 	for name, g in pairs(ns.rdb.guilds or {}) do
 		if ns.IsKingGuild(name) and type(g) == "table" and g.leader and not g.twin then
 			local full = ns.FullName(g.leader, g.realm or ns.realm)
@@ -243,6 +245,8 @@ end
 function Layers.Receive(sender, l)
 	if not ns.IsFederation(l.guild) then return end
 	sender = ns.FullName(sender)
+	-- The King's own layer tells where he plays (1.0.0, Konig's review: Hop.King), whatever a report says.
+	if ns.Hop and ns.Hop.HeardKing then ns.Hop.HeardKing(sender) end
 	local old = where[sender]
 	local here = CurrentMap()
 	local urgent = (here and (l.mapID == here or (old and old[1] == here))) or FromKing(sender)

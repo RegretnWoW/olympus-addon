@@ -70,9 +70,11 @@ ns.BORDERS_COUNCIL_GOLD = false
 --            (ns.IsKingGuild); where no character is pinned, that guild's guild master
 --   council  the High Council (the signed list, ns.IsHighCouncillor): true, or the name of the
 --            ns flag that must be on for it (except on the King's screen while he streams)
---   leader   the guild master of an Olympus guild, as its census names him (Data.KnownRank:
---            another sender's word, never his own; our own guild's: our roster)
---   officer  its officers: the census's (the same way), or our own guild's officer ranks (Roster.lua)
+--   leader   the guild master of an Olympus guild, as its census names him (Data.KnownRank, as
+--            the Crown asks it: two senders naming him, one of them someone else; our own
+--            guild's: our roster)
+--   officer  its officers: the census's (the same way, two senders), or our own guild's officer
+--            ranks (Roster.lua)
 --   ranks    a member of an Olympus guild whose rank name holds one of these words (any case, a
 --            whole word): rank names are what each guild master wrote, as the game shows them
 local WINGED = "UI-HUD-UnitFrame-Target-PortraitOn-Boss-Gold-Winged"
@@ -154,11 +156,15 @@ local function Facts(unit)
 		f.leader = rank == 0
 		f.officer = type(rank) == "number" and rank > 0 and rank <= ns.CAPTAIN_RANK
 	elseif type(report) == "table" then
-		-- Another guild: the rank its census gives him, as the census's other checks trust it
-		-- (Data.KnownRank, soft: what only shows, like the King's line): the picture most senders
-		-- give, and someone else naming him in it. One report never makes its own sender a Lord
-		-- or a Captain: alone, against the guild's other senders, or once their row is old.
-		local rank = ns.Data.KnownRank(who, f.guild, true)
+		-- Another guild: the rank its census gives him, as the Crown's checks trust it (Data.KnownRank,
+		-- not soft): the picture most senders give, and two senders naming him in it, one of them
+		-- someone else. One report never makes its own sender a Lord or a Captain: alone, against
+		-- the guild's other senders, or once their row is old. Nor does one report of anyone else's
+		-- (1.0.0, Konig's review of 1.0.0: a single character's report naming him gave a Lord's gold
+		-- or a Captain's silver on every screen); the Crown asks two for a guild master, and a
+		-- border asks two for a Captain as well.
+		local rank, named = ns.Data.KnownRank(who, f.guild)
+		if (named or 0) < 2 then rank = nil end
 		f.leader = rank == 0
 		f.officer = type(rank) == "number" and rank > 0 and rank <= ns.CAPTAIN_RANK
 	end

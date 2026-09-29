@@ -1110,8 +1110,18 @@ Workshop.LIST_ASK_AGAIN, Workshop.LIST_ASK_EVERY, Workshop.LIST_ASKS = 150, 600,
 -- count itself alone, and all of them answer), and one sender's asks count once per
 -- LIST_ASK_FROM (a client asks LIST_ASK_AGAIN apart at the soonest).
 -- The author's client answers sooner, always, once per AUTHOR_ANSWER_GAP.
+-- A handful of answers (1.0.0, Konig's review of 1.0.0: one ask drew some 15 to 45 messages on the
+-- channel, every drawn client sending both lists, each 5 to 14 pieces long). The clients drawn go
+-- in turn, in the order of their draws over LIST_ANSWER_SPREAD; one that hears another's answer
+-- begin (its first piece: Comm.pieceHook) waits for it, the time its pieces take (LIST_HOLD_PIECE
+-- each, LIST_HOLD_SLACK more) and its own turn again, and leaves out what it heard whole. It
+-- waits LIST_HOLD_MAX past its turn at most: a forged first piece holds an answer back, never
+-- silences it. On the channel the draw counts at least our guild's addon users on our realm
+-- (their hellos), whatever the census counts: a census still coming in (after a restart) drew
+-- most of the channel.
 Workshop.LIST_ANSWER_MIN, Workshop.LIST_ANSWER_SPREAD, Workshop.LIST_ANSWER_GAP = 3, 12, 120
 Workshop.LIST_DRAW_GAP, Workshop.LIST_ANSWERS, Workshop.LIST_ASK_FROM = 30, 3, 120
+Workshop.LIST_HOLD_PIECE, Workshop.LIST_HOLD_SLACK, Workshop.LIST_HOLD_MAX = 1.2, 6, 45
 Workshop.AUTHOR_ANSWER_MIN, Workshop.AUTHOR_ANSWER_SPREAD, Workshop.AUTHOR_ANSWER_GAP = 1, 2, 60
 -- Passing a list taken from our guild on to our channel (1.0.0, PassOn): our guild's reporter on
 -- this realm PASS_MIN to PASS_MIN + PASS_SPREAD seconds after; its runner-up PASS_HOLD after the
@@ -1258,16 +1268,33 @@ Workshop.CouncilNames = CouncilNames
 -- and a list already found false is not checked again. The author's own file is not limited.
 -- Once a minute per sender and per kind of list (0.9.9): a relay sends the names and the titles
 -- one after the other, and one gap for both would leave the titles unchecked at every relay.
+-- Two budgets (1.0.0, Konig's review of 1.0.0: three strangers sending a forged list of each kind
+-- spent the whole minute's checks, and nothing relayed was checked meanwhile, a councillor's
+-- removal included): lists from our guild (over GUILD, or on the channel from a guildmate our
+-- roster knows: the server names the sender) have VERIFY_MAX checks a minute of their own, which
+-- nobody outside our guild can spend. And a signature that can't be the author's (not 512 hex
+-- digits: Sign.Plausible) is refused before it costs anything, never checked, never asked for.
+-- The author's own relays and answers (1.0.0, Konig's second look: "exempt your own relays from
+-- the shared cap") are outside both budgets: on a realm where no guildmate our roster knows is
+-- his, full-length forgeries from three strangers still spent the channel's checks every minute,
+-- and the author's relay removing a councillor waited behind them. His name is the server's word
+-- (IsAuthorName), never the sender's. His lists still keep the gap per kind of list (two checks a
+-- minute at most: his client relays each 10 minutes and answers an ask once per
+-- AUTHOR_ANSWER_GAP) and a list found false is never checked again.
 Workshop.VERIFY_GAP, Workshop.VERIFY_MAX = 60, 6
-local verifiedFrom, verifyTimes, falseLists, falseCount = {}, {}, {}, 0
-local function MayVerify(sender, kind, blob, now)
+local verifiedFrom, falseLists, falseCount = {}, {}, 0
+local verifyTimes = { channel = {}, guild = {} } -- each budget's checks in the last minute
+local function MayVerify(sender, kind, blob, now, guild)
 	if falseLists[blob] then return false end
 	local key = sender and (sender .. "~" .. kind)
 	if key and now - (verifiedFrom[key] or -math.huge) < Workshop.VERIFY_GAP then return false end
-	for i = #verifyTimes, 1, -1 do if now - verifyTimes[i] >= 60 then table.remove(verifyTimes, i) end end
-	if #verifyTimes >= Workshop.VERIFY_MAX then return false end
+	if not IsAuthorName(sender) then
+		local times = guild and verifyTimes.guild or verifyTimes.channel
+		for i = #times, 1, -1 do if now - times[i] >= 60 then table.remove(times, i) end end
+		if #times >= Workshop.VERIFY_MAX then return false end
+		times[#times + 1] = now
+	end
 	if key then verifiedFrom[key] = now end
-	verifyTimes[#verifyTimes + 1] = now
 	return true
 end
 local function RememberFalse(blob)
@@ -1275,11 +1302,19 @@ local function RememberFalse(blob)
 	falseLists[blob], falseCount = true, falseCount + 1
 end
 function Workshop.ResetVerify() -- tests (the list times heard of go too)
-	wipe(verifiedFrom); wipe(verifyTimes); wipe(falseLists); falseCount = 0
+	wipe(verifiedFrom); wipe(verifyTimes.channel); wipe(verifyTimes.guild); wipe(falseLists); falseCount = 0
 	if Workshop.ResetListAsk then Workshop.ResetListAsk() end
 end
 
-function Workshop.TakeCouncil(blob, sender)
+-- A list heard from our guild (1.0.0, Konig's review): over GUILD, or on the channel from a
+-- guildmate (our roster: the server's word, never the sender's).
+local function FromGuild(dist, sender)
+	return dist == "GUILD" or (sender ~= nil and ns.Roster ~= nil and ns.Roster.RankOf(sender) ~= nil)
+end
+
+-- sender: nil for the author's own file (never limited); the author's name (a relay from his
+-- client) outside both budgets; guild: charged to our guild's budget.
+function Workshop.TakeCouncil(blob, sender, guild)
 	if type(blob) ~= "string" or #blob > 2000 then return false end
 	local text, at, realm, list, sig = blob:match("^(HS1~(%d+)~([^~]*)~([^~]*))~(%x+)$")
 	at = tonumber(at)
@@ -1288,7 +1323,8 @@ function Workshop.TakeCouncil(blob, sender)
 	-- client a signature check for nothing (0.9.8).
 	local c = ns.rdb.council
 	if type(c) == "table" and (tonumber(c.at) or 0) >= at then return false end
-	if sender and not MayVerify(sender, "HS", blob, ns.Now()) then
+	if not ns.Sign or not ns.Sign.Plausible(sig) then return false end -- (costs nothing: Konig's review)
+	if sender and not MayVerify(sender, "HS", blob, ns.Now(), guild) then
 		if not falseLists[blob] then Advertise("HS", at) end -- (not checked: asked for later)
 		return false
 	end
@@ -1314,7 +1350,8 @@ end
 function Workshop.HandleCouncil(dist, sender, text)
 	if (dist ~= "CHANNEL" and dist ~= "GUILD") or type(text) ~= "string" then return end
 	local blob = text:match("^HS~(HS1~.*)$") or text
-	if Workshop.TakeCouncil(blob, ns.FullName(sender)) and dist == "GUILD" then PassOn("HS", blob) end
+	sender = ns.FullName(sender)
+	if Workshop.TakeCouncil(blob, sender, FromGuild(dist, sender)) and dist == "GUILD" then PassOn("HS", blob) end
 	HeardList("HS", blob, dist)
 end
 ns.Comm.Handle("HS", function(...) Workshop.HandleCouncil(...) end)
@@ -1349,15 +1386,16 @@ local function ReadDepartments(text)
 end
 
 -- A signed titles list, from the author's file or the channel: checked and kept like the names
--- (only a newer one; the same budget of signature checks).
-function Workshop.TakeTitles(blob, sender)
+-- (only a newer one; the same budgets of signature checks).
+function Workshop.TakeTitles(blob, sender, guild)
 	if type(blob) ~= "string" or #blob > Workshop.TITLES_BLOB then return false end
 	local text, at, realm, public, list, sig = blob:match("^(HT1~(%d+)~([^~]*)~([01])~([^~]*))~(%x+)$")
 	at = tonumber(at)
 	if not at then return false end
 	local t = ns.rdb.councilTitles
 	if type(t) == "table" and (tonumber(t.at) or 0) >= at then return false end
-	if sender and not MayVerify(sender, "HT", blob, ns.Now()) then
+	if not ns.Sign or not ns.Sign.Plausible(sig) then return false end
+	if sender and not MayVerify(sender, "HT", blob, ns.Now(), guild) then
 		if not falseLists[blob] then Advertise("HT", at) end
 		return false
 	end
@@ -1395,7 +1433,8 @@ end
 function Workshop.HandleTitles(dist, sender, text)
 	if (dist ~= "CHANNEL" and dist ~= "GUILD") or type(text) ~= "string" then return end
 	local blob = text:match("^HT~(HT1~.*)$") or text
-	if Workshop.TakeTitles(blob, ns.FullName(sender)) and dist == "GUILD" then PassOn("HT", blob) end
+	sender = ns.FullName(sender)
+	if Workshop.TakeTitles(blob, sender, FromGuild(dist, sender)) and dist == "GUILD" then PassOn("HT", blob) end
 	HeardList("HT", blob, dist)
 end
 ns.Comm.Handle("HT", function(...) Workshop.HandleTitles(...) end)
@@ -1470,6 +1509,35 @@ function Workshop.AskLists()
 	return true
 end
 
+-- Someone else's answer beginning (1.0.0, Konig's review): the first piece of a list of a kind our
+-- waiting answer on that lane would send, at least as new as ours. Our answer waits for it (see
+-- LIST_HOLD_*). Comm hands us the pieces only while an answer of ours waits (Comm.pieceHook).
+local function Waiting()
+	for _, lane in pairs(lanes) do if lane.answering then return true end end
+	return false
+end
+local function OnPiece(dist, sender, text)
+	local lane = lanes[dist == "GUILD" and "GUILD" or "CHANNEL"]
+	local a = lane and lane.answering
+	if not a or a.mine or type(text) ~= "string" then return end
+	local n, body = text:match("^C%w+:1:(%d+):(.*)$")
+	n = tonumber(n)
+	if not n then return end
+	local kind, at = body:match("^(HS)~HS1~(%d+)~")
+	if not kind then kind, at = body:match("^(HT)~HT1~(%d+)~") end
+	at = tonumber(at)
+	if not at then return end
+	local than = kind == "HS" and a.names or a.titles
+	local _, held = HeldList(kind)
+	if not NewerList(kind, than) or at < held then return end
+	local now = ns.Now()
+	local hold = now + n * Workshop.LIST_HOLD_PIECE + Workshop.LIST_HOLD_SLACK + a.turn * Workshop.LIST_ANSWER_SPREAD
+	a.holdUntil = math.min(a.dueAt + Workshop.LIST_HOLD_MAX, math.max(a.holdUntil or 0, hold))
+end
+local function HookPieces()
+	if ns.Comm then ns.Comm.pieceHook = Waiting() and OnPiece or nil end
+end
+
 -- Someone's ask: taken up when we hold a newer list and it is our turn (see LIST_ANSWER_*).
 -- An answer already waiting covers the asks that come meanwhile. Each list is drawn for and
 -- sent on a clock of its own: an ask for the titles alone never holds the names back, and a
@@ -1495,28 +1563,42 @@ function Workshop.AnswerAsk(names, titles, dist)
 		end
 	end
 	if #kinds == 0 then return false end
+	local turn = 0
 	if not mine then
 		-- A census that counts nobody but us is not in yet (whoever asked is online too).
 		local users = dist == "GUILD" and GuildUsers() or (ns.King and ns.King.AddonsOnline and ns.King.AddonsOnline() or 1)
 		if users <= 1 then return false end
+		-- (The channel: our guild's addon users on our realm at least, Konig's review.)
+		if dist ~= "GUILD" then users = math.max(users, GuildUsers(true)) end
 		for _, kind in ipairs(kinds) do lane.drawnAt[kind] = now end
-		if Workshop.random() > math.min(1, Workshop.LIST_ANSWERS / users) then return false end
+		local share, draw = math.min(1, Workshop.LIST_ANSWERS / users), Workshop.random()
+		if draw > share then return false end
+		turn = draw / share -- our place among those drawn: 0 first, 1 last
 	end
-	local pending = { names = names, titles = titles, heard = {}, mine = mine }
-	lane.answering = pending
 	local wait = mine and Workshop.AUTHOR_ANSWER_MIN + Workshop.random() * Workshop.AUTHOR_ANSWER_SPREAD
-		or Workshop.LIST_ANSWER_MIN + Workshop.random() * Workshop.LIST_ANSWER_SPREAD
-	Workshop.after(wait, "council answer", function()
+		or Workshop.LIST_ANSWER_MIN + turn * Workshop.LIST_ANSWER_SPREAD
+	local pending = { names = names, titles = titles, heard = {}, mine = mine, turn = turn, dueAt = now + wait }
+	lane.answering = pending
+	HookPieces()
+	local function Due()
 		if lane.answering ~= pending then return end
+		local at = ns.Now()
+		-- Someone else's answer began meanwhile: its time, then our turn again (OnPiece).
+		if pending.holdUntil and pending.holdUntil - at > 0.05 then
+			Workshop.after(pending.holdUntil - at, "council answer", Due)
+			return
+		end
 		lane.answering = nil
-		local at, send = ns.Now(), {}
+		HookPieces()
+		local send = {}
 		for kind, than in pairs({ HS = pending.names, HT = pending.titles }) do
 			if not pending.heard[kind] and at - lane.answeredAt[kind] >= gap then send[kind] = NewerList(kind, than) end
 		end
 		if send.HS then lane.answeredAt.HS = at end
 		if send.HT then lane.answeredAt.HT = at end
 		SendLists(send.HS, send.HT, dist)
-	end)
+	end
+	Workshop.after(wait, "council answer", Due)
 	return true
 end
 
@@ -1566,6 +1648,7 @@ function Workshop.ResetListAsk()
 		for k, v in pairs(NewLane()) do lane[k] = v end
 		lane.answering = nil
 	end
+	HookPieces()
 	passing, lastGuildSent = nil, -math.huge
 end
 

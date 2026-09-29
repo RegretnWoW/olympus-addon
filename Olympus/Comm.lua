@@ -727,9 +727,10 @@ end
 -- channel, and a guild that elected a single reporter was missing from the other realm's
 -- census (older versions left that reporter out after GUARD_AFTER unheard, one name at a time).
 -- So each realm elects its own reporter among the peers whose hello names that realm, and
--- those whose realm we don't know (versions before 0.7.11). While our guild's report, sent by a
--- guildmate of another realm, reaches our channel (the channel is shared:
--- Comm.ElectsAcrossRealms), one reporter for all, as before.
+-- those whose realm we don't know (versions before 0.7.11), unless the server stamps another
+-- realm on their name (see Electable). While our guild's report, sent by a guildmate of another
+-- realm, reaches our channel (the channel is shared: Comm.ElectsAcrossRealms), one reporter for
+-- all, as before.
 ---------------------------------------------------------------------------
 
 -- A realm's code in our report (field 27): three letters or digits.
@@ -783,10 +784,15 @@ end
 
 -- The realm, not ours, that the hello of this guildmate named (counted now), or nil. The channel
 -- may send a name of another realm without it (see heardOwn): matched by the short name then,
--- unless the full name is a peer of its own.
+-- unless the full name is a peer of its own. Only a realm the server stamped on the hello's
+-- sender too (1.0.0, Konig's review of 1.0.0): a guildmate of our realm whose hello named another
+-- one, sending our guild's report on our channel, made our election cross realms, and our guild's
+-- reporter then played on another realm's channel, off our realm's census.
 local function OtherRealm(name, now)
 	local t, realm = peers[name], peerRealm[name]
-	if t and now - t <= COUNT_WINDOW and realm and realm ~= "old" and realm ~= ns.realm then return realm end
+	if t and now - t <= COUNT_WINDOW and realm and realm ~= "old" and realm ~= ns.realm and ns.RealmOf(name) == realm then
+		return realm
+	end
 end
 local function PeerOfOtherRealm(sender, now)
 	if peers[sender] then return OtherRealm(sender, now) end
@@ -843,13 +849,21 @@ function Comm.SharesZone(name)
 end
 
 -- The peers that may be elected (1.0.0): those on our realm and those of a realm we don't know
--- (a hello without one: "old"), or every realm's while the channel is shared (see Realms,
--- above); never one left out by the guard below. The runner-up is drawn from the same pool.
+-- (a hello without one: "old", on no other realm by the server's stamp), or every realm's while
+-- the channel is shared (see Realms, above); never one left out by the guard below. The
+-- runner-up is drawn from the same pool.
+-- The server's stamp on a peer's name counts first, whatever its hello says (1.0.0, Konig's
+-- review of 1.0.0): a guildmate the server places on PvP 2 whose hello named no realm, or one
+-- we can't read ("old"), was elected on ours, never heard on our channel, and our guild was off
+-- our realm's census while the guard left him out (GUARD_AFTER), then his next alt. A peer of
+-- another realm by the server's stamp is left out here unless the channel is shared; "old"
+-- stays what the runner-up's pick reads it as (a version that sends no runner-up report).
 local function Electable(now)
 	local all, pool = Comm.ElectsAcrossRealms(now), {}
 	for name, t in pairs(peers) do
-		local realm = peerRealm[name]
-		if (benched[name] or 0) <= now and (all or realm == nil or realm == "old" or realm == ns.realm) then pool[name] = t end
+		local realm, stamped = peerRealm[name], ns.RealmOf(name)
+		local ours = (realm == nil or realm == "old" or realm == ns.realm) and (stamped == nil or stamped == ns.realm)
+		if (benched[name] or 0) <= now and (all or ours) then pool[name] = t end
 	end
 	return pool
 end
@@ -1168,7 +1182,12 @@ local function OnAddonMessage(prefix, text, dist, sender, target, zoneChannelID,
 	if dist == "GUILD" and text:sub(1, 3) == "H1~" then
 		if not peers[sender] then ns.Log("peer %s (%s)", sender, text:sub(4)) end
 		peers[sender] = now
-		peerRealm[sender] = Codec.RealmField(text:match("^H1~[^~]*~([^~]+)")) or "old"
+		-- The realm the hello names, unless the server stamped another one than ours on its sender:
+		-- then the server's (1.0.0, Konig's review of 1.0.0: a guildmate's hello naming our realm
+		-- from another one was elected our realm's reporter, never heard on our channel).
+		local named, stamped = Codec.RealmField(text:match("^H1~[^~]*~([^~]+)")) or "old", ns.RealmOf(sender)
+		if named ~= "old" and stamped and stamped ~= ns.realm then named = stamped end
+		peerRealm[sender] = named
 		peerVersion[sender] = text:match("^H1~(%d+%.%d+%.%d+)") or "?"
 		local sealed = text:match("^H1~[^~]*~[^~]*~([^~]*)")
 		peerSealed[sender] = (sealed == "s" or sealed == "p") and sealed or nil
@@ -1180,6 +1199,10 @@ local function OnAddonMessage(prefix, text, dist, sender, target, zoneChannelID,
 		handler(dist, sender, text)
 		return
 	end
+	-- A piece, while the High Council's lists wait to answer an ask (1.0.0, Workshop.lua: an answer
+	-- heard beginning holds ours back); nil otherwise, and no piece pays for it.
+	local pieceHook = Comm.pieceHook
+	if pieceHook and (dist == "GUILD" or dist == "CHANNEL") then ns.SafeCall("list piece", pieceHook, dist, sender, text) end
 	if dist == "GUILD" then
 		-- Pieces over GUILD (1.0.0): the High Council's lists cross to guildmates on other realms.
 		-- Only those are put together; versions before 1.0.0 put nothing together from GUILD.
