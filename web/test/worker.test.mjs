@@ -46,6 +46,7 @@ async function setup({ mode = 'c', policy } = {}) {
 		LINK_BACKEND_SEED: vectors.backend.seed_b64url,
 		LINK_BACKEND_PUBLIC: vectors.backend.public_hex,
 		LINK_CA_PUBLIC: CA.public_hex,
+		LINK_COUNCIL_CHARACTERS: CK.character, // closed by default: the vectors' councillor of the authority, listed
 		LINK_MODE: mode,
 		LINK_ORIGIN: ORIGIN,
 		LINK_ADMIN_TOKEN: ADMIN,
@@ -402,6 +403,7 @@ describe('Worker', { skip: probe ? false : 'node:sqlite is not available in this
 		assert.equal((await row('SELECT cert_exp FROM council_keys WHERE key_id = ?', CK.key_id)).cert_exp, CK.cert_exp + 86400);
 		await setup();
 		await submit(B5.bundle, USER_C);
+		env.LINK_COUNCIL_CHARACTERS = `${CK.character}, Someone Else-ClassicBetaPvP`; // both listed
 		const moved = await makeBundle({ ...B3, requester: 'Another Requester-ClassicBetaPvP' }, [[1799990200, CK.key_id, 'Someone Else-ClassicBetaPvP', 'w']]);
 		await env.DB.prepare('UPDATE codes SET discord_id = ? WHERE r = ?').bind(USER_C.id, B3.R).run();
 		const x = await submit(moved, USER_C);
@@ -415,6 +417,7 @@ describe('Worker', { skip: probe ? false : 'node:sqlite is not available in this
 		// carries 86 characters of junk in a link for his alt, with a code of his own account.
 		await setup();
 		const EVIL = 'Evil Councillor-ClassicBetaPvP';
+		env.LINK_COUNCIL_CHARACTERS = `${CK.character}, ${EVIL}`; // both on the High Council
 		const pub = Buffer.from(CK.public_hex, 'hex').toString('base64url');
 		const exp = NOW + 365 * 86400;
 		const payload = `OLK2.${CK.key_id}.${pub}.c.${exp}.${EVIL}`;

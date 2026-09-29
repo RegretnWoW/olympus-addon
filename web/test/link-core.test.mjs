@@ -64,6 +64,7 @@ async function setup({ mode = 'c', binding = 'DB' } = {}) {
 		LINK_BACKEND_SEED: vectors.backend.seed_b64url,
 		LINK_BACKEND_PUBLIC: vectors.backend.public_hex,
 		LINK_CA_PUBLIC: vectors.council_authority.public_hex,
+		LINK_COUNCIL_CHARACTERS: CK.character, // the vectors' High Councillor of the council authority
 		LINK_MODE: mode,
 		LINK_ORIGIN: PAGE_ORIGIN,
 		LINK_ADMIN_TOKEN: ADMIN,
@@ -464,7 +465,7 @@ describe('with D1', { skip: probe ? false : 'node:sqlite is not available in thi
 		assert.equal((await handleKeys(new Request('https://bot.example/keys', { method: 'POST', body: '{}' }), env)).status, 401);
 	});
 
-	test('the council authority alone links (the trust FERN.md\'s FAQ describes); LINK_COUNCIL_CHARACTERS limits it to the councillors listed', async () => {
+	test('the council authority links only the councillors LINK_COUNCIL_CHARACTERS lists (the trust FERN.md\'s FAQ describes)', async () => {
 		await setup();
 		// The review's case: a key the council authority certified for a character this Worker never
 		// heard of confirms a character that is nobody's, for the account whose /verify code it holds.
@@ -480,8 +481,13 @@ describe('with D1', { skip: probe ? false : 'node:sqlite is not available in thi
 		p.sig = b64url(sign(seed, signedMessage(b, p)));
 		b.proofs = [{ ...p, pub: b64url(Buffer.from(pub, 'hex')), tier: 'c', certExp: exp, certSig: b64url(sign(vectors.council_authority.seed_hex, Buffer.from(payload, 'utf8'))) }];
 		const text = buildBundle(b);
-		// No list: whatever character the authority certifies is a councillor here, and one links.
-		assert.equal(councilCharacters(env), null);
+		// No list: no character the authority certifies is a councillor here (closed by default,
+		// Konig's review: this was open before 1.0.0).
+		delete env.LINK_COUNCIL_CHARACTERS;
+		assert.equal(councilCharacters(env).size, 0);
+		assert.match((await checkProof(env, text, { discordId: USER_C.id })).message, /not on LINK_COUNCIL_CHARACTERS/);
+		// Listed, one links (checked, nothing written).
+		env.LINK_COUNCIL_CHARACTERS = minted;
 		const trusted = await checkProof(env, text, { discordId: USER_C.id });
 		assert.deepEqual([trusted.ok, trusted.by, trusted.confirmers, trusted.guildCheck], [true, 'councillor', [minted], 'w']);
 		// Your list: a certificate for anyone else counts for nothing. Nothing is claimed, given or recorded.
@@ -502,17 +508,40 @@ describe('with D1', { skip: probe ? false : 'node:sqlite is not available in thi
 		env.LINK_COUNCIL_CHARACTERS = '';
 		assert.deepEqual([...councilCharacters(env)], []);
 		assert.equal((await checkProof(env, B5.bundle)).reason, 'not-enough');
-		// Revoking a character does not stick without the list: a certificate signed after it counts again.
-		delete env.LINK_COUNCIL_CHARACTERS;
+		// Revoking a listed character does not stick: a certificate signed after it counts again.
+		env.LINK_COUNCIL_CHARACTERS = minted;
 		await revokeCharacter(env, minted, NOW - 3600);
 		assert.equal((await checkProof(env, text, { discordId: USER_C.id })).ok, true);
 		// Listed, the character links, and its key is recorded for you to see.
-		env.LINK_COUNCIL_CHARACTERS = minted;
 		const linked = await acceptProof(env, text, { discordId: USER_C.id, promote });
 		assert.equal(linked.status, 'linked', linked.message);
 		assert.deepEqual(roles, [['promote', USER_C.id, b.requester]]);
 		assert.deepEqual({ ...(await row('SELECT key_id, character, first_seen FROM council_keys')) }, { key_id: keyId, character: minted, first_seen: NOW });
 		assert.deepEqual({ ...(await row('SELECT key_id FROM used WHERE r = ?', TOKEN_C.R)) }, { key_id: keyId });
+	});
+
+	test('LINK_COUNCIL_CHARACTERS left out: no certificate of the council authority counts, closed by default (Konig\'s review)', async () => {
+		await setup();
+		delete env.LINK_COUNCIL_CHARACTERS;
+		// B5: a real councillor's proof, the authority's real certificate. Without the list, no.
+		const v = await checkProof(env, B5.bundle, { discordId: USER_C.id });
+		assert.deepEqual([v.ok, v.reason], [false, 'not-enough'], v.message);
+		assert.match(v.message, new RegExp(`${CK.key_id}: its character is not on LINK_COUNCIL_CHARACTERS`));
+		const r = await acceptProof(env, B5.bundle, { discordId: USER_C.id, promote });
+		assert.deepEqual([r.status, r.reason], ['rejected', 'not-enough']);
+		assert.deepEqual(roles, [], 'nobody gets a role');
+		assert.equal((await row('SELECT used FROM codes WHERE r = ?', B5.R)).used, null, 'the code stays unused');
+		assert.equal((await row('SELECT COUNT(*) AS n FROM council_keys')).n, 0, 'nothing recorded');
+		for (const unset of [undefined, null, '', ' , ']) {
+			env.LINK_COUNCIL_CHARACTERS = unset;
+			assert.equal(councilCharacters(env).size, 0, String(unset));
+			assert.equal((await checkProof(env, B5.bundle)).reason, 'not-enough', String(unset));
+		}
+		// Keys you register yourself are yours: the list never applies to them.
+		assert.equal((await checkProof(env, B1.bundle, { discordId: USER_C.id })).ok, true);
+		// Listed, the councillor counts.
+		env.LINK_COUNCIL_CHARACTERS = CK.character;
+		assert.equal((await acceptProof(env, B5.bundle, { discordId: USER_C.id, promote })).status, 'linked');
 	});
 
 	test('forgetUser: a Discord account\'s characters, codes and log lines gone, its keys revoked', async () => {
