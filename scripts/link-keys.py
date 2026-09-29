@@ -44,7 +44,9 @@ alone, never printed, and its public key printed for the addon (ns.LINK_CA_KEYS,
 the Worker (LINK_CA_PUBLIC). Like dist/CouncilList.lua, the file goes to the author's own game
 only: copy it into Interface/AddOns/Olympus/ on his computer and add a line "LinkCA.lua" at the
 end of Olympus.toc there (never in the repository, the public zip or a chat). His client then
-certifies, in game and by itself, the keys the High Councillors' addons make (tier c, a year).
+certifies, in game and by itself, the keys the High Councillors' addons make (tier c, a year),
+but only with ns.LINK_COUNCIL_AUTHORITY = true in Olympus/Link.lua: it ships false (Konig's
+review), and then every key, a High Councillor's too, is one "confirmer" makes.
 "ca" refuses to replace a file that exists: a new authority is a rotation (its public key next to
 the old one in the addon and the Worker, then the new file, then every councillor's certificate
 renewed by "/oly discord key new"). "ca public" prints the file's public key again.
@@ -408,7 +410,9 @@ def ca(args):
     print("Copy %s to your own game only: Interface/AddOns/Olympus/LinkCA.lua on your computer, and add the" % CA_OUT)
     print("line LinkCA.lua at the end of Olympus.toc there (like CouncilList.lua). Never in the repository, the")
     print("public zip, a chat or a screenshot; keep a copy in a password manager. Your client then certifies the")
-    print("High Councillors' own keys by itself, whenever one of their addons hears you (a year each).")
+    print("High Councillors' own keys by itself, whenever one of their addons hears you (a year each), but only")
+    print("with ns.LINK_COUNCIL_AUTHORITY = true in Olympus/Link.lua: it ships false, and then the bot's keeper")
+    print("makes every key (\"confirmer\"), a High Councillor's too.")
 
 
 def revoke(args):

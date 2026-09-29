@@ -28,9 +28,10 @@ the Discord role.
    └─> code  OLC2.<R>.<username>.<exp>.<mode>.<T>.<sig>    (signed with the backend key)
 
  each confirmer's key is one character's, and so is its certificate:
-   a player's (or a councillor's you register): you make it, the backend key signs its certificate
-   a High Councillor's: their addon makes it in game, the author's game client signs its certificate
-                        by itself (the council authority), and nobody pastes anything
+   every one, a High Councillor's or a drawn player's: you make it, the backend key signs its
+   certificate, and the confirmer types both in game (step 8)
+   (the council authority, a councillor's addon making its own key and the author's client
+    certifying it, is off in the addon, and here while LINK_CA_PUBLIC stays out: step 1b)
  confirmers announce themselves in game with it, from that character only:
    DV~1~OLK2.<keyId>.<public key>.<c|p>.<exp>.<Name-Realm>.<sig>
 
@@ -96,21 +97,36 @@ It prints a seed and a public key, once, and writes nothing to disk.
 - The public key (64 hex digits) goes into the Worker var `LINK_BACKEND_PUBLIC`, and to Daniel
   for the addon (`ns.LINK_BACKEND_KEYS` in `Olympus/Link.lua`): the addon refuses any code, and
   any confirmer's certificate, whose signature does not check against one of those keys.
-- The same key signs the certificates of the confirmer keys you register (step 8). The Worker
-  does it when you register a councillor's key, and a player's once it counts. To sign them on
-  your own computer instead (`link-keys.py cert`), keep the seed in a file only you can read and
-  give the tool its path; the tool never prints it. High Councillors' own keys are certified by
-  the council authority instead (step 1b).
+- The same key signs the certificates of the confirmer keys you register (step 8), the High
+  Councillors' too. The Worker does it when you register a councillor's key, and a player's once
+  it counts. To sign them on your own computer instead (`link-keys.py cert`), keep the seed in a
+  file only you can read and give the tool its path; the tool never prints it.
 - Rotating it: make a new key, have its public key added to `ns.LINK_BACKEND_KEYS` next to the
   old one (the addon takes two for this), wait until that addon version is out, then switch the
   Worker's `LINK_BACKEND_SEED` and `LINK_BACKEND_PUBLIC` and renew every confirmer's
   certificate (step 8) before the old key leaves the addon. Codes already handed out stay valid
   until they expire.
 
-### 1b. The council authority (High Councillors' keys, nothing to paste)
+### 1b. The council authority (off: leave `LINK_CA_PUBLIC` out)
 
-High Councillors do not type keys. The first time a councillor's addon finds its character on
-the signed High Council list, it makes a key of its own, in the game, and keeps it for that
+**Off in this release** (Konig's review of 1.0.0). The addon carries it behind a switch its author
+leaves off (`ns.LINK_COUNCIL_AUTHORITY = false` in `Olympus/Link.lua`). While it is off, no
+councillor's addon makes a key in game or asks for a certificate, the author's client signs none
+(even holding the authority's seed), no addon takes a certificate of the authority, and a key an
+earlier build made in game is removed at login, with one line. Why: WoW's Lua has no
+cryptographic random source, so a key made in game comes from a few tens of bits of frame timing
+(the comment above `Link.EntropySample` in `Olympus/Link.lua` says which), it sits in plain text
+in the SavedVariables, and its certificate lasts a year. So every High Councillor's key is one you
+make (step 8: kind `c`, with `--bootstrap` at launch), exactly like a player's, and
+`LINK_CA_PUBLIC` stays out of your settings (step 5): without it this Worker takes none of the
+authority's certificates either. Even with the switch on, the addon runs none of it before the
+bot's key is in the addon.
+
+The rest of this section is how the path works, for the day the author turns it on: he tells
+you, and you decide then whether to set `LINK_CA_PUBLIC` (and `LINK_COUNCIL_CHARACTERS` with it).
+
+With it on, High Councillors do not type keys. The first time a councillor's addon finds its
+character on the signed High Council list, it makes a key of its own, in the game, and keeps it for that
 character. When that councillor and the addon's author are online at the same time, the
 councillor's addon asks the author's addon for a certificate, and his addon signs one by
 itself: for that key, that character, a year. From then on the councillor confirms like anyone with a certificate. The
@@ -279,8 +295,9 @@ LINK_GUILD_POLICY = "verified"           # or "claimed": see "The guild check" b
 LINK_ORIGIN = "https://dnl-gentile.github.io"         # the page's origin: no path, no trailing slash
 DISCORD_CLIENT_ID = "<your application's client id>"  # the page's sign-in must be for it
 LINK_BACKEND_PUBLIC = "<64 hex from link-keys.py backend>"
-LINK_CA_PUBLIC = "a84125fa433276244fda242a28d2e4208a5d6db26dcb529e3e87af61939e10a7" # the council authority (step 1b)
-LINK_COUNCIL_CHARACTERS = "<Name-Realm>, <Name-Realm>"  # the High Councillors you accept from it (step 1b)
+# The council authority is off (step 1b): leave these two out.
+# LINK_CA_PUBLIC = "a84125fa433276244fda242a28d2e4208a5d6db26dcb529e3e87af61939e10a7"
+# LINK_COUNCIL_CHARACTERS = "<Name-Realm>, <Name-Realm>"  # with it: the High Councillors you accept
 DISCORD_PUBLIC_KEY = "<Developer Portal > General Information > Public Key>"      # only for /verify over HTTP
 ```
 
@@ -366,8 +383,9 @@ curl -X POST "https://discord.com/api/v10/applications/$APP_ID/guilds/$GUILD_ID/
 
 Each confirmer you register has a key of their own, made on your computer, for one of their
 characters, and a certificate for it signed with the backend key that names that character. The
-confirmer types two lines in game, on that character: the key, then the certificate. (High
-Councillors need none of this: step 1b.)
+confirmer types two lines in game, on that character: the key, then the certificate. That is every
+confirmer, the High Councillors included: their addons make no key of their own (step 1b). The
+addon keeps neither line until the release that carries your bot's key (`ns.LINK_BACKEND_KEYS`).
 
 ```sh
 python3 scripts/link-keys.py confirmer <id> c --character "<Name-Realm>" --owner <their Discord id> --username <their username> --bootstrap
@@ -573,8 +591,9 @@ The page's request lives in `web/public/backend.js` (`proofRequest`), its settin
   `sig` an Ed25519 signature over the UTF-8 bytes of everything before the last dot: the
   backend's (a key you registered: the confirmer types it), or, for a High Councillor's key
   (tier `c`) whose id is the first 12 hex of SHA-256 of its 32 bytes, the council authority's
-  (the author's addon whispers it to the councillor's). At most 240 bytes: the confirmer's addon
-  announces it as `DV~1~<certificate>`, and only from that character.
+  (the author's addon whispers it to the councillor's; only with that path on, off as the addon
+  ships: step 1b). At most 240 bytes: the confirmer's addon announces it as
+  `DV~1~<certificate>`, and only from that character.
 - **Tag**: the first 16 lowercase hex of `SHA-256(<the code token's sig> + "~" + <requester>)`,
   the requester as `Name-Realm`. The requester's addon makes it from the command it was given
   and sends it with its request; the Worker makes it again from the token it stored.
@@ -610,9 +629,10 @@ For every bundle, from the page or the inbox (`checkProof` reads, `acceptProof` 
    after that it is `expired`.
 4. For each proof, its key: a key registered here, not revoked, whose certificate (the one the
    proof carries) names its public key, its tier and the confirming character as registered; or
-   a High Councillor's key the council authority certified (the certificate checks with
-   `LINK_CA_PUBLIC`, tier `c`, the id the key's hash, valid when the proof was signed), for a
-   character on `LINK_COUNCIL_CHARACTERS` when you set that list, not on the revocation list, not
+   (only with `LINK_CA_PUBLIC` set, step 1b) a High Councillor's key the council authority
+   certified (the certificate checks with `LINK_CA_PUBLIC`, tier `c`, the id the key's hash, valid
+   when the proof was signed), for a character on `LINK_COUNCIL_CHARACTERS` when you set that
+   list, not on the revocation list, not
    signed (its end less a year) at or before a revocation of its character, and not recorded for
    another character. Then: its owner is not the code's account;
    the Worker rebuilds the exact `OLY4` text and verifies the Ed25519 signature with the key

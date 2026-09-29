@@ -223,4 +223,24 @@ if (process.argv[1] === fileURLToPath(import.meta.url) && process.argv.includes(
 		assert.ok(queries.length >= 3);
 		for (const sql of queries) await DB.prepare(sql).all();
 	});
+
+	// Konig's review of 1.0.0 (3): councillors' keys come from the bot's keeper, and the council
+	// authority stays off: the addon's switch, and the settings both guides give.
+	test('FERN.md and WORKER.md: the council authority is off as the addon ships (its switch false), the settings leave LINK_CA_PUBLIC out, and the required steps mint the High Councillors\' keys', () => {
+		const lua = readFileSync(join(REPO, 'Olympus', 'Link.lua'), 'utf8');
+		assert.match(lua, /^ns\.LINK_COUNCIL_AUTHORITY = false$/m, 'the addon ships with the switch off');
+		for (const [name, doc] of [['FERN.md', fern], ['WORKER.md', md]]) {
+			for (const setting of ['LINK_CA_PUBLIC', 'LINK_COUNCIL_CHARACTERS']) {
+				const lines = [...doc.matchAll(new RegExp(`^(#\\s*)?${setting} = `, 'gm'))];
+				assert.ok(lines.length >= 1, `${name} shows ${setting}`);
+				for (const m of lines) assert.ok(m[1], `${name}: its settings leave ${setting} out (commented)`);
+			}
+			assert.ok(doc.includes('Konig\'s review'), `${name} says why`);
+		}
+		const required = fern.slice(fern.indexOf('### 1. '), fern.indexOf('### 8. '));
+		assert.match(required, /python3 scripts\/link-keys\.py confirmer <id> c --character "<Name-Realm>"[^\n]*--bootstrap/,
+			'the High Councillors\' keys are minted in the required steps');
+		assert.match(md, /^### 1b\. The council authority \(off/m, 'WORKER.md step 1b says it is off');
+		assert.ok(md.includes('ns.LINK_COUNCIL_AUTHORITY = false'), 'and names the switch');
+	});
 }
