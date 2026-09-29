@@ -18195,6 +18195,69 @@ test("1.0 the early supporters go out from his mail character only with the Trea
 	end)
 end)
 
+-- Konig's review of 1.0.0: any sender's ask (TQ) held every client's own ask for EARLY_ASK_HOLD,
+-- whatever it asked for. One dated as new as the holder's list (or far ahead) is never answered,
+-- so a stranger repeating it kept every client without the list from ever asking.
+test("1.0.0 Konig's review: an ask for the early supporters the holder won't answer for us holds nobody's own ask", function()
+	WithThrone(function(w, K)
+		local T = ns.Treasury
+		local saved = { split = ns.splitNames, after = ns.After }
+		local ok, err = pcall(function()
+			ns.splitNames = true
+			local timers = {}
+			ns.After = function(_, _, fn) timers[#timers + 1] = fn end
+			local function Asks()
+				local n = 0
+				for _, s in ipairs(w.sent) do if s.msg:sub(1, 3) == "TQ~" then n = n + 1 end end
+				return n
+			end
+			-- The holder's list, closed at `closed` (0.9's book on the Treasurer's account).
+			ns.rdb.treasuryEpoch = nil
+			ns.rdb.treasury = { { name = "Alice Early", money = 100, how = "mail", t = w.clock - 1000 } }
+			AsTreasurer()
+			T.Migrate()
+			local closed = ns.rdb.treasuryArchive["0.9"].closed
+			ns.db.keeperShares = { [TREASURER_KEY] = true }
+			-- A soldier without the list, who may see the ranking.
+			AsSoldier()
+			ns.rdb.treasuryFlags = { balance = true, ranking = true, at = w.clock }
+			w.sent = {}
+			-- A stranger asks for a list as new as the holder's (the holder sends nothing), then one
+			-- dated a day ahead: neither is an ask whose answer reaches us.
+			T.HandleEarlyAsk("CHANNEL", "Faker Guy-Realm", "TQ~" .. closed)
+			eq(T.ArmEarly(), true, "an ask the holder won't answer does not hold ours")
+			eq(LastSent(w), "TQ~0")
+			T.Reset(); ns.rdb.treasuryFlags = { balance = true, ranking = true, at = w.clock }
+			w.sent = {}
+			T.HandleEarlyAsk("CHANNEL", "Faker Guy-Realm", "TQ~" .. (w.clock + 86400))
+			eq(T.ArmEarly(), true, "nor one dated ahead of the server's clock")
+			eq(Asks(), 1)
+			-- The holder answers neither; it still answers ours.
+			ns.rdb.treasuryEpoch = nil
+			ns.rdb.treasury = { { name = "Alice Early", money = 100, how = "mail", t = w.clock - 1000 } }
+			AsTreasurer()
+			T.Migrate()
+			ns.db.keeperShares = { [TREASURER_KEY] = true }
+			closed = ns.rdb.treasuryArchive["0.9"].closed
+			w.sent = {}
+			T.HandleEarlyAsk("CHANNEL", "Faker Guy-Realm", "TQ~" .. closed)
+			T.HandleEarlyAsk("CHANNEL", "Faker Guy-Realm", "TQ~" .. (w.clock + 86400))
+			eq(#w.sent, 0, "the holder answers neither")
+			T.HandleEarlyAsk("CHANNEL", "Soldier-Realm", "TQ~0")
+			assert(LastSent(w) and LastSent(w):find("^TE~Olympus~" .. closed .. "~1~1~Alice Early$"), tostring(LastSent(w)))
+			-- An ask its answer covers (a client with no list, as ours) still holds ours: the answer is ours.
+			AsSoldier()
+			T.Reset(); ns.rdb.treasuryFlags = { balance = true, ranking = true, at = w.clock }
+			w.sent = {}
+			T.HandleEarlyAsk("CHANNEL", "Other Soldier-Realm", "TQ~0")
+			eq(T.ArmEarly(), false, "someone else's ask is fresh: its answer is ours")
+			eq(Asks(), 0)
+		end)
+		ns.splitNames, ns.After = saved.split, saved.after
+		if not ok then error(err, 0) end
+	end)
+end)
+
 test("1.0 the Treasurer's mail and the early supporters: their lines in both languages, with the same format arguments", function()
 	local savedLocale, pt = GetLocale, {}
 	GetLocale = function() return "ptBR" end

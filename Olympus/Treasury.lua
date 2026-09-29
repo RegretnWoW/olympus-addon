@@ -1913,12 +1913,17 @@ end
 
 -- Someone asks: the holder answers when its list is newer than the asker's (EARLY_GAP apart at
 -- the soonest, however many ask: the answer goes to the whole channel), with the same yeses as
--- its own sending (SendEarly).
+-- its own sending (SendEarly). Anyone's ask holds ours (EARLY_ASK_HOLD) only when its answer
+-- reaches us too: it asks for no newer list than ours, so any list newer than it has is newer
+-- than ours (Konig's review of 1.0.0: an ask as new as the holder's list, or dated ahead, is
+-- never answered, and anyone repeating one kept every client without the list from asking).
 function Treasury.HandleEarlyAsk(dist, sender, text)
 	if dist ~= "CHANNEL" or type(text) ~= "string" then return end
 	local at = tonumber(text:match("^TQ~(%d+)$"))
 	if not at then return end
-	heardEarlyAsk = ns.Now()
+	local held = ns.rdb and ns.rdb.treasuryEarly
+	local ours = type(held) == "table" and tonumber(held.at) or 0
+	if at <= ours then heardEarlyAsk = ns.Now() end
 	local list = EarlyHolder() and ArchivedSupporters()
 	if list and list.at > at then Treasury.SendEarly() end
 end
