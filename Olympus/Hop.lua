@@ -648,6 +648,16 @@ function Hop.ZoneName(mapID)
 	return mapID and ns.Zones and ns.Zones.NameForKey and ns.Zones.NameForKey("m" .. mapID) or "?"
 end
 
+-- The King's own word on where he plays (1.0.0, Konig's review of 1.0.0): the name the server
+-- stamped on the last message his client sent us (his crown, his layer, his commands: King.lua
+-- and Layers.lua call Hop.HeardKing for the character pinned by name, ns.IsKingCharacter).
+-- A census report is anyone's word: one forged report from another realm of our group placed him
+-- there ("he plays on another realm"), and his layer could not be asked for. This session's alone.
+local kingFrom
+function Hop.HeardKing(sender)
+	if type(sender) == "string" and ns.IsKingCharacter(sender) then kingFrom = ns.FullName(sender) end
+end
+
 -- The King when he is online (leader of the guild named exactly "Olympus"), and his layer
 -- when his addon announced it: { name, mapID, zoneUID }. The name is the one the army calls
 -- him (ns.KING_NAME); his character's is only used to find his layer.
@@ -655,16 +665,22 @@ end
 -- only shows; the Throne's commands ask for more): one forged report can't crown anyone
 -- while the guild's own reporter says otherwise. strict: two reports (inviting on its own,
 -- "For Olympus!", waits for that).
+-- His realm and his layer (1.0.0, Konig's review): where the census names the character pinned
+-- by name, from his own messages alone (Hop.HeardKing), none heard yet: neither is known. Where
+-- none is pinned (another realm group), the census's word is all there is.
 function Hop.King(strict)
 	local now = ns.Now()
+	local pin = ns.KingCharacter()
 	for name, g in pairs(ns.rdb.guilds or {}) do
 		if ns.IsKingGuild(name) and type(g) == "table" and g.leader and not g.twin
 			and now - (g.t or 0) <= ns.Data.FRESH and g.leaderOnline then
 			local full = ns.FullName(g.leader, g.realm or ns.realm)
 			if ns.Data.KnownRank(full, name, not strict) == 0 then
-				local where = ns.Layers.Of(full, true)
+				local at = full
+				if pin ~= nil and ns.ShortName(g.leader) == pin then at = kingFrom end
+				local where = at and ns.Layers.Of(at, true)
 				return { name = ns.KingName(g.leader), mapID = where and where.mapID, zoneUID = where and where.zoneUID,
-					t = where and where.t, realm = ns.RealmOf(full) }
+					t = where and where.t, realm = at and ns.RealmOf(at) }
 			end
 		end
 	end
@@ -683,9 +699,10 @@ local function KingUnconfirmed()
 	return false
 end
 
--- The census places the King on another realm than ours (his name in its report). A layer is a
--- copy of a zone inside one realm: nobody here can join his, even when his crown and his layer
--- reach us (a channel shared across realms, Comm.ElectsAcrossRealms). Checked before his layer.
+-- The King plays on another realm than ours (his own messages say so, Hop.King; where no King
+-- is pinned by name, the census). A layer is a copy of a zone inside one realm: nobody here can
+-- join his, even when his crown and his layer reach us (a channel shared across realms,
+-- Comm.ElectsAcrossRealms). Checked before his layer.
 function Hop.KingOtherRealm(k)
 	return k ~= nil and k.realm ~= nil and ns.realm ~= nil and ns.realm ~= "?" and k.realm ~= ns.realm
 end
@@ -897,8 +914,8 @@ end
 
 -- What this client knows of the King, for /oly status and /oly bug (1.0.0: "the King's layer
 -- doesn't work" said nothing of why). Elsewhere: confirmed (two reports name him online),
--- online (one report), checking (reported online, not confirmed yet) or offline; the realm the
--- census places him on; his layer and when it was heard; his crown and when it was heard. On
+-- online (one report), checking (reported online, not confirmed yet) or offline; the realm his
+-- own messages place him on (Hop.King); his layer and when it was heard; his crown and when it was heard. On
 -- his own client: his crown shown or hidden, and when his layer last went out.
 function Hop.KingStatusLine()
 	local K = ns.King
@@ -942,6 +959,7 @@ function Hop.Reset()
 	lastOffer, declines, pausedUntil = -math.huge, 0, -math.huge
 	wipe(offered); wipe(answeredAt); wipe(recent); wipe(guests)
 	for k in pairs(stats) do stats[k] = 0 end
+	kingFrom = nil
 end
 
 ns.Comm.Handle("LQ", function(...) Hop.HandleAsk(...) end)

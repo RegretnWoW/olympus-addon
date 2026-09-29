@@ -8648,6 +8648,59 @@ test("1.0.0 the King's line says why his layer is unknown: his crown is hidden, 
 	end)
 end)
 
+-- Konig's review of 1.0.0: the realm Hop.King gave the King was his census row's, the realm of
+-- whoever sent the last report of <Olympus>. One report from a character of another realm of our
+-- group, naming him its leader, placed him there: "he plays on another realm", and his layer could
+-- not be asked for, his own crown and layer coming from our realm. Now the King pinned by name is
+-- where his own messages say (the server stamps their sender's realm).
+test("1.0.0 one forged report can't place the King on another realm: his realm and his layer come from his own messages", function()
+	WithHop(function(w, H)
+		local savedPrint, savedLinks = ns.Print, ns.db.links
+		local said = {}
+		local ok, err = pcall(function()
+			ns.King.Reset()
+			ns.rdb.guilds = {}
+			ns.Print = function(m) said[#said + 1] = m end
+			local king = ns.KingCharacter()
+			-- One report of <Olympus>, sent from another realm, naming him (by his name, as a report
+			-- does) its leader online; nobody else's. The census has him online.
+			local forged = { guild = "Olympus", total = 1000, online = 200, leader = king, leaderOnline = true, users = 5,
+				zones = {}, officers = {}, ranks = {}, top = {}, faction = "Alliance" }
+			eq(ns.Data.Receive(forged, "Forger-OtherRealm"), true, "(taken: nothing to outvote it)")
+			local k = H.King()
+			assert(k, "the census has him online")
+			eq(H.KingOtherRealm(k), false, "a report never places him on another realm")
+			eq(k.realm, nil, "nothing of his heard yet: his realm is not known")
+			H.AskKing()
+			eq(said[#said], ns.L.HOP_KING_HIDDEN:format("Asmon"), "not 'he plays on another realm'")
+			-- His crown and his layer, from his own client on our realm: his layer can be asked for.
+			ns.King.HandleCommand("CHANNEL", king .. "-Realm", "T1~P~3~Olympus~1453~420~510")
+			ns.Layers.Receive(king .. "-Realm", { mapID = 1453, zoneUID = 9, rank = 0, guild = "Olympus" })
+			k = H.King()
+			eq(k.realm, "Realm"); eq(k.zoneUID, 9)
+			eq(H.KingOtherRealm(k), false)
+			H.AskKing()
+			eq(w.sent[#w.sent], "CHANNEL LQ~1~1453~9", "his layer asked for")
+			assert(H.KingStatusLine():find("realm Realm (ours)", 1, true), H.KingStatusLine())
+			-- Someone else's layer in his guild's name changes nothing.
+			ns.Layers.Receive("Forger-OtherRealm", { mapID = 1453, zoneUID = 5, rank = 0, guild = "Olympus" })
+			eq(H.King().zoneUID, 9); eq(H.King().realm, "Realm")
+			-- His own messages from another realm of his group (a channel shared across realms): there.
+			ns.db.links = { Realm = "OtherRealm+Realm", OtherRealm = "OtherRealm+Realm" }
+			ns.Layers.Receive(king .. "-OtherRealm", { mapID = 1453, zoneUID = 7, rank = 0, guild = "Olympus" })
+			k = H.King()
+			eq(k.realm, "OtherRealm"); eq(H.KingOtherRealm(k), true, "his own word")
+			H.AskKing()
+			eq(said[#said], ns.L.HOP_KING_OTHER_REALM:format("Asmon", "OtherRealm"))
+		end)
+		ns.Print, ns.db.links = savedPrint, savedLinks
+		ns.King.Reset()
+		ns.Layers.Reset()
+		ns.rdb.guilds = {}
+		if not ok then error(err, 0) end
+	end)
+end)
+
 -- 1.0.0: a player's "the King's layer doesn't work" came with a /oly bug that said nothing of the
 -- King. Now one line says what this client knows of him: whether the census has him online (and
 -- how sure), the realm it places him on, his layer and his crown, and how long ago each was heard.
