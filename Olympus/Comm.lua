@@ -783,10 +783,15 @@ end
 
 -- The realm, not ours, that the hello of this guildmate named (counted now), or nil. The channel
 -- may send a name of another realm without it (see heardOwn): matched by the short name then,
--- unless the full name is a peer of its own.
+-- unless the full name is a peer of its own. Only a realm the server stamped on the hello's
+-- sender too (1.0.0, Konig's review of 1.0.0): a guildmate of our realm whose hello named another
+-- one, sending our guild's report on our channel, made our election cross realms, and our guild's
+-- reporter then played on another realm's channel, off our realm's census.
 local function OtherRealm(name, now)
 	local t, realm = peers[name], peerRealm[name]
-	if t and now - t <= COUNT_WINDOW and realm and realm ~= "old" and realm ~= ns.realm then return realm end
+	if t and now - t <= COUNT_WINDOW and realm and realm ~= "old" and realm ~= ns.realm and ns.RealmOf(name) == realm then
+		return realm
+	end
 end
 local function PeerOfOtherRealm(sender, now)
 	if peers[sender] then return OtherRealm(sender, now) end
@@ -1168,7 +1173,12 @@ local function OnAddonMessage(prefix, text, dist, sender, target, zoneChannelID,
 	if dist == "GUILD" and text:sub(1, 3) == "H1~" then
 		if not peers[sender] then ns.Log("peer %s (%s)", sender, text:sub(4)) end
 		peers[sender] = now
-		peerRealm[sender] = Codec.RealmField(text:match("^H1~[^~]*~([^~]+)")) or "old"
+		-- The realm the hello names, unless the server stamped another one than ours on its sender:
+		-- then the server's (1.0.0, Konig's review of 1.0.0: a guildmate's hello naming our realm
+		-- from another one was elected our realm's reporter, never heard on our channel).
+		local named, stamped = Codec.RealmField(text:match("^H1~[^~]*~([^~]+)")) or "old", ns.RealmOf(sender)
+		if named ~= "old" and stamped and stamped ~= ns.realm then named = stamped end
+		peerRealm[sender] = named
 		peerVersion[sender] = text:match("^H1~(%d+%.%d+%.%d+)") or "?"
 		local sealed = text:match("^H1~[^~]*~[^~]*~([^~]*)")
 		peerSealed[sender] = (sealed == "s" or sealed == "p") and sealed or nil

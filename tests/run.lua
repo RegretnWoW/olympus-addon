@@ -18555,6 +18555,48 @@ do
 		end)
 	end)
 
+	-- Konig's review of 1.0.0: the realm a hello names is whatever its sender writes. A guildmate of
+	-- our realm whose hello named PvP 2 and who sent our guild's report on our channel made our
+	-- election cross realms: Aa, of PvP 2, was elected, never heard on our channel, and our guild
+	-- was off our realm's census (then Ab, Ac... each left out in turn). And a guildmate of PvP 2
+	-- whose hello named our realm was elected our realm's reporter. The server stamps the sender's
+	-- realm: its word counts first.
+	test("1.0.0 a guildmate's hello naming another realm than the server's never pulls our guild off our realm's census", function()
+		Guarded(function(Open)
+			local cns, Deliver, Report = Open()
+			local C = cns.Comm
+			local ours = { guild = MY_GUILD, total = 1000, online = 300, zones = {} }
+			local far = { "Aa", "Ab", "Ac" }
+			local function Tick(seconds)
+				cns.clock = cns.clock + (seconds or 0)
+				for _, n in ipairs(far) do Deliver("GUILD", n .. "-" .. P2, "H1~1.0.0~" .. P2 .. "~p") end
+				-- Mallory plays on our realm (the server sends his name without a realm), and his hello
+				-- names PvP 2.
+				Deliver("GUILD", "Mallory", "H1~1.0.0~" .. P2 .. "~p")
+				C.MaybeBroadcast(ours)
+			end
+			Tick()
+			eq(C.isReporter, true)
+			-- He sends our guild's report on our channel, naming PvP 2, every half hour.
+			for _ = 1, 4 do
+				Report("Mallory", { guild = MY_GUILD, total = 1000, online = 300, zones = {}, from = P2 })
+				eq(C.ElectsAcrossRealms(), false, "his hello's realm is not the server's: no proof the channel crosses realms")
+				Tick(1800)
+				eq(C.isReporter, true, "we keep reporting our guild on our realm")
+			end
+			eq(#C.Stats().benched, 0, "nobody of PvP 2 elected, nobody left out")
+			-- A guildmate of PvP 2 (the server stamps it) whose hello names our realm, sorting first:
+			-- not our realm's reporter.
+			Deliver("GUILD", "Aaa-" .. P2, "H1~1.0.0~Realm~p")
+			C.MaybeBroadcast(ours)
+			eq(C.isReporter, true, "Aaa plays on PvP 2, whatever his hello says")
+			assert(C.Stats().peerRealms[P2] ~= nil, "counted on PvP 2")
+			-- Still: a guildmate the server places on PvP 2, heard on our channel, shows it shared.
+			Report("Ab-" .. P2, { guild = MY_GUILD, total = 1000, online = 300, zones = {}, from = P2 })
+			eq(C.ElectsAcrossRealms(), true)
+		end)
+	end)
+
 	test("1.0.0 the hello quiet rule counts our realm: 10 guildmates before us on one realm, 5 on each of two, 3 at least", function()
 		Guarded(function(Open)
 			local cns, Deliver, Report = Open()
