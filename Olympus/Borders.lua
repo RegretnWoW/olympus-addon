@@ -41,6 +41,10 @@ local L = ns.L
 -- nothing is sent, nothing is saved (a /reload forgets it), nobody else's border changes. It goes
 -- through the same Refresh as a real border, so the same rules hold: none while the borders are
 -- off or with the gamepad UI, the textures made once out of combat.
+--
+-- The nameplate marks (1.0.0, Nameplates.lua) come from the same facts and tiers (Borders.MarkOf),
+-- and `/oly borders off` hides them with the borders. The author's preview shows its tier's mark
+-- too, and has one tier of the marks alone: "member", the star (no border has it).
 
 local Borders = {}
 ns.Borders = Borders
@@ -144,6 +148,7 @@ local function Facts(unit)
 	if mine and f.guild == mine then
 		-- Our own guild: the rank the server gives (our roster's if it gives none).
 		local rank = type(rankIndex) == "number" and rankIndex or (ns.Roster and ns.Roster.RankOf(who))
+		f.fromRoster = type(rankIndex) ~= "number"
 		f.leader = rank == 0
 		f.officer = type(rank) == "number" and rank > 0 and rank <= ns.CAPTAIN_RANK
 	elseif type(report) == "table" then
@@ -177,16 +182,57 @@ function Borders.TierOf(unit)
 	return t and t.name or nil
 end
 
+-- What a unit's border (or nameplate mark) was worked out from, to know when it must be worked
+-- out again (Borders.Changed): its guild, that guild's census report as it stood (its time, and
+-- its votes: an outvoted report keeps the row and changes the votes, which Data.KnownRank reads),
+-- the High Council's list, and our roster when his rank came from it (our own guild's, the server
+-- giving none; Roster.lua makes a new table at each scan).
+local function Inputs(f)
+	local report = f and f.report
+	local row = type(report) == "table"
+	return { guild = f and f.guild, report = report, rt = row and report.t or nil, vouch = row and report.vouch or nil,
+		council = ns.rdb and ns.rdb.council, roster = f and f.fromRoster and (ns.Roster and ns.Roster.byName or false) or nil }
+end
+
+-- Has anything a unit's border or mark was worked out from (Inputs) changed since? Lookups only:
+-- its guild's report by name, never a walk over every guild.
+function Borders.Changed(k)
+	local rdb = ns.rdb
+	local report = k.guild and rdb and type(rdb.guilds) == "table" and rdb.guilds[k.guild] or nil
+	local row = type(report) == "table"
+	return report ~= k.report or (row and report.t or nil) ~= k.rt or (row and report.vouch or nil) ~= k.vouch
+		or (rdb and rdb.council) ~= k.council or (k.roster ~= nil and k.roster ~= (ns.Roster and ns.Roster.byName or false))
+end
+
 local function Compute(unit, guid)
 	Borders.stats.computed = Borders.stats.computed + 1
 	local f = Facts(unit)
 	local t = Match(f)
-	local report = f and f.report
-	local k = { guid = guid, tier = t and t.name or nil, guild = f and f.guild, report = report,
-		rt = type(report) == "table" and report.t or nil, vouch = type(report) == "table" and report.vouch or nil,
-		council = ns.rdb and ns.rdb.council }
+	local k = Inputs(f)
+	k.guid, k.tier = guid, t and t.name or nil
 	known[unit] = k
 	return k
+end
+
+-- The nameplate mark (Nameplates.lua) of each border, for anyone but the King: the High Council
+-- (gold wings too behind ns.BORDERS_COUNCIL_GOLD), Lords and Captains the game's silver elite
+-- mark, Raiders and Veterans the bronze. The King's mark, the game's gold, is his alone.
+Borders.MARK_OF = { ["gold-elite"] = "silver", ["silver-elite"] = "silver", gold = "silver", silver = "silver",
+	["bronze-elite"] = "bronze", bronze = "bronze" }
+
+-- The mark a unit gets next to its name on a nameplate, from the same facts and trust rules as
+-- its border: "gold" (the King), "silver", "bronze", "member" (any other member of an Olympus
+-- guild of our faction: the star), nil for anyone else; and what it was worked out from (Inputs).
+function Borders.MarkOf(unit)
+	local f = Facts(unit)
+	local mark
+	if f and f.king then
+		mark = "gold"
+	elseif f then
+		local t = Match(f)
+		mark = t and Borders.MARK_OF[t.name] or (f.olympus and "member" or nil)
+	end
+	return mark, Inputs(f)
 end
 
 function Borders.Enabled() return not (ns.db and ns.db.borders == false) end
@@ -320,19 +366,12 @@ function Borders.RefreshAll(fresh)
 	for _, spec in ipairs(RIGS) do Borders.Refresh(spec.unit, fresh) end
 end
 
--- The census or the High Council's list changed: only a unit whose guild's report, its votes (an
--- outvoted report keeps the row and changes the votes, which Data.KnownRank reads) or the list
--- are not the ones its border was worked out from is worked out again.
+-- The census, the High Council's list or our roster changed: only a unit whose border was worked
+-- out from something that changed since (Borders.Changed) is worked out again.
 function Borders.CensusChanged()
 	if not installed then return end
-	local rdb = ns.rdb
 	for unit, k in pairs(known) do
-		local report = k.guild and rdb and type(rdb.guilds) == "table" and rdb.guilds[k.guild] or nil
-		local row = type(report) == "table"
-		if report ~= k.report or (row and report.t or nil) ~= k.rt or (row and report.vouch or nil) ~= k.vouch
-			or (rdb and rdb.council) ~= k.council then
-			Borders.Refresh(unit, true)
-		end
+		if Borders.Changed(k) then Borders.Refresh(unit, true) end
 	end
 end
 
@@ -342,9 +381,11 @@ function Borders.Report()
 	if ns.GamepadUI() then ns.Print(L.BORDERS_GAMEPAD) end
 end
 
+-- On or off, and the nameplate marks with them (Nameplates.lua).
 function Borders.SetEnabled(on)
 	ns.db.borders = on and true or false
 	Borders.RefreshAll(true)
+	ns.Nameplates.RefreshAll(true)
 	Borders.Report()
 end
 
@@ -373,8 +414,13 @@ function Borders.PreviewAllowed()
 end
 function Borders.Preview() return preview end
 
+-- The marks' own preview tier (Nameplates.lua): the star of any other member. No border has it,
+-- so his portrait shows none while it is on.
+Borders.MEMBER = "member"
+
 -- `/oly borders test <tier>|off` (any case; nothing: which tiers there are). False for anyone
--- else, with nothing done: the command then answers as /oly borders does.
+-- else, with nothing done: the command then answers as /oly borders does. A tier shows its border
+-- and its nameplate mark (Nameplates.lua); "member" the star alone.
 function Borders.SetPreview(word)
 	if not Borders.PreviewAllowed() then return false end
 	word = type(word) == "string" and word:lower() or ""
@@ -384,6 +430,9 @@ function Borders.SetPreview(word)
 	elseif TierNamed(word) then
 		preview = word
 		ns.Print(L.BORDERS_PREVIEW_ON:format(word))
+	elseif word == Borders.MEMBER then
+		preview = word
+		ns.Print(L.BORDERS_PREVIEW_ON_MEMBER)
 	else
 		local names = {}
 		for _, t in ipairs(Borders.TIERS) do names[#names + 1] = t.name end
@@ -391,11 +440,15 @@ function Borders.SetPreview(word)
 		return true
 	end
 	Borders.RefreshAll()
+	ns.Nameplates.RefreshAll()
 	-- Why it doesn't show yet, if it doesn't: the same rules as a real border.
 	if preview then
 		if not Borders.Enabled() then ns.Print(L.BORDERS_PREVIEW_WHEN_OFF)
 		elseif ns.GamepadUI() then ns.Print(L.BORDERS_GAMEPAD)
 		elseif ns.IsMember() ~= true then ns.Print(L.BORDERS_PREVIEW_NOT_MEMBER)
+		elseif preview == Borders.MEMBER then
+			-- (no border: the marks alone, and only while they are on)
+			if ns.Nameplates.Enabled() == false then ns.Print(L.NAMEPLATES_PREVIEW_WHEN_OFF) end
 		elseif not installed then ns.Print(L.BORDERS_PREVIEW_COMBAT) -- (only combat keeps them from being made)
 		elseif not (rigs.player and rigs.player.tex[preview]) then ns.Print(L.BORDERS_PREVIEW_MISSING) end
 	end
@@ -403,21 +456,24 @@ function Borders.SetPreview(word)
 	return true
 end
 
--- The Workshop's lines for it (not in its copy for Discord): one per tier, a click shows it, a
--- click on the one shown ends it.
+-- The Workshop's lines for it (not in its copy for Discord): one per tier, and last the marks'
+-- member star; a click shows it, a click on the one shown ends it.
 function Borders.PreviewLines(lines)
 	if not Borders.PreviewAllowed() then return end
 	lines[#lines + 1] = { header = true, text = L.BORDERS_PREVIEW_TITLE,
 		right = Grey(preview and L.BORDERS_PREVIEW_NOW:format(preview) or L.BORDERS_PREVIEW_NONE) }
-	for _, t in ipairs(Borders.TIERS) do
-		local name, on = t.name, preview == t.name
+	local names = {}
+	for _, t in ipairs(Borders.TIERS) do names[#names + 1] = t.name end
+	names[#names + 1] = Borders.MEMBER
+	for _, name in ipairs(names) do
+		local on = preview == name
 		lines[#lines + 1] = {
 			indent = 1, text = (on and Gold(name) or name) .. "  " .. Grey(Who(name)),
 			right = on and Green(L.BORDERS_PREVIEW_SHOWN) or nil,
 			onClick = function() Borders.SetPreview(on and "off" or name) end,
 			tooltip = function(tt)
 				tt:AddLine(L.BORDERS_PREVIEW_TITLE, 1, 0.82, 0)
-				tt:AddLine(L.BORDERS_PREVIEW_TIP, 1, 1, 1, true)
+				tt:AddLine(name == Borders.MEMBER and L.BORDERS_PREVIEW_TIP_MEMBER or L.BORDERS_PREVIEW_TIP, 1, 1, 1, true)
 			end,
 		}
 	end

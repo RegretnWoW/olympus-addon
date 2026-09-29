@@ -377,6 +377,7 @@ function ns.StatusText()
 	-- (1.0.0) The King as this client knows him: why his layer can or can't be asked for.
 	add("king: %s", ns.Hop and ns.Hop.KingStatusLine and ns.Hop.KingStatusLine() or "not loaded")
 	add("borders: %s", ns.Borders and ns.Borders.StatusLine and ns.Borders.StatusLine() or "not loaded")
+	add("nameplates: %s", ns.Nameplates and ns.Nameplates.StatusLine and ns.Nameplates.StatusLine() or "not loaded")
 	-- The gamepad UI and what the game refused us this session; what its code reads, as now.
 	local refused = type(ns.db.actionsBlocked) == "table" and ns.db.actionsBlocked or {}
 	add("gamepad UI: %s  |  blocked this session: %d  |  blocked calls kept: %d%s", ns.GamepadUI() and "on" or "off", blocked, #refused,
