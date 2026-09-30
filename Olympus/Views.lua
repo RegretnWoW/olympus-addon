@@ -23,6 +23,11 @@ local CROWN = "|TInterface\\GroupFrame\\UI-Group-LeaderIcon:13:13|t "
 local ASSIST = "|TInterface\\GroupFrame\\UI-Group-AssistantIcon:12:12|t "
 
 local function Green(s) return "|cff40ff40" .. s .. "|r" end
+-- 1.1.2: a count's tooltip ends with why it can differ between players (Answers.lua, the bank's).
+local function Why(tt, ...)
+	local A = ns.Answers
+	if A and type(A.WhyTip) == "function" then A.WhyTip(tt, ...) end
+end
 local function Grey(s) return "|cff9d9d9d" .. s .. "|r" end
 local function Red(s) return "|cffff4040" .. s .. "|r" end
 local function Gold(s) return "|cffffd200" .. s .. "|r" end
@@ -628,6 +633,8 @@ local function GuildTooltip(e)
 		tt:AddLine(L.REPORTED_BY:format(g.reporter or "?", ns.Ago(g.t)), 0.6, 0.6, 0.6)
 		if not e.fresh then tt:AddLine(L.STALE, 1, 0.4, 0.4) end
 		DisputeTooltip(tt, ns.Data.Dispute(g))
+		-- (Ours is live from our roster; another guild's is its last report, 1.1.2's review.)
+		Why(tt, not e.fresh and "count-grey-rows" or (g.mine and "count-own-guild-live" or "count-other-guild-report"))
 	end
 end
 
@@ -640,6 +647,7 @@ local function SeenTooltip(e)
 		tt:AddLine(" ")
 		tt:AddLine(L.SEEN_TIP, 0.8, 0.8, 0.8, true)
 		if e.capped then tt:AddLine(L.SEEN_CAPPED_TIP, 0.8, 0.8, 0.8, true) end
+		Why(tt, "count-army-lower")
 	end
 end
 
@@ -830,6 +838,7 @@ local function EveningLine()
 				local z = zones[i]
 				tt:AddDoubleLine(ns.Zones.NameForKey(z.key), ns.FormatNumber(z.now) .. "  " .. Trend(z.change), 0.8, 0.8, 0.8, 1, 1, 1)
 			end
+			Why(tt, "count-differs-from-friend")
 		end,
 	}
 end
@@ -888,6 +897,7 @@ local function ZoneLines(lines, s, q)
 				tooltip = function(tt)
 					tt:AddLine(name, 1, 0.82, 0)
 					tt:AddLine(L.SEARCH_ZONE_TIP, 1, 1, 1, true)
+					Why(tt, "count-map-zones")
 				end,
 			}
 			local guilds = {}
@@ -1540,7 +1550,16 @@ local function RealmLines(s, q)
 		end
 		local officers = g.officers or {}
 		local listed = only and only.officers or officers
-		if #listed > 0 or not only then lines[#lines + 1] = { indent = 1, text = Gold(L.CAPTAINS:format(#officers)) } end
+		if #listed > 0 or not only then
+			lines[#lines + 1] = { indent = 1, text = Gold(L.CAPTAINS:format(#officers)),
+				-- (1.1.2: another guild's report names 30 Captains at most, Codec.lua.)
+				tooltip = function(tt)
+					local ours = e.name == GetGuildInfo("player")
+					tt:AddLine(L.CAPTAINS:format(#officers), 1, 0.82, 0)
+					tt:AddLine(ours and L.CAPTAINS_OWN_TIP or L.CAPTAINS_TIP, 1, 1, 1, true)
+					Why(tt, ours and "count-own-guild-live" or "count-other-guild-report")
+				end }
+		end
 		for _, o in ipairs(listed) do
 			local person = { name = o.name, realm = g.realm, class = o.class, level = o.level, zone = o.zone, guild = e.name,
 				rank = L.CAPTAIN, online = o.online, days = o.days }
@@ -1563,6 +1582,7 @@ local function RealmLines(s, q)
 				tooltip = function(tt)
 					tt:AddLine((fromWho and L.MEMBERS_SEEN or L.MEMBERS_ONLINE):format(#members), 1, 0.82, 0)
 					tt:AddLine(fromWho and L.MEMBERS_SEEN_TIP or L.MEMBERS_ONLINE_TIP, 1, 1, 1, true)
+					Why(tt, fromWho and "count-other-guild-seen-online" or "count-realm-online-now")
 				end,
 			}
 		end
@@ -1686,7 +1706,11 @@ local function RealmLines(s, q)
 	end
 
 	local open = Views.OpenGuilds(s)
-	lines[#lines + 1] = { header = true, text = L.RECRUITING }
+	-- (1.1.2's review: free slots are 1000 less the size of each guild's last report.)
+	lines[#lines + 1] = { header = true, text = L.RECRUITING, tooltip = function(tt)
+		tt:AddLine(L.RECRUITING, 1, 0.82, 0)
+		Why(tt, "count-other-guild-report")
+	end }
 	-- The gates the King (or a Hand) opened: where new recruits go now (Acts.lua).
 	local gates = ns.Acts and ns.Acts.Gates and ns.Acts.Gates()
 	local commands = ns.King and (ns.King.CanCommand() or ns.King.Preview())
@@ -1713,14 +1737,15 @@ local function RealmLines(s, q)
 			text = mark .. Green("<" .. name .. ">"), right = L.FREE_SLOTS:format(ns.FormatNumber(open[i].free)),
 			-- The King and his Hands open a guild's gates from here.
 			onClick = commands and function() ns.Acts.GatesClick(name) end or nil,
-			tooltip = (commands or d) and function(tt)
+			tooltip = function(tt)
 				tt:AddLine("<" .. name .. ">", 0.25, 1, 0.25)
 				if commands then
 					local closing = gates and gates.guild == name
 					tt:AddLine(closing and (ns.Acts.CanClose() and L.GATES_CLOSE_TIP or L.GATES_ONLY_OPENER) or L.GATES_CLICK_TIP, 1, 1, 1, true)
 				end
 				DisputeTooltip(tt, d)
-			end or nil,
+				Why(tt, "count-other-guild-report")
+			end,
 		}
 	end
 	if #open > Views.RECRUIT_SHOWN then
@@ -1760,6 +1785,8 @@ local function RealmLines(s, q)
 				if head then tt:AddLine(("%s <%s>"):format(head.name, head.guild or "?"), 1, 1, 1) end
 				if layer.mine then tt:AddLine(L.LAYER_YOU, 0.25, 1, 0.25) else tt:AddLine(L.HOP_ROW_TIP, 0.25, 1, 0.25, true) end
 				tt:AddLine(L.LAYER_EXPERIMENTAL, 0.6, 0.6, 0.6, true)
+				-- (1.1.2: "~N with Olympus" is a sample: Layers.lua.)
+				Why(tt, "count-layer-sample")
 			end,
 		}
 	end

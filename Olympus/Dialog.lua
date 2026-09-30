@@ -16,6 +16,10 @@ local ADDON, ns = ...
 -- EditBoxOnEnterPressed and EditBoxOnEscapePressed(editBox, data), Enter doing nothing else.
 -- Like the game's popups too, they stay up through death, loading screens and the game's
 -- window sweeps (they are not in UISpecialFrames), and are only answered by a click.
+-- 1.1.2: a definition's `extra` = { label, shown(self, data), onClick(self, data) } adds a button
+-- after the others that answers nothing and keeps the dialog up (the Answers of the author, the
+-- High Council and the Stewards in Olympus's whisper windows: UI.lua). The game's popups have no
+-- such button: a dialog that needs it is shown here in both input modes (Dialog.Show).
 -- An edit box here never takes the keyboard from another one (the chat's): its focus change
 -- would run the game's gamepad code from ours, the same block (ns.Focus).
 
@@ -133,6 +137,13 @@ local function Build(i)
 	end)
 	f.editBox, f.EditBox = eb, eb
 	f.buttons = { Button(f, 1), Button(f, 2), Button(f, 3) }
+	f.extraButton = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+	f.extraButton:SetHeight(22)
+	f.extraButton:SetScript("OnClick", function()
+		local extra = f.def and f.def.extra
+		if f:IsShown() and type(extra) == "table" then Call(f, "extra", extra.onClick, f, f.data) end
+	end)
+	f.extraButton:Hide()
 	f:SetScript("OnUpdate", function(self, elapsed)
 		self.look = (self.look or 0) + elapsed
 		if self.look > 0.25 then
@@ -234,6 +245,18 @@ function Dialog.Show(which, a, b, data)
 			b:Hide()
 		end
 	end
+	-- The extra button (1.1.2), when its definition has one for this dialog.
+	local extra, eb2 = def.extra, f.extraButton
+	if type(extra) == "table" and (not extra.shown or Call(f, "extra shown", extra.shown, f, data)) then
+		eb2:SetText(tostring(extra.label or ""))
+		local fs = eb2:GetFontString()
+		local textW = fs and (fs.GetUnboundedStringWidth and fs:GetUnboundedStringWidth() or fs:GetStringWidth()) or 80
+		eb2:SetWidth(math.max(90, math.ceil(textW) + 24))
+		eb2:Show()
+		used[#used + 1] = eb2
+	else
+		eb2:Hide()
+	end
 	local total = 0
 	for _, b in ipairs(used) do total = total + b:GetWidth() end
 	total = total + 8 * math.max(0, #used - 1)
@@ -257,7 +280,9 @@ function Dialog.Show(which, a, b, data)
 	f:Show()
 	Layout()
 	Call(f, "show", def.OnShow, f, data)
-	if not hinted then
+	-- (The hint is the gamepad UI's: with mouse and keyboard these are Olympus's own windows by
+	-- choice, 1.1.2, and they are answered with the mouse as any window.)
+	if not hinted and ns.GamepadUI() then
 		hinted = true
 		ns.Print(ns.L.DIALOG_GAMEPAD_HINT)
 	end

@@ -2,7 +2,7 @@ local ADDON, ns = ...
 local L = ns.L
 
 ns.NAME = "Olympus"
-ns.VERSION = "1.1.1"
+ns.VERSION = "1.1.2"
 ns.PREFIX = "OLYMPUS"        -- addon message prefix (max 16 chars)
 ns.CHANNEL = "OlympusNet"    -- hidden chat channel shared by every Olympus guild (Alliance)
 ns.CHANNEL_HORDE = "OlympusNetH" -- the Horde's: the two factions never see each other's guilds
@@ -1566,6 +1566,11 @@ StandIn("Keys", { "RotatePrompt" })
 StandIn("Loot", { "Show" }) -- (1.1)
 StandIn("Crafters", { "Ask", "Slash" }) -- (1.1)
 StandIn("ChatWindow", { "Open", "Toggle" }) -- 1.1.1: the Chat tab of the Olympus window (ChatWindow.lua)
+-- 1.1.2: the right-click menus' lines (PlayerMenu.lua), a player's version (Versions.lua), the
+-- answer bank's Answers and explanations (Answers.lua).
+StandIn("PlayerMenu", {})
+StandIn("Versions", { "Check", "AskUpdate", "Tell" })
+StandIn("Answers", { "Open" })
 
 -- Blizzard's gamepad UI (WoW: Forever's controller mode) is on.
 function ns.GamepadUI()
@@ -1614,6 +1619,14 @@ function ns.HideDialog(which, data)
 	if not ns.GamepadUI() and StaticPopup_Hide then StaticPopup_Hide(which, data) end
 end
 
+-- 1.1.2: the game holds addon messages and chat from addons now (C_ChatInfo.InChatMessagingLockdown:
+-- a dungeon or raid map, an encounter, a challenge, a PvP match). A send then fails (the addon
+-- message's result says so) and roster values come as secrets: the right-click menu's lines that
+-- send grey out, and their functions refuse (Versions.lua, Workshop.lua, UI.lua's whispers).
+function ns.ChatLocked()
+	return C_ChatInfo and C_ChatInfo.InChatMessagingLockdown and C_ChatInfo.InChatMessagingLockdown() and true or false
+end
+
 -- The keyboard to one of our edit boxes (setFocus: its own SetFocus). With the gamepad UI,
 -- not while another box has it (the chat's): its focus change would run the game's gamepad
 -- code from ours, and the game blocks it (see Dialog.lua); the player clicks into ours.
@@ -1644,7 +1657,7 @@ end
 ns.RegisterEvent("PLAYER_LOGIN", function()
 	ns.CheckFaction()
 	local missing = {}
-	for _, key in ipairs({ "Who", "Channels", "King", "Hop", "Workshop", "Vox", "Court", "Treasury", "Dues", "Acts", "Dialog", "Bank", "Link", "Borders", "Nameplates", "Backup", "Loot", "Crafters", "Board", "Week", "Consent", "Chronicle", "Filter", "Members", "Moderation", "Alts", "Keys", "ChatWindow" }) do
+	for _, key in ipairs({ "Who", "Channels", "King", "Hop", "Workshop", "Vox", "Court", "Treasury", "Dues", "Acts", "Dialog", "Bank", "Link", "Borders", "Nameplates", "Backup", "Loot", "Crafters", "Board", "Week", "Consent", "Chronicle", "Filter", "Members", "Moderation", "Alts", "Keys", "ChatWindow", "PlayerMenu", "Versions", "Answers" }) do
 		if ns[key].missing then missing[#missing + 1] = key .. ".lua" end
 	end
 	if #missing > 0 then
@@ -1666,6 +1679,37 @@ ns.On("LOGIN", function()
 	ns.RegisterEvent("PLAYER_FLAGS_CHANGED", Soon)
 	ns.Every(10, "held alerts", ns.ReleaseHeld)
 end)
+
+-- 1.1.2: a window that opens by itself (the author's bug report and version results, a player's
+-- window for his bug report ask) waits out a fight in the open world, where ns.Alert does not
+-- hold it: in the middle of the screen it would catch the mouse mid-combat. fn() now out of
+-- combat, else once it ends (PLAYER_REGEN_ENABLED). The same key waiting again: the newer fn, in
+-- the older's place. True when it ran now.
+local afterCombat = {} -- { key, fn }, in order
+function ns.OutOfCombat(key, fn)
+	if not (InCombatLockdown and InCombatLockdown()) then
+		fn()
+		return true
+	end
+	for _, e in ipairs(afterCombat) do
+		if key ~= nil and e.key == key then
+			e.fn = fn
+			return false
+		end
+	end
+	afterCombat[#afterCombat + 1] = { key = key, fn = fn }
+	return false
+end
+function ns.RunAfterCombat()
+	if (InCombatLockdown and InCombatLockdown()) or #afterCombat == 0 then return 0 end
+	local list = afterCombat
+	afterCombat = {}
+	for _, e in ipairs(list) do ns.SafeCall("after combat " .. tostring(e.key), e.fn) end
+	return #list
+end
+function ns.WaitingForCombat() return #afterCombat end -- (tests, /oly status)
+function ns.ResetAfterCombat() afterCombat = {} end -- (tests)
+ns.RegisterEvent("PLAYER_REGEN_ENABLED", ns.RunAfterCombat)
 
 ---------------------------------------------------------------------------
 -- Slash commands
@@ -1926,7 +1970,13 @@ SlashCmdList.OLYMPUS = function(input)
 		elseif cmd == "bug" then
 			ns.UI.ShowBugReport()
 		elseif cmd == "status" then
-			for line in ns.StatusText():gmatch("[^\n]+") do print("  " .. line) end
+			-- 1.1.2: the author's in a copy window (he copies it; a chat line can't be), everyone
+			-- else's in chat as before.
+			if ns.Workshop.IsAuthor and ns.Workshop.IsAuthor() == true and ns.UI.ShowCopy then
+				ns.UI.ShowCopy("/oly status", ns.StatusText(), nil, { key = "status" })
+			else
+				for line in ns.StatusText():gmatch("[^\n]+") do print("  " .. line) end
+			end
 		elseif cmd == "key" then
 			-- 1.1: "rotate" is the King's rotation of the army's key (Keys.lua), never a key: anyone
 			-- else is told so (and a /reload before the restart the new file needs), and no guild is

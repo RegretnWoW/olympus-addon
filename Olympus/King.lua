@@ -1316,11 +1316,23 @@ function King.RollCallLines()
 				if ns.UI and ns.UI.Refresh then ns.UI.Refresh() end
 			end }
 		if rollOpen then
+			-- (1.1.2's review: Silent and the unconfirmed say why they can be off, the answer bank's.)
+			local function Why(tt) if ns.Answers and ns.Answers.WhyTip then ns.Answers.WhyTip(tt, "count-throne-silent") end end
 			for _, group in ipairs({ { L.THRONE_PRESENT_N, present, Green }, { L.THRONE_BUSY_N, busy, Grey }, { L.THRONE_SILENT_N, silent, Grey } }) do
-				lines[#lines + 1] = { indent = 1, text = group[3](group[1]:format(#group[2])) }
+				local label = group[1]:format(#group[2])
+				lines[#lines + 1] = { indent = 1, text = group[3](label), tooltip = group[2] == silent and function(tt)
+					tt:AddLine(label, 1, 0.82, 0)
+					Why(tt)
+				end or nil }
 				for _, row in ipairs(group[2]) do lines[#lines + 1] = { indent = 2, text = row } end
 			end
-			if others > 0 then lines[#lines + 1] = { indent = 1, text = Grey(L.THRONE_UNCONFIRMED:format(others)) } end
+			if others > 0 then
+				local label = L.THRONE_UNCONFIRMED:format(others)
+				lines[#lines + 1] = { indent = 1, text = Grey(label), tooltip = function(tt)
+					tt:AddLine(label, 1, 0.82, 0)
+					Why(tt)
+				end }
+			end
 		end
 		lines[#lines + 1] = { indent = 1, text = Gold("> " .. L.ROLL_AGAIN), onClick = function() King.Summon() end }
 	end

@@ -2955,7 +2955,11 @@ end
 -- `q`: the tab's search (the donors it finds, RankFound, a page at a time as ever).
 local function RankLines(lines, rank, q)
 	local found = RankFound(rank, q)
-	lines[#lines + 1] = { header = true, text = L.TREASURY_RANKING }
+	-- (1.1.2: why the ranking reads lower than on the Treasurer's screen, the answer bank's.)
+	lines[#lines + 1] = { header = true, text = L.TREASURY_RANKING, tooltip = function(tt)
+		tt:AddLine(L.TREASURY_RANKING, 1, 0.82, 0)
+		if ns.Answers and ns.Answers.WhyTip then ns.Answers.WhyTip(tt, "count-treasury-donors") end
+	end }
 	if #rank == 0 then lines[#lines + 1] = { text = Grey(L.TREASURY_NONE) } end
 	local n = #found
 	for k = 1, math.min(n, rankShown) do
@@ -3401,7 +3405,12 @@ local function SummaryLines(role, q)
 	if Treasury.MaySee("balance") then
 		lines[#lines + 1] = { text = Gold(L.TREASURY_BALANCE), right = Treasury.Coins(r.balance) }
 		lines[#lines + 1] = { text = L.TREASURY_IN_OUT, right = Green("+" .. Treasury.Coins(r.allIn)) .. "  " .. Red("-" .. Treasury.Coins(r.allOut)) }
-		lines[#lines + 1] = { text = L.TREASURY_WEEK:format(r.donors), right = Green("+" .. Treasury.Coins(r.week)) }
+		lines[#lines + 1] = { text = L.TREASURY_WEEK:format(r.donors), right = Green("+" .. Treasury.Coins(r.week)),
+			-- (1.1.2: counted per keeper, the answer bank says why that can differ.)
+			tooltip = function(tt)
+				tt:AddLine(L.TREASURY_WEEK:format(r.donors), 1, 0.82, 0)
+				if ns.Answers and ns.Answers.WhyTip then ns.Answers.WhyTip(tt, "count-treasury-donors") end
+			end }
 		if keeper then
 			lines[#lines + 1] = { text = Grey(L.TREASURY_OPENING:format(Treasury.Coins(Treasury.Opening()))),
 				onClick = function() ns.ShowDialog("OLYMPUS_TREASURY_OPENING") end,

@@ -156,7 +156,7 @@ end
 -- Load addon files like WoW does: each gets (addonName, sharedTable)
 ---------------------------------------------------------------------------
 local ns = {}
-for _, file in ipairs({ "Bootstrap", "Locales", "Locales/deDE", "Locales/esES", "Locales/frFR", "Core", "Diagnostics", "Dialog", "Codec", "Sign", "Zones", "Who", "Data", "Roster", "Comm", "Map", "Layers", "Hop", "Positions", "Decree", "Channels", "Filter", "Inspect", "King", "Vox", "Court", "Board", "Week", "Treasury", "Dues", "Bank", "Acts", "Loot", "Crafters", "Chronicle", "Workshop", "Ed25519", "libs/QREncode/qrencode", "Link", "Recruit", "Views", "Consent", "Members", "Bridge" }) do
+for _, file in ipairs({ "Bootstrap", "Locales", "Locales/deDE", "Locales/esES", "Locales/frFR", "Core", "Diagnostics", "Dialog", "PlayerMenu", "Codec", "Sign", "Zones", "Who", "Data", "Roster", "Comm", "Map", "Layers", "Hop", "Positions", "Decree", "Channels", "Filter", "Inspect", "King", "Vox", "Court", "Board", "Week", "Treasury", "Dues", "Bank", "Acts", "Loot", "Crafters", "Chronicle", "Workshop", "Versions", "Ed25519", "libs/QREncode/qrencode", "Link", "Recruit", "AnswerBank", "Answers", "Views", "Consent", "Members", "Bridge" }) do
 	local chunk = assert(loadfile(ADDON_DIR .. file .. ".lua"))
 	chunk("Olympus", ns)
 end
@@ -516,6 +516,20 @@ test("Throne: only the King sees it and his commands are checked; Lords answer h
 		K.HandleAnswer("WHISPER", "Troll-Realm", ("T2~%d~P~Asmongold|cffff0000 smells"):format(id))
 		eq(st.summon.answers["Troll-Realm"], nil, "no free text on the King's screen")
 		eq(st.summon.answers["Late-Realm"], nil, "another roll call's answer")
+		-- (1.1.2's review: the unconfirmed answers say why the roll call's counts can be off, the
+		-- answer bank's line.)
+		local function RollLine(text)
+			for _, l in ipairs(K.RollCallLines()) do if tostring(l.text):find(text, 1, true) then return l end end
+		end
+		local whoLine = RollLine(ns.L.ROLL_WHO)
+		assert(whoLine, "who answered")
+		whoLine.onClick()
+		local unconfirmed = RollLine(ns.L.THRONE_UNCONFIRMED:match("%%d(.*)$"))
+		assert(unconfirmed and unconfirmed.tooltip, "the unconfirmed line's tooltip")
+		local rollTip = {}
+		unconfirmed.tooltip({ AddLine = function(_, s) rollTip[#rollTip + 1] = s end })
+		assert(table.concat(rollTip, "\n"):find(ns.Answers.Find("count-throne-silent").text, 1, true), table.concat(rollTip, "\n"))
+		whoLine.onClick()
 		-- Royal Inspection reports.
 		K.Reset()
 		GetGuildInfo = function() return "Olympus", "King", 0 end
@@ -956,7 +970,14 @@ test("map refresh runs end to end with a map library (continent totals included)
 	}, { __index = function() return function() end end })
 	local savedLibStub, savedCreateFrame, savedWMF = LibStub, CreateFrame, WorldMapFrame
 	LibStub = function(name) if name == "HereBeDragons-Pins-2.0" then return fakePins end end
-	CreateFrame = function() return deep() end
+	-- (1.1.2: the frames keep their OnEnter, for the pin's tooltip below.)
+	local made = {}
+	CreateFrame = function()
+		local f = deep()
+		rawset(f, "SetScript", function(self, kind, fn) rawset(self, "script" .. kind, fn) end)
+		made[#made + 1] = f
+		return f
+	end
 	WorldMapFrame = deep()
 	C_Map.GetMapRectOnMap = function() return 0.1, 0.3, 0.2, 0.8 end
 	MAPS[947] = { "Azeroth", 1 }; MAPS[1415] = { "Eastern Kingdoms", 2, 947 }
@@ -981,6 +1002,18 @@ test("map refresh runs end to end with a map library (continent totals included)
 	assert(calls.world >= 2, "zone pins were not added")
 	local totals = ns.Map.ContinentTotals(ns.Data.Summary())
 	eq(totals[1415], 10, "continent total")
+	-- (1.1.2's review: a zone pin's tooltip says why its soldiers add up to less than the army online.)
+	local pin
+	for _, f in ipairs(made) do if rawget(f, "scriptOnEnter") and rawget(f, "key") then pin = f end end
+	assert(pin, "a zone pin with its tooltip")
+	local savedTip = GameTooltip
+	local tip = {}
+	GameTooltip = setmetatable({ AddLine = function(_, s) tip[#tip + 1] = tostring(s) end,
+		AddDoubleLine = function(_, a, b) tip[#tip + 1] = tostring(a) .. " " .. tostring(b) end }, { __index = function() return function() end end })
+	local okTip, errTip = pcall(pin.scriptOnEnter, pin)
+	GameTooltip = savedTip
+	assert(okTip, errTip)
+	assert(table.concat(tip, "\n"):find(ns.Answers.Find("count-map-zones").text, 1, true), table.concat(tip, "\n"))
 end)
 
 ---------------------------------------------------------------------------
@@ -3256,6 +3289,29 @@ end
 
 local function Msg(tier, guild, id, text)
 	return Codec.EncodeChat(tier, guild, id, "PA", text or "hi")
+end
+
+-- Chattynator 224's public API (its API/Main.lua) as a stand-in, the global Chattynator (1.1.2,
+-- PR #47): GetWindowsAndTabs answers c.windows (its tabs' names, window by window; a test may
+-- change them between calls); AddMessageToWindowAndTab(window, tab, text, r, g, b) records each line
+-- in c.calls, and in c.calls[i].source the file of its caller: Chattynator names the line's addon
+-- after that caller (debugstack(2)), and a tab's filter lets the line in by that name. fn(c); the
+-- global put back after.
+local function WithChattynatorAPI(windows, fn)
+	local saved = rawget(_G, "Chattynator")
+	local c = { windows = windows, calls = {} }
+	Chattynator = { API = {
+		GetWindowsAndTabs = function() return c.windows end,
+		AddMessageToWindowAndTab = function(...)
+			local info = debug.getinfo(2, "S")
+			local call = { ... }
+			call.source = info and info.source or "?"
+			c.calls[#c.calls + 1] = call
+		end,
+	} }
+	local ok, err = pcall(fn, c)
+	Chattynator = saved
+	if not ok then error(err, 0) end
 end
 
 test("chat message round trip: separators, escapes and unicode", function()
@@ -5728,7 +5784,13 @@ local function WithWorkshop(me, fn)
 		ns.me = me
 		ns.Now = function() return w.clock end
 		ns.Comm.Send = function(dist, msg, key) w.sent[#w.sent + 1] = { dist = dist, msg = msg, key = key } end
-		ns.Comm.Whisper = function(to, msg, key) w.whispered[#w.whispered + 1] = { to = to, msg = msg, key = key } end
+		-- (1.1.2: a whisper's done callback, Comm.Whisper's sixth argument, is told it left, as the
+		-- queue does once it sends; w.holdSends keeps it for the test to call, w.whispered[i].done.)
+		ns.Comm.Whisper = function(to, msg, key, urgent, logged, done)
+			local e = { to = to, msg = msg, key = key, urgent = urgent, done = done }
+			w.whispered[#w.whispered + 1] = e
+			if done and not w.holdSends then done(true) end
+		end
 		ns.Comm.ChannelReady = function() return true end
 		ns.Print = function(m) w.printed[#w.printed + 1] = m end
 		W.after = function(_, _, f) f() end
@@ -9285,6 +9347,292 @@ do
 			id = id + 1
 			eq((Chan.Receive("CHANNEL", "Member530", Msg("A", MY_GUILD, id, "no api"), 3002000)), true)
 			eq(Count(w[1].lines, "no api"), 1, "the main window")
+		end)
+	end)
+
+	-- Chattynator 224's public API returns arrays of tab names and accepts window/tab
+	-- indices followed by the AddMessage arguments. It does not expose Blizzard frames.
+	-- (1.1.2: the stand-in is WithChattynatorAPI's, which also records the caller's file.)
+	local function WithChattynator(fn)
+		WithChattynatorAPI({ { "General", "Olympus" }, { "Captains", "Lords" } }, function(c)
+			WithWindows(function(w, printed) fn(c.windows, c.calls, w, printed) end)
+		end)
+	end
+	local function Our(text) return "|c" .. ns.COLOR .. "Olympus:|r " .. text end
+	local LEGEND = "|cffe6c45c[Olympus]|r, |cff59d9d9[Captains]|r, |cffbf80ff[Lords]|r"
+
+	-- (1.1.2, PR #47's test on 1.1.1: a tab named Olympus is the Olympus tab, whose first line says
+	-- what it holds, CHATTAB_HERE, where another tab gets CHATWIN_SET, and whose lines come without
+	-- the channel's name; the main window says, for each tab chosen, how to let Olympus in through its
+	-- filter, which Olympus cannot read. On 1.1.1's Channels.Frame, without the adaptation, the
+	-- Olympus tab's lines went to the game's hidden window named Olympus: 2 calls of 3.)
+	test("chat window: Chattynator tabs receive each tier and our echo instead of hidden native frames", function()
+		WithChattynator(function(tabs, calls, w, printed)
+			-- A native window with the same name still exists after Chattynator hides it.
+			SlashCmdList.OLYMPUS("chatwindow oLYMPus olympus")
+			eq(ns.db.chatWindows["Tester-Realm"].A, "Olympus")
+			eq(#calls, 1, "confirmation reaches the Chattynator tab")
+			eq(calls[1][3], Our(ns.L.CHATTAB_HERE:format(LEGEND)), "the Olympus tab says what it holds")
+			eq(printed[#printed - 1], ns.L.CHATWIN_SET:format("[Olympus]", '"Olympus"'))
+			eq(printed[#printed], ns.L.CHATTY_FILTER:format('"Olympus"'), "and how to let Olympus in, in the main window")
+			eq(Chan.ChooseWindow("Captains captains"), true, "no native window with this name")
+			eq(calls[2][3], Our(ns.L.CHATWIN_SET:format("[Captains]", '"Captains"')))
+			eq(printed[#printed], ns.L.CHATTY_FILTER:format('"Captains"'))
+			eq(Chan.ChooseWindow("Lords lords"), true)
+			eq(Chan.WindowStatus(), '[Olympus] "Olympus", [Captains] "Captains", [Lords] "Lords"')
+			wipe(calls)
+			for index, tier in ipairs({ "A", "C", "L" }) do
+				id = id + 1
+				eq((Chan.Receive("CHANNEL", "Member1", Msg(tier, MY_GUILD, id, "routed " .. tier), 3200000 + index * 10)), true)
+			end
+			eq(#calls, 3)
+			for index, target in ipairs({ { 1, 2 }, { 2, 1 }, { 2, 2 } }) do
+				eq(calls[index][1], target[1]); eq(calls[index][2], target[2])
+				assert(calls[index][3]:find("routed " .. ({ "A", "C", "L" })[index], 1, true))
+				local color = Chan.TIERS[({ "A", "C", "L" })[index]].color
+				for c = 1, 3 do eq(calls[index][3 + c], color[c], "channel color") end
+			end
+			assert(calls[1][3]:find("^|Hplayer:Member1|h%["), "the Olympus tab: no channel name: " .. calls[1][3])
+			assert(calls[2][3]:find("^%[Captains%] |Hplayer:"), calls[2][3])
+			assert(calls[3][3]:find("^%[Lords%] |Hplayer:"), calls[3][3])
+			WithLane(function()
+				ns.db.chatWarned = { A = true, C = true, L = true }
+				local ok, why = Chan.Send("A", "own Chattynator echo", 1e12 + 200)
+				eq(ok, true, tostring(why))
+			end)
+			eq(#calls, 4); eq(calls[4][1], 1); eq(calls[4][2], 2)
+			assert(calls[4][3]:find("own Chattynator echo", 1, true))
+			assert(calls[4][3]:find("^|Hplayer:"), calls[4][3])
+			eq(#w[1].lines, 0); eq(#w[4].lines, 0, "no hidden native output")
+		end)
+	end)
+
+	test("chat window: Chattynator names follow moved tabs and fall back once when removed", function()
+		WithChattynator(function(tabs, calls, w, printed)
+			eq(Chan.ChooseWindow("Captains captains"), true)
+			tabs[1], tabs[2] = { "Captains", "General", "Olympus" }, { "Lords" }
+			wipe(calls)
+			id = id + 1
+			eq((Chan.Receive("CHANNEL", "Member2", Msg("C", MY_GUILD, id, "moved tab"), 3200100)), true)
+			eq(#calls, 1); eq(calls[1][1], 1); eq(calls[1][2], 1)
+			tabs[1][1] = "Renamed"
+			local n = #printed
+			for k = 1, 2 do
+				id = id + 1
+				eq((Chan.Receive("CHANNEL", "Member2", Msg("C", MY_GUILD, id, "fallback " .. k), 3200110 + k * 10)), true)
+			end
+			eq(#calls, 1); eq(Count(w[1].lines, "fallback"), 2)
+			eq(#printed, n + 1); eq(printed[#printed], ns.L.CHATWIN_GONE:format('"Captains"'))
+			tabs[2][2] = "Captains"
+			id = id + 1
+			eq((Chan.Receive("CHANNEL", "Member2", Msg("C", MY_GUILD, id, "restored tab"), 3200150)), true)
+			eq(#calls, 2); eq(calls[2][1], 2); eq(calls[2][2], 2)
+			eq(Chan.ChooseWindow("main captains"), true)
+			eq(ns.db.chatWindows, nil)
+		end)
+	end)
+
+	test("chat window: Chattynator routing preserves chat opt-in", function()
+		WithChattynator(function(tabs, calls, w)
+			local savedChatOn = ns.db.addonChat
+			local ok, err = pcall(function()
+				for _, state in ipairs({ "unanswered", "off" }) do
+					if state == "unanswered" then ns.db.addonChat = nil else ns.db.addonChat = false end
+					eq(Chan.ChooseWindow("Captains captains"), true)
+					if state == "unanswered" then eq(ns.db.addonChat, nil) else eq(ns.db.addonChat, false) end
+					wipe(calls)
+					id = id + 1
+					local shown, why = Chan.Receive("CHANNEL", "Member2", Msg("C", MY_GUILD, id, "chat is off"), 3200200)
+					eq(shown, false); eq(why, "off"); eq(#calls, 0)
+					eq(#Chan.History("C"), 0)
+				end
+				ns.db.addonChat = true
+				id = id + 1
+				eq((Chan.Receive("CHANNEL", "Member2", Msg("C", MY_GUILD, id, "chat is on"), 3200210)), true)
+				eq(#calls, 1); eq(calls[1][1], 2); eq(calls[1][2], 1)
+				eq(#Chan.History("C"), 1)
+				eq(#w[1].lines, 0)
+			end)
+			ns.db.addonChat = savedChatOn
+			if not ok then error(err, 0) end
+		end)
+	end)
+
+	-- (1.1.2, PR #47's test on 1.1.1: while Chattynator answers, a name not found lists its tabs by
+	-- name with how to make one there, CHATTY_NOT_FOUND, where the PR added them to the game's
+	-- windows' list; "2" is a tab's name there, the game's windows being hidden behind Chattynator's,
+	-- and Chattynator's own combat log tab is refused as the game's is.)
+	test("chat window: unavailable Chattynator API preserves native lookup and lists available tabs", function()
+		WithChattynator(function(tabs, calls, w, printed)
+			eq(Chan.ChooseWindow("Missing"), false)
+			eq(printed[#printed], ns.L.CHATTY_NOT_FOUND:format('"Missing"', '"General", "Olympus", "Captains", "Lords"'))
+			local api = Chattynator.API
+			for _, unavailable in ipairs({ {}, { GetWindowsAndTabs = api.GetWindowsAndTabs },
+				{ GetWindowsAndTabs = function() error("not initialized") end, AddMessageToWindowAndTab = api.AddMessageToWindowAndTab } }) do
+				Chattynator.API = unavailable
+				eq(Chan.FindWindow("Olympus"), w[4], "native fallback")
+				eq(Chan.ChooseWindow("Captains captains"), false)
+			end
+			Chattynator.API = api
+			eq(Chan.ChooseWindow("2"), false, "a tab's name while Chattynator answers: the game's window 2 is hidden")
+			eq(printed[#printed], ns.L.CHATTY_NOT_FOUND:format('"2"', '"General", "Olympus", "Captains", "Lords"'))
+			tabs[1][3] = "COMBAT_LOG"
+			eq(Chan.ChooseWindow("combat_log"), false); eq(printed[#printed], ns.L.CHATWIN_COMBATLOG, "Chattynator's combat log")
+			eq(Chan.ChooseWindow("Missing"), false)
+			eq(printed[#printed], ns.L.CHATTY_NOT_FOUND:format('"Missing"', '"General", "Olympus", "Captains", "Lords"'), "not listed")
+			Chattynator.API = {}
+			eq(Chan.ChooseWindow("2"), false, "native combat log remains refused"); eq(printed[#printed], ns.L.CHATWIN_COMBATLOG)
+		end)
+	end)
+
+	-- (1.1.2, the review of PR #47: its delivery had no pcall, and a window that was not a list threw
+	-- at every line, /oly status included.)
+	test("chat window (1.1.2): a Chattynator that fails, or answers a window that is not a list, costs no line and raises no error", function()
+		WithChattynator(function(tabs, calls, w, printed)
+			eq(Chan.ChooseWindow("Captains captains"), true)
+			wipe(calls)
+			-- A window that is not a list of names: left out, the others still read; names not strings too.
+			tabs[1] = "not a window"
+			eq(Chan.WindowStatus(), '[Olympus] main window, [Captains] "Captains", [Lords] main window')
+			id = id + 1
+			eq((Chan.Receive("CHANNEL", "Member2", Msg("C", MY_GUILD, id, "still routed"), 3200300)), true)
+			eq(#calls, 1); eq(calls[1][1], 2); eq(calls[1][2], 1)
+			tabs[1] = { 42, false, "", "Olympus" }
+			local f, i, name = Chan.FindWindow("olympus")
+			assert(f and f ~= w[4], "Chattynator's tab"); eq(i, nil); eq(name, "Olympus")
+			eq(Chan.OpenWindows()[1].name, "Olympus", "only the names")
+			-- Its delivery failing: the main window has the line, whole, and nothing raises.
+			local api = Chattynator.API
+			Chattynator.API = { GetWindowsAndTabs = api.GetWindowsAndTabs, AddMessageToWindowAndTab = function() error("Chattynator broke") end }
+			id = id + 1
+			local shown, why = Chan.Receive("CHANNEL", "Member2", Msg("C", MY_GUILD, id, "delivery failed"), 3200310)
+			eq(shown, true, tostring(why))
+			eq(Count(w[1].lines, "delivery failed"), 1, "in the main window")
+			assert(w[1].lines[#w[1].lines]:find("^%[Captains%] "), w[1].lines[#w[1].lines])
+			eq(Chan.ChooseWindow("Lords lords"), true, "no error either")
+			eq(Count(w[1].lines, ns.L.CHATWIN_SET:format("[Lords]", '"Lords"')), 1, "the tab's line, in the main window")
+			WithLane(function()
+				ns.db.chatWarned = { A = true, C = true, L = true }
+				local ok, why2 = Chan.Send("L", "own line, delivery failed", 1e12 + 300)
+				eq(ok, true, tostring(why2))
+			end)
+			eq(Count(w[1].lines, "own line, delivery failed"), 1)
+			-- Answering what is not a list, or a Chattynator that throws when read: the game's windows.
+			Chattynator.API = { GetWindowsAndTabs = function() return "x" end, AddMessageToWindowAndTab = api.AddMessageToWindowAndTab }
+			eq(Chan.Chattynator(), false); eq(Chan.FindWindow("Officers"), w[5])
+			Chattynator = setmetatable({}, { __index = function() error("not a table to read") end })
+			eq(Chan.Chattynator(), false); eq(Chan.FindWindow("Officers"), w[5])
+			Chattynator = "not a table"
+			eq(Chan.Chattynator(), false); eq(Chan.FindWindow("Officers"), w[5])
+			eq(#calls, 1, "nothing reached the tab after its failure")
+		end)
+	end)
+
+	-- (1.1.2: Chattynator names the line's addon after the caller of AddMessageToWindowAndTab,
+	-- debugstack(2), and a tab that lets Olympus in shows only lines named Olympus. Called through
+	-- pcall(api.AddMessageToWindowAndTab, ...), or as a tail call, the caller is not our file and the
+	-- line is "/loadstring": this fails on either.)
+	test("chat window (1.1.2): every line reaches Chattynator from Olympus/Channels.lua, the addon its tab's filter lets in", function()
+		WithChattynator(function(tabs, calls, w)
+			eq(Chan.ChooseWindow("Captains captains"), true)
+			eq(Chan.ChooseWindow("olympus"), true)
+			id = id + 1
+			eq((Chan.Receive("CHANNEL", "Member2", Msg("C", MY_GUILD, id, "a line"), 3200400)), true)
+			id = id + 1
+			eq((Chan.Receive("CHANNEL", "Member2", Msg("A", MY_GUILD, id, "a bare line"), 3200410)), true)
+			eq(#calls, 4, "two choices said in their tabs, two lines")
+			for _, call in ipairs(calls) do assert(call.source:find("Olympus/Channels%.lua$"), call.source) end
+		end)
+	end)
+
+	test("chat window (1.1.2): Chattynator's tab by any case, spaces around it aside, or by the name it shows; the game's windows hidden behind its tabs are not picked", function()
+		WithChattynator(function(tabs, calls, w, printed)
+			local saved = rawget(_G, "GENERAL")
+			local ok, err = pcall(function()
+				GENERAL = "General" -- (the game's string: Chattynator shows its "GENERAL" tab so)
+				tabs[1] = { "GENERAL", " olympus " }
+				eq(Chan.ChooseWindow("Olympus"), true)
+				eq(ns.db.chatWindows["Tester-Realm"].A, " olympus ", "as Chattynator has it")
+				eq(calls[#calls][1], 1); eq(calls[#calls][2], 2); eq(calls[#calls][3], Our(ns.L.CHATTAB_HERE:format(LEGEND)))
+				eq(Chan.ChooseWindow("general captains"), true)
+				eq(ns.db.chatWindows["Tester-Realm"].C, "General", "the name it shows")
+				eq(Chan.ChooseWindow("GENERAL lords"), true); eq(ns.db.chatWindows["Tester-Realm"].L, "General")
+				wipe(calls)
+				id = id + 1
+				eq((Chan.Receive("CHANNEL", "Member2", Msg("A", MY_GUILD, id, "spaced tab"), 3200500)), true)
+				id = id + 1
+				eq((Chan.Receive("CHANNEL", "Member2", Msg("C", MY_GUILD, id, "general tab"), 3200510)), true)
+				eq(#calls, 2)
+				eq(calls[1][2], 2); assert(calls[1][3]:find("^|Hplayer:"), "the Olympus tab, bare: " .. calls[1][3])
+				eq(calls[2][2], 1); assert(calls[2][3]:find("^%[Captains%] "), calls[2][3])
+				-- A game window no tab of Chattynator's is named after: not found, by name or number.
+				eq(Chan.ChooseWindow("Officers"), false)
+				eq(printed[#printed], ns.L.CHATTY_NOT_FOUND:format('"Officers"', '"General", " olympus ", "Captains", "Lords"'))
+				eq(Chan.ChooseWindow("5"), false)
+				-- Chosen before Chattynator: hidden now, so gone: the main window, one notice.
+				ns.db.chatWindows["Tester-Realm"].L = "Officers"
+				local n = #printed
+				for k = 1, 2 do
+					id = id + 1
+					eq((Chan.Receive("CHANNEL", "Member1", Msg("L", MY_GUILD, id, "officers " .. k), 3200520 + k * 10)), true)
+				end
+				eq(Count(w[1].lines, "officers "), 2); eq(#w[5].lines, 0, "nothing in the hidden window")
+				eq(#printed, n + 1); eq(printed[#printed], ns.L.CHATWIN_GONE:format('"Officers"'))
+				assert(Chan.WindowStatus():find('[Lords] "Officers" ' .. ns.L.CHATWIN_GONE_TAG, 1, true), Chan.WindowStatus())
+			end)
+			GENERAL = saved
+			if not ok then error(err, 0) end
+		end)
+	end)
+
+	test("chat window (1.1.2): ChooseTab picks Chattynator's tab by its name alone (one called main is that tab), for one channel, said as /oly chatwindow says it", function()
+		WithChattynator(function(tabs, calls, w, printed)
+			tabs[2][3] = "main"
+			eq(Chan.ChooseTab("main", "C"), true)
+			eq(ns.db.chatWindows["Tester-Realm"].C, "main"); eq(ns.db.chatWindows["Tester-Realm"].A, nil, "that channel alone")
+			eq(printed[#printed - 1], ns.L.CHATWIN_SET:format("[Captains]", '"main"'))
+			eq(printed[#printed], ns.L.CHATTY_FILTER:format('"main"'))
+			eq(calls[#calls][1], 2); eq(calls[#calls][2], 3); eq(calls[#calls][3], Our(ns.L.CHATWIN_SET:format("[Captains]", '"main"')))
+			eq(Chan.ChooseTab(" OLYMPUS ", "A"), true); eq(ns.db.chatWindows["Tester-Realm"].A, "Olympus")
+			eq(calls[#calls][3], Our(ns.L.CHATTAB_HERE:format(LEGEND)), "the Olympus tab says what it holds")
+			local n = #calls
+			eq(Chan.ChooseTab("Nowhere", "C"), false); eq(ns.db.chatWindows["Tester-Realm"].C, "main", "unchanged")
+			eq(Chan.ChooseTab("Lords", "X"), false, "no such channel"); eq(Chan.ChooseTab(nil, "L"), false)
+			tabs[1][3] = "COMBAT_LOG"
+			eq(Chan.ChooseTab("COMBAT_LOG", "L"), false, "its combat log")
+			Chattynator.API = {}
+			eq(Chan.ChooseTab("Lords", "L"), false, "no Chattynator"); eq(ns.db.chatWindows["Tester-Realm"].L, nil)
+			eq(#calls, n)
+		end)
+	end)
+
+	-- (1.1.2's review: Chattynator's search tab, a passing one, is named with a texture code
+	-- (Display/Buttons.lua, CreateTextureMarkup): it showed escaped in the list of its tabs, as a
+	-- file's path in the Chat tab's settings, and a channel could be sent there, where only lines
+	-- its search finds show. And a choice saved as its combat log tab was never tried.)
+	test("chat window (1.1.2 review): Chattynator's search tab (named with a texture code) is no chat window: not listed, not picked, not offered; a choice saved as its combat log tab goes to the main window", function()
+		WithChattynator(function(tabs, calls, w, printed)
+			local SEARCH = "|TInterface/AddOns/Chattynator/Assets/Search.png:12:12:0:0:64:64:0:64:0:64|t"
+			tabs[2][3] = SEARCH
+			eq(Chan.ChooseWindow("Missing"), false)
+			eq(printed[#printed], ns.L.CHATTY_NOT_FOUND:format('"Missing"', '"General", "Olympus", "Captains", "Lords"'), "not listed")
+			eq(Chan.ChooseWindow(SEARCH), false); eq(Chan.ChooseTab(SEARCH, "C"), false)
+			eq(Chan.FindWindow(SEARCH), nil)
+			local offered = {}
+			for _, o in ipairs(Chan.OpenWindows()) do offered[#offered + 1] = o.name end
+			eq(table.concat(offered, ","), "General,Olympus,Captains,Lords", "not offered")
+			eq(ns.db.chatWindows, nil); eq(#calls, 0)
+			-- Chattynator's combat log tab, chosen in the saved variables: the main window, one notice.
+			tabs[1][3] = "COMBAT_LOG"
+			ns.db.chatWindows = { ["Tester-Realm"] = { L = "COMBAT_LOG" } }
+			eq(Chan.FindWindow("combat_log"), nil)
+			local n = #printed
+			for k = 1, 2 do
+				id = id + 1
+				eq((Chan.Receive("CHANNEL", "Member1", Msg("L", MY_GUILD, id, "combat choice " .. k), 3200600 + k * 10)), true)
+			end
+			eq(#calls, 0, "never its combat log"); eq(Count(w[1].lines, "combat choice "), 2)
+			eq(#printed, n + 1); eq(printed[#printed], ns.L.CHATWIN_GONE:format('"COMBAT_LOG"'))
 		end)
 	end)
 
@@ -41809,6 +42157,8 @@ do
 			local tip = {}
 			row.tooltip({ AddLine = function(_, s) tip[#tip + 1] = s end })
 			eq(tip[2], ns.L.DUES_GUILD_TIP:format("300", "?", T.Coins(50000), T.Coins(150000), 2), "the King's amount in its tip")
+			-- (1.1.2's review: its members are the census's, and the tip says why they can differ.)
+			assert(table.concat(tip, "\n"):find(ns.Answers.Find("count-other-guild-report").text, 1, true), table.concat(tip, "\n"))
 			-- His addon hears the King: both paid 5 gold or more.
 			AsTreasurer()
 			Word(KING, 50000, w.clock - WEEK, 100000)
@@ -42605,6 +42955,66 @@ do
 			end)
 			ns.Roster.byName, GuildControlGetRankName, ns.Comm.loginAt = saved.byName, saved.rankName, saved.loginAt
 			ns.King.IsStewardName, ns.King.IsHandName, C_Texture, ns.CouncilMasked = saved.steward, saved.hand, saved.tex, saved.masked
+			if not ok then error(err, 0) end
+		end)
+	end)
+
+	-- 1.1.2 (the owner, from a screenshot: the silver mark in the Chat tab, none on the same line in the
+	-- game's Olympus chat tab): the game's chat windows show the Chat tab's marks.
+	test("1.1.2 the game's chat windows: each Olympus line carries the mark its Chat tab header shows (crown, High Council, silver, bronze, star, none)", function()
+		WithWindow(function(w)
+			local saved = { byName = ns.Roster.byName, rankName = GuildControlGetRankName, loginAt = ns.Comm.loginAt, tex = C_Texture,
+				masked = ns.CouncilMasked, borders = ns.Borders }
+			local ok, err = pcall(function()
+				local bns = setmetatable({ On = function() end, RegisterEvent = function() end }, { __index = ns })
+				assert(loadfile(ADDON_DIR .. "Borders.lua"))("Olympus", bns)
+				ns.Borders = bns.Borders
+				ns.rdb.council = { names = { ["sage owl"] = true } } -- (made-up names only)
+				ns.Roster.byName = { ["Raider Guy-Realm"] = 2, ["Vet Guy-Realm"] = 3, ["Plain Guy-Realm"] = 4 }
+				GuildControlGetRankName = function(i) return ({ "Master", "Officer", "Raider", "Veteran", "Member" })[i] end
+				ns.Comm.loginAt = ns.Now() - ns.Data.CROWN_AFTER - 1
+				ns.rdb.guilds["Olympus Zeus"] = Vouched({ guild = "Olympus Zeus", leader = "Zeusy", officers = {}, realm = "Realm", t = ns.Now() }, "W1-Realm", "W2-Realm")
+				C_Texture = nil
+				local CROWN = "|T" .. ns.CROWN_ICON .. ":14:14|t"
+				local SILVER = "|A:nameplates-icon-elite-silver:14:14|a"
+				local BRONZE = "|A:nameplates-icon-elite-gold:14:14:0:0:158:118:86|a"
+				local STAR = "|TInterface\\AddOns\\Olympus\\media\\borders\\star:14:14|t"
+				local cases = {
+					{ "Asmongold Asmongler-Realm", "Olympus", CROWN, "the King's crown" },
+					{ "Sage Owl-Realm", "Olympus II", ns.HIGH_COUNCIL_MARK, "the High Council's mark" },
+					{ "Zeusy-Realm", "Olympus Zeus", SILVER, "a Lord: silver" },
+					{ "Raider Guy-Realm", "Olympus II", BRONZE, "a Raider: bronze" },
+					{ "Vet Guy-Realm", "Olympus II", BRONZE, "a Veteran: bronze" },
+					{ "Plain Guy-Realm", "Olympus II", STAR, "a member: the star" },
+				}
+				for _, c in ipairs(cases) do
+					local who, guild, mark, what = c[1], c[2], c[3], c[4]
+					local line = ns.Channels.FormatLine("A", who, guild, "PA", "hello")
+					local bare = ns.Channels.FormatLine("A", who, guild, "PA", "hello", true)
+					assert(line:find("|h[" .. mark, 1, true), what .. ", right before the name: " .. line)
+					assert(bare:find("|h[" .. mark, 1, true), what .. " in the Olympus tab: " .. bare)
+					eq(ns.Borders.ChatMark(who, guild), line:match("|h%[(.-)|c") or line:match("|h%[(.-)" .. ns.DisplayName(who)), what .. ": the Chat tab's mark")
+				end
+				assert(not ns.Channels.FormatLine("A", "Sage Owl-Realm", "Olympus II", nil, "hi"):find(SILVER, 1, true), "the council's mark, not silver")
+				-- Nobody our roster or a census proves: no mark, as in the Chat tab.
+				local line = ns.Channels.FormatLine("A", "Stranger-Realm", "Olympus II", "PA", "hello")
+				assert(not line:find("|A:", 1, true) and not line:find(STAR, 1, true) and not line:find(ns.CROWN_ICON, 1, true), "no mark: " .. line)
+				-- An atlas the client does not know: the star, as the Chat tab.
+				C_Texture = { GetAtlasInfo = function() return nil end }
+				assert(ns.Channels.FormatLine("A", "Zeusy-Realm", "Olympus Zeus", nil, "x"):find("|h[" .. STAR, 1, true))
+				C_Texture = nil
+				-- The King's screen while the councillors' names are hidden: no council mark or colour.
+				ns.CouncilMasked = function() return true end
+				line = ns.Channels.FormatLine("A", "Sage Owl-Realm", "Olympus II", nil, "hi")
+				assert(not line:find(ns.HIGH_COUNCIL_MARK, 1, true) and not line:find(ns.HIGH_COUNCIL_COLOR, 1, true), line)
+				ns.CouncilMasked = saved.masked
+				-- Without Borders.lua (a client updated without a restart): the council's mark alone, as before.
+				ns.Borders = nil
+				assert(ns.Channels.FormatLine("A", "Sage Owl-Realm", "Olympus II", nil, "hi"):find("|h[" .. ns.HIGH_COUNCIL_MARK .. "|c", 1, true))
+				assert(not ns.Channels.FormatLine("A", "Zeusy-Realm", "Olympus Zeus", nil, "x"):find("|A:", 1, true))
+			end)
+			ns.Roster.byName, GuildControlGetRankName, ns.Comm.loginAt, C_Texture = saved.byName, saved.rankName, saved.loginAt, saved.tex
+			ns.CouncilMasked, ns.Borders = saved.masked, saved.borders
 			if not ok then error(err, 0) end
 		end)
 	end)
@@ -43784,7 +44194,10 @@ do
 				local s = f.search:Anchor("TOPLEFT")
 				eq(s[2], f); eq(s[5], -30); assert(s[4] > main.headerX, "right of the portrait")
 				eq(f.gear:Anchor("TOPRIGHT")[4], -26); eq(f.gear:Anchor("TOPRIGHT")[5], -30); eq(f.gear:IsShown(), true)
-				eq(f.search:Anchor("TOPRIGHT")[4], -50, "the search ends where the gear begins"); eq(f.search:Anchor("TOPRIGHT")[5], -30)
+				-- (Changed on purpose, 1.1.2: the tab's "?" sits left of the gear, 20 wide and 4 apart,
+				-- its explanation, Answers.lua; the search box ends where the "?" begins, 24 further left.)
+				eq(f.help:Anchor("TOPRIGHT")[4], -50); eq(f.help:Anchor("TOPRIGHT")[5], -30); eq(f.help:IsShown(), true)
+				eq(f.search:Anchor("TOPRIGHT")[4], -74, "the search ends where the tab's ? begins"); eq(f.search:Anchor("TOPRIGHT")[5], -30)
 				eq(f.searchLabel:GetText(), L.SEARCH); eq(f.searchLabel:Anchor("TOPLEFT")[4], main.headerX)
 				eq(f.pills, nil, "no row of pills"); eq(f.switch:IsShown(), false, "one channel: no switch")
 				eq(f.box:Anchor("TOPLEFT")[4], 6); eq(f.box:Anchor("TOPLEFT")[5], -56, "the lines take the pills' row")
@@ -43805,9 +44218,9 @@ do
 				-- shorter; still no row of its own.
 				AsCaptain()
 				w.CW.Render()
-				eq(f.switch:IsShown(), true); eq(f.switch:Anchor("TOPRIGHT")[4], -50); eq(f.switch:Anchor("TOPRIGHT")[5], -30)
+				eq(f.switch:IsShown(), true); eq(f.switch:Anchor("TOPRIGHT")[4], -74, "left of the tab's ? (1.1.2)"); eq(f.switch:Anchor("TOPRIGHT")[5], -30)
 				eq(f.switch:GetHeight(), 20, "the search box's height")
-				eq(f.search:Anchor("TOPRIGHT")[4], -50 - f.switch:GetWidth() - 4, "the search ends where the switch begins")
+				eq(f.search:Anchor("TOPRIGHT")[4], -74 - f.switch:GetWidth() - 4, "the search ends where the switch begins")
 				eq(f.box:Anchor("TOPLEFT")[5], -56, "no row of its own")
 				AsSoldier()
 				w.CW.Render()
@@ -44691,7 +45104,311 @@ do
 				end)
 			end)
 		end)
+
+		-- (1.1.2, PR #47 on 1.1.1's Chat tab: with Chattynator its tabs are the chat windows. The
+		-- settings' choice of a channel's window went by the game's windows' numbers, hidden behind
+		-- Chattynator's tabs; it goes through its tabs by name now, Channels.ChooseTab.)
+		test("1.1.2 Chat tab settings with Chattynator: each channel's window goes through Chattynator's tabs by name (its combat log never, a tab called main is that tab), then the main window; its tip says so; the game's hidden windows never offered", function()
+			WithWindow(function(w)
+				WithGameChat(function(g)
+					AsCaptain()
+					ns.db.addonChat = true
+					ns.Channels.Pin = function() return nil end
+					rawset(g[3], "name", "Guild"); rawset(g[3], "shown", true) -- (the game's, hidden behind Chattynator's)
+					local f
+					WithChattynatorAPI({ { "GENERAL", "main", "COMBAT_LOG" }, { "Olympus Talk" } }, function(c)
+						f = w.CW.Open("A")
+						f.gear:Click()
+						local where = Under(f, ALLH, L.CHATSET_WHERE:format(L.CHATWIN_MAIN_NAME))
+						assert(where, "[Olympus] in the main window")
+						assert(TipOf(where):find(L.CHATSET_WHERE_TIP_CHATTY, 1, true), TipOf(where))
+						w.printed = {}
+						where:Click()
+						eq(ns.Channels.ChosenWindow("A"), "GENERAL"); eq(ns.Channels.ChosenWindow("C"), nil, "that channel alone")
+						eq(w.printed[1], L.CHATWIN_SET:format(ALLH, '"GENERAL"'), "said as /oly chatwindow says it")
+						eq(w.printed[2], L.CHATTY_FILTER:format('"GENERAL"'), "and how to let Olympus in")
+						eq(c.calls[#c.calls][1], 1); eq(c.calls[#c.calls][2], 1, "and in that tab")
+						Under(f, ALLH, L.CHATSET_WHERE:format('"GENERAL"')):Click()
+						eq(ns.Channels.ChosenWindow("A"), "main", "a tab called main is that tab")
+						eq(c.calls[#c.calls][1], 1); eq(c.calls[#c.calls][2], 2)
+						Under(f, ALLH, L.CHATSET_WHERE:format('"main"')):Click()
+						eq(ns.Channels.ChosenWindow("A"), "Olympus Talk", "its combat log left out")
+						Under(f, ALLH, L.CHATSET_WHERE:format('"Olympus Talk"')):Click()
+						eq(ns.Channels.ChosenWindow("A"), nil, "the main window again")
+						assert(Under(f, ALLH, L.CHATSET_WHERE:format(L.CHATWIN_MAIN_NAME)))
+						-- A tab removed in Chattynator: gone; a click takes its first tab.
+						eq(ns.Channels.ChooseTab("Olympus Talk", "C"), true)
+						c.windows[2] = {}
+						w.CW.Render()
+						local gone = Under(f, CAPTH, L.CHATSET_WHERE:format('"Olympus Talk" ' .. L.CHATWIN_GONE_TAG))
+						assert(gone, "gone")
+						gone:Click()
+						eq(ns.Channels.ChosenWindow("C"), "GENERAL")
+						for _, call in ipairs(c.calls) do assert(call[1] ~= 1 or call[2] ~= 3, "never its combat log") end
+						eq(#g[3].lines, 0, "never the game's hidden window")
+					end)
+					-- Chattynator off: the game's windows again, by their numbers, in the game's words.
+					w.CW.Render()
+					local where = Under(f, CAPTH, L.CHATSET_WHERE:format('"GENERAL"'))
+					assert(where, "the name chosen (the game's main window has it)")
+					assert(TipOf(where):find(L.CHATSET_WHERE_TIP:format("Create New Window"), 1, true), TipOf(where))
+					where:Click()
+					eq(ns.Channels.ChosenWindow("C"), "Guild", "the game's window 3, by its number")
+				end)
+			end)
+		end)
+
+		test("1.1.2 Chat tab settings with Chattynator: the Olympus tab's line: no pointer (the game's tabs are hidden; one shown before goes), its click sends the channels there and says Chattynator's steps, the line and the settings show them; the Chat tab reads its tabs while it shows and says it once when the tab is there", function()
+			WithWindow(function(w)
+				WithGameChat(function(g)
+					AsCaptain()
+					ns.db.addonChat = true
+					ns.Channels.Pin = function() return nil end
+					-- Before Chattynator answers: the game's way, its pointer by the game's chat tab.
+					local f = w.CW.Open()
+					eq(f.guide:IsShown(), true, "the line over the lines")
+					f.guide:Click()
+					local p = w.CW.Pointer()
+					assert(p and p:IsShown(), "the pointer")
+					eq(ns.Channels.TabState(), "none")
+					g.reads = {}
+					WithChattynatorAPI({ { "GENERAL", "GUILD" } }, function(c)
+						w.printed = {}
+						w.CW.Render()
+						assert(f.guide.text:GetText():find(L.CHATTY_TAB_STEPS, 1, true), "Chattynator's steps: " .. f.guide.text:GetText())
+						f.guide:Click()
+						eq(p:IsShown(), false, "the pointer goes: it would point at nothing")
+						eq(w.CW.Watching(), true); eq(ns.Channels.TabState(), "waiting")
+						eq(Count(w.printed, L.CHATTY_STEPS), 1, "Chattynator's steps, in chat")
+						eq(ns.Channels.ChosenWindow("A"), "Olympus"); eq(ns.Channels.ChosenWindow("C"), "Olympus")
+						f:Fire("OnUpdate", 0.3)
+						assert(f.guide.text:GetText():find(L.CHATTY_TAB_STEPS, 1, true), f.guide.text:GetText())
+						-- The settings: the same steps; a click says them again, still no pointer.
+						f.gear:Click()
+						local steps = Under(f, L.CHATSET_TAB, L.CHATTY_TAB_STEPS)
+						assert(steps, "the steps while it is awaited")
+						steps:Click()
+						eq(Count(w.printed, L.CHATTY_STEPS), 2)
+						p = w.CW.Pointer()
+						eq(p == nil or not p:IsShown(), true, "no pointer")
+						-- The player makes it in Chattynator: no event of the game's; the Chat tab reads its tabs.
+						table.insert(c.windows[1], "Olympus")
+						f:Fire("OnUpdate", 1.1)
+						eq(ns.Channels.TabState(), "open"); eq(w.CW.Watching(), false)
+						eq(Count(w.printed, SET), 1, "said once")
+						eq(Count(w.printed, L.CHATTY_FILTER:format('"Olympus"')), 1)
+						eq(#c.calls, 1); eq(c.calls[1][1], 1); eq(c.calls[1][2], 3)
+						assert(c.calls[1][3]:find(L.CHATTAB_HERE:sub(1, 20), 1, true), c.calls[1][3])
+						f:Fire("OnUpdate", 1.1)
+						eq(Count(w.printed, SET), 1, "once")
+						w.CW.Render()
+						assert(Under(f, L.CHATSET_TAB, L.CHATS_TAB_ON), "on")
+						assert(Under(f, CAPTH, L.CHATSET_WHERE:format('"Olympus"'))); eq(Under(f, CAPTH, L.CHATWIN_GONE_TAG), nil)
+						eq(#g.reads, 0, "the game's chat tab never read for a pointer")
+					end)
+				end)
+			end)
+		end)
+
+		-- (1.1.2's review: with Chattynator the click already sends the channels to its tab named
+		-- Olympus (AddTab). The Chat tab, shown again after a line had landed in that tab and the
+		-- player had moved a channel elsewhere, ran SetupTab once more: the channel went back to the
+		-- tab, and the tab's line, its intro and the filter's hint were said a second time. Now the
+		-- tab, there at last, is said once, by its first line or by the Chat tab, and nothing is
+		-- chosen again.)
+		test("1.1.2 review: with Chattynator, the Olympus tab made while the Chat tab is hidden: shown again after a line landed there and a channel was moved, the Chat tab chooses nothing and says nothing again; with no line there yet, it says so once, for the channels still going there", function()
+			WithWindow(function(w)
+				WithGameChat(function(g)
+					AsCaptain()
+					ns.db.addonChat = true
+					ns.Channels.Pin = function() return nil end
+					WithChattynatorAPI({ { "GENERAL", "GUILD" } }, function(c)
+						local HINT = L.CHATTY_FILTER:format('"Olympus"')
+						local f = w.CW.Open()
+						w.printed = {}
+						f.guide:Click()
+						eq(w.CW.Watching(), true); eq(ns.Channels.ChosenWindow("C"), "Olympus", "sent at the click")
+						table.insert(c.windows[1], "Olympus") -- (made while the Olympus window is closed)
+						ns.Channels.Frame("A") -- (a line lands there: the intro, and the hint)
+						eq(#c.calls, 1); eq(Count(w.printed, HINT), 1)
+						eq(ns.Channels.ChooseWindow("main captains"), true)
+						f:Fire("OnUpdate", 1.1) -- (the Chat tab shown again)
+						eq(w.CW.Watching(), false, "the tab is there")
+						eq(Count(w.printed, SET), 0, "nothing said again"); eq(#c.calls, 1, "no second intro")
+						eq(Count(w.printed, HINT), 1, "no second hint")
+						eq(ns.Channels.ChosenWindow("C"), nil, "the channel moved stays in the main window")
+						eq(ns.Channels.ChosenWindow("A"), "Olympus"); eq(ns.Channels.ChosenWindow("L"), "Olympus")
+						-- Removed, the click again (all three sent there again), a channel moved, the tab
+						-- made, no line yet: the Chat tab says it once, for the two still going there.
+						c.windows[1][3] = nil
+						w.CW.Render()
+						f.guide:Click()
+						eq(w.CW.Watching(), true); eq(ns.Channels.ChosenWindow("C"), "Olympus")
+						eq(ns.Channels.ChooseWindow("main captains"), true)
+						w.printed = {}
+						ns.Channels.Frame("A") -- (a line while it is awaited: the main window says so, once)
+						eq(w.printed[1], L.CHATTAB_WAITING)
+						c.windows[1][3] = "Olympus"
+						w.printed = {}
+						f:Fire("OnUpdate", 1.1)
+						eq(w.CW.Watching(), false)
+						eq(Count(w.printed, L.CHATTAB_SET:format(ALLH .. ", " .. LORDH)), 1, "said once, for the two")
+						eq(Count(w.printed, SET), 0); eq(Count(w.printed, HINT), 1)
+						eq(#c.calls, 2); assert(c.calls[2][3]:find(HERE, 1, true), c.calls[2][3])
+						eq(ns.Channels.ChosenWindow("C"), nil, "kept where the player put it")
+						-- Removed at once, before any line got there: its notice, as for any window gone (the
+						-- wait said before is over); made again, nothing said again.
+						c.windows[1][3] = nil
+						ns.Channels.Frame("A")
+						eq(Count(w.printed, L.CHATWIN_GONE:format('"Olympus"')), 1)
+						c.windows[1][3] = "Olympus"
+						f:Fire("OnUpdate", 1.1)
+						ns.Channels.Frame("L")
+						eq(#c.calls, 2, "once"); eq(Count(w.printed, HINT), 1)
+						-- The steps clicked again while the tab is awaited, the tab there by then and every
+						-- channel moved back meanwhile: that click is the player's own, and sends them there.
+						c.windows[1][3] = nil
+						w.CW.Render()
+						f.guide:Click()
+						eq(w.CW.Watching(), true)
+						eq(ns.Channels.ChooseWindow("main"), true); eq(ns.Channels.TabState(), "none")
+						c.windows[1][3] = "Olympus"
+						w.printed = {}
+						w.CW.Render()
+						f.guide:Click()
+						eq(w.CW.Watching(), false); eq(Count(w.printed, SET), 1, "sent, and said")
+						eq(ns.Channels.ChosenWindow("C"), "Olympus"); eq(ns.Channels.TabState(), "open")
+						eq(#g.unsafe, 0)
+					end)
+				end)
+			end)
+		end)
+
+		-- (1.1.2's review: the choice is a name, and a name picks the first window of it; with two
+		-- windows of one name the click went to the second and stayed there, on and on, the windows
+		-- after it and the main one out of reach. Chattynator names each new tab "New tab".)
+		test("1.1.2 review: two chat windows of one name (Chattynator's \"New tab\" twice, or the game's): a click on a channel's window goes through each name once, then back to the main window", function()
+			WithWindow(function(w)
+				WithGameChat(function(g)
+					AsCaptain()
+					ns.db.addonChat = true
+					ns.Channels.Pin = function() return nil end
+					local f
+					local function Cycle(n)
+						local seen = {}
+						for _ = 1, n do
+							local cur = ns.Channels.ChosenWindow("A")
+							local row = Under(f, ALLH, L.CHATSET_WHERE:format(cur and ('"' .. cur .. '"') or L.CHATWIN_MAIN_NAME))
+							assert(row, "the row for " .. tostring(cur))
+							row:Click()
+							seen[#seen + 1] = tostring(ns.Channels.ChosenWindow("A") or "main")
+						end
+						return table.concat(seen, " > ")
+					end
+					WithChattynatorAPI({ { "GENERAL", "New tab", "New tab" }, { "new tab ", "Olympus Talk" } }, function(c)
+						f = w.CW.Open("A")
+						f.gear:Click()
+						eq(Cycle(5), "GENERAL > New tab > Olympus Talk > main > GENERAL")
+						-- In pt-BR its first tab, kept as "GENERAL", shows "Geral": a tab the player named
+						-- "general" is picked by that name as the first one, so it is left out too.
+						local saved = rawget(_G, "GENERAL")
+						local ok, err = pcall(function()
+							GENERAL = "Geral"
+							c.windows = { { "GENERAL", "general", "Olympus Talk" } }
+							eq(ns.Channels.ChooseWindow("main olympus"), true)
+							w.CW.Render()
+							eq(Cycle(4), "Geral > Olympus Talk > main > Geral")
+						end)
+						GENERAL = saved
+						if not ok then error(err, 0) end
+						eq(ns.Channels.ChooseWindow("main olympus"), true)
+					end)
+					-- The game's windows: two called Guild.
+					rawset(g[3], "name", "Guild"); rawset(g[3], "shown", true)
+					rawset(g[4], "name", "guild "); rawset(g[4], "shown", true)
+					rawset(g[5], "name", "Trade"); rawset(g[5], "shown", true)
+					eq(ns.Channels.ChooseWindow("main olympus"), true)
+					w.CW.Render()
+					eq(Cycle(4), "Guild > Trade > main > Guild")
+				end)
+			end)
+		end)
 		end)()
+	end
+	-- 1.1.2: the Chat tab's "?" (its explanation, Answers.lua) and the Answers button of the author,
+	-- the High Council and the Stewards.
+	do
+		test("1.1.2 Chat tab: its '?' explains the tab from the answer bank; the Answers button for the High Council (and the author, the Stewards) alone fills the tab's box, never sends, never takes the keyboard", function()
+			WithWindow(function(w)
+				ns.Channels.TabState = function() return "open" end
+				ns.Channels.Pin = function() return nil end
+				local sent = {}
+				local savedHC, savedShift = ns.IsHighCouncillor, IsShiftKeyDown
+				local ok, err = pcall(function()
+					ns.Channels.Send = function(t, text) sent[#sent + 1] = text return true end
+					IsShiftKeyDown = function() return false end
+					local f = w.CW.Open()
+					-- A soldier: the "?", no Answers.
+					eq(f.help:IsShown(), true); eq(f.answers:IsShown(), false)
+					f.help:Click()
+					local box = OlympusCopyFrame
+					eq(box:IsShown(), true); eq(box.TitleText:GetText(), L.PAGE_HELP_TITLE:format(L.TAB_CHAT))
+					assert(box.text:find(ns.Answers.Find("feat-chat-tab").long, 1, true), box.text)
+					-- A High Councillor: the Answers button at the end of the box it fills, the box ending
+					-- before it. (Changed on purpose, 1.1.2's review: on the top row, left of the "?", it
+					-- left a Lord of the High Council a search box of 6 px in the default window.)
+					ns.IsHighCouncillor = function(name) return name == ns.me end
+					w.CW.Render()
+					eq(f.answers:IsShown(), true)
+					local a = f.answers:Anchor("BOTTOMRIGHT")
+					eq(a[4], -8, "the row's end, where the box's art ends"); eq(a[5], 9, "centred on the box")
+					eq(f.input:Anchor("BOTTOMRIGHT")[4], -18 - f.answers:GetWidth() - 4, "the box ends before it")
+					eq(f.search:Anchor("TOPRIGHT")[4], -74, "the search box as a soldier's")
+					-- A Lord of the High Council (three channels: the switch on the top row too): the search
+					-- box as long as a Lord's who is not on it.
+					AsLord()
+					w.CW.Render()
+					eq(f.switch:IsShown(), true); eq(f.answers:IsShown(), true)
+					local councilW = f.search:GetRight() - f.search:GetLeft()
+					ns.IsHighCouncillor = function() return false end
+					w.CW.Render()
+					eq(f.answers:IsShown(), false)
+					eq(f.search:GetRight() - f.search:GetLeft(), councilW, "the Answers take nothing from it")
+					assert(councilW >= 60, "a search box to type in: " .. councilW)
+					eq(f.input:Anchor("BOTTOMRIGHT")[4], -18, "the box across the row again")
+					ns.IsHighCouncillor = function(name) return name == ns.me end
+					AsSoldier()
+					w.CW.Render()
+					f.input:SetText("")
+					w.focus = {} -- (the copy box took its own box's keyboard, as it does with mouse and keyboard)
+					f.answers:Click()
+					local picker = OlympusAnswers
+					eq(picker:IsShown(), true)
+					local entry = ns.Answers.Find("count-not-a-bug")
+					local row
+					for _, r in ipairs(picker.rows) do if r:IsShown() and r.entry == entry then row = r end end
+					assert(row, "the row")
+					row:Click()
+					eq(f.input:GetText(), entry.text); eq(picker:IsShown(), false)
+					eq(#sent, 0, "nothing sent"); eq(#w.focus, 0, "no keyboard taken")
+					-- The settings (the gear): no Answers there (no box to fill).
+					w.CW.ShowSettings(true)
+					eq(f.answers:IsShown(), false)
+					w.CW.ShowSettings(false)
+					-- (1.1.2's review: every line of the bank goes from this box as picked; none starts
+					-- with "/", which this box never sends.)
+					for _, entry2 in ipairs(ns.ANSWER_BANK.answers) do
+						f.input:SetText(entry2.text)
+						f.input:Fire("OnEnterPressed")
+						eq(sent[#sent], entry2.text, entry2.id .. ": sent from the Chat tab's box")
+					end
+					eq(#sent, #ns.ANSWER_BANK.answers)
+				end)
+				ns.IsHighCouncillor, IsShiftKeyDown = savedHC, savedShift
+				ns.Answers.Reset()
+				if not ok then error(err, 0) end
+			end)
+		end)
 	end
 
 	---------------------------------------------------------------------------
@@ -45794,7 +46511,7 @@ end)()
 		end)
 	end)
 
-	test("1.1.1 Olympus tab: at login the saved list of characters told what their tab holds keeps [name] = true alone", function()
+	test("1.1.1 Olympus tab: at login the saved list of characters told what their tab holds keeps [name] = true alone (or \"chatty\", Chattynator's tab, 1.1.2)", function()
 		local init
 		local saved = { slash = { SlashCmdList.OLYMPUSALL, SlashCmdList.OLYMPUSCAPTAINS, SlashCmdList.OLYMPUSLORDS },
 			dialogs = { StaticPopupDialogs.OLYMPUS_CHAT_PRIVACY, StaticPopupDialogs.OLYMPUS_PIN, StaticPopupDialogs.OLYMPUS_PIN_DOWN } }
@@ -45802,9 +46519,10 @@ end)()
 			Comm = setmetatable({ Handle = function() end }, { __index = ns.Comm }) }, { __index = ns })
 		local ok, err = pcall(function()
 			assert(loadfile(ADDON_DIR .. "Channels.lua"))("Olympus", ins)
-			ins.db, ins.rdb = { chatTabIntro = { ["Tester-Realm"] = true, ["Other-Realm"] = "yes", [3] = true } }, {}
+			ins.db, ins.rdb = { chatTabIntro = { ["Tester-Realm"] = true, ["Other-Realm"] = "yes", [3] = true, ["Chatty-Realm"] = "chatty" } }, {}
 			init()
 			eq(ins.db.chatTabIntro["Tester-Realm"], true); eq(ins.db.chatTabIntro["Other-Realm"], nil); eq(ins.db.chatTabIntro[3], nil)
+			eq(ins.db.chatTabIntro["Chatty-Realm"], "chatty", "Chattynator's tab told (1.1.2)")
 			ins.db.chatTabIntro = { x = false }
 			init()
 			eq(ins.db.chatTabIntro, nil, "nothing left")
@@ -45825,6 +46543,116 @@ end)()
 			ChatFrame4:RemoveAllMessageGroups()
 		end)
 		assert(not ok and tostring(err):find("FCF_OpenNewWindow, ChatFrameUtil.SetLastActiveWindow, ChatFrame4:RemoveAllMessageGroups", 1, true), tostring(err))
+	end)
+
+	-- (1.1.2, PR #47 on 1.1.1's Olympus tab: with Chattynator the game's window named Olympus is
+	-- hidden behind Chattynator's tabs, and 1.1.1's FindTab found it first: the lines went where
+	-- nobody saw them, GitHub #46 again. Chattynator's tab named Olympus is the Olympus tab now.)
+	test("1.1.2 Olympus tab with Chattynator: its tab named Olympus, not the game's hidden one: the one click says so, one intro in that tab and how to let Olympus in (the main window); the lines bare, each in its channel's colour, from Olympus's own file; nothing of the game's called", function()
+		WithTabs(function(w, printed)
+			w[4].name, w[4].isDocked = "Olympus", true -- (the game's, hidden behind Chattynator's)
+			WithChattynatorAPI({ { "GENERAL", "GUILD" }, { "Olympus" } }, function(c)
+				eq(Chan.TabState(), "none")
+				local ok, state = Chan.SetupTab()
+				eq(ok, true); eq(state, "open")
+				eq(printed[#printed - 1], ns.L.CHATTAB_SET:format("[Olympus], [Captains], [Lords]"))
+				eq(printed[#printed], ns.L.CHATTY_FILTER:format('"Olympus"'), "the main window: its filter")
+				eq(#c.calls, 1); eq(c.calls[1][1], 2); eq(c.calls[1][2], 1)
+				eq(c.calls[1][3], Our(ns.L.CHATTAB_HERE:format(LEGEND)), "no word of the game's Settings (CHATTAB_MIXED)")
+				-- (Told in Chattynator's tab, "chatty": the game's tab, told apart, 1.1.2's review.)
+				eq(ns.db.chatTabIntro["Tester-Realm"], "chatty"); eq(Chan.TabState(), "open")
+				eq(Recv("A", "Member500", "army line"), true)
+				eq(Recv("C", "Member2", "captains line"), true)
+				eq(Recv("L", "Member1", "lords line"), true)
+				eq(#c.calls, 4, "no second intro")
+				for k, tier in ipairs({ "A", "C", "L" }) do
+					local call = c.calls[k + 1]
+					assert(call[3]:find("^|Hplayer:Member"), "bare: " .. call[3])
+					local color = Chan.TIERS[tier].color
+					eq(call[4], color[1]); eq(call[5], color[2]); eq(call[6], color[3])
+				end
+				WithLane(function() local sent, why = Chan.Send("C", "my own line", 5e12 + 100); eq(sent, true, tostring(why)) end)
+				eq(#c.calls, 5); assert(c.calls[5][3]:find("^|Hplayer:"), c.calls[5][3])
+				assert(c.calls[5][3]:find("my own line", 1, true))
+				for _, call in ipairs(c.calls) do assert(call.source:find("Olympus/Channels%.lua$"), call.source) end
+				eq(#w[4].lines, 0, "nothing in the game's hidden tab"); eq(#w[1].lines, 0)
+				eq(Has(printed, ns.L.CHATTAB_STEPS:sub(1, 20)), 0, "no word of the game's menu")
+			end)
+			-- Chattynator gone (disabled): the game's tab named Olympus again, which says what it holds
+			-- first (told in Chattynator's tab alone: 1.1.2's review keeps the two apart).
+			eq(Chan.TabState(), "open")
+			eq(Recv("A", "Member503", "the game's tab again"), true)
+			eq(#w[4].lines, 2); eq(w[4].lines[1], Our(ns.L.CHATTAB_HERE:format(LEGEND)))
+			assert(w[4].lines[2]:find("^|Hplayer:Member503|h%["), w[4].lines[2])
+			eq(ns.db.chatTabIntro["Tester-Realm"], true)
+			eq(Recv("A", "Member503", "no second intro"), true); eq(#w[4].lines, 3)
+		end)
+	end)
+
+	test("1.1.2 Olympus tab with Chattynator, not made yet: the one click says how in Chattynator; the lines wait in the main window, said once, and land in its tab, bare, after one intro and the filter's hint, the moment it exists (no event of the game's)", function()
+		WithTabs(function(w, printed)
+			w[4].name, w[4].isDocked = "Olympus", true -- (the game's, hidden behind Chattynator's)
+			WithChattynatorAPI({ { "GENERAL", "GUILD" } }, function(c)
+				ns.db.chatTabIntro = { ["Tester-Realm"] = true } -- (told of an earlier tab: the new one says it again)
+				local ok, state = Chan.SetupTab()
+				eq(ok, true); eq(state, "waiting")
+				eq(printed[#printed], ns.L.CHATTY_STEPS, "Chattynator's steps, not the game's menu")
+				eq(ns.db.chatTabIntro, nil); eq(Chan.TabState(), "waiting")
+				local n = #printed
+				eq(Recv("A", "Member500", "before the tab"), true)
+				eq(Has(w[1].lines, "before the tab"), 1); eq(#w[4].lines, 0, "never the game's hidden tab")
+				eq(#printed, n + 1); eq(printed[#printed], ns.L.CHATTAB_WAITING)
+				-- The player makes it in Chattynator, in a second window of its own.
+				c.windows[2] = { "Olympus" }
+				eq(Chan.TabState(), "open")
+				eq(Recv("L", "Member1", "now in the tab"), true)
+				eq(#c.calls, 2)
+				eq(c.calls[1][3], Our(ns.L.CHATTAB_HERE:format(LEGEND)), "the intro first")
+				eq(c.calls[1][1], 2); eq(c.calls[1][2], 1)
+				assert(c.calls[2][3]:find("^|Hplayer:Member1|h%["), c.calls[2][3])
+				eq(#printed, n + 2); eq(printed[#printed], ns.L.CHATTY_FILTER:format('"Olympus"'))
+				eq(Recv("C", "Member2", "no second intro"), true)
+				eq(#c.calls, 3); eq(#printed, n + 2)
+				-- Removed: the usual notice, once; /oly chatwindow tab says Chattynator's steps again.
+				c.windows[2] = {}
+				eq(Recv("A", "Member504", "tab removed"), true)
+				eq(printed[#printed], ns.L.CHATWIN_GONE:format('"Olympus"')); eq(Chan.TabState(), "waiting")
+				eq(Has(w[1].lines, "tab removed"), 1)
+				SlashCmdList.OLYMPUS("chatwindow tab")
+				eq(printed[#printed], ns.L.CHATTY_STEPS)
+			end)
+		end)
+	end)
+
+	-- (1.1.2's review: the game's Olympus tab and Chattynator's shared one mark of "told": a player
+	-- told in the game's tab who then made Chattynator's by hand got its lines there with no intro
+	-- and no word of its filter, which lets no addon in while the tab is new: he saw nothing, and
+	-- nothing said why. Each kind of tab is told now, "chatty" for Chattynator's.)
+	test("1.1.2 review: told in the game's Olympus tab, then Chattynator's tab named Olympus made by hand: its first line comes after its own intro and the filter's hint; back in the game's tab, that one says it again", function()
+		WithTabs(function(w, printed)
+			w[4].name, w[4].isDocked = "Olympus", true
+			local ok, state = Chan.SetupTab()
+			eq(ok, true); eq(state, "open")
+			eq(ns.db.chatTabIntro["Tester-Realm"], true); eq(#w[4].lines, 1, "the game's tab told")
+			WithChattynatorAPI({ { "GENERAL", "GUILD" } }, function(c)
+				eq(Recv("A", "Member500", "before the tab"), true)
+				eq(printed[#printed], ns.L.CHATWIN_GONE:format('"Olympus"'))
+				eq(Has(w[1].lines, "before the tab"), 1); eq(#w[4].lines, 1, "never the game's hidden tab")
+				c.windows[1][3] = "Olympus"
+				eq(Recv("A", "Member500", "in the tab"), true)
+				eq(#c.calls, 2)
+				eq(c.calls[1][3], Our(ns.L.CHATTAB_HERE:format(LEGEND)), "its own intro first")
+				assert(c.calls[2][3]:find("in the tab", 1, true), c.calls[2][3])
+				eq(Has(printed, ns.L.CHATTY_FILTER:format('"Olympus"')), 1, "the filter's hint, in the main window")
+				eq(ns.db.chatTabIntro["Tester-Realm"], "chatty")
+				eq(Recv("C", "Member2", "no second intro"), true)
+				eq(#c.calls, 3); eq(Has(printed, ns.L.CHATTY_FILTER:format('"Olympus"')), 1)
+			end)
+			-- Chattynator off: the game's tab again, told again.
+			eq(Recv("L", "Member1", "the game's tab again"), true)
+			eq(#w[4].lines, 3); eq(w[4].lines[2], Our(ns.L.CHATTAB_HERE:format(LEGEND)))
+			eq(ns.db.chatTabIntro["Tester-Realm"], true)
+		end)
 	end)
 
 	test("1.1.1 /ol, /olc, /oll alone open the Olympus window's Chat tab on that channel; without one, the usage line; with text, a line as before", function()
@@ -45914,6 +46742,44 @@ end)()
 			pages[#pages + 1] = doc:match("### Channels(.-)%*%*Not encrypted")
 		end
 		eq(pages[1], pages[2], "the Channels section is the same on both pages")
+	end)
+
+	test("1.1.2: Chattynator's strings in English and pt-BR, with the same format codes, in Chattynator's own words for its menus; the README and the CurseForge page tell of its tabs in the same words", function()
+		local en, pt = LoadedL("enUS"), LoadedL("ptBR")
+		for _, k in ipairs({ "CHATTY_STEPS", "CHATTY_FILTER", "CHATTY_NOT_FOUND", "CHATTY_TAB_STEPS", "CHATSET_WHERE_TIP_CHATTY" }) do
+			assert(type(en[k]) == "string" and en[k] ~= "", k .. ": English")
+			assert(type(pt[k]) == "string" and pt[k] ~= "" and pt[k] ~= en[k], k .. ": pt-BR")
+			local function Codes(s) local out = {} for c in s:gmatch("%%%a") do out[#out + 1] = c end return table.concat(out) end
+			eq(Codes(pt[k]), Codes(en[k]), k .. ": format codes")
+		end
+		eq(select(2, en.CHATTY_FILTER:gsub("%%s", "")), 1, "the tab's name")
+		eq(select(2, en.CHATTY_NOT_FOUND:gsub("%%s", "")), 2, "the name asked for, its tabs")
+		-- (Chattynator 224's Locales.lua: its menus as the player sees them.)
+		for _, words in ipairs({ { en, "Rename tab", "Tab Settings", "Addons" }, { pt, "Renomear aba", "Configurações da aba", "Addons" } }) do
+			for i = 2, 4 do assert(words[1].CHATTY_STEPS:find(words[i], 1, true), words[i]) end
+			assert(words[1].CHATTY_FILTER:find(words[3], 1, true), words[3])
+		end
+		local PHRASES = {
+			"**Chattynator (1.1.2, from hypertectonic's pull request #47).**",
+			"the game's own windows are hidden behind them",
+			"right-click it, Tab Settings, and under Addons tick Olympus",
+			"picks any other tab of Chattynator's by its name",
+			"which Olympus cannot see: each time you choose a Chattynator tab, the main window says how",
+			"the lines it showed before may not follow it",
+			"it never makes, renames or sets up a tab",
+			"With Chattynator (1.1.2) there is no pointer either",
+			"with Chattynator, to its next tab, by name, 1.1.2",
+			"in another chat window (with Chattynator, one of its tabs, by name)",
+			"hypertectonic (Chattynator's tabs)",
+			-- (1.1.2's review: said once, whichever sees the tab first; nothing chosen again.)
+			"The tab is announced once, by the Chat tab when it sees the tab or by the tab's first line if that comes first, and a channel you moved meanwhile stays where you put it.",
+		}
+		for _, path in ipairs({ "README.md", "docs/CURSEFORGE.md" }) do
+			local doc = assert(ReadFile(ROOT .. path)):gsub("%s+", " ")
+			for _, phrase in ipairs(PHRASES) do assert(doc:find(phrase, 1, true), path .. ": " .. phrase) end
+			assert(not doc:find("create a regular chat tab in Chattynator", 1, true), path .. ": PR #47's bullet, rewritten for 1.1.1's tab")
+			assert(not doc:find("and says so once when the tab is there", 1, true), path .. ": the Chat tab alone, as if the tab's first line said nothing")
+		end
 	end)
 
 	---------------------------------------------------------------------------
@@ -46088,6 +46954,36 @@ end)()
 			end)
 		end)
 
+		-- (1.1.2: the Treasury prints this line on the frame Channels.Frame gives, as Show does; with
+		-- Chattynator that is its tab, and the line is still Olympus's for the tab's filter: the
+		-- stand-in's own code, in Channels.lua, calls Chattynator.)
+		test("1.1.2 review: the Treasury's donation line reaches Chattynator's tab named Olympus, without [Olympus], in its colour, as a line of Olympus's", function()
+			WithTabs(function(w, printed)
+				local T = ns.Treasury
+				local savedKeeper = T.IsKeeperName
+				local keeper = "Keeper Four-Realm"
+				local ok, err = pcall(function()
+					T.IsKeeperName = function() return true end
+					w[4].name, w[4].isDocked = "Olympus", true -- (the game's, hidden behind Chattynator's)
+					ns.db.chatWindows = { ["Tester-Realm"] = { A = "Olympus", C = "Olympus", L = "Olympus" } }
+					ns.db.chatTabIntro = { ["Tester-Realm"] = "chatty" } -- (told in Chattynator's tab)
+					WithChattynatorAPI({ { "GENERAL" }, { "Olympus" } }, function(c)
+						T.HandleDonations("CHANNEL", keeper, ("TD~Olympus II~1~%d~"):format(ns.Now()))
+						eq(#c.calls, 1)
+						eq(c.calls[1][1], 2); eq(c.calls[1][2], 1)
+						eq(c.calls[1][3], T.DonationText(keeper, nil), "no [Olympus] in the tab:")
+						local color = Chan.TIERS.A.color
+						eq(c.calls[1][4], color[1]); eq(c.calls[1][5], color[2]); eq(c.calls[1][6], color[3])
+						assert(c.calls[1].source:find("Olympus/Channels%.lua$"), c.calls[1].source)
+						eq(#w[4].lines, 0, "not the game's hidden tab"); eq(#w[1].lines, 0)
+					end)
+				end)
+				T.HandleDonations("CHANNEL", keeper, "TD~Olympus II~0~0~")
+				T.IsKeeperName = savedKeeper
+				if not ok then error(err, 0) end
+			end)
+		end)
+
 		test("1.1.1 review: the README and the CurseForge page tell of the refused part, the parts that left before a move, the tab's hint said once, and the donation line", function()
 			local PHRASES = {
 				"if the game refuses one of them, the rest of that line is not sent either, and you are told (1.1.1)",
@@ -46102,6 +46998,1429 @@ end)()
 			end
 		end)
 	end)()
+end)()
+
+---------------------------------------------------------------------------
+-- 1.1.2: the right-click menus (PlayerMenu.lua); a player's Olympus version, Ask to update, Check
+-- version and Tell them about Olympus (Versions.lua); the author's Ask for a bug report, the
+-- player's window for it and the author's report window (Workshop.lua); the answer bank
+-- (docs/answers.json, scripts/answers.lua, AnswerBank.lua), its Answers and each page's "?"
+-- (Answers.lua). A function of its own (the main chunk is near LuaJIT's 200 locals).
+---------------------------------------------------------------------------
+;(function()
+	local L = ns.L
+	local PM, V, A, W = ns.PlayerMenu, ns.Versions, ns.Answers, ns.Workshop
+
+	-- The game's menu description as Blizzard_Menu gives it to Menu.ModifyMenu's callbacks
+	-- (MenuUtil: CreateDivider, CreateTitle, CreateButton; SetTooltip and SetEnabled on a line).
+	local function MenuRoot()
+		local root = { items = {} }
+		local function Desc(kind, text, cb)
+			local d = { kind = kind, text = text, cb = cb, enabled = true }
+			function d:SetTooltip(fn) self.tip = fn end
+			function d:SetEnabled(on) self.enabled = on end
+			root.items[#root.items + 1] = d
+			return d
+		end
+		function root:CreateDivider() return Desc("divider") end
+		function root:CreateTitle(text) return Desc("title", text) end
+		function root:CreateButton(text, cb) return Desc("button", text, cb) end
+		function root.Find(text)
+			for _, d in ipairs(root.items) do if d.text == text then return d end end
+		end
+		function root.Texts()
+			local out = {}
+			for _, d in ipairs(root.items) do out[#out + 1] = d.kind .. ":" .. tostring(d.text or "") end
+			return table.concat(out, " | ")
+		end
+		return root
+	end
+	local function TipOf(d)
+		local tt = { lines = {} }
+		function tt:AddLine(text) self.lines[#self.lines + 1] = text end
+		d.tip(tt)
+		return table.concat(tt.lines, "\n")
+	end
+	-- A tooltip that records every line (AddLine, AddDoubleLine).
+	local function Tooltip()
+		local tt = { lines = {} }
+		function tt:AddLine(text) self.lines[#self.lines + 1] = tostring(text) end
+		function tt:AddDoubleLine(a, b) self.lines[#self.lines + 1] = tostring(a) .. " " .. tostring(b) end
+		function tt.Has(text) for _, l in ipairs(tt.lines) do if l:find(text, 1, true) then return true end end return false end
+		return tt
+	end
+
+	-- fn(w, W) as WithWorkshop's `me`, with: the versions' guild hellos from `hellos` ([short name] =
+	-- version, heard at w.clock - (w.helloAge or 0)), the version checks' timers in w.timers
+	-- (RunTimers-like: w.Run()), a fixed check id, no saved asks or released version, ns.UI's copy
+	-- windows recorded in w.copies (ns.UI a stand-in, unless keepUI).
+	local function WithVersions(me, fn, keepUI)
+		WithWorkshop(me, function(w, W)
+			local saved = { peer = ns.Comm.PeerVersion, after = V.after, random = V.random, ui = ns.UI, release = ns.db.authorRelease,
+				asked = ns.db.updateAsked, times = ns.db.updateAskTimes, shown = ns.db.updateAskShown, snooze = ns.db.updateAskSnooze,
+				friends = C_FriendList, blocked = ns.db.blocked, released = ns.db.releasedVersion, chat = C_ChatInfo, rollCall = ns.db.rollCall }
+			w.hellos, w.timers, w.copies, w.whispers = {}, {}, {}, {}
+			local ok, err = pcall(function()
+				V.Reset()
+				W.ResetVersion()
+				ns.ResetAfterCombat()
+				ns.db.authorRelease, ns.db.updateAsked, ns.db.updateAskTimes, ns.db.updateAskShown, ns.db.updateAskSnooze = nil, nil, nil, nil, nil
+				ns.db.releasedVersion = nil
+				ns.db.blocked = {}
+				ns.Comm.PeerVersion = function(name)
+					local v = w.hellos[ns.ShortName(ns.FullName(ns.Normal(name)))]
+					if v then return v, w.clock - (w.helloAge or 0) end
+				end
+				V.after = function(_, _, f) w.timers[#w.timers + 1] = f end
+				V.random = function(a, b) if a then return 4242 end return 0.5 end
+				w.Run = function() local due = w.timers; w.timers = {}; for _, f in ipairs(due) do f() end end
+				if not keepUI then
+					ns.UI = { ShowCopy = function(title, text, action, opts) w.copies[#w.copies + 1] = { title = title, text = text, opts = opts } end,
+						-- (Olympus's whisper window with its text, UI.WhisperText: recorded, nothing sent.)
+						WhisperText = function(name, text) w.whispers[#w.whispers + 1] = { name = name, text = text } return {} end,
+						LINKS = { curseforge = "https://www.curseforge.com/wow/addons/olympus-guild" } }
+				end
+				fn(w, W)
+			end)
+			ns.Comm.PeerVersion, V.after, V.random, ns.UI, ns.db.authorRelease = saved.peer, saved.after, saved.random, saved.ui, saved.release
+			ns.db.updateAsked, ns.db.updateAskTimes, ns.db.updateAskShown, ns.db.updateAskSnooze = saved.asked, saved.times, saved.shown, saved.snooze
+			C_FriendList, ns.db.blocked, ns.db.releasedVersion, C_ChatInfo, ns.db.rollCall = saved.friends, saved.blocked, saved.released, saved.chat, saved.rollCall
+			W.ResetVersion()
+			ns.ResetAfterCombat()
+			V.Reset()
+			if not ok then error(err, 0) end
+		end)
+	end
+
+	test("1.1.2 player menus: Menu.ModifyMenu for each player menu (never ENEMY_PLAYER, SELF, offline names or Battle.net); Olympus's lines after a divider and its title, only for a player we can reach; nothing without Menu", function()
+		WithVersions("Tester-Realm", function(w)
+			local savedMenu, savedEnum = rawget(_G, "Menu"), Enum.ClubMemberPresence
+			local savedUnit = { player = UnitIsPlayer, is = UnitIsUnit, conn = UnitIsConnected, full = UnitFullName }
+			local hooks, order = {}, {}
+			local ok, err = pcall(function()
+				-- A client without the new menus: nothing hooked, and nothing breaks.
+				Menu = nil
+				PM.Reset()
+				eq(PM.Hook(), false)
+				Menu = { ModifyMenu = function(tag, cb) hooks[tag] = cb; order[#order + 1] = tag; return {} end }
+				eq(PM.Hook(), true); eq(PM.Hook(), true, "once")
+				eq(#order, #PM.WHICH, "each menu once")
+				for _, which in ipairs({ "PLAYER", "PARTY", "RAID_PLAYER", "RAID", "FRIEND", "COMMUNITIES_GUILD_MEMBER", "GUILD", "CHAT_ROSTER" }) do
+					assert(hooks["MENU_UNIT_" .. which], which)
+				end
+				for _, which in ipairs({ "ENEMY_PLAYER", "SELF", "FRIEND_OFFLINE", "GUILD_OFFLINE", "BN_FRIEND", "BN_FRIEND_OFFLINE", "TARGET" }) do
+					eq(hooks["MENU_UNIT_" .. which], nil, which)
+				end
+				-- A name in chat (FRIEND): the divider, "Olympus", the version line, Check version.
+				local root = MenuRoot()
+				hooks.MENU_UNIT_FRIEND(nil, root, { name = "Ann", which = "FRIEND" })
+				eq(root.Texts(), "divider: | title:Olympus | title:" .. L.VERSION_LINE_UNKNOWN .. " | button:" .. L.VERSION_CHECK)
+				assert(TipOf(root.Find(L.VERSION_CHECK)):find(L.VERSION_CHECK_TIP, 1, true))
+				eq(#w.whispered + #w.sent, 0, "opening a menu sends nothing")
+				-- Whoever we can't reach: no line at all.
+				Enum.ClubMemberPresence = { Online = 1, OnlineMobile = 2, Offline = 3 }
+				for _, ctx in ipairs({ { name = "Tester" }, { name = "Ann", isSelf = true }, { name = "Ann", bnetIDAccount = 7 },
+					{ name = "Ann", clubMemberInfo = { presence = 3 } }, { name = "Ann", isMobile = true }, { name = "" }, {} }) do
+					local r = MenuRoot()
+					hooks.MENU_UNIT_COMMUNITIES_GUILD_MEMBER(nil, r, ctx)
+					eq(#r.items, 0, "no line for " .. tostring(ctx.name))
+				end
+				local r = MenuRoot()
+				hooks.MENU_UNIT_COMMUNITIES_GUILD_MEMBER(nil, r, { name = "Ann", clubMemberInfo = { presence = 1 } })
+				assert(#r.items > 0, "online in the roster")
+				-- A unit (the target frame): its name as the server writes it; not a player, not connected: nothing.
+				UnitIsPlayer = function(unit) return unit ~= "npc" end
+				UnitIsUnit = function(a, b) return a == "player" and b == "player" end
+				UnitIsConnected = function(unit) return unit ~= "gone" end
+				UnitFullName = function(unit) if unit == "target" then return "Bob", "Realm" end return "Tester", "Realm" end
+				w.hellos.Bob = "1.0.0"
+				r = MenuRoot()
+				hooks.MENU_UNIT_PLAYER(nil, r, { unit = "target" })
+				-- (Changed on purpose, 1.1.2's review: under the version, a line of its own says where
+				-- from, when and the newest known: a gamepad can't reach a menu line's tooltip.)
+				local detail = L.VERSION_DETAIL_HELLO:format(ns.Ago(w.clock)) .. "; " .. L.VERSION_DETAIL_NEWEST:format(ns.VERSION)
+				eq(r.Texts(), "divider: | title:Olympus | title:" .. L.VERSION_LINE_OUTDATED:format("1.0.0") .. " | title:|cff9d9d9d" .. detail .. "|r | button:" .. L.VERSION_ASK)
+				eq(PM.Target("PLAYER", { unit = "target" }).name, "Bob-Realm")
+				for _, unit in ipairs({ "npc", "gone", "player" }) do eq(PM.Target("PLAYER", { unit = unit }), nil, unit) end
+				-- Classic's split name (the menu gives "Bob" and his realm apart): whole again.
+				eq(PM.Target("FRIEND", { name = "Bob", surname = "Otherrealm" }).name, "Bob-Otherrealm")
+				-- Outside an Olympus guild: nothing (the addon sends nothing there anyway).
+				GetGuildInfo = function() return "Wanderers", "Member", 3 end
+				r = MenuRoot()
+				hooks.MENU_UNIT_FRIEND(nil, r, { name = "Ann" })
+				eq(#r.items, 0, "not in an Olympus guild")
+				-- A feature that adds nothing: no divider, no title.
+				GetGuildInfo = function() return "Olympus II", "Member", 3 end
+				local root2 = MenuRoot()
+				eq(PM.Add("test-nothing", function() end, 1), true)
+				PM.Add("versions", function() end, 10) -- (replaced for this check, put back below)
+				hooks.MENU_UNIT_FRIEND(nil, root2, { name = "Ann" })
+				eq(#root2.items, 0, "nothing of Olympus without a line")
+				PM.Add("versions", function(target, menu) V.MenuLines(target, menu) end, 10)
+				eq(PM.Add("test-nothing", nil), false, "taken off")
+				assert(PM.StatusLine():find("hooked", 1, true))
+			end)
+			Menu, Enum.ClubMemberPresence = savedMenu, savedEnum
+			UnitIsPlayer, UnitIsUnit, UnitIsConnected, UnitFullName = savedUnit.player, savedUnit.is, savedUnit.conn, savedUnit.full
+			PM.Reset()
+			if not ok then error(err, 0) end
+		end)
+	end)
+
+	test("1.1.2 versions: a guildmate's hello names it (by the short name too); up to date, out of date, newer, unreadable; the author's released version is the newest known", function()
+		local cns, Deliver = FreshComm()
+		Deliver("GUILD", "Ann", "H1~" .. ns.VERSION .. "~Realm~p")
+		Deliver("GUILD", "Bob", "H1~1.1.0~Realm~p")
+		Deliver("GUILD", "Dan", "H1~beta~Realm~p")
+		local v, at = cns.Comm.PeerVersion("Ann")
+		eq(v, ns.VERSION); eq(at, cns.clock)
+		eq((cns.Comm.PeerVersion("Ann-OtherRealm")), ns.VERSION, "the short name when the realm is written apart")
+		eq((cns.Comm.PeerVersion("Dan-Realm")), "?", "a version it can't read")
+		eq(cns.Comm.PeerVersion("Eve"), nil, "no hello: nothing")
+		WithVersions("Tester-Realm", function(w, W)
+			ns.Comm.PeerVersion = cns.Comm.PeerVersion
+			eq((V.Status("Ann-Realm")), "current")
+			local state, version, how = V.Status("Bob")
+			eq(state, "outdated"); eq(version, "1.1.0"); eq(how, "hello")
+			eq((V.Status("Dan")), "olympus"); eq((V.Status("Eve")), "unknown")
+			eq(V.Line("outdated", "1.1.0"), L.VERSION_LINE_OUTDATED:format("1.1.0"))
+			w.hellos = {}
+			ns.Comm.PeerVersion = function(name) if ns.ShortName(name) == "Cid" then return "9.9.9", w.clock end end
+			eq((V.Status("Cid")), "newer", "newer than ours: never the newest known (anyone can send any number)")
+			eq(V.Latest(), ns.VERSION)
+			-- The author's presence names 9.9.8 as out: Ann's version is behind it now.
+			W.HeardVersion("9.9.8")
+			eq(V.Latest(), "9.9.8")
+			ns.Comm.PeerVersion = cns.Comm.PeerVersion
+			eq((V.Status("Ann")), "outdated")
+			W.ResetVersion()
+		end)
+	end)
+
+	test("1.1.2 Check version: one addon whisper, answered with the version alone; 'no answer' after 10 s; once per player every 2 min, 6 a minute; the answering side's limits, blocks and ignores", function()
+		WithVersions("Tester-Realm", function(w, W)
+			eq(V.Check("Ann-Realm"), true)
+			eq(#w.whispered, 1); eq(w.whispered[1].to, "Ann-Realm"); eq(w.whispered[1].msg, "V7~4242"); eq(w.whispered[1].key, "vcheck:ann")
+			eq(w.whispered[1].urgent, true, "the player waits for it: ahead of the census in the queue")
+			eq((V.Status("Ann")), "checking")
+			-- Wrong id, the channel, another sender: nothing.
+			V.HandleAnswer("WHISPER", "Ann-Realm", "V8~1~1.1.0")
+			V.HandleAnswer("CHANNEL", "Ann-Realm", "V8~4242~1.1.0")
+			V.HandleAnswer("WHISPER", "Bob-Realm", "V8~4242~1.1.0")
+			eq((V.Status("Ann")), "checking")
+			V.HandleAnswer("WHISPER", "Ann-Realm", "V8~4242~" .. ns.VERSION)
+			local state, version, how = V.Status("Ann")
+			eq(state, "current"); eq(version, ns.VERSION); eq(how, "check")
+			eq(w.printed[#w.printed], "Ann: " .. L.VERSION_LINE_CURRENT:format(ns.VERSION), "one line in chat")
+			eq(#w.copies, 0, "no window for a player")
+			-- Again soon: refused, nothing sent.
+			eq(V.Check("Ann"), false); eq(#w.whispered, 1)
+			-- No answer in 10 s: "no answer", and Tell them about Olympus in the menu.
+			V.Check("Bob-Realm")
+			w.Run()
+			eq((V.Status("Bob")), "none")
+			eq(w.printed[#w.printed], L.VERSION_RESULT_NONE:format("Bob"))
+			local root = MenuRoot()
+			local noneAt = w.clock
+			V.MenuLines({ name = "Bob-Realm" }, { Line = function(t) root:CreateTitle(t) end, Button = function(t) root:CreateButton(t) end })
+			-- (The line under the version, 1.1.2's review: where from and when.)
+			local function Detail() return " | title:|cff9d9d9d" .. L.VERSION_DETAIL_CHECK:format(ns.Ago(noneAt)) .. "|r" end
+			eq(root.Texts(), "title:" .. L.VERSION_LINE_NONE .. Detail() .. " | button:" .. L.VERSION_TELL, "no Check again within 2 minutes")
+			w.clock = w.clock + V.PING_GAP
+			root = MenuRoot()
+			V.MenuLines({ name = "Bob-Realm" }, { Line = function(t) root:CreateTitle(t) end, Button = function(t) root:CreateButton(t) end })
+			eq(root.Texts(), "title:" .. L.VERSION_LINE_NONE .. Detail() .. " | button:" .. L.VERSION_CHECK .. " | button:" .. L.VERSION_TELL)
+			-- A late answer still counts.
+			V.HandleAnswer("WHISPER", "Bob-Realm", "V8~4242~1.0.9")
+			eq((V.Status("Bob")), "outdated")
+			-- Six a minute at most, whoever they go to.
+			w.clock = w.clock + 61
+			local sent = 0
+			for i = 1, 8 do if V.Check("P" .. i .. "-Realm") then sent = sent + 1 end end
+			eq(sent, V.PING_MAX); eq(w.printed[#w.printed], L.VERSION_CHECK_BUSY)
+			-- Answering: the version and the id, to that player alone; once per 30 s each, 20 a minute.
+			w.whispered = {}
+			V.HandlePing("WHISPER", "Zed-Realm", "V7~77")
+			eq(#w.whispered, 1); eq(w.whispered[1].to, "Zed-Realm"); eq(w.whispered[1].msg, "V8~77~" .. ns.VERSION); eq(w.whispered[1].urgent, true)
+			V.HandlePing("WHISPER", "Zed-Realm", "V7~78")
+			V.HandlePing("CHANNEL", "Yan-Realm", "V7~79")
+			V.HandlePing("WHISPER", "Yan-Realm", "V7~1234567")
+			V.HandlePing("WHISPER", "Yan-Realm", "V7~evil~text")
+			eq(#w.whispered, 1, "again too soon, the channel, a long id or garbage: no answer")
+			ns.db.blocked["yan-realm"] = true
+			V.HandlePing("WHISPER", "Yan-Realm", "V7~80")
+			C_FriendList = { IsIgnored = function(n) return n == "Xia" end }
+			V.HandlePing("WHISPER", "Xia-Realm", "V7~81")
+			eq(#w.whispered, 1, "blocked or ignored: no answer")
+			for i = 1, 30 do V.HandlePing("WHISPER", "Q" .. i .. "-Realm", "V7~" .. i) end
+			eq(#w.whispered, V.ANSWER_MAX, "20 a minute")
+			w.clock = w.clock + V.ANSWER_GAP
+			V.HandlePing("WHISPER", "Zed-Realm", "V7~90")
+			eq(#w.whispered, V.ANSWER_MAX, "the minute's budget still spent")
+			w.clock = w.clock + 60
+			V.HandlePing("WHISPER", "Zed-Realm", "V7~91")
+			eq(w.whispered[#w.whispered].msg, "V8~91~" .. ns.VERSION)
+		end)
+	end)
+
+	test("1.1.2 the author's version checks and 'Ask <name>' answers open his copy window, never chat lines", function()
+		WithVersions(AUTHOR_FULL, function(w, W)
+			-- (Changed on purpose, 1.1.2's review: his Check version is his roll call to that player
+			-- alone, V1, which every version since 0.9.9 answers after the player's yes; never a V7.)
+			V.Check("Ann-Realm")
+			local id = tonumber(w.whispered[#w.whispered].msg:match("^V1~(%d+)~100$"))
+			assert(id, "his roll call to her alone: " .. w.whispered[#w.whispered].msg)
+			eq((V.Status("Ann")), "checking")
+			local before = #w.printed
+			W.HandleAnswer("WHISPER", "Ann-Realm", ("V2~%d~1.1.0~~Forever~~c~0~0~"):format(id))
+			eq(#w.printed, before, "no chat line")
+			eq(#w.copies, 1); eq(w.copies[1].title, L.VERSION_RESULTS_TITLE); eq(w.copies[1].opts.key, "versions")
+			eq(w.copies[1].opts.auto, true, "opened by the answer: no keyboard taken")
+			assert(w.copies[1].text:find("Ann  " .. L.VERSION_LINE_OUTDATED:format("1.1.0"), 1, true), w.copies[1].text)
+			assert(w.copies[1].text:find(L.VERSION_RESULTS_HEAD:format(V.Latest()), 1, true))
+			local state, version, how = V.Status("Ann")
+			eq(state, "outdated"); eq(version, "1.1.0"); eq(how, "roll")
+			w.Run() -- (its 10 s: answered, nothing more)
+			eq(#w.copies, 1)
+			-- His roll call to one player alone (Ask <name>): the answer in the same window.
+			w.clock = w.clock + W.ASK_ONE_EVERY
+			W.AskOne("Bob-Realm")
+			id = tonumber(w.whispered[#w.whispered].msg:match("^V1~(%d+)~100$"))
+			W.HandleAnswer("WHISPER", "Bob-Realm", ("V2~%d~1.0.0~~Forever~~c~0~0~"):format(id))
+			eq(#w.copies, 2)
+			assert(w.copies[2].text:find("Bob  " .. L.VERSION_LINE_OUTDATED:format("1.0.0"), 1, true), w.copies[2].text)
+			-- No answer (no Olympus, older than 0.9.9, or no yes to his roll calls): the window says so.
+			w.clock = w.clock + W.ASK_ONE_EVERY
+			V.Check("Cid-Realm")
+			w.Run()
+			eq((V.Status("Cid")), "none"); eq(#w.copies, 3); eq(w.copies[3].opts.auto, true)
+			assert(w.copies[3].text:find("Cid  " .. L.VERSION_LINE_NONE, 1, true), w.copies[3].text)
+			-- A player's addon never answers a V7 from his name without their yes to his roll calls.
+			ns.me = "Tester-Realm"
+			ns.db.rollCall = nil
+			local n = #w.whispered
+			V.HandlePing("WHISPER", AUTHOR_FULL, "V7~5")
+			eq(#w.whispered, n, "not answered: no yes to his roll calls")
+			ns.db.rollCall = true
+			V.HandlePing("WHISPER", AUTHOR_FULL, "V7~6")
+			eq(#w.whispered, n + 1, "answered after the yes"); eq(w.whispered[n + 1].msg, "V8~6~" .. ns.VERSION)
+		end)
+	end)
+
+	test("1.1.2 Ask to update: only for a player behind; one ask per player a day, five an hour; the author's is his usual update window (V3)", function()
+		WithVersions("Tester-Realm", function(w, W)
+			-- (Changed on purpose, 1.1.2's review: a player's ask, V9, goes to 1.1.2 and newer alone,
+			-- the first that show it: here the author's presence named 1.1.3 as out.)
+			W.HeardVersion("1.1.3")
+			w.hellos = { Ann = "1.1.3", Bob = "1.1.2", P1 = "1.1.2", P2 = "1.1.2", P3 = "1.1.2", P4 = "1.1.2", P5 = "1.1.2" }
+			eq(V.AskUpdate("Ann-Realm"), false, "up to date"); eq(#w.whispered, 0)
+			eq(V.AskUpdate("Eve-Realm"), false, "nothing known"); eq(#w.whispered, 0)
+			eq(V.AskUpdate("Bob-Realm"), true)
+			eq(w.whispered[1].to, "Bob-Realm"); eq(w.whispered[1].msg, "V9~1.1.3"); eq(w.whispered[1].key, "vask:bob")
+			eq(w.printed[#w.printed], L.VERSION_ASKED:format("Bob"))
+			eq(V.AskUpdate("Bob"), false, "once a day"); eq(w.printed[#w.printed], L.VERSION_ASK_WAIT_ONE:format("Bob"))
+			for i = 1, 5 do V.AskUpdate("P" .. i .. "-Realm") end
+			eq(#w.whispered, 5, "Bob and four more: five an hour")
+			eq(w.printed[#w.printed], L.VERSION_ASK_WAIT_HOUR:format(V.ASK_HOUR))
+			w.clock = w.clock + 3601
+			eq(V.AskUpdate("P5-Realm"), true, "the next hour")
+			eq(V.AskUpdate("Bob-Realm"), false, "Bob: still today")
+			w.clock = w.clock + V.ASK_GAP
+			eq(V.AskUpdate("Bob-Realm"), true, "a day later")
+			-- The menu offers it for Bob, not for Ann.
+			local root = MenuRoot()
+			V.MenuLines({ name = "Ann-Realm" }, { Line = function(t) root:CreateTitle(t) end, Button = function(t) root:CreateButton(t) end })
+			eq(root.Texts(), "title:" .. L.VERSION_LINE_CURRENT:format("1.1.3") .. " | title:|cff9d9d9d" .. L.VERSION_DETAIL_HELLO:format(ns.Ago(w.clock)) .. "|r")
+		end)
+		WithVersions(AUTHOR_FULL, function(w, W)
+			w.hellos = { Bob = "1.0.0" }
+			eq(V.AskUpdate("Bob-Realm"), true)
+			eq(w.whispered[1].msg, "V3~" .. ns.VERSION, "the author's own update window"); eq(w.whispered[1].key, "askupdate:Bob-Realm")
+			eq(w.printed[#w.printed], L.VERSION_ASKED:format("Bob"))
+			eq(V.AskUpdate("Bob-Realm"), false, "his own gap (10 minutes)")
+			-- (1.1.2's review: from the menu, his too once a day per player, not every 10 minutes.)
+			w.clock = w.clock + W.UPDATE_GAP
+			eq(V.AskUpdate("Bob-Realm"), false, "once a day from the menu"); eq(#w.whispered, 1)
+			eq(w.printed[#w.printed], L.VERSION_ASK_WAIT_ONE:format("Bob"))
+			w.clock = w.clock + V.ASK_GAP
+			eq(V.AskUpdate("Bob-Realm"), true, "a day later"); eq(#w.whispered, 2)
+		end)
+	end)
+
+	test("1.1.2 review: the author's newest is the version he marked as out, not the preview he runs; his update window names it", function()
+		WithVersions(AUTHOR_FULL, function(w, W)
+			local mine = ns.VERSION
+			ns.VERSION = "1.1.3" -- (his preview, not on CurseForge yet)
+			local ok, err = pcall(function()
+				ns.db.releasedVersion = "1.1.2"
+				eq(V.Latest(), "1.1.2")
+				w.hellos = { Ann = "1.1.2", Bob = "1.1.1" }
+				eq((V.Status("Ann")), "current", "on the released version: up to date, whatever he runs")
+				local root = MenuRoot()
+				V.MenuLines({ name = "Ann-Realm" }, { Line = function(t) root:CreateTitle(t) end, Button = function(t) root:CreateButton(t) end })
+				eq(root.Find(L.VERSION_ASK), nil, "no Ask to update for her")
+				eq((V.Status("Bob")), "outdated")
+				eq(V.AskUpdate("Bob-Realm"), true)
+				eq(w.whispered[1].msg, "V3~1.1.2", "his window names the version that is out, never his preview")
+				-- Nothing marked: his build is the newest he knows (as before 1.1.2).
+				ns.db.releasedVersion = nil
+				eq(V.Latest(), "1.1.3")
+			end)
+			ns.VERSION = mine
+			if not ok then error(err, 0) end
+		end)
+	end)
+
+	test("1.1.2 review: a player older than 1.1.2 can't show a player's ask or answer a check: Ask to update opens a whisper to send yourself; no answer says it may be an older Olympus", function()
+		WithVersions("Tester-Realm", function(w, W)
+			w.hellos = { Old = "1.1.1" }
+			local root = MenuRoot()
+			V.MenuLines({ name = "Old-Realm" }, { Line = function(t) root:CreateTitle(t) end, Button = function(t, fn, title, tip) local d = root:CreateButton(t, fn); d.tipText = tip end })
+			local b = root.Find(L.VERSION_ASK)
+			assert(b, root.Texts()); eq(b.tipText, L.VERSION_ASK_OLD_TIP:format("1.1.1"))
+			eq(V.AskUpdate("Old-Realm"), true)
+			eq(#w.whispered, 0, "no V9 their addon would ignore"); eq(ns.db.updateAsked, nil, "no slot used: the player sends it himself")
+			eq(#w.whispers, 1); eq(w.whispers[1].name, "Old")
+			eq(w.whispers[1].text, L.VERSION_ASK_WHISPER:format("1.1.1", ns.VERSION, ns.UI.LINKS.curseforge))
+			assert(#w.whispers[1].text <= 255, "one whisper")
+			-- A check nobody answers: the texts say what it can mean (1.1.1 and older never answer).
+			assert(L.VERSION_RESULT_NONE:find("1.1.2", 1, true) and L.VERSION_CHECK_TIP:find("1.1.2", 1, true))
+			assert(L.VERSION_INVITE_TEXT:find("1.1.2", 1, true), "the invite says to update an older one")
+			V.Check("Eve-Realm")
+			w.Run()
+			eq(w.printed[#w.printed], L.VERSION_RESULT_NONE:format("Eve"))
+		end)
+	end)
+
+	test("1.1.2 asked to update: a small notice with both versions and where to update, once a day, not for 7 days after Don't remind me; never from a blocked or ignored player, nor for a version not newer", function()
+		-- (Changed on purpose, 1.1.2's review: the notice is Olympus's own window in both input modes,
+		-- never the game's popup, whose Escape pressed "Don't remind me"; the shown windows are read
+		-- from Dialog.lua, w.notices.)
+		WithUI(function()
+			WithGamepadUI(false, function(game)
+				WithVersions("Tester-Realm", function(w, W)
+					local mine = ns.VERSION
+					ns.VERSION = "1.1.0"
+					local notices = {}
+					local function Shown()
+						local d = ns.Dialog.Find("OLYMPUS_UPDATE_ASKED")
+						if d and d.text:GetText() ~= notices[#notices] then notices[#notices + 1] = d.text:GetText() end
+						return #notices
+					end
+					local ok, err = pcall(function()
+						V.HandleAsk("WHISPER", "Ann-Realm", "V9~1.1.0")
+						V.HandleAsk("WHISPER", "Ann-Realm", "V9~1.0.9")
+						V.HandleAsk("WHISPER", "Ann-Realm", "V9~go to evil.example")
+						V.HandleAsk("CHANNEL", "Ann-Realm", "V9~1.1.2")
+						eq(Shown(), 0, "not newer, garbage or the channel: nothing")
+						ns.db.blocked["ann-realm"] = true
+						V.HandleAsk("WHISPER", "Ann-Realm", "V9~1.1.2")
+						C_FriendList = { IsIgnored = function(n) return n == "Bob" end }
+						V.HandleAsk("WHISPER", "Bob-Realm", "V9~1.1.2")
+						eq(Shown(), 0, "blocked, ignored: nothing")
+						V.HandleAsk("WHISPER", "Cid-Realm", "V9~1.1.2")
+						eq(Shown(), 1); eq(#game.shown, 0, "never the game's popup"); eq(#w.popups, 0)
+						-- (No released version heard from the author: no number of theirs is shown.)
+						eq(notices[1], L.VERSION_NOTICE_ANY:format("Cid", "1.1.0"))
+						assert(notices[1]:find("CurseForge", 1, true), "where to update")
+						local d = ns.Dialog.Find("OLYMPUS_UPDATE_ASKED")
+						d.buttons[1]:Click()
+						V.HandleAsk("WHISPER", "Dee-Realm", "V9~1.1.2")
+						eq(Shown(), 1, "once a day")
+						w.clock = w.clock + V.SHOWN_GAP
+						V.HandleAsk("WHISPER", "Dee-Realm", "V9~1.1.2")
+						eq(Shown(), 2, "the next day")
+						-- Don't remind me (its second button): 7 days of quiet.
+						ns.Dialog.Find("OLYMPUS_UPDATE_ASKED").buttons[2]:Click()
+						eq(w.printed[#w.printed], L.VERSION_SNOOZED)
+						w.clock = w.clock + V.SHOWN_GAP
+						V.HandleAsk("WHISPER", "Eli-Realm", "V9~1.1.2")
+						eq(ns.Dialog.Find("OLYMPUS_UPDATE_ASKED"), nil, "snoozed")
+						w.clock = w.clock + V.SNOOZE
+						V.HandleAsk("WHISPER", "Eli-Realm", "V9~1.1.2")
+						eq(Shown(), 3, "after 7 days")
+						ns.Dialog.Find("OLYMPUS_UPDATE_ASKED").buttons[1]:Click()
+						-- In an instance it waits, as any alert, and shows once out.
+						w.clock = w.clock + V.SHOWN_GAP
+						local savedInstance = IsInInstance
+						IsInInstance = function() return true end
+						V.HandleAsk("WHISPER", "Fay-Realm", "V9~1.1.2")
+						eq(ns.Dialog.Find("OLYMPUS_UPDATE_ASKED"), nil, "held")
+						IsInInstance = savedInstance
+						ns.ReleaseHeld()
+						eq(Shown(), 4); eq(notices[4], L.VERSION_NOTICE_ANY:format("Fay", "1.1.0"))
+						ns.Dialog.Find("OLYMPUS_UPDATE_ASKED").buttons[1]:Click()
+					end)
+					ns.VERSION = mine
+					ns.ResetHeld()
+					if not ok then error(err, 0) end
+				end)
+			end)
+		end)
+	end)
+
+	test("1.1.2 review: an update ask never names a version the author has not released, never comes from a player the moderators took off, and Escape never means Don't remind me", function()
+		WithUI(function()
+			WithGamepadUI(false, function(game)
+				WithVersions("Tester-Realm", function(w, W)
+					local mine, savedHides, savedCombat = ns.VERSION, ns.Moderation.Hides, rawget(_G, "InCombatLockdown")
+					ns.VERSION = "1.1.2"
+					local ok, err = pcall(function()
+						-- Taken off by the moderators (net-off): nothing.
+						ns.Moderation.Hides = function(sender) if sender == "Gus-Realm" then return { kind = "c" } end return nil end
+						V.HandleAsk("WHISPER", "Gus-Realm", "V9~1.1.3")
+						eq(ns.Dialog.Find("OLYMPUS_UPDATE_ASKED"), nil, "net-off: dropped")
+						ns.Moderation.Hides = savedHides
+						-- The author's presence named 1.1.2 as out: ours is it, nothing to update to, whatever
+						-- a player's number says.
+						W.HeardVersion("1.1.2")
+						V.HandleAsk("WHISPER", "Hal-Realm", "V9~9.9.9")
+						eq(ns.Dialog.Find("OLYMPUS_UPDATE_ASKED"), nil, "up to date with what the author released")
+						-- He named 1.1.3: a claimed 9.9.9 shows as 1.1.3, the version that is out.
+						W.HeardVersion("1.1.3")
+						V.HandleAsk("WHISPER", "Hal-Realm", "V9~9.9.9")
+						local d = ns.Dialog.Find("OLYMPUS_UPDATE_ASKED")
+						assert(d, "shown"); eq(d.text:GetText(), L.VERSION_NOTICE:format("Hal", "1.1.2", "1.1.3"))
+						assert(not d.text:GetText():find("9.9.9", 1, true), "never the made-up number")
+						eq(#game.shown, 0, "Olympus's window, not the game's popup, with mouse and keyboard")
+						-- Escape: the game's popup would call OnCancel(..., "clicked") unless noCancelOnEscape
+						-- (Forever's StaticPopup_CallEscapeHandler); its definition says so, and ours ignores Escape.
+						eq(StaticPopupDialogs.OLYMPUS_UPDATE_ASKED.noCancelOnEscape, true)
+						eq(UISpecialFrames[1], nil, "not on the Escape list")
+						d.buttons[1]:Click()
+						eq(ns.db.updateAskSnooze, nil, "OK is not Don't remind me")
+						-- (The limits are the addon's saved data: on the beta, which loads none back, a new
+						-- login starts them over; the texts say so.)
+						assert(L.VERSION_SNOOZED:find("beta", 1, true) and L.VERSION_ASK_TIP:find("beta", 1, true))
+						ns.db.updateAskShown = nil -- (a beta login)
+						w.clock = w.clock + 1
+						V.HandleAsk("WHISPER", "Ivy-Realm", "V9~1.1.3")
+						assert(ns.Dialog.Find("OLYMPUS_UPDATE_ASKED"), "shown again after a login that loaded nothing")
+						ns.Dialog.Find("OLYMPUS_UPDATE_ASKED").buttons[1]:Click()
+						-- In a fight: after it.
+						ns.db.updateAskShown = nil
+						InCombatLockdown = function() return true end
+						V.HandleAsk("WHISPER", "Joy-Realm", "V9~1.1.3")
+						eq(ns.Dialog.Find("OLYMPUS_UPDATE_ASKED"), nil, "not in a fight")
+						InCombatLockdown = function() return false end
+						ns.RunAfterCombat()
+						assert(ns.Dialog.Find("OLYMPUS_UPDATE_ASKED"), "once it is over")
+					end)
+					InCombatLockdown = savedCombat
+					ns.VERSION, ns.Moderation.Hides = mine, savedHides
+					ns.ResetHeld()
+					if not ok then error(err, 0) end
+				end)
+			end)
+		end)
+	end)
+
+	test("1.1.2 Tell them about Olympus: Olympus's own whisper window with the invite and the CurseForge link, in both input modes; nothing sent until Send, and the keyboard untouched", function()
+		WithUI(function()
+			local UI = LoadUI()
+			local said, focus = {}, 0
+			local saved = { say = SendChatMessage, show = StaticPopup_Show }
+			SendChatMessage = function(text, kind, _, to) said[#said + 1] = kind .. " " .. tostring(to) .. " " .. text end
+			local ok, err = pcall(function()
+				for _, gamepad in ipairs({ false, true }) do
+					WithGamepadUI(gamepad, function(game)
+						local d = V.Tell("Ann-Realm")
+						assert(d, "a window")
+						eq(ns.Dialog.Find("OLYMPUS_WHISPER_TEXT"), d); eq(#game.shown, 0, "never the game's popup")
+						eq(d.text:GetText(), L.WHISPER_TO:format("Ann"))
+						eq(d.editBox:GetText(), L.VERSION_INVITE_TEXT:format(UI.LINKS.curseforge))
+						assert(#d.editBox:GetText() <= 255, "one whisper")
+						eq(#said, gamepad and 1 or 0, "nothing sent by the click")
+						d.editBox:SetText(d.editBox:GetText() .. " :)")
+						d.buttons[1]:Click()
+						eq(said[#said], "WHISPER Ann " .. L.VERSION_INVITE_TEXT:format(UI.LINKS.curseforge) .. " :)")
+						eq(d:IsShown(), false)
+						-- Cancel: nothing.
+						local n = #said
+						V.Tell("Bob-Realm").buttons[2]:Click()
+						eq(#said, n)
+					end)
+				end
+			end)
+			SendChatMessage, StaticPopup_Show = saved.say, saved.show
+			if not ok then error(err, 0) end
+		end)
+	end)
+
+	-- (The player's window for the author's ask is Olympus's own: these tests run on the widget
+	-- toolkit, WithUI, with WithWorkshop's recorded whispers.)
+	local function BugAskWorld(fn)
+		WithUI(function()
+			local UI = LoadUI()
+			WithWorkshop("Ann-Realm", function(w, W)
+				ns.UI = UI
+				-- (The report's timers kept, not run: the author answers in time.)
+				w.timers = {}
+				W.after = function(_, _, f) w.timers[#w.timers + 1] = f end
+				local ok, err = pcall(fn, w, W, UI)
+				W.Reset()
+				if not ok then error(err, 0) end
+			end)
+		end)
+	end
+
+	test("1.1.2 the author asks for a bug report: the player's own window (no game popup) says who asks; See what is sent shows the exact text; Send goes to him even without his presence heard; Not now sends nothing; anyone else's ask is ignored", function()
+		BugAskWorld(function(w, W)
+			eq(W.AuthorOnline(), false, "no presence heard")
+			W.HandleBugAsk("WHISPER", "Faladoriel-Realm", "VR~5")
+			W.HandleBugAsk("WHISPER", "Faladoriel Skylance-SomeEraRealm", "VR~5")
+			W.HandleBugAsk("CHANNEL", AUTHOR_FULL, "VR~5")
+			eq(W.BugAsk(), nil, "not the author, or not a whisper: ignored")
+			eq(rawget(_G, "OlympusBugAsk"), nil, "no window")
+			W.HandleBugAsk("WHISPER", AUTHOR_FULL, "VR~5")
+			local f = OlympusBugAsk
+			assert(f and f:IsShown(), "the window")
+			eq(#w.popups, 0, "not the game's popup")
+			eq(f.TitleText:GetText(), ns.L.BUGASK_TITLE)
+			eq(f.message:GetText(), ns.L.BUGASK_TEXT:format(ns.DisplayName(AUTHOR_FULL)))
+			eq(f.view:IsShown(), false, "the text on a click")
+			eq(#w.whispered, 0, "nothing sent yet")
+			f.see:Click()
+			eq(f.view:IsShown(), true); eq(f.see:GetText(), ns.L.BUGASK_HIDE)
+			local shown = f.box:GetText()
+			eq(shown, f.text, "the text Send sends")
+			assert(shown:find("^```") and shown:find("Olympus v" .. ns.VERSION, 1, true), "the /oly bug text")
+			eq(W.Outgoing(shown), shown, "cut and escaped already, as it will arrive")
+			-- Read only: typing puts it back.
+			f.box:SetText("changed"); f.box:Fire("OnTextChanged", true)
+			eq(f.box:GetText(), shown)
+			f.send:Click()
+			eq(f:IsShown(), false)
+			eq(#w.whispered, 1); eq(w.whispered[1].to, AUTHOR_FULL); assert(w.whispered[1].msg:find("^V5~%d+~1~%d+~"), w.whispered[1].msg)
+			-- He gets it whole: the text the player saw.
+			local first = w.whispered[1].msg
+			ns.me = AUTHOR_FULL
+			W.HandleBug("WHISPER", "Ann-Realm", first)
+			ns.me = "Ann-Realm"
+			W.HandleAck("WHISPER", AUTHOR_FULL, w.whispered[#w.whispered].msg)
+			local pieces = {}
+			for i = 3, #w.whispered do pieces[#pieces + 1] = w.whispered[i].msg end
+			ns.me = AUTHOR_FULL
+			for _, m in ipairs(pieces) do W.HandleBug("WHISPER", "Ann-Realm", m) end
+			ns.me = "Ann-Realm"
+			eq(#W.Reports(), 1); eq(W.Reports()[1].text, shown, "what arrived is what was shown")
+			W.HandleAck("WHISPER", AUTHOR_FULL, w.whispered[#w.whispered].msg) -- (his "got it all")
+			eq(w.printed[#w.printed], ns.L.WORKSHOP_BUG_SENT:format(ns.DisplayName(AUTHOR_FULL)))
+			-- Another ask soon after: ignored (one a minute); later: Not now sends nothing.
+			W.HandleBugAsk("WHISPER", AUTHOR_FULL, "VR~6")
+			eq(f:IsShown(), false)
+			w.clock = w.clock + W.BUGASK_GAP
+			local n = #w.whispered
+			W.HandleBugAsk("WHISPER", AUTHOR_FULL, "VR~7")
+			eq(f:IsShown(), true)
+			f.later:Click()
+			eq(f:IsShown(), false); eq(#w.whispered, n, "Not now: nothing"); eq(W.BugAsk(), nil)
+			-- Its X, in combat too (the template's HideUIPanel would do nothing there): nothing either,
+			-- and the ask is gone.
+			w.clock = w.clock + W.BUGASK_GAP
+			W.HandleBugAsk("WHISPER", AUTHOR_FULL, "VR~8")
+			local savedCombat = rawget(_G, "InCombatLockdown")
+			InCombatLockdown = function() return true end
+			f.CloseButton:Click()
+			InCombatLockdown = savedCombat
+			eq(f:IsShown(), false)
+			eq(W.BugAsk(), nil); eq(#w.whispered, n)
+			-- Asked, the report goes even right after one the player sent himself (its 10 minutes).
+			w.clock = w.clock + W.BUGASK_GAP
+			W.HandleBugAsk("WHISPER", AUTHOR_FULL, "VR~9")
+			f.send:Click()
+			eq(#w.whispered, n + 1, "sent")
+			-- An ask left unanswered goes stale.
+			W.Reset()
+			W.HandleBugAsk("WHISPER", AUTHOR_FULL, "VR~10")
+			w.clock = w.clock + W.BUGASK_OPEN + 1
+			eq(W.BugAsk(), nil)
+		end)
+	end)
+
+	test("1.1.2 the author's bug report ask with the gamepad UI: Olympus's window, nothing on the escape list, no keyboard taken, no game popup", function()
+		BugAskWorld(function(w, W)
+			WithGamepadUI(true, function(game)
+				local took = 0
+				W.HandleBugAsk("WHISPER", AUTHOR_FULL, "VR~5")
+				local f = OlympusBugAsk
+				assert(f:IsShown())
+				f.box.SetFocus = function() took = took + 1 end
+				f.see:Click()
+				eq(took, 0); eq(#game.shown, 0); eq(#UISpecialFrames, 0, "nothing written to the escape list")
+				f.send:Click()
+				eq(#w.whispered, 1)
+			end)
+		end)
+	end)
+
+	test("1.1.2 the author: Ask for a bug report on a player who runs Olympus 1.1.2 (greyed before 1.1.2), one small whisper, once per player every 2 minutes; nobody else has it", function()
+		-- (Other tests load Workshop.lua and friends again into namespaces of their own, and each load
+		-- adds its lines, as a second load would in the game: the addon's own files' lines here.)
+		PM.Add("versions", function(target, menu) V.MenuLines(target, menu) end, 10)
+		PM.Add("bugreport", function(target, menu) W.MenuLines(target, menu) end, 50)
+		WithVersions(AUTHOR_FULL, function(w, W)
+			w.hellos = { Ann = ns.VERSION, Bob = "1.1.1" }
+			local root = MenuRoot()
+			PM.Build("FRIEND", root, { name = "Ann" })
+			local b = root.Find(L.WORKSHOP_BUGASK)
+			assert(b and b.enabled, root.Texts())
+			b.cb()
+			eq(#w.whispered, 1); eq(w.whispered[1].to, "Ann-Realm"); assert(w.whispered[1].msg:find("^VR~%d+$"), w.whispered[1].msg)
+			eq(w.whispered[1].key, "bugask:Ann-Realm"); eq(w.printed[#w.printed], L.WORKSHOP_BUGASK_SENT:format("Ann"))
+			eq(W.AskBug("Ann-Realm"), false, "again too soon"); eq(#w.whispered, 1)
+			w.clock = w.clock + W.BUGASK_EVERY
+			eq(W.AskBug("Ann-Realm"), true)
+			-- 1.1.1 can't answer it: greyed, its tooltip says why.
+			root = MenuRoot()
+			PM.Build("FRIEND", root, { name = "Bob" })
+			b = root.Find(L.WORKSHOP_BUGASK)
+			assert(b and not b.enabled, "greyed")
+			assert(TipOf(b):find(L.WORKSHOP_BUGASK_OLD:format("1.1.1"), 1, true))
+			-- Nothing known of them: no such line.
+			root = MenuRoot()
+			PM.Build("FRIEND", root, { name = "Eve" })
+			eq(root.Find(L.WORKSHOP_BUGASK), nil)
+		end)
+		WithVersions("Tester-Realm", function(w, W)
+			w.hellos = { Ann = ns.VERSION }
+			local root = MenuRoot()
+			PM.Build("FRIEND", root, { name = "Ann" })
+			eq(root.Find(L.WORKSHOP_BUGASK), nil, "not the author")
+			eq(W.AskBug("Ann-Realm"), false); eq(#w.whispered, 0)
+		end)
+	end)
+
+	test("1.1.2 the author's received bug report opens by itself in a copy window (sender and time, all selected, Select all); chat gets one short line; in an instance it waits; his Workshop row opens it again", function()
+		WithUI(function()
+			local UI = LoadUI()
+			WithWorkshop(AUTHOR_FULL, function(w, W)
+				local ok, err = pcall(function()
+					-- (Changed on purpose, 1.1.2's review: a report opens by itself only when he asked
+					-- that player for it; anyone's else gets its sound and chat line, as before 1.1.2.)
+					W.AskBug("Ann-Realm")
+					W.AskBug("Bob-Realm")
+					w.printed = {}
+					W.HandleBug("WHISPER", "Ann-Realm", "V5~11~1~1~line one !\\nline two")
+					local f = OlympusCopyFrameBug
+					assert(f and f:IsShown(), "the report's window")
+					eq(f.TitleText:GetText(), L.WORKSHOP_BUG_FROM_AT:format("Ann", date("%H:%M", w.clock), 1, 1))
+					eq(f.eb:GetText(), "line one !\nline two"); eq(f.text, f.eb:GetText())
+					eq(f.selectAll:GetText(), L.COPY_SELECT_ALL); eq(f:GetWidth(), 680)
+					eq(#w.printed, 1, "one short line in chat"); eq(w.printed[1], L.WORKSHOP_BUG_IN:format("Ann"))
+					eq(OlympusCopyFrame == nil or not OlympusCopyFrame:IsShown(), true, "its own window, not the help's")
+					-- Its X closes it, in combat too. In an instance: held, then shown once out.
+					local savedCombat = rawget(_G, "InCombatLockdown")
+					InCombatLockdown = function() return true end
+					f.CloseButton:Click()
+					InCombatLockdown = savedCombat
+					eq(f:IsShown(), false, "closed in combat")
+					local savedInstance = IsInInstance
+					IsInInstance = function() return true end
+					W.HandleBug("WHISPER", "Bob-Realm", "V5~12~1~1~bob's report")
+					eq(f:IsShown(), false, "held")
+					IsInInstance = savedInstance
+					ns.ReleaseHeld()
+					eq(f:IsShown(), true); eq(f.eb:GetText(), "bob's report")
+					eq(f.TitleText:GetText(), L.WORKSHOP_BUG_FROM_AT:format("Bob", date("%H:%M", w.clock), 2, 2))
+					-- The Workshop's list: a click opens Ann's again.
+					local row
+					for _, l in ipairs(W.Build()) do if l.onClick and (l.text or ""):find("^Ann") then row = l end end
+					assert(row, "Ann's row")
+					row.onClick()
+					eq(f.eb:GetText(), "line one !\nline two")
+				end)
+				ns.ResetHeld()
+				if not ok then error(err, 0) end
+			end)
+		end)
+	end)
+
+	-- 1.1.2's review: windows that open by themselves take no keyboard and wait out a fight; a report
+	-- nobody asked for never pops up; one never covers the report he reads.
+	local function WithFocusCount(fn)
+		local focused = {}
+		local saved = { focus = rawget(Widget, "SetFocus"), kbd = rawget(_G, "GetCurrentKeyBoardFocus"), combat = rawget(_G, "InCombatLockdown") }
+		Widget.SetFocus = function(self) focused[#focused + 1] = self end
+		GetCurrentKeyBoardFocus = function() return nil end
+		InCombatLockdown = function() return false end
+		ns.ResetAfterCombat()
+		local ok, err = pcall(fn, focused)
+		Widget.SetFocus, GetCurrentKeyBoardFocus, InCombatLockdown = saved.focus, saved.kbd, saved.combat
+		ns.ResetAfterCombat()
+		if not ok then error(err, 0) end
+	end
+
+	test("1.1.2 review: a report nobody asked for never pops up; the one he asked for does, with no keyboard taken (both input modes), after a fight, never over the one he reads; past the hour's three", function()
+		WithUI(function()
+			LoadUI()
+			WithFocusCount(function(focused)
+				for _, gamepad in ipairs({ false, true }) do
+					WithGamepadUI(gamepad, function()
+						WithWorkshop(AUTHOR_FULL, function(w, W)
+							-- Nobody asked: its sound and one line; no window.
+							W.HandleBug("WHISPER", "Zed-Realm", "V5~21~1~1~text nobody asked for")
+							local f = rawget(_G, "OlympusCopyFrameBug")
+							eq(f == nil or not f:IsShown(), true, "no window for a report nobody asked for")
+							eq(w.printed[#w.printed], L.WORKSHOP_BUG_IN:format("Zed")); eq(#W.Reports(), 1, "in the Workshop's list")
+							-- Asked: it opens by itself, and takes no keyboard.
+							W.AskBug("Ann-Realm")
+							W.HandleBug("WHISPER", "Ann-Realm", "V5~22~1~1~ann's report")
+							f = OlympusCopyFrameBug
+							assert(f and f:IsShown()); eq(f.eb:GetText(), "ann's report")
+							eq(#focused, 0, "no keyboard taken by a window that opened by itself")
+							-- A second one he asked for, while he reads the first: it waits for him to close it.
+							W.AskBug("Bob-Realm")
+							W.HandleBug("WHISPER", "Bob-Realm", "V5~23~1~1~bob's report")
+							eq(f.eb:GetText(), "ann's report", "the one he reads stays")
+							f.CloseButton:Click()
+							eq(f:IsShown(), true); eq(f.eb:GetText(), "bob's report", "the next, once he closed it")
+							eq(#focused, 0)
+							-- Select all: his click takes the keyboard.
+							f.selectAll:Click()
+							eq(#focused, 1, "Select all's click")
+							focused[1] = nil
+							f.CloseButton:Click()
+							-- In a fight: after it.
+							InCombatLockdown = function() return true end
+							W.AskBug("Cid-Realm")
+							W.HandleBug("WHISPER", "Cid-Realm", "V5~24~1~1~cid's report")
+							eq(f:IsShown(), false, "not in the middle of a fight")
+							InCombatLockdown = function() return false end
+							eq(ns.RunAfterCombat(), 1)
+							eq(f:IsShown(), true); eq(f.eb:GetText(), "cid's report"); eq(#focused, 0)
+							f.CloseButton:Click()
+							-- Three reports an hour from one player; the one he asks for gets in past them.
+							for i = 1, 3 do W.HandleBug("WHISPER", "Dee-Realm", ("V5~3%d~1~1~dee %d"):format(i, i)) end
+							W.HandleBug("WHISPER", "Dee-Realm", "V5~34~1~1~dee 4")
+							eq(W.Reports()[#W.Reports()].text, "dee 3", "a fourth this hour: dropped")
+							eq(f:IsShown(), false, "none of hers popped up")
+							W.AskBug("Dee-Realm")
+							W.HandleBug("WHISPER", "Dee-Realm", "V5~35~1~1~dee asked")
+							eq(W.Reports()[#W.Reports()].text, "dee asked", "the one he asked for")
+							eq(f:IsShown(), true); eq(f.eb:GetText(), "dee asked")
+							W.HandleBug("WHISPER", "Dee-Realm", "V5~36~1~1~dee again")
+							eq(W.Reports()[#W.Reports()].text, "dee asked", "once per ask")
+							f.CloseButton:Click()
+						end)
+					end)
+				end
+			end)
+		end)
+	end)
+
+	test("1.1.2 review: the author's version results and ask-one answers open with no keyboard taken, and after a fight", function()
+		WithUI(function()
+			local UI = LoadUI()
+			WithFocusCount(function(focused)
+				for _, gamepad in ipairs({ false, true }) do
+					WithGamepadUI(gamepad, function()
+						WithVersions(AUTHOR_FULL, function(w, W)
+							V.Check("Ann-Realm")
+							local id = tonumber(w.whispered[#w.whispered].msg:match("^V1~(%d+)~100$"))
+							W.HandleAnswer("WHISPER", "Ann-Realm", ("V2~%d~1.1.0~~Forever~~c~0~0~"):format(id))
+							local f = OlympusCopyFrameVersions
+							assert(f and f:IsShown(), "his results window")
+							eq(#focused, 0, "no keyboard taken")
+							f.CloseButton:Click()
+							-- No answer, in a fight: after it.
+							InCombatLockdown = function() return true end
+							w.clock = w.clock + W.ASK_ONE_EVERY
+							V.Check("Bob-Realm")
+							w.Run()
+							eq(f:IsShown(), false, "not in a fight")
+							InCombatLockdown = function() return false end
+							ns.RunAfterCombat()
+							eq(f:IsShown(), true); assert(f.text:find("Bob  " .. L.VERSION_LINE_NONE, 1, true), f.text)
+							eq(#focused, 0)
+							f.CloseButton:Click()
+						end, true)
+					end)
+				end
+			end)
+		end)
+	end)
+
+	test("1.1.2 review: the player's window for the author's ask: Alt+Z keeps the ask; an ask over by Send is said so; a newer ask keeps the text shown, which is what goes; Send while a report is on its way keeps the window; in a fight it waits", function()
+		BugAskWorld(function(w, W)
+			local savedBuild, savedCombat = ns.BuildBugReport, rawget(_G, "InCombatLockdown")
+			local ok, err = pcall(function()
+				ns.ResetAfterCombat()
+				ns.BuildBugReport = function() return "first text" end
+				W.HandleBugAsk("WHISPER", AUTHOR_FULL, "VR~5")
+				local f = OlympusBugAsk
+				assert(f:IsShown())
+				-- The whole interface hidden (Alt+Z): OnHide, the window still up: the ask stays.
+				f:Fire("OnHide")
+				assert(W.BugAsk(), "still asked")
+				-- Over by the time of Send: said so, nothing sent.
+				w.clock = w.clock + W.BUGASK_OPEN + 1
+				f.send:Click()
+				eq(#w.whispered, 0); eq(w.printed[#w.printed], L.BUGASK_GONE); eq(f:IsShown(), false)
+				-- A newer ask while it shows: the text shown stays the one that goes.
+				w.clock = w.clock + W.BUGASK_GAP
+				W.HandleBugAsk("WHISPER", AUTHOR_FULL, "VR~6")
+				eq(f.text, "first text")
+				ns.BuildBugReport = function() return "second text" end
+				w.clock = w.clock + 5
+				W.HandleBugAsk("WHISPER", AUTHOR_FULL, "VR~7")
+				eq(f:IsShown(), true); eq(f.text, "first text", "what it shows stays")
+				f.send:Click()
+				eq(#w.whispered, 1); assert(w.whispered[1].msg:find("first text", 1, true), w.whispered[1].msg)
+				-- A report still on its way (the author has not answered its first piece): the window
+				-- stays up and says so; once it is in, Send goes.
+				w.clock = w.clock + W.BUGASK_GAP
+				W.HandleBugAsk("WHISPER", AUTHOR_FULL, "VR~8")
+				eq(f:IsShown(), true)
+				f.send:Click()
+				eq(f:IsShown(), true, "kept up"); eq(w.printed[#w.printed], L.WORKSHOP_BUG_BUSY); eq(#w.whispered, 1)
+				local id = w.whispered[1].msg:match("^V5~(%d+)~")
+				W.HandleAck("WHISPER", AUTHOR_FULL, "V6~" .. id .. "~2")
+				f.send:Click()
+				eq(#w.whispered, 2); eq(f:IsShown(), false)
+				-- In a fight: the window waits for its end (the ask keeps its 10 minutes).
+				w.clock = w.clock + W.BUGASK_GAP
+				InCombatLockdown = function() return true end
+				W.HandleBugAsk("WHISPER", AUTHOR_FULL, "VR~9")
+				eq(f:IsShown(), false, "not in a fight")
+				InCombatLockdown = function() return false end
+				ns.RunAfterCombat()
+				eq(f:IsShown(), true)
+				f.later:Click()
+				-- In an instance: held as any alert, then shown once out (ns.ReleaseHeld).
+				w.clock = w.clock + W.BUGASK_GAP
+				local savedInstance = IsInInstance
+				IsInInstance = function() return true end
+				W.HandleBugAsk("WHISPER", AUTHOR_FULL, "VR~10")
+				eq(f:IsShown(), false, "held in an instance")
+				IsInInstance = savedInstance
+				ns.ReleaseHeld()
+				eq(f:IsShown(), true, "shown once out")
+				f.later:Click()
+				ns.ResetHeld()
+			end)
+			ns.BuildBugReport, InCombatLockdown = savedBuild, savedCombat
+			ns.ResetAfterCombat()
+			if not ok then error(err, 0) end
+		end)
+	end)
+
+	test("1.1.2 review: in a dungeon, a raid or a match nothing is sent (the menu's lines grey out and say why); a send the queue drops leaves nothing recorded; a check's wait starts once it left", function()
+		PM.Add("versions", function(target, menu) V.MenuLines(target, menu) end, 10)
+		PM.Add("bugreport", function(target, menu) W.MenuLines(target, menu) end, 50)
+		WithVersions("Tester-Realm", function(w, W)
+			-- The 10 seconds start once the check left, not while it waits in the queue.
+			w.holdSends = true
+			V.Check("Ann-Realm")
+			eq(#w.timers, 0, "no wait before it left"); eq((V.Status("Ann")), "checking")
+			-- The menu meanwhile: "checking", and no Check version again.
+			local waiting = MenuRoot()
+			V.MenuLines({ name = "Ann-Realm" }, { Line = function(t) waiting:CreateTitle(t) end, Button = function(t) waiting:CreateButton(t) end })
+			eq(waiting.Texts(), "title:" .. L.VERSION_LINE_CHECKING)
+			w.whispered[1].done(true)
+			eq(#w.timers, 1)
+			-- Dropped by the queue: nothing recorded ("no answer" would offer an invite), the player told.
+			V.Check("Bob-Realm")
+			w.whispered[2].done(false)
+			eq((V.Status("Bob")), "unknown"); eq(w.printed[#w.printed], L.VERSION_NOT_SENT:format("Bob"))
+			eq(V.Check("Bob-Realm"), true, "checked again at once")
+			-- An ask to update dropped: the day's and the hour's slots come back.
+			W.HeardVersion("1.1.3")
+			w.hellos = { Cid = "1.1.2" }
+			eq(V.AskUpdate("Cid-Realm"), true)
+			local e = w.whispered[#w.whispered]
+			eq(e.msg, "V9~1.1.3")
+			e.done(false)
+			eq(ns.db.updateAsked.cid, nil); eq(#ns.db.updateAskTimes, 0); eq(w.printed[#w.printed], L.VERSION_NOT_SENT:format("Cid"))
+			w.holdSends = false
+			eq(V.AskUpdate("Cid-Realm"), true, "asked again at once"); eq(w.printed[#w.printed], L.VERSION_ASKED:format("Cid"))
+			-- Chat lockdown: nothing leaves, and the player is told.
+			C_ChatInfo = { InChatMessagingLockdown = function() return true end }
+			ns.db.updateAsked = nil
+			local n = #w.whispered
+			eq(V.Check("Dee-Realm"), false); eq(V.AskUpdate("Cid-Realm"), false)
+			eq(#w.whispered, n); eq(w.printed[#w.printed], L.VERSION_LOCKED)
+			-- The menu: the lines show, the ones that send greyed, saying why.
+			local root = MenuRoot()
+			PM.Build("FRIEND", root, { name = "Cid" })
+			local ask = root.Find(L.VERSION_ASK)
+			assert(ask, root.Texts()); eq(ask.enabled, false); assert(TipOf(ask):find(L.PLAYERMENU_LOCKED, 1, true))
+			root = MenuRoot()
+			PM.Build("FRIEND", root, { name = "Eve" })
+			local check = root.Find(L.VERSION_CHECK)
+			assert(check, root.Texts()); eq(check.enabled, false)
+			C_ChatInfo = nil
+		end)
+		WithVersions(AUTHOR_FULL, function(w, W)
+			w.hellos = { Ann = ns.VERSION }
+			-- His ask for a bug report dropped: said so, and it may go again at once.
+			w.holdSends = true
+			eq(W.AskBug("Ann-Realm"), true)
+			w.whispered[1].done(false)
+			eq(w.printed[#w.printed], L.VERSION_NOT_SENT:format("Ann"))
+			w.holdSends = false
+			eq(W.AskBug("Ann-Realm"), true, "again at once"); eq(w.printed[#w.printed], L.WORKSHOP_BUGASK_SENT:format("Ann"))
+			-- In a dungeon: refused, and greyed in the menu.
+			C_ChatInfo = { InChatMessagingLockdown = function() return true end }
+			w.clock = w.clock + W.BUGASK_EVERY
+			eq(W.AskBug("Ann-Realm"), false); eq(w.printed[#w.printed], L.VERSION_LOCKED); eq(#w.whispered, 2)
+			local root = MenuRoot()
+			PM.Build("FRIEND", root, { name = "Ann" })
+			local b = root.Find(L.WORKSHOP_BUGASK)
+			assert(b, root.Texts()); eq(b.enabled, false); assert(TipOf(b):find(L.PLAYERMENU_LOCKED, 1, true))
+			C_ChatInfo = nil
+		end)
+		-- Olympus's whisper windows: Send in a lockdown keeps the text and says why.
+		WithUI(function()
+			local UI = LoadUI()
+			local saved = { say = SendChatMessage, info = C_ChatInfo, print = ns.Print }
+			local said, printed = {}, {}
+			local ok, err = pcall(function()
+				SendChatMessage = function(text) said[#said + 1] = text end
+				ns.Print = function(m) printed[#printed + 1] = m end
+				WithGamepadUI(true, function()
+					C_ChatInfo = { InChatMessagingLockdown = function() return true end }
+					local d = UI.WhisperText("Ann", "hello")
+					d.buttons[1]:Click()
+					eq(#said, 0, "nothing sent"); eq(d:IsShown(), true, "the window and its text stay"); eq(d.editBox:GetText(), "hello")
+					eq(printed[#printed], L.WHISPER_LOCKDOWN)
+					d.editBox:Fire("OnEnterPressed")
+					eq(#said, 0); eq(d:IsShown(), true)
+					C_ChatInfo = nil
+					d.buttons[1]:Click()
+					eq(said[1], "hello"); eq(d:IsShown(), false)
+				end)
+			end)
+			SendChatMessage, C_ChatInfo, ns.Print = saved.say, saved.info, saved.print
+			if not ok then error(err, 0) end
+		end)
+	end)
+
+	test("1.1.2 review: a menu whose context holds values the game hides (secret values: a dungeon's guild roster, a restricted unit) gets no Olympus lines and no error", function()
+		WithVersions("Tester-Realm", function(w)
+			local SECRET = {}
+			local saved = { is = rawget(_G, "issecretvalue"), full = UnitFullName, player = UnitIsPlayer, capture = ns.CaptureError, enum = Enum.ClubMemberPresence }
+			local errors = {}
+			local ok, err = pcall(function()
+				issecretvalue = function(v) return rawequal(v, SECRET) end
+				ns.CaptureError = function(where, e) errors[#errors + 1] = where .. ": " .. tostring(e) end
+				Enum.ClubMemberPresence = { Online = 1, OnlineMobile = 2, Offline = 3 }
+				for _, ctx in ipairs({
+					{ name = "Ann", clubMemberInfo = { presence = SECRET } },
+					{ name = SECRET, clubMemberInfo = { presence = 1 } },
+					{ name = "Ann", isSelf = SECRET },
+					{ name = "Ann", clubMemberInfo = SECRET },
+				}) do
+					local r = MenuRoot()
+					eq(PM.Build("COMMUNITIES_GUILD_MEMBER", r, ctx), 0)
+					eq(#r.items, 0, "no line")
+				end
+				UnitIsPlayer = function() return true end
+				UnitFullName = function(unit) if unit == "target" then return SECRET, SECRET end return "Tester", "Realm" end
+				local r = MenuRoot()
+				eq(PM.Build("PLAYER", r, { unit = "target" }), 0); eq(#r.items, 0)
+				eq(#errors, 0, table.concat(errors, "\n"))
+				-- The same with plain values: the lines.
+				r = MenuRoot()
+				assert(PM.Build("COMMUNITIES_GUILD_MEMBER", r, { name = "Ann", clubMemberInfo = { presence = 1 } }) > 0)
+			end)
+			issecretvalue, UnitFullName, UnitIsPlayer, ns.CaptureError, Enum.ClubMemberPresence = saved.is, saved.full, saved.player, saved.capture, saved.enum
+			if not ok then error(err, 0) end
+		end)
+	end)
+
+	test("1.1.2 review: the Answers list lets go of a whisper window's box when it closes; a pick never lands in the next Olympus window that reuses the box", function()
+		WithUI(function()
+			local UI = LoadUI()
+			local saved = { hc = ns.IsHighCouncillor, shift = IsShiftKeyDown, print = ns.Print }
+			local printed = {}
+			local ok, err = pcall(function()
+				A.Reset()
+				ns.Print = function(m) printed[#printed + 1] = m end
+				IsShiftKeyDown = function() return false end
+				ns.IsHighCouncillor = function(name) return name == ns.me end
+				WithGamepadUI(false, function()
+					local d = UI.WhisperWindow("Ann")
+					d.extraButton:Click()
+					local p = OlympusAnswers
+					eq(p:IsShown(), true); eq(A.Target(), d.editBox)
+					d.buttons[2]:Click() -- (Cancel: the whisper closes)
+					eq(p:IsShown(), false, "the list closes with it"); eq(A.Target(), nil)
+					-- The next Olympus window takes the same box (Dialog.lua's pool).
+					StaticPopupDialogs.OLYMPUS_TEST_REUSE = { text = "amount", button1 = "OK", hasEditBox = true, timeout = 0 }
+					local other = ns.Dialog.Show("OLYMPUS_TEST_REUSE")
+					eq(other.editBox, d.editBox, "the same box, reused")
+					other.editBox:SetText("")
+					local entry = A.Find("count-not-a-bug")
+					for _, r in ipairs(p.rows) do if r.entry == entry then r:Click() end end
+					eq(other.editBox:GetText(), "", "nothing in another window's box")
+					eq(printed[#printed], L.ANSWERS_BOX_GONE)
+					other.buttons[1]:Click()
+					StaticPopupDialogs.OLYMPUS_TEST_REUSE = nil
+				end)
+			end)
+			ns.IsHighCouncillor, IsShiftKeyDown, ns.Print = saved.hc, saved.shift, saved.print
+			A.Reset()
+			if not ok then error(err, 0) end
+		end)
+	end)
+
+	test("1.1.2 review: the explanations are English: a game in another language gets no English line in its tooltips, and its pages' ? says so first", function()
+		local savedLocale = GetLocale
+		local ok, err = pcall(function()
+			local tt = { lines = {} }
+			function tt:AddLine(text) self.lines[#self.lines + 1] = text end
+			eq(A.WhyTip(tt, "count-layer-sample"), true, "in English")
+			eq(A.ExplainText("census/"):find(L.PAGE_HELP_ENGLISH, 1, true), nil)
+			GetLocale = function() return "ptBR" end
+			tt.lines = {}
+			eq(A.WhyTip(tt, "count-layer-sample"), false); eq(#tt.lines, 0, "no English line in a Portuguese tooltip")
+			local text = A.ExplainText("census/")
+			eq(text:sub(1, #L.PAGE_HELP_ENGLISH), L.PAGE_HELP_ENGLISH, "said first")
+			assert(text:find(A.Find("count-not-a-bug").long, 1, true))
+		end)
+		GetLocale = savedLocale
+		if not ok then error(err, 0) end
+	end)
+
+	test("1.1.2 /oly status: the author's in a copy window, everyone else's in chat as before", function()
+		WithUI(function()
+			local UI = LoadUI()
+			local savedMe, savedPrint = ns.me, print
+			local printed = {}
+			print = function(s) printed[#printed + 1] = s end
+			local ok, err = pcall(function()
+				ns.me = "Tester-Realm"
+				SlashCmdList.OLYMPUS("status")
+				assert(#printed > 5, "in chat"); eq(rawget(_G, "OlympusCopyFrameStatus"), nil)
+				printed = {}
+				ns.me = AUTHOR_FULL
+				SlashCmdList.OLYMPUS("status")
+				eq(#printed, 0, "no chat lines")
+				local f = OlympusCopyFrameStatus
+				assert(f and f:IsShown()); eq(f.TitleText:GetText(), "/oly status")
+				assert(f.text:find("Olympus v" .. ns.VERSION, 1, true)); assert(f.text:find("player menus:", 1, true))
+			end)
+			ns.me, print = savedMe, savedPrint
+			if not ok then error(err, 0) end
+		end)
+	end)
+
+	test("1.1.2 answer bank: Olympus/AnswerBank.lua is what scripts/answers.lua makes of docs/answers.json; every in-game line fits a chat line with no escape; a bad bank is refused", function()
+		local gen = dofile(ROOT .. "scripts/answers.lua")
+		eq(ReadFile(ROOT .. "Olympus/AnswerBank.lua"), gen.Expected(ROOT), "run luajit scripts/answers.lua")
+		local bank = gen.Decode(ReadFile(ROOT .. "docs/answers.json"))
+		eq(#ns.ANSWER_BANK.answers, #bank.answers); eq(#ns.ANSWER_BANK.topics, #bank.meta.topics)
+		local ids = {}
+		for i, a in ipairs(ns.ANSWER_BANK.answers) do
+			eq(a.id, bank.answers[i].id); eq(a.text, bank.answers[i].in_game); eq(a.long, bank.answers[i].answer)
+			assert(#a.text <= 200 and not a.text:find("[|\n]"), a.id)
+			ids[a.id] = true
+		end
+		for _, id in ipairs({ "count-not-a-bug", "count-differs-from-friend", "rc-see-version", "rc-bug-report-ask", "rc-tell-olympus", "feat-quick-answers", "feat-page-help" }) do
+			assert(ids[id], id)
+		end
+		-- The reader: escapes, and what the checks refuse.
+		eq(gen.Decode('{"a":["x\\u00e9\\n",1.5,true,null]}').a[1], "x\195\169\n")
+		local bad = gen.Decode(ReadFile(ROOT .. "docs/answers.json"))
+		bad.answers[1].in_game = "a | pipe"
+		eq(pcall(gen.Render, bad), false, "a '|' in a line")
+		bad.answers[1].in_game = ("x"):rep(201)
+		eq(pcall(gen.Render, bad), false, "too long for a chat line")
+		bad = gen.Decode(ReadFile(ROOT .. "docs/answers.json"))
+		bad.answers[2].id = bad.answers[1].id
+		eq(pcall(gen.Render, bad), false, "an id twice")
+		-- check.sh runs the same comparison.
+		local check = assert(ReadFile(ROOT .. "scripts/check.sh"))
+		assert(check:find("luajit scripts/answers.lua --check", 1, true), "check.sh")
+	end)
+
+	test("1.1.2 Answers: the author, the High Council and the Stewards alone; the list by topic with a search; a click fills the box (after what is typed), never sends and never takes the keyboard; Shift-click the longer answer to copy", function()
+		WithUI(function()
+			local UI = LoadUI()
+			local saved = { hc = ns.IsHighCouncillor, st = ns.IsSteward, shift = IsShiftKeyDown, me = ns.me }
+			local ok, err = pcall(function()
+				A.Reset()
+				ns.me = "Tester-Realm"
+				local box = CreateFrame("EditBox", "TestAnswersBox", UIParent)
+				box:SetText("")
+				local focused = 0
+				box.SetFocus = function() focused = focused + 1 end
+				eq(A.Allowed(), false); eq(A.Open(box), nil, "a soldier: no list")
+				ns.IsSteward = function(name) return name == ns.me end
+				eq(A.Allowed(), true, "a Steward")
+				ns.IsSteward = saved.st
+				ns.IsHighCouncillor = function(name) return name == ns.me end
+				eq(A.Allowed(), true, "a High Councillor")
+				local p = A.Open(box)
+				eq(p, OlympusAnswers); eq(p:IsShown(), true); eq(p.TitleText:GetText(), L.ANSWERS_TITLE)
+				-- Every line, under its topic's header.
+				local rows, headers = 0, 0
+				for _, r in ipairs(p.rows) do
+					if r:IsShown() then if r.entry then rows = rows + 1 else headers = headers + 1 end end
+				end
+				eq(rows, #ns.ANSWER_BANK.answers); eq(headers, #ns.ANSWER_BANK.topics)
+				-- The search: "layer" keeps the lines that say it.
+				p.search:SetText("LAYER"); p.search:Fire("OnTextChanged")
+				local kept = {}
+				for _, r in ipairs(p.rows) do if r:IsShown() and r.entry then kept[#kept + 1] = r.entry end end
+				assert(#kept > 0 and #kept < rows, #kept)
+				for _, e in ipairs(kept) do assert(ns.Holds("layer", e.text, e.long, e.id, unpack(e.q)), e.id) end
+				p.search:SetText("no such words at all"); p.search:Fire("OnTextChanged")
+				eq(p.empty:IsShown(), true)
+				p.search:SetText(""); p.search:Fire("OnTextChanged")
+				-- A click: into the box, the list closes; nothing sent, no keyboard.
+				local entry = A.Find("count-differs-from-friend")
+				local row
+				for _, r in ipairs(p.rows) do if r:IsShown() and r.entry == entry then row = r end end
+				assert(row, "its row")
+				row:Fire("OnEnter")
+				eq(GameTooltip.lines[2], entry.text); eq(GameTooltip.lines[4], entry.long)
+				IsShiftKeyDown = function() return false end
+				row:Click()
+				eq(box:GetText(), entry.text); eq(p:IsShown(), false); eq(focused, 0)
+				-- After what is typed.
+				box:SetText("@Ann ")
+				A.Open(box)
+				row:Click()
+				eq(box:GetText(), "@Ann " .. entry.text)
+				-- Shift-click: the longer answer, to copy.
+				A.Open(box)
+				IsShiftKeyDown = function() return true end
+				row:Click()
+				eq(OlympusCopyFrame:IsShown(), true); eq(OlympusCopyFrame.text, entry.long); eq(box:GetText(), "@Ann " .. entry.text)
+				-- The box's window closed meanwhile: said so, nothing written.
+				IsShiftKeyDown = function() return false end
+				box:Hide()
+				A.Open(box)
+				row:Click()
+				eq(box:GetText(), "@Ann " .. entry.text)
+			end)
+			ns.IsHighCouncillor, ns.IsSteward, IsShiftKeyDown, ns.me = saved.hc, saved.st, saved.shift, saved.me
+			A.Reset()
+			if not ok then error(err, 0) end
+		end)
+	end)
+
+	test("1.1.2 whisper windows: the Answers button for the author, the High Council and the Stewards (Olympus's own window, both input modes), filling its box and keeping it open; anyone else's as before", function()
+		WithUI(function()
+			local UI = LoadUI()
+			local saved = { hc = ns.IsHighCouncillor, shift = IsShiftKeyDown }
+			local ok, err = pcall(function()
+				A.Reset()
+				IsShiftKeyDown = function() return false end
+				WithGamepadUI(false, function(game)
+					-- A soldier, mouse and keyboard: the game's popup, as before.
+					UI.WhisperWindow("Ann")
+					eq(#game.shown, 1); eq(game.shown[1].which, "OLYMPUS_WHISPER")
+					ns.IsHighCouncillor = function(name) return name == ns.me end
+					local d = UI.WhisperWindow("Ann")
+					eq(#game.shown, 1, "a councillor: Olympus's own window")
+					eq(ns.Dialog.Find("OLYMPUS_WHISPER"), d)
+					eq(d.extraButton:IsShown(), true); eq(d.extraButton:GetText(), L.ANSWERS_BTN)
+					d.extraButton:Click()
+					eq(d:IsShown(), true, "the whisper stays open")
+					local p = OlympusAnswers
+					eq(p:IsShown(), true); eq(A.Target(), d.editBox)
+					local entry = A.Find("count-not-a-bug")
+					for _, r in ipairs(p.rows) do if r:IsShown() and r.entry == entry then r:Click() end end
+					eq(d.editBox:GetText(), entry.text)
+					d.buttons[2]:Click()
+				end)
+				ns.IsHighCouncillor = saved.hc
+				WithGamepadUI(true, function(game)
+					local d = UI.WhisperWindow("Ann")
+					eq(d.extraButton:IsShown(), false, "a soldier with the gamepad UI: no Answers")
+					eq(#game.shown, 0)
+				end)
+			end)
+			ns.IsHighCouncillor, IsShiftKeyDown = saved.hc, saved.shift
+			A.Reset()
+			if not ok then error(err, 0) end
+		end)
+	end)
+
+	test("1.1.2 explanations: every tab and page has its '?', from the answer bank; where it counts, why its numbers can differ; the window's '?' opens the page shown", function()
+		local pages = { "join", "census/", "realm/tree", "realm/board", "realm/loot", "realm/crafters", "realm/members:7", "realm/members:30",
+			"realm/members:recruits", "chat/", "decrees/", "heraldry/", "throne/home", "throne/hands", "vox/", "treasury/summary",
+			"treasury/book", "treasury/keepers", "treasury/dues", "workshop/" }
+		for _, t in ipairs(ns.UI and ns.UI.TABS or {}) do pages[#pages + 1] = t.key .. "/" end
+		for _, page in ipairs(pages) do
+			local def = A.PageOf(page)
+			assert(def and #def > 0, "an explanation for " .. page)
+			local text = A.ExplainText(page)
+			for _, id in ipairs(def) do
+				local e = A.Find(id)
+				assert(e, page .. ": " .. id .. " is in the bank")
+				assert(text:find(e.long, 1, true), page .. ": " .. id)
+			end
+			for _, id in ipairs(def.counts or {}) do assert(A.Find(id), id) end
+		end
+		eq(A.PageOf("realm/members:7"), A.PAGES["realm/members"]); eq(A.PageOf("realm/tree"), A.PAGES.realm)
+		for _, page in ipairs({ "census/", "realm/tree", "treasury/summary" }) do
+			assert(A.ExplainText(page):find(L.WHY_DIFFER, 1, true), page .. ": why its counts can differ")
+		end
+		assert(A.ExplainText("census/"):find(A.Find("count-not-a-bug").long, 1, true))
+		WithUI(function()
+			local UI = LoadUI()
+			for _, t in ipairs(UI.TABS) do assert(A.PageOf(t.key .. "/"), "tab " .. t.key) end
+			UI.Toggle()
+			local main = OlympusFrame
+			local help = main.pageHelp
+			assert(help and help:IsShown(), "the page's ?")
+			help:Fire("OnEnter")
+			eq(GameTooltip.lines[1], L.PAGE_HELP); eq(GameTooltip.lines[2], L.PAGE_HELP_TIP)
+			help:Click()
+			eq(OlympusCopyFrame:IsShown(), true); eq(OlympusCopyFrame.TitleText:GetText(), L.PAGE_HELP_TITLE:format(L.TAB_CENSUS))
+			eq(OlympusCopyFrame.text, (A.ExplainText("census/")))
+			UI.SelectTab("decrees")
+			help:Click()
+			eq(OlympusCopyFrame.TitleText:GetText(), L.PAGE_HELP_TITLE:format(L.TAB_DECREES))
+			assert(OlympusCopyFrame.text:find(A.Find("feat-acts-log").long, 1, true))
+			-- The census's header: why the list's columns don't add up to it.
+			UI.SelectTab("census")
+			main.headerHover:Fire("OnEnter")
+			eq(GameTooltip.lines[1], L.HEADER_TIP_TITLE); eq(GameTooltip.lines[2], L.HEADER_TIP)
+			local tip = table.concat(GameTooltip.lines, "\n")
+			assert(tip:find(L.WHY_DIFFER, 1, true) and tip:find(A.Find("count-columns-dont-add-up").text, 1, true), tip)
+		end)
+	end)
+
+	test("1.1.2 counts: a guild's row, a guild only /who saw, the Realm's online and Captains lines, and the Treasury's week each end their tooltip with why it can differ", function()
+		WithUI(function()
+			LoadUI()
+			local lines = ns.Views.Build("census")
+			local row, seen
+			for _, l in ipairs(lines) do
+				if l.cols and l.tooltip and not row and l.cols[2] ~= "|cff9d9d9d?|r" then row = l end
+			end
+			assert(row, "a guild's row")
+			local tt = Tooltip()
+			row.tooltip(tt)
+			assert(tt.Has(L.WHY_DIFFER), "why")
+			-- (Changed on purpose, 1.1.2's review: another guild's fresh row says its numbers are its last
+			-- report; only ours, from our roster, says it is live.)
+			ns.rdb.guilds["Olympus II"].mine = true
+			local own, other
+			for _, l in ipairs(ns.Views.Build("census")) do
+				if l.cols and l.tooltip then
+					if l.cols[1]:find("Olympus II", 1, true) then own = l elseif l.cols[1]:find("Olympus", 1, true) and not l.dim then other = l end
+				end
+			end
+			assert(own and other, "both rows")
+			tt = Tooltip(); own.tooltip(tt)
+			assert(tt.Has(A.Find("count-own-guild-live").text) and not tt.Has(A.Find("count-other-guild-report").text), "ours: live")
+			tt = Tooltip(); other.tooltip(tt)
+			assert(tt.Has(A.Find("count-other-guild-report").text) and not tt.Has(A.Find("count-own-guild-live").text), "another: its last report")
+			-- The Realm's Recruiting: free slots come from each guild's last report.
+			local recruiting
+			for _, l in ipairs(ns.Views.Build("realm")) do
+				if l.header and l.text == L.RECRUITING then recruiting = l end
+			end
+			assert(recruiting and recruiting.tooltip, "Recruiting's tooltip")
+			tt = Tooltip(); recruiting.tooltip(tt)
+			assert(tt.Has(L.WHY_DIFFER) and tt.Has(A.Find("count-other-guild-report").text), "Recruiting: why")
+			-- WhyTip itself: nothing for an id the bank lacks.
+			local t2 = Tooltip()
+			eq(A.WhyTip(t2, "no-such-answer"), false); eq(#t2.lines, 0)
+			eq(A.WhyTip(t2, "count-layer-sample"), true); eq(t2.lines[2], L.WHY_DIFFER); eq(t2.lines[3], A.Find("count-layer-sample").text)
+			-- The Realm: our guild opened, its Captains and Online now.
+			ns.Views.ExpandAll(true)
+			local realm = ns.Views.Build("realm")
+			local caps, online
+			for _, l in ipairs(realm) do
+				local text = tostring(l.text or "")
+				if not caps and text:find((L.CAPTAINS:gsub("%(%%d%)", "")), 1, true) and l.tooltip then caps = l end
+				if not online and l.tooltip and (text:find((L.MEMBERS_ONLINE:gsub("%(%%d%)", "")), 1, true) or text:find((L.MEMBERS_SEEN:gsub("%(%%d%)", "")), 1, true)) then online = l end
+			end
+			ns.Views.ExpandAll(false)
+			assert(caps, "a Captains line with a tooltip")
+			tt = Tooltip(); caps.tooltip(tt); assert(tt.Has(L.WHY_DIFFER), "Captains: why")
+			if online then tt = Tooltip(); online.tooltip(tt); assert(tt.Has(L.WHY_DIFFER), "online: why") end
+		end)
+	end)
+
+	test("1.1.2: the strings in English and pt-BR, with the same format codes; the counts' help says what the code does", function()
+		local function LoadedL(code)
+			local lns, savedLocale = {}, GetLocale
+			GetLocale = function() return code end
+			local ok, err = pcall(function() assert(loadfile(ADDON_DIR .. "Locales.lua"))("Olympus", lns) end)
+			GetLocale = savedLocale
+			if not ok then error(err, 0) end
+			return lns.L
+		end
+		local en, pt = LoadedL("enUS"), LoadedL("ptBR")
+		local KEYS = { "PLAYERMENU_VERSION", "VERSION_LINE_CURRENT", "VERSION_LINE_NEWER", "VERSION_LINE_OUTDATED", "VERSION_LINE_OLYMPUS",
+			"VERSION_LINE_CHECKING", "VERSION_LINE_NONE", "VERSION_LINE_UNKNOWN", "VERSION_SOURCE_NONE", "VERSION_SOURCE_HELLO",
+			"VERSION_SOURCE_ROLL", "VERSION_SOURCE_CHECK", "VERSION_BEHIND_TIP", "VERSION_CHECK", "VERSION_CHECK_TIP", "VERSION_CHECK_WAIT",
+			"VERSION_CHECK_BUSY", "VERSION_RESULT_NONE", "VERSION_RESULTS_TITLE", "VERSION_RESULTS_HEAD", "VERSION_RESULTS_NONE",
+			"VERSION_ASK", "VERSION_ASK_TIP", "VERSION_ASK_AUTHOR_TIP", "VERSION_ASKED", "VERSION_ASK_WAIT_ONE", "VERSION_ASK_WAIT_HOUR",
+			"VERSION_NOTICE", "VERSION_SNOOZE", "VERSION_SNOOZED", "HELD_UPDATE_ASK", "VERSION_TELL", "VERSION_TELL_TIP", "VERSION_INVITE_TEXT",
+			"WORKSHOP_BUG_FROM_AT", "WORKSHOP_BUGASK", "WORKSHOP_BUGASK_TIP", "WORKSHOP_BUGASK_OLD", "WORKSHOP_BUGASK_SENT",
+			"WORKSHOP_BUGASK_WAIT", "BUGASK_TITLE", "BUGASK_TEXT", "BUGASK_SEE", "BUGASK_HIDE", "BUGASK_SEND", "BUGASK_LATER",
+			"BUGASK_HELD", "COPY_SELECT_ALL", "ANSWERS_BTN", "ANSWERS_BTN_TIP", "ANSWERS_TITLE", "ANSWERS_HINT", "ANSWERS_ROW_TIP",
+			"ANSWERS_COPY_TITLE", "ANSWERS_BOX_GONE", "PAGE_HELP", "PAGE_HELP_TIP", "PAGE_HELP_TITLE", "PAGE_HELP_MORE", "WHY_DIFFER",
+			"CAPTAINS_TIP", "CAPTAINS_OWN_TIP", "HEADER_TIP", "HEADER_TIP_DIFFER", "SEEN_TIP", "MEMBERS_SEEN_TIP", "THRONE_INSPECT_TIP" }
+		local function Codes(s) local out = {} for c in s:gmatch("%%%a") do out[#out + 1] = c end return table.concat(out) end
+		for _, k in ipairs(KEYS) do
+			assert(type(en[k]) == "string" and en[k] ~= "" and en[k] ~= k, k .. ": English")
+			assert(type(pt[k]) == "string" and pt[k] ~= "" and pt[k] ~= en[k], k .. ": pt-BR")
+			eq(Codes(pt[k]), Codes(en[k]), k .. ": format codes")
+		end
+		-- (Changed on purpose, 1.1.2: the census's help said every player reports and that everyone
+		-- converges within minutes; one elected member per guild reports (Comm.lua), and a size stays
+		-- counted a day on the clients that heard it (Data.TOTAL_KEEP).)
+		assert(not en.HEADER_TIP:find("Every player with the addon reports", 1, true))
+		assert(en.HEADER_TIP:find("elected", 1, true)); assert(en.HEADER_TIP_DIFFER:find("no central server", 1, true))
+		assert(not en.HEADER_TIP_DIFFER:find("converges", 1, true))
+		assert(en.THRONE_INSPECT_TIP:find("30 minutes", 1, true) and en.THRONE_INSPECT_TIP:find("said yes", 1, true))
+		eq(ns.King.INSPECT_GAP, 30 * 60, "what the tip says")
+		assert(#en.VERSION_INVITE_TEXT:format("https://www.curseforge.com/wow/addons/olympus-guild") <= 255)
+		assert(#pt.VERSION_INVITE_TEXT:format("https://www.curseforge.com/wow/addons/olympus-guild") <= 255)
+	end)
+
+	test("1.1.2: the version, the TOC's files in order, the new message types in Comm.lua's list", function()
+		eq(ns.VERSION, "1.1.2")
+		local toc = assert(ReadFile(ADDON_DIR .. "Olympus.toc"))
+		assert(toc:find("## Version: 1.1.2", 1, true))
+		local at = {}
+		local n = 0
+		for line in toc:gmatch("[^\n]+") do n = n + 1; at[line:gsub("%s+$", "")] = n end
+		for _, f in ipairs({ "PlayerMenu.lua", "Versions.lua", "AnswerBank.lua", "Answers.lua" }) do assert(at[f], f) end
+		assert(at["Dialog.lua"] < at["PlayerMenu.lua"] and at["PlayerMenu.lua"] < at["Workshop.lua"], "the menus' list before the files adding to it")
+		assert(at["Workshop.lua"] < at["Versions.lua"], "Versions reads the Workshop's version helpers")
+		assert(at["AnswerBank.lua"] < at["Answers.lua"])
+		local comm = assert(ReadFile(ADDON_DIR .. "Comm.lua"))
+		assert(comm:find("Versions V7 V8 V9 | Workshop VR", 1, true))
+		-- A client updated without a restart: the new files' stand-ins.
+		for _, key in ipairs({ "PlayerMenu", "Versions", "Answers" }) do
+			local core = assert(ReadFile(ADDON_DIR .. "Core.lua"))
+			assert(core:find('StandIn("' .. key .. '"', 1, true), key)
+		end
+	end)
+
+	test("1.1.2: the README and the CurseForge page tell of the right-click menu, the author's bug report ask, the Answers and each page's ?, in the same words", function()
+		local PHRASES = {
+			"### Right-click a player (1.1.2)",
+			"**Check version**",
+			"**Ask to update**",
+			"**Tell them about Olympus**",
+			"**Ask for a bug report**",
+			"**See what is sent**",
+			"opens by itself in a window you can copy from",
+			"**Answers**",
+			"a **?** in its bottom box",
+			"Why can this differ?",
+		}
+		local sections = {}
+		for _, path in ipairs({ "README.md", "docs/CURSEFORGE.md" }) do
+			local doc = assert(ReadFile(ROOT .. path)):gsub("%s+", " ")
+			for _, phrase in ipairs(PHRASES) do assert(doc:find(phrase, 1, true), path .. ": " .. phrase) end
+			sections[#sections + 1] = doc:match("### Right%-click a player %(1%.1%.2%)(.-)###")
+		end
+		assert(sections[1] and sections[1] ~= "", "the section")
+		eq(sections[1], sections[2], "the same words on both pages")
+	end)
 end)()
 
 print(("\n%d passed, %d failed"):format(passed, failed))

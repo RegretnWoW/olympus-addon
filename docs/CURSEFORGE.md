@@ -197,6 +197,56 @@ Click any Lord, Captain, racer or inspected player. You get the same card the Gu
 shows: level, class, zone, rank and status, with **Whisper**, **Invite** and **Who** buttons.
 Any soldier can reach the Lord of another Olympus guild in two clicks.
 
+### Right-click a player (1.1.2)
+Right-click a player (the target frame, party and raid frames, a name in chat, the Who list, the
+friends list, the guild roster) and the game's menu gets an **Olympus** part at the bottom:
+- **Their version**: "Olympus 1.1.1 (out of date)", "up to date" or "not seen yet", and under it
+  where it came from and when. Guildmates show up by themselves (their addon says hello to your
+  guild), and so does a known version on the person card. Opening the menu sends nothing.
+- **Check version**: for anyone else, one tiny addon whisper that their addon answers with its
+  version and nothing else (a player once every 2 minutes, 6 a minute). Only 1.1.2 and newer
+  answer, so no answer in 10 seconds can mean no Olympus, an older one, a dungeon or raid, or no
+  Olympus guild (outside one the addon sends nothing). The author's check is his roll call to that
+  player alone, which every version since 0.9.9 answers, and only after their yes to his roll calls.
+- **Ask to update**, when they are behind the newest version your addon knows: on 1.1.2 or newer
+  their addon shows a small notice with both versions and where to update; an older one can't, so
+  the click opens a whisper with the ask for you to send. One ask per player a day, 5 an hour;
+  they see one a day at most, **Don't remind me** hides them for 7 days (on the beta, which forgets
+  addon data at login, these last until you log out), and a player they block (`/oly block`) or
+  ignore, or one the moderators took off, never gets through. The notice never names a version the
+  author has not released. The author's pick sends his usual update window, naming the version he
+  marked as out (`/oly released`).
+- **Tell them about Olympus**, when their addon did not answer: a whisper with a short invite and
+  the CurseForge link (to get it, or update an old one) opens in Olympus's own window, for you to
+  edit and send yourself. The click sends nothing.
+- **Ask for a bug report** (the author alone, on a player running 1.1.2 or newer): their addon
+  opens a window of its own, never a game popup, saying the author asks for their Olympus bug
+  report, with **See what is sent** (the exact text, the same as `/oly bug`), **Send** and **Not
+  now**. Send goes to him alone, in game; Not now sends nothing; an ask from anyone else is
+  ignored. On his side the report he asked for opens by itself in a window you can copy from (the
+  sender and time on top, **Select all**), and stays in the Workshop's list; chat gets one short
+  line. A report nobody asked for gets its line and the list only. His version checks and his
+  `/oly status` open in copy windows too. A window that opens by itself takes no keyboard, waits
+  until a fight is over, and never covers a report he is reading.
+- In a dungeon, a raid or a match the game holds addon messages: the lines that send show greyed
+  and say why. Not on yourself, enemies, offline names or Battle.net friends, and only while you
+  are in an Olympus guild. It uses the game's own way for addons to add to its menus (a client
+  without it gets no lines); no Blizzard function is replaced, and nothing opens the game's chat
+  box.
+
+**Explanations and Answers.** Each page has a **?** in its bottom box (next to the gear on the
+Chat tab): what the page shows and, where it counts, why the numbers can differ between players.
+A count's tooltip (the header's totals, a guild's row, the Realm's online, Captains and
+Recruiting, a layer's ~N, a zone and a map pin, the Treasury's week and ranking, the dues' guilds,
+the Throne's roll call) ends with **Why can this differ?** and a short answer. The author, the
+High Council and the Stewards also get an **Answers** button at the end of the Chat tab's box and
+in Olympus's whisper window: ready answers by topic (the counts, each feature, installing and
+updating), with a search. A click puts one in the box to edit (Shift-click: the longer one, to
+copy for Discord); nothing is sent until you do. The explanations and answers are in English: in
+another game language the tooltips leave them out, and a page's **?** says so first. The answers
+live in `docs/answers.json`, and `luajit scripts/answers.lua` writes `Olympus/AnswerBank.lua`
+from it.
+
 ### Decrees
 | Decree | Who | What happens |
 |---|---|---|
@@ -275,6 +325,23 @@ WoW channel number to join). Each channel is exclusive to a rank:
   changes: the addon never touches the chat box, so every command typed there works as always.
   A window closed or renamed sends its lines back to the main window, with a notice.
   `/oly status` shows where each channel goes.
+- **Chattynator (1.1.2, from hypertectonic's pull request #47).** With the Chattynator chat
+  addon, its tabs are your chat windows: the game's own windows are hidden behind them, so
+  Olympus leaves those out and picks Chattynator's tabs instead. `/oly chatwindow tab` (or the
+  Chat tab's settings) sends the three channels to a Chattynator tab named Olympus, without the
+  channel's name, and says how to make it: in Chattynator, click the + after its tabs, rename
+  the new tab Olympus (right-click it, Rename tab), then right-click it, Tab Settings, and under
+  Addons tick Olympus. `/oly chatwindow <name>` picks any other tab of Chattynator's by its
+  name, in any case (`/oly chatwindow Guild captains`), as the tab shows it or as Chattynator
+  keeps it ("GENERAL" for General); not by number. A tab shows Olympus's lines only if its
+  filter lets Olympus in, which Olympus cannot see: each time you choose a Chattynator tab, the
+  main window says how. A tab moved gets the new lines where it now is (the lines it showed
+  before may not follow it: Chattynator files each line under the tab's place when it came);
+  one removed or renamed sends them back to the main window, with a notice. Olympus only reads
+  the names of Chattynator's tabs and prints its lines there through Chattynator's public API:
+  it never makes, renames or sets up a tab, and your chat box works as always. Choosing a tab
+  does not turn the Olympus chats on (the first-open page, or `/oly chat on`). Without
+  Chattynator nothing changes.
 - The flood guard keeps a busy channel readable: past 60 lines a minute (or 10 from one player
   while the channel is half full) the rest stay off the chat, and a notice says how many, at
   most once a minute. Those lines still go to the Chat tab (1.1.1), which keeps the last 100
@@ -428,14 +495,19 @@ window's left edge (for the author, his Workshop goes there first).
   pointer (the game's chat tabs work otherwise there): the line gives the same steps as text. The
   line stays away while you send a channel to a chat window of your own (`/oly chatwindow`), and
   its **x** puts it away for good, on every character: the settings and `/oly chatwindow tab`
-  still make the tab.
+  still make the tab. With Chattynator (1.1.2) there is no pointer either (the game's tabs are
+  hidden behind Chattynator's): the click sends the chats to its tab named Olympus at once, and
+  chat says how to make that tab in Chattynator; the Chat tab reads Chattynator's tabs while it
+  shows. The tab is announced once, by the Chat tab when it sees the tab or by the tab's first
+  line if that comes first, and a channel you moved meanwhile stays where you put it.
 - **Settings**: the gear at the end of the top row shows them in place of the lines (a click on it
   again, or **< Back to the lines**, goes back). The Olympus chats on or off on this client, what
   that means, and a click to choose (the first-open page); for officers while your channel is
   public, its quiet grey line. For each channel your rank reads: whether it shows in your game
   chat (a click mutes it there or shows it again, as `/oly mute`), and the chat window it prints
   in (a click moves it to the next chat window open in your game, then back to the main one, as
-  `/oly chatwindow`). The Olympus tab of the game chat: add it (as the line over the lines does),
+  `/oly chatwindow`; with Chattynator, to its next tab, by name, 1.1.2). The Olympus tab of the
+  game chat: add it (as the line over the lines does),
   the steps while it is awaited, **on**, or waiting for a chat tab named Olympus. And for whoever
   may pin, **Pin a line for the army...** (or **for your guild...**). Each choice is the one its
   command makes, kept where it always was, so nothing chosen before 1.1.1 is lost; the game's chat
@@ -1179,7 +1251,8 @@ account, `/oly discord forget` drops this character's request and proof.
   command typed in the chat there can set the block off again.
 - English and Portuguese in full, and since 1.1 Spanish, French and German for the main
   screens, the alerts and decrees, the Join screen and its whisper, the chats and the privacy
-  questions (the rest in English). It follows the game language, and only the text on your
+  questions (the rest in English; the pages' **?** explanations and the Answers of 1.1.2 are in
+  English too). It follows the game language, and only the text on your
   screen changes: nothing sent between players does. `/oly status` shows the language in use.
 
 ## Install
@@ -1282,6 +1355,10 @@ message (the game adds it). What goes where:
 | The army's key (1.1, when the King or his Steward rotates it): the new key, the time it was made and the hashes of the keys it replaces | each Lord and Captain the census confirms online in the guilds the King picks whom his own /who saw in that guild (a whisper from the King each), then each one's guild over guild chat; never the Olympus channel. Each 1.1 addon that has it tells the King so (a whisper), and after login asks its guild whether a newer key exists | only when the King rotates it on the Throne; a guildmate's ask once a login |
 | Your alt links (1.1, only if you link your characters): each linked character's name and guild, and the names it confirmed (its main, or its alts) | everyone on the Olympus channel | from each character you linked yourself, confirmed on each: at login, when a link changes and every 30 minutes while you play |
 | Hello: addon version, realm, public or sealed channel, whether you share your zone | your guild | every minute or so |
+| Check version (1.1.2): nothing but a number to match the answer | the player you right-clicked, alone (a whisper) | only when you pick **Check version** (a player once every 2 minutes, 6 a minute) |
+| The answer to a version check (1.1.2): your addon's version | the player whose addon asked, alone (a whisper) | when a player's addon asks: each once every 30 seconds at most, 20 a minute in all; never to a player you block or ignore, and to the author only after your yes to his roll calls (his checks are roll calls) |
+| Ask to update (1.1.2): the newest version your addon knows | the player you right-clicked, alone (a whisper) | only when you pick **Ask to update** for a player on 1.1.2 or newer (a player once a day, 5 an hour); for an older one it only opens a whisper you send yourself |
+| Your bug report (the same text as `/oly bug`) | the author alone (whispers) | only when you press **Send to** him in Report a bug, or **Send** in the window his ask opens (1.1.2) |
 | The shared block terms (1.1): each word, whether it was added or removed, and when; for 15 minutes after an edit, the editor's own client adds his name to it (never to anyone else's) | everyone on the Olympus channel | only from the client of the King, his Steward, a Hand or a High Councillor: at once when they edit it, and every 10 minutes while they play (not when another client just sent the same list). Your own filter is never sent |
 | Your position as a dot on the map | your guild | only with `/oly share` (off by default) |
 | A Lord's mentor pair (1.1): the recruit's name to the Captain, the Captain's name to the recruit, as whispers in his words | those two players | only when the Lord clicks **Send both** |
@@ -1324,7 +1401,7 @@ calls, the Olympus chats, an officer's patrol findings to his guild's officers, 
 listing (and with it your addon's answers to who can make it) and Olympus Link (your **Accept**, or a confirmer's typing in the key the
 bot's keeper made them) wait for your yes. The rest of the table goes out while you are in an
 Olympus guild, with no question first: your guild's census (from the member it elects, with the
-names above), the hello, an officer's loot notes and points to his guild and your addon's ask for what its book lacks
+names above), the hello and your addon's answer to a version check (1.1.2), an officer's loot notes and points to his guild and your addon's ask for what its book lacks
 (when the page opens), and what other addons read through the bridge.
 
 **The first-open page (1.1).** It is the first question the addon asks. About 45 seconds after
@@ -1627,7 +1704,7 @@ Other limits:
 | `/oly all <text>` · `/oly captains <text>` · `/oly lords <text>` | the same, as `/oly` commands |
 | `/oly mute olympus` · `/oly mute captains` · `/oly mute lords` | hide or show a channel in chat |
 | `/oly pin <text>` · `/oly pin off` · `/oly pin` | the King, his Stewards and Hands: pin one line for the army on top of the Olympus chats and the Realm (2 hours); a guild master: one for his own guild. Take it down, or see what is pinned |
-| `/oly chatwindow tab` · `/oly chatwindow <number or name> [olympus\|captains\|lords]` · `/oly chatwindow main` | the Olympus chats in a chat tab named Olympus (without the channel's name; it says how to make the tab), in another chat window, or back in the main one |
+| `/oly chatwindow tab` · `/oly chatwindow <number or name> [olympus\|captains\|lords]` · `/oly chatwindow main` | the Olympus chats in a chat tab named Olympus (without the channel's name; it says how to make the tab), in another chat window (with Chattynator, one of its tabs, by name), or back in the main one |
 | `/oly treasurer on\|off` | a keeper of the treasury (the Treasurer, the King, a character he named) shares his book and the guild bank, or keeps them private (1.1: what the King hides goes only to the King, his Steward and the keepers, by whisper) |
 | `/oly backup` · `/oly restore` | copy a backup of your treasury book and your settings as text, or paste one back after a wipe (nothing is sent anywhere, never the channel key) (1.1) |
 | `/oly donations on\|off` | a keeper of the treasury tells everyone with the addon he is taking donations (a line on the Realm and Treasury tabs, with his zone if he shares it, one line in the [Olympus] chat), until he logs out (1.1) |
@@ -1668,14 +1745,17 @@ Other limits:
 | `/oly sound <kind> on\|off` | one kind's sound (1.1): `arms`, `muster`, `royal`, `court`, `vox`, `agenda`, `throne`, `help`, `hop`, `treasury`, `patrol`, `update`; also a click on its line at the bottom of the Decrees tab |
 | `/oly bug` | copyable bug report (also: the help button left of the window's X, then **Report a bug**) |
 | `/oly log [n \| word \| copy \| clear]` | the acts this client saw (decrees, gates, pardons, visibility switches), each with the sender's name; kept on this computer, never sent (1.1) |
-| `/oly status` | diagnostics in chat (1.0.0: whom your addon knows as the King's Steward, and the lists of Hands it holds, whose each is) |
+| `/oly status` | diagnostics in chat (1.0.0: whom your addon knows as the King's Steward, and the lists of Hands it holds, whose each is; 1.1.2: the author's in a copy window) |
 
 ## Reporting a bug
 
 While the addon's author is online, the **Report a bug** window also has a **Send to
 Faladoriel Skylance** button: your report goes to him in game, by addon whisper, and nowhere
-else (once every 10 minutes at most). It first checks he is really there: the rest follows
+else (once every 10 minutes at most, unless he asked for it). It first checks he is really there: the rest follows
 only once he answers, and you are told when he got it.
+
+Since 1.1.2 the author can also ask you for it from the right-click menu: your addon shows you
+the exact text first, in a window of its own, and sends nothing without your **Send**.
 
 Type `/oly bug` (or press **Report a bug**), copy the text and open an issue on [GitHub](https://github.com/dnl-gentile/olympus-addon/issues). Errors are
 also saved in `WTF/Account/<ACCOUNT>/SavedVariables/Olympus.lua`.
@@ -1687,7 +1767,7 @@ also saved in `WTF/Account/<ACCOUNT>/SavedVariables/Olympus.lua`.
 - **Security reviews:** Konig, bjess9 (jess), lordjumper and Fadirstave, who read the code and
   showed what an attacker could do.
 - **Code and ideas:** RoyLeviGit (Olympus chats in their own chat window), Artz (hiding the
-  Issue Reporter), bjess9 (CI and the shared checks).
+  Issue Reporter), bjess9 (CI and the shared checks), hypertectonic (Chattynator's tabs).
 - **Feature requests:** Fernmelder, whose 39 posts became 1.1 (the Fernmelder release);
   shenanigans_ (the nameplate marks), Valdericht (`<OLYMPIAN>`), Pyralis Ashandar (taking
   donations) and Zeal (what the King hides stays off the channel).

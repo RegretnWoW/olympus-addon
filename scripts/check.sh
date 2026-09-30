@@ -52,6 +52,12 @@ toc:close()
 if failed then os.exit(1) end
 LUA
 
+# 1.1.2: the answer bank the addon loads is the one docs/answers.json makes (the script changes nothing).
+if [ -f scripts/answers.lua ]; then
+	printf 'Checking the answer bank against docs/answers.json...\n'
+	luajit scripts/answers.lua --check
+fi
+
 printf 'Checking local/global name collisions...\n'
 bash scripts/lint-globals.sh
 

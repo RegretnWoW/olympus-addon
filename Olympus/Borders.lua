@@ -332,6 +332,31 @@ local function AtlasExists(atlas)
 	return ok and v ~= nil
 end
 
+-- The mark before a name on an Olympus line, the same in the Chat tab and in the game's own chat
+-- windows (1.1.2: the game's windows showed the High Council's alone): the King's crown, a High
+-- Councillor's mark and icon, silver, bronze (the gold atlas in Nameplates.BRONZE), the star; ""
+-- for none. 14 px, as the Chat tab has shown them; an atlas the client lacks: the star.
+Borders.CHAT_STAR = "|TInterface\\AddOns\\Olympus\\media\\borders\\star:14:14|t"
+local CHAT_SILVER = "nameplates-icon-elite-silver"
+local CHAT_BRONZE, CHAT_BRONZE_TINT = "nameplates-icon-elite-gold", ":0:0:158:118:86" -- (Nameplates.BRONZE x 255)
+
+local function ChatAtlas(atlas, tint)
+	if not AtlasExists(atlas) then return Borders.CHAT_STAR end
+	return "|A:" .. atlas .. ":14:14" .. (tint or "") .. "|a"
+end
+
+function Borders.ChatMark(who, guild)
+	if type(who) ~= "string" or who == "" then return "" end
+	who = ns.FullName(who)
+	local mark = Borders.MarkOfName(who, guild)
+	if mark == "gold" then return "|T" .. ns.CROWN_ICON .. ":14:14|t" end -- (the King's mark in chat is his crown)
+	if ns.IsHighCouncillor(who) and not ns.CouncilMasked() then return ns.CouncilMark(who) end
+	if mark == "silver" then return ChatAtlas(CHAT_SILVER) end
+	if mark == "bronze" then return ChatAtlas(CHAT_BRONZE, CHAT_BRONZE_TINT) end
+	if mark == "member" then return Borders.CHAT_STAR end
+	return ""
+end
+
 -- A tier's art on a new texture (mirror: turned round, for your own portrait), or false when the
 -- client has none of it. An atlas at its own size; a file at the tier's size, its art's area only.
 -- A file SetTexture fails or says false for: the game's frame it was drawn over, without colour.

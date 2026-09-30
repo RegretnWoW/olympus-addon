@@ -34,6 +34,8 @@ local function PinEnter(self)
 		-- (Guilds from other players' reports: plain text, whatever they carry, 0.9.2.)
 		GameTooltip:AddDoubleLine(ns.Codec.Plain(list[i][1]), ns.FormatNumber(list[i][2]), 0.8, 0.8, 0.8, 1, 1, 1)
 	end
+	-- 1.1.2's review: why a zone's soldiers add up to less than the army online (the answer bank's).
+	if ns.Answers and ns.Answers.WhyTip then ns.Answers.WhyTip(GameTooltip, "count-map-zones") end
 	GameTooltip:Show()
 end
 

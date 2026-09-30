@@ -375,6 +375,9 @@ function ns.StatusText()
 		add("author's roll call: %s (/oly rollcall on|off)", ns.Workshop and ns.Workshop.AnswerState and ns.Workshop.AnswerState() or "?")
 		-- (1.1) The author's released version as his presence named it, and whether this client is behind it.
 		add("%s", ns.Workshop and ns.Workshop.VersionLine and ns.Workshop.VersionLine() or "author's released version: ?")
+		-- (1.1.2) The right-click menus' lines, and this session's version checks and asks.
+		add("player menus: %s  |  versions: %s", ns.PlayerMenu and ns.PlayerMenu.StatusLine and ns.PlayerMenu.StatusLine() or "not loaded",
+			ns.Versions and ns.Versions.StatusLine and ns.Versions.StatusLine() or "not loaded")
 		add("olympus chats: %s (/oly chat on|off)  |  layer help: %s", ns.Channels and ns.Channels.ChatState and ns.Channels.ChatState() or "?",
 			ns.db.layerHelp == true and "on" or (ns.db.layerHelp == false and "off" or "not chosen (off)"))
 		-- (1.1: block terms, #31; the log of acts, #12: counts only, never the words or the entries.)

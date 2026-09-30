@@ -856,6 +856,8 @@ local function CreateMain(style)
 		end
 		GameTooltip:AddLine(" ")
 		GameTooltip:AddLine(L.HEADER_TIP_DIFFER, 0.8, 0.8, 0.8, true)
+		-- 1.1.2: why the list's columns don't add up to these totals (the answer bank's).
+		if ns.Answers and ns.Answers.WhyTip then ns.Answers.WhyTip(GameTooltip, "count-columns-dont-add-up") end
 		GameTooltip:Show()
 	end)
 	hover:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -921,7 +923,26 @@ local function CreateMain(style)
 	detail:SetHeight(DETAIL_H)
 	f.detailTitle = detail:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 	f.detailTitle:SetPoint("TOPLEFT", 8, -6)
-	f.detailTitle:SetPoint("TOPRIGHT", -8, -6)
+	f.detailTitle:SetPoint("TOPRIGHT", -26, -6) -- (the page's "?" at its end)
+	-- 1.1.2: the page's own "?" (Answers.lua): what this page shows and, where it counts, why the
+	-- numbers can differ between two players. Blizzard's help art, as the title bar's help button
+	-- (the whole addon's help); a plain button: a click opens the copy box.
+	local pageHelp = CreateFrame("Button", nil, detail)
+	pageHelp:SetSize(18, 18)
+	pageHelp:SetPoint("TOPRIGHT", detail, "TOPRIGHT", -5, -3)
+	pageHelp.icon = pageHelp:CreateTexture(nil, "ARTWORK")
+	pageHelp.icon:SetTexture(UI.HELP_ICON)
+	pageHelp.icon:SetAllPoints()
+	pageHelp:SetHighlightTexture(UI.HELP_ICON, "ADD")
+	pageHelp:SetScript("OnClick", function() ns.SafeCall("page help", UI.ExplainPage) end)
+	pageHelp:SetScript("OnEnter", function(self)
+		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+		GameTooltip:AddLine(L.PAGE_HELP, 1, 0.82, 0)
+		GameTooltip:AddLine(L.PAGE_HELP_TIP, 1, 1, 1, true)
+		GameTooltip:Show()
+	end)
+	pageHelp:SetScript("OnLeave", function() GameTooltip:Hide() end)
+	f.pageHelp = pageHelp
 	f.detailTitle:SetJustifyH("LEFT")
 	f.detailText = detail:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 	f.detailText:SetPoint("TOPLEFT", f.detailTitle, "BOTTOMLEFT", 0, -3)
@@ -1411,6 +1432,18 @@ local function PageOf(tab, locked)
 	return tab .. "/" .. tostring(sub or "")
 end
 
+-- 1.1.2: the page shown now ("census/", "realm/tree", "treasury/book", "join"...), for its "?".
+function UI.PageId()
+	if not main then return nil end
+	return PageOf(main.tab, not ns.IsMember())
+end
+
+-- The "?" of the page shown (Answers.lua).
+function UI.ExplainPage()
+	if not (ns.Answers and ns.Answers.ExplainPage) then return false end
+	return ns.Answers.ExplainPage(UI.PageId() or "census/")
+end
+
 local function Clamp(v, lo, hi) return math.max(lo, math.min(v, hi)) end
 
 -- The shown row of `content` whose line has id `id`.
@@ -1598,12 +1631,35 @@ end
 -- mouse and keyboard, the game's chat box. (A line for an Olympus chat is written in the Chat
 -- tab's own box, ChatWindow.lua: the Realm tab's chats page and its window for that are gone.)
 local function Trim(text) return (tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")) end
+-- 1.1.2: not while the game holds chat from addons (a dungeon, a raid, an encounter, a PvP
+-- match: ns.ChatLocked): the player is told, and the text stays in the box (false). True: sent,
+-- or nothing to send.
 local function SendWhisper(name, text)
 	text = Trim(text)
-	if text ~= "" and name then SendChatMessage(text:sub(1, 255), "WHISPER", nil, name) end
+	if text == "" or not name then return true end
+	if ns.ChatLocked() then
+		ns.Print(L.WHISPER_LOCKDOWN)
+		return false
+	end
+	SendChatMessage(text:sub(1, 255), "WHISPER", nil, name)
+	return true
 end
+-- A whisper window closed: the Answers list it opened lets go of its box (Answers.lua), which the
+-- next Olympus window may reuse.
+local function LetGo(self)
+	local eb = self and (self.editBox or self.EditBox)
+	if ns.Answers and ns.Answers.Release and eb then ns.Answers.Release(eb) end
+end
+-- The Answers of the author, the High Council and the Stewards (1.1.2, Answers.lua): a button in
+-- Olympus's whisper windows that fills their box with a ready answer to edit (Dialog.lua's extra).
+local ANSWERS_EXTRA = {
+	label = L.ANSWERS_BTN,
+	shown = function() return ns.Answers ~= nil and ns.Answers.Allowed ~= nil and ns.Answers.Allowed() == true end,
+	onClick = function(self) ns.Answers.Open(self.editBox or self.EditBox) end,
+}
 StaticPopupDialogs["OLYMPUS_WHISPER"] = {
 	text = L.WHISPER_TO,
+	extra = ANSWERS_EXTRA,
 	button1 = SEND_LABEL or "Send",
 	button2 = CANCEL or "Cancel",
 	hasEditBox = true,
@@ -1616,12 +1672,12 @@ StaticPopupDialogs["OLYMPUS_WHISPER"] = {
 	end,
 	OnAccept = function(self, name)
 		local eb = self.editBox or self.EditBox
-		SendWhisper(name, eb and eb:GetText())
+		return not SendWhisper(name, eb and eb:GetText()) -- (held: the window stays, its text in it)
 	end,
+	OnHide = LetGo,
 	EditBoxOnEnterPressed = function(self)
 		local parent = self:GetParent()
-		SendWhisper(parent.data, self:GetText())
-		parent:Hide()
+		if SendWhisper(parent.data, self:GetText()) then parent:Hide() end
 	end,
 	EditBoxOnEscapePressed = function(self) self:GetParent():Hide() end,
 	timeout = 0,
@@ -1629,8 +1685,55 @@ StaticPopupDialogs["OLYMPUS_WHISPER"] = {
 	hideOnEscape = true,
 	preferredIndex = 3,
 }
--- (name: the one the server finds.)
-function UI.WhisperWindow(name) return ns.ShowDialog("OLYMPUS_WHISPER", name, nil, name) end
+-- (name: the one the server finds.) 1.1.2: the author, the High Council and the Stewards get it in
+-- Olympus's own window with mouse and keyboard too, for its Answers button (the game's popup has
+-- no room for it); anyone else as before.
+function UI.WhisperWindow(name)
+	if ANSWERS_EXTRA.shown() and not ns.Dialog.missing then return ns.Dialog.Show("OLYMPUS_WHISPER", name, nil, name) end
+	return ns.ShowDialog("OLYMPUS_WHISPER", name, nil, name)
+end
+
+-- A whisper already written, for the player to read, edit and send himself (1.1.2: Tell them about
+-- Olympus, Versions.lua). Olympus's own window in both input modes; the text is put in its box and
+-- nothing takes the keyboard (the player clicks into it to edit, or presses Send). Nothing is
+-- sent until Send (or Enter in its box).
+StaticPopupDialogs["OLYMPUS_WHISPER_TEXT"] = {
+	text = L.WHISPER_TO,
+	extra = ANSWERS_EXTRA,
+	button1 = SEND_LABEL or "Send",
+	button2 = CANCEL or "Cancel",
+	hasEditBox = true,
+	editBoxWidth = 380,
+	maxLetters = 255,
+	maxBytes = 256,
+	OnShow = function(self, data)
+		local eb = self.editBox or self.EditBox
+		if eb then eb:SetText(type(data) == "table" and tostring(data.text or "") or "") end
+	end,
+	OnAccept = function(self, data)
+		local eb = self.editBox or self.EditBox
+		return not SendWhisper(type(data) == "table" and data.name or nil, eb and eb:GetText())
+	end,
+	OnHide = LetGo,
+	EditBoxOnEnterPressed = function(self)
+		local parent = self:GetParent()
+		local data = parent.data
+		if SendWhisper(type(data) == "table" and data.name or nil, self:GetText()) then parent:Hide() end
+	end,
+	EditBoxOnEscapePressed = function(self) self:ClearFocus() end,
+	timeout = 0,
+	whileDead = true,
+	hideOnEscape = true,
+	preferredIndex = 3,
+}
+function UI.WhisperText(name, text)
+	if type(name) ~= "string" or name == "" then return nil end
+	if ns.Dialog.missing then
+		ns.Print(L.RESTART_NEEDED)
+		return nil
+	end
+	return ns.Dialog.Show("OLYMPUS_WHISPER_TEXT", name, nil, { name = name, text = text })
+end
 
 -- Whisper, invite and /who take the name the server finds (ns.TellName).
 local function Whisper(name)
@@ -1849,6 +1952,10 @@ function UI.ShowPerson(p)
 	elseif p.online == false then
 		rows[#rows + 1] = "|cff9d9d9d" .. ((p.days or 0) >= 1 and L.OFFLINE_DAYS:format(math.floor(p.days)) or L.OFFLINE_TODAY) .. "|r"
 	end
+	-- 1.1.2: their Olympus version, when this client knows it (Versions.lua; the same line as the
+	-- right-click menu's). Nothing is asked by opening the card.
+	local version = ns.Versions and ns.Versions.CardLine and ns.Versions.CardLine(full)
+	if version then rows[#rows + 1] = "|cff9d9d9d" .. version .. "|r" end
 	if p.tabard then rows[#rows + 1] = L.TABARD .. ": " .. p.tabard end
 	if p.note then rows[#rows + 1] = '|cffff8080"' .. p.note .. '"|r' end
 	for i, fs in ipairs(f.lines) do fs:SetText(rows[i] or "") end
@@ -1980,7 +2087,6 @@ ns.RegisterEvent("UI_SCALE_CHANGED", function() ns.SafeCall("relayout", Relayout
 -- Copy box (Discord text, bug report, help)
 ---------------------------------------------------------------------------
 
-local copyFrame
 -- The bug report, with "Send to <author>" while the addon's author is online (Workshop.lua).
 function UI.ShowBugReport()
 	local text = ns.BuildBugReport()
@@ -2038,60 +2144,95 @@ end
 -- action: an optional { label, fn } button at the bottom (fn returns true once done).
 -- What is copied goes to Discord, and names in it come from other players: it pings nobody
 -- (0.9.2, Codec.NoMentions).
-function UI.ShowCopy(title, text, action)
-	text = ns.Codec.NoMentions(text)
-	if not copyFrame then
-		local f = CreateFrame("Frame", "OlympusCopyFrame", UIParent, "BasicFrameTemplateWithInset")
-		f:SetSize(520, 340)
-		f:SetPoint("CENTER")
-		f:SetFrameStrata("DIALOG")
-		f:SetMovable(true)
-		f:EnableMouse(true)
-		f:RegisterForDrag("LeftButton")
-		f:SetScript("OnDragStart", f.StartMoving)
-		f:SetScript("OnDragStop", function(self)
-			self:StopMovingOrSizing()
-			self.movedByPlayer = true -- where the player puts it, it stays
+-- opts (1.1.2): { key = a window of its own (the author's bug reports "bug", his version checks
+-- "versions", his /oly status "status"; the help and every Copy share "copy"), big = larger, with
+-- a Select all button (the reports: long, and read before copied), auto = opened by itself (no
+-- keyboard: see the end) }. Each key's window keeps its place and text while another one shows.
+local copyFrames = {}
+local COPY_PLACES = { bug = { 0, 30 }, versions = { 60, -30 }, status = { -60, 30 } }
+
+local function CopyFrame(key, big)
+	if copyFrames[key] then return copyFrames[key] end
+	local name = key == "copy" and "OlympusCopyFrame" or ("OlympusCopyFrame" .. key:sub(1, 1):upper() .. key:sub(2))
+	local w, h = big and 680 or 520, big and 460 or 340
+	local f = CreateFrame("Frame", name, UIParent, "BasicFrameTemplateWithInset")
+	f:SetSize(w, h)
+	local place = COPY_PLACES[key] or { 30, -30 }
+	if key == "copy" then f:SetPoint("CENTER") else f:SetPoint("CENTER", place[1], place[2]) end
+	f:SetFrameStrata("DIALOG")
+	f:SetMovable(true)
+	f:EnableMouse(true)
+	f:RegisterForDrag("LeftButton")
+	f:SetScript("OnDragStart", f.StartMoving)
+	f:SetScript("OnDragStop", function(self)
+		self:StopMovingOrSizing()
+		self.movedByPlayer = true -- where the player puts it, it stays
+	end)
+	ns.EscapeCloses(name)
+	-- (1.1.2) Its X hides it itself, in combat too (the template's HideUIPanel does nothing there
+	-- for a call that is not secure: the author's report may open in the middle of a fight).
+	f.onCloseCallback = function()
+		f:Hide()
+		return false
+	end
+	local hint = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	hint:SetPoint("BOTTOM", 0, 10)
+	hint:SetText(L.COPY_HINT)
+	f.hint = hint
+	local scroll = CreateFrame("ScrollFrame", name == "OlympusCopyFrame" and "OlympusCopyScroll" or (name .. "Scroll"), f, "UIPanelScrollFrameTemplate")
+	scroll:SetPoint("TOPLEFT", 12, -30)
+	scroll:SetPoint("BOTTOMRIGHT", -30, 28)
+	local eb = CreateFrame("EditBox", nil, scroll)
+	eb:SetMultiLine(true)
+	eb:SetFontObject(ChatFontNormal)
+	eb:SetWidth(w - 50)
+	eb:SetHeight(h - 60)
+	eb:SetAutoFocus(false)
+	eb:SetScript("OnEscapePressed", function() f:Hide() end)
+	eb:SetScript("OnTextChanged", function(self, userInput)
+		if userInput then -- read only
+			self:SetText(f.text or "")
+			self:HighlightText()
+		end
+	end)
+	scroll:SetScrollChild(eb)
+	f.eb = eb
+	f.action = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+	f.action:SetSize(160, 20)
+	f.action:SetPoint("BOTTOMLEFT", 10, 6)
+	f.action:SetScript("OnClick", function(self)
+		ns.SafeCall("copy action", function()
+			if self.fn and self.fn() then self:Disable() end
 		end)
-		ns.EscapeCloses("OlympusCopyFrame")
-		local hint = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-		hint:SetPoint("BOTTOM", 0, 10)
-		hint:SetText(L.COPY_HINT)
-		f.hint = hint
-		local scroll = CreateFrame("ScrollFrame", "OlympusCopyScroll", f, "UIPanelScrollFrameTemplate")
-		scroll:SetPoint("TOPLEFT", 12, -30)
-		scroll:SetPoint("BOTTOMRIGHT", -30, 28)
-		local eb = CreateFrame("EditBox", nil, scroll)
-		eb:SetMultiLine(true)
-		eb:SetFontObject(ChatFontNormal)
-		eb:SetWidth(470)
-		eb:SetHeight(280)
-		eb:SetAutoFocus(false)
-		eb:SetScript("OnEscapePressed", function() f:Hide() end)
-		eb:SetScript("OnTextChanged", function(self, userInput)
-			if userInput then -- read only
-				self:SetText(f.text or "")
-				self:HighlightText()
-			end
-		end)
-		scroll:SetScrollChild(eb)
-		f.eb = eb
-		f.action = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-		f.action:SetSize(160, 20)
-		f.action:SetPoint("BOTTOMLEFT", 10, 6)
-		f.action:SetScript("OnClick", function(self)
-			ns.SafeCall("copy action", function()
-				if self.fn and self.fn() then self:Disable() end
+	end)
+	if big then
+		-- The whole text selected again (after a click in it), for Ctrl+C. Never the keyboard by
+		-- itself with the gamepad UI (ns.Focus): there a click in the text selects it.
+		f.selectAll = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+		f.selectAll:SetSize(110, 20)
+		f.selectAll:SetText(L.COPY_SELECT_ALL)
+		f.selectAll:SetScript("OnClick", function()
+			ns.SafeCall("copy select all", function()
+				ns.Focus(f.eb)
+				f.eb:HighlightText()
 			end)
 		end)
-		copyFrame = f
 	end
+	copyFrames[key] = f
+	return f
+end
+
+function UI.ShowCopy(title, text, action, opts)
+	text = ns.Codec.NoMentions(text)
+	opts = type(opts) == "table" and opts or {}
+	local key = type(opts.key) == "string" and opts.key or "copy"
+	local copyFrame = CopyFrame(key, opts.big)
 	local button = copyFrame.action
 	button.fn = action and action.fn or nil
 	button:SetShown(action ~= nil)
 	-- With the button on the left, the hint moves right.
 	copyFrame.hint:ClearAllPoints()
-	if action then
+	if action or copyFrame.selectAll then
 		copyFrame.hint:SetPoint("BOTTOMRIGHT", -12, 10)
 		copyFrame.hint:SetJustifyH("RIGHT")
 	else
@@ -2105,6 +2246,10 @@ function UI.ShowCopy(title, text, action)
 		button:SetWidth(math.max(120, math.ceil(textW) + 24))
 		button:Enable()
 	end
+	if copyFrame.selectAll then
+		copyFrame.selectAll:ClearAllPoints()
+		if action then copyFrame.selectAll:SetPoint("LEFT", button, "RIGHT", 6, 0) else copyFrame.selectAll:SetPoint("BOTTOMLEFT", 10, 6) end
+	end
 	if copyFrame.TitleText then copyFrame.TitleText:SetText(title) end
 	copyFrame.text = text
 	copyFrame.eb:SetText(text)
@@ -2116,9 +2261,14 @@ function UI.ShowCopy(title, text, action)
 	end
 	copyFrame.eb.olympusBox = true
 	-- (Gamepad UI with the chat box typing: not taken from it; a click in the text selects it.)
-	if not ns.Focus(copyFrame.eb) then copyFrame.eb:SetScript("OnEditFocusGained", function(self) self:HighlightText() end) end
+	-- opts.auto (1.1.2): opened by itself, not by the player's click (a bug report that came in,
+	-- a version check's answer): never the keyboard, in either input mode, or his movement keys
+	-- and the chat line he was typing would go into it. A click in the text (or Select all) takes it.
+	if opts.auto or not ns.Focus(copyFrame.eb) then copyFrame.eb:SetScript("OnEditFocusGained", function(self) self:HighlightText() end) end
 	copyFrame.eb:HighlightText()
+	return copyFrame
 end
+function UI.CopyFrame(key) return copyFrames[key or "copy"] end
 
 ---------------------------------------------------------------------------
 -- Minimap button (drag around the minimap, angle is saved)

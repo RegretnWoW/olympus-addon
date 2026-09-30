@@ -118,6 +118,23 @@ function Comm.PeerVersions()
 	return out
 end
 
+-- 1.1.2 (Versions.lua, the right-click menus): one guildmate's addon version as their last hello
+-- named it ("?" for a hello whose version we can't read), and when that was; nil when none was
+-- heard this session. By the whole name first, else by the short name folded (the roster, a menu
+-- and guild messages may write the realm apart, as SharesZone reads them). Never pruned: an old
+-- hello still says which version they ran then (the caller shows how long ago).
+function Comm.PeerVersion(name)
+	if type(name) ~= "string" or name == "" then return nil end
+	local full = ns.FullName(ns.Normal(name))
+	if peers[full] then return peerVersion[full] or "?", peers[full] end
+	local short = ns.Fold(ns.ShortName(full))
+	local version, at
+	for peer, t in pairs(peers) do
+		if ns.Fold(ns.ShortName(peer)) == short and (not at or t > at) then version, at = peerVersion[peer] or "?", t end
+	end
+	return version, at
+end
+
 -- Guild peers counted now, by the realm their hello named.
 local function PeerRealms(now)
 	local out = {}
@@ -211,6 +228,7 @@ end
 --   Board G0 G1 GQ | Keys K3 K4 K5 | Channels N1 | Moderation O1 | Treasury TA TD TW
 --   Bank TL TN TO TS | Week Y2. Reserved: J2 (#20's route answer), E0 E1 E2 (1.2's army events),
 --   FK (a 1.1 build's copy of the dues' amount from the Treasurer's client, read by nobody now).
+--   1.1.2, the right-click menus: Versions V7 V8 V9 | Workshop VR (the author asks for a bug report).
 local handlers = {}
 -- 1.1 (Moderation.lua): a client the moderators took off (net-off) sends none of what they hide.
 local function Held(msg)

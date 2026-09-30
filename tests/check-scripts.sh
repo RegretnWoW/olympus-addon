@@ -65,6 +65,13 @@ fixture 'test failure'
 printf 'error("fixture test failed")\n' > "$case_root/tests/run.lua"
 expect_failure 'offline test failure' 'fixture test failed'
 
+fixture 'stale answer bank'
+mkdir -p "$case_root/docs"
+cp "$repo_root/scripts/answers.lua" "$case_root/scripts/"
+cp "$repo_root/docs/answers.json" "$case_root/docs/"
+printf 'return {}\n' > "$case_root/Olympus/AnswerBank.lua"
+expect_failure 'answer bank out of date with docs/answers.json' 'Olympus/AnswerBank.lua is not what docs/answers.json makes'
+
 fixture 'signing round trip failure'
 printf 'echo "fixture round trip failed" >&2\nexit 1\n' > "$case_root/tests/sign-roundtrip.sh"
 expect_failure 'signing round trip failure' 'fixture round trip failed'

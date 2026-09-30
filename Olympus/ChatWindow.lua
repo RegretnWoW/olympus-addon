@@ -75,10 +75,6 @@ local MAX_NOTES = 5
 local LOOK_GAP = 1                                    -- the Olympus tab awaited: the game's chat windows read this often
 local GREY = "|cff9d9d9d"
 local LINK_TIPS = { item = true, spell = true, enchant = true, quest = true } -- (the links Codec lets through)
-local STAR = "|TInterface\\AddOns\\Olympus\\media\\borders\\star:14:14|t"
-local SILVER = "nameplates-icon-elite-silver"
-local BRONZE = "nameplates-icon-elite-gold"
-local BRONZE_TINT = ":0:0:158:118:86" -- (Nameplates.BRONZE x 255)
 local WHY = { moved = "CHATWIN_WHY_MOVED", late = "CHATWIN_WHY_LATE", failed = "CHATWIN_WHY_FAILED", left = "CHATWIN_WHY_LEFT" }
 -- The pointer's arrow: the game's tutorial arrow (Blizzard_TutorialTemplates), else the chat
 -- frame's own scroll-down arrow (Blizzard_SharedXML's dropdown and store templates use it).
@@ -104,6 +100,7 @@ local acc, lookAcc = 0, 0
 local tipOwner
 local pointer                -- the Olympus tab awaited: Olympus's own pointer by the game's chat tab
 local watching = false       -- ... and the game's chat windows read until it is there
+local sent = false           -- ... the click having sent the channels there already (Chattynator)
 local settings = false       -- the settings (the gear) shown in place of the lines
 local keyButton              -- Olympus's own button the "Open chat" key clicks (made when first bound)
 local boundKeys              -- the keys our override binding holds now (nil: none)
@@ -311,38 +308,21 @@ local function BackInView(was)
 end
 
 ---------------------------------------------------------------------------
--- A name's header: one mark, the name, a tag, the guild (Borders.MarkOfName: the elite borders'
--- and nameplate marks' rules, and a mark only where the guild the line names is proven).
+-- A name's header: one mark, the name, a tag, the guild (Borders.ChatMark over Borders.MarkOfName:
+-- the elite borders' and nameplate marks' rules, and a mark only where the guild the line names is
+-- proven).
 ---------------------------------------------------------------------------
-
-local function AtlasMark(atlas, tint)
-	local info = C_Texture and C_Texture.GetAtlasInfo
-	if type(info) == "function" then
-		local ok, v = pcall(info, atlas)
-		if not ok or v == nil then return STAR end
-	end
-	return "|A:" .. atlas .. ":14:14" .. (tint or "") .. "|a"
-end
 
 local function NameText(e)
 	local who = ns.FullName(e.sender)
 	local guild = e.guild
 	local B = ns.Borders
-	local mark = B and type(B.MarkOfName) == "function" and B.MarkOfName(who, guild) or nil
 	local council = ns.IsHighCouncillor(who) and not ns.CouncilMasked()
 	local name = ns.Codec.Plain(ns.DisplayName(e.sender) or "?")
-	local lead = ""
-	if mark == "gold" then
-		lead = "|T" .. ns.CROWN_ICON .. ":14:14|t " -- (the King's mark in chat is his crown)
-	elseif council then
-		lead = ns.CouncilMark(who) .. " "
-	elseif mark == "silver" then
-		lead = AtlasMark(SILVER) .. " "
-	elseif mark == "bronze" then
-		lead = AtlasMark(BRONZE, BRONZE_TINT) .. " "
-	elseif mark == "member" then
-		lead = STAR .. " "
-	end
+	-- (Borders.ChatMark, shared with the game's chat windows since 1.1.2; without Borders.lua, a
+	-- client updated without a restart, the High Council's mark alone.)
+	local lead = B and type(B.ChatMark) == "function" and B.ChatMark(who, guild) or (council and ns.CouncilMark(who)) or ""
+	if lead ~= "" then lead = lead .. " " end
 	if ns.IsTreasurer(who, guild) then lead = lead .. (ns.COIN:gsub(" $", "")) end
 	if council then
 		name = "|c" .. ns.HIGH_COUNCIL_COLOR .. name .. "|r"
@@ -766,6 +746,23 @@ local function PaintGear()
 	if settings then g:LockHighlight() else g:UnlockHighlight() end
 end
 
+-- The box to write in, across the bottom row; 1.1.2: the Answers button (the author, the High
+-- Council and the Stewards) at that row's end while it shows, the box ending before it. Never on
+-- the top row (1.1.2's review: next to the switch, the search box there shrank to nothing for a
+-- Lord of the High Council in the default window), and by the box it fills.
+local function PlaceInput(p)
+	local input = p.places and p.places.input
+	if not input then return end
+	local room = 0
+	if p.answers and p.answers:IsShown() then
+		p.answers:ClearAllPoints()
+		p.answers:SetPoint("BOTTOMRIGHT", p, "BOTTOMRIGHT", input.right, input.y + math.floor((input.h - SEARCH_H) / 2))
+		room = p.answers:GetWidth() + TOP_GAP
+	end
+	-- (The box's border art reaches 10 past its ends.)
+	p.input:SetPoint("BOTTOMRIGHT", p, "BOTTOMRIGHT", input.right - 10 - room, input.y)
+end
+
 -- The row: the gear at its end; the switch left of it while the lines show and the rank reads more
 -- than one channel (never a row of its own; one channel, nothing); the search box in the rest.
 -- The settings: their title there instead.
@@ -776,6 +773,16 @@ local function DrawTop(tiers, on)
 	frame.gear:SetPoint("TOPRIGHT", frame, "TOPRIGHT", s.right, s.top)
 	PaintGear()
 	local right = s.right - GEAR_W - TOP_GAP
+	-- 1.1.2: the page's "?" left of the gear (Answers.lua: the tab's explanation, the detail box's
+	-- "?" of the other tabs being under this one). The Answers of the author, the High Council and
+	-- the Stewards: at the end of the box they fill, while the lines and that box show (PlaceInput).
+	frame.help:ClearAllPoints()
+	frame.help:SetPoint("TOPRIGHT", frame, "TOPRIGHT", right, s.top)
+	frame.help:Show()
+	right = right - GEAR_W - TOP_GAP
+	local A = ns.Answers
+	frame.answers:SetShown(lines and A ~= nil and type(A.Allowed) == "function" and A.Allowed() == true)
+	PlaceInput(frame)
 	local sw = frame.switch
 	if lines and #tiers > 1 then
 		PaintSwitch()
@@ -894,7 +901,12 @@ end
 -- UPDATE_FLOATING_CHAT_WINDOWS: FloatingChatFrame.lua and ChatFrameOverrides.lua register them)
 -- and every LOOK_GAP while the pointer or the tab shows; the moment a window named Olympus is
 -- there it runs Channels.SetupTab (the chats go there, and it says so once) and the pointer goes.
--- With the gamepad UI the game's chat tabs work otherwise: no pointer, the steps as text.
+-- With the gamepad UI the game's chat tabs work otherwise: no pointer, the steps as text. With
+-- Chattynator (1.1.2) its tabs are the chat and the game's are hidden behind them (the pointer
+-- would point at nothing): no pointer, the click runs Channels.SetupTab at once, which says in
+-- chat how to make the tab in Chattynator and sends the channels there the moment it exists
+-- (nothing tells Olympus when a tab of Chattynator's is made: the Chat tab reads its tabs every
+-- LOOK_GAP while it shows, to say it once).
 ---------------------------------------------------------------------------
 
 local function TabReady()
@@ -902,9 +914,21 @@ local function TabReady()
 	return not C.missing and type(C.SetupTab) == "function" and type(C.TabState) == "function" and type(C.FindTab) == "function"
 end
 
+-- Whether Chattynator's tabs are the chat windows now (Channels.Chattynator, 1.1.2).
+local function Chatty()
+	local C = ns.Channels
+	return type(C.Chattynator) == "function" and C.Chattynator() and true or false
+end
+
 local function MainTabWord()
 	local C = ns.Channels
 	return type(C.MainTabName) == "function" and C.MainTabName() or L.CHATTAB_MAIN_TAB
+end
+
+-- The steps to the Olympus tab while it is awaited, for the line over the lines and the settings.
+local function TabSteps()
+	if Chatty() then return L.CHATTY_TAB_STEPS end
+	return L.CHATS_TAB_STEPS:format(MainTabWord(), GameWord(NEW_CHAT_WINDOW, L.CHATWIN_NEW))
 end
 
 -- The game's main chat tab (its frame's name and "Tab": ChatFrame1Tab, FloatingChatFrame.xml),
@@ -919,11 +943,15 @@ local function MainChatTab()
 end
 
 local function StopWatching()
-	watching, lookAcc = false, 0
+	watching, lookAcc, sent = false, 0, false
 	if pointer then pointer:Hide() end
 end
 
 -- The game's chat windows read: a window named Olympus there, the chats go to it (SetupTab, once).
+-- With Chattynator (1.1.2) the click sent them there already (AddTab): the tab there, it is said
+-- once (Channels.TabArrived: not when a line got there first, its intro saying it), and nothing is
+-- chosen again. (The review of 1.1.2: SetupTab again, when the Chat tab next showed, undid a
+-- channel the player had moved since, and said the tab's intro and filter hint a second time.)
 local function Look()
 	if not watching then return false end
 	if not TabReady() then
@@ -933,8 +961,9 @@ local function Look()
 	local C = ns.Channels
 	if not C.FindTab() then return false end
 	-- (Awaited from the line's click: chosen or not before, it is set up now, and said once.)
+	local already = sent
 	StopWatching()
-	C.SetupTab()
+	if already and type(C.TabArrived) == "function" then C.TabArrived() else C.SetupTab() end
 	MarkDirty()
 	if ns.UI and type(ns.UI.RefreshSoon) == "function" then ns.UI.RefreshSoon() end
 	return true
@@ -999,7 +1028,7 @@ local function MakePointer()
 end
 
 -- By the game's main chat tab (the screen's bottom left where it does not show). Never with the
--- gamepad UI.
+-- gamepad UI, nor with Chattynator (AddTab, StepsAgain).
 local function ShowPointer()
 	if ns.GamepadUI() then return nil end
 	local p = pointer or MakePointer()
@@ -1019,6 +1048,10 @@ end
 
 -- The Chat tab's line (the player's click): a tab named Olympus there already, the chats go to
 -- it at once; else the pointer shows and the game's chat windows are read until it is there.
+-- With Chattynator (1.1.2), no pointer (the game's tabs are hidden behind Chattynator's, and
+-- ChatFrame1Tab is said shown there: the pointer would point at nothing; one shown before
+-- Chattynator answered goes): the channels go to its tab named Olympus now, the lines landing there
+-- the moment it exists, and chat says how to make it (Channels.SetupTab).
 -- Returns true when the chats went to it, false when it is awaited, nil when there is no way.
 function ChatWindow.AddTab()
 	if not TabReady() then return nil end
@@ -1027,11 +1060,23 @@ function ChatWindow.AddTab()
 		MarkDirty()
 		return true
 	end
-	watching, lookAcc = true, 0
+	watching, lookAcc, sent = true, 0, false
 	if Look() then return true end
-	ShowPointer()
+	if Chatty() then
+		if pointer then pointer:Hide() end
+		C.SetupTab()
+		sent = true
+	else
+		ShowPointer()
+	end
 	MarkDirty()
 	return false
+end
+
+-- A click on the steps while the tab is awaited: the pointer again; with Chattynator, the steps
+-- said again in chat (AddTab).
+local function StepsAgain()
+	if Chatty() then ChatWindow.AddTab() else ShowPointer() end
 end
 function ChatWindow.Watching() return watching end
 function ChatWindow.Pointer() return pointer end -- (tests)
@@ -1075,7 +1120,7 @@ local function DrawGuide(y)
 	end
 	local text
 	if watching then
-		text = Grey(L.CHATS_TAB_STEPS:format(MainTabWord(), GameWord(NEW_CHAT_WINDOW, L.CHATWIN_NEW)))
+		text = Grey(TabSteps())
 	else
 		text = Green("+ " .. L.CHATS_TAB_ADD)
 	end
@@ -1120,22 +1165,40 @@ end
 
 -- A click on a channel's window: the next one open in the game's chat after the one it goes to
 -- (the main one, then the others in their order, then the main one again), through
--- /oly chatwindow's own code (Channels.ChooseWindow, by the window's number).
+-- /oly chatwindow's own code (Channels.ChooseWindow, by the window's number). With Chattynator
+-- (1.1.2), its tabs in their order, each by its name (Channels.ChooseTab: a tab called "main" or
+-- "2" would read otherwise in /oly chatwindow's words).
 local function NextWindow(t)
 	local C = ns.Channels
 	if type(C.OpenWindows) ~= "function" or type(C.ChooseWindow) ~= "function" then return end
-	local list = C.OpenWindows()
+	-- One window for each name (the first of it): the choice is a name, and a name picks the first
+	-- window of it, so a second one could never be passed (the review of 1.1.2: Chattynator names
+	-- each new tab "New tab", and two of them kept the click there, on and on).
+	local list, seen = {}, {}
+	for _, w in ipairs(C.OpenWindows()) do
+		local key = Trim(w.name):lower()
+		local rawKey = type(w.raw) == "string" and Trim(w.raw):lower() or key
+		if not seen[key] and not seen[rawKey] then list[#list + 1] = w end
+		seen[key], seen[rawKey] = true, true
+	end
 	local current = type(C.ChosenWindow) == "function" and C.ChosenWindow(t) or nil
 	local at = 0 -- (the main window)
 	if current then
 		local key = Trim(current):lower()
 		for i, w in ipairs(list) do
-			if Trim(w.name):lower() == key and at == 0 then at = i end
+			local named = Trim(w.name):lower() == key or (type(w.raw) == "string" and Trim(w.raw):lower() == key)
+			if named and at == 0 then at = i end
 		end
 	end
 	local word = C.TIERS[t].word
 	local nxt = list[at + 1]
-	if nxt then C.ChooseWindow(nxt.index .. " " .. word) else C.ChooseWindow("main " .. word) end
+	if not nxt then
+		C.ChooseWindow("main " .. word)
+	elseif nxt.index then
+		C.ChooseWindow(nxt.index .. " " .. word)
+	elseif type(C.ChooseTab) == "function" then
+		C.ChooseTab(nxt.name, t)
+	end
 end
 
 function ChatWindow.SettingsLines()
@@ -1184,7 +1247,7 @@ function ChatWindow.SettingsLines()
 			end or nil,
 			tip = function(tt)
 				tt:AddLine("[" .. Label(t) .. "]", 1, 0.82, 0)
-				tt:AddLine(L.CHATSET_WHERE_TIP:format(newWindow), 1, 1, 1, true)
+				tt:AddLine(Chatty() and L.CHATSET_WHERE_TIP_CHATTY or L.CHATSET_WHERE_TIP:format(newWindow), 1, 1, 1, true)
 			end })
 		out[#out].gap = true
 	end
@@ -1206,8 +1269,8 @@ function ChatWindow.SettingsLines()
 				tt:AddLine(L.CHATS_TAB_TIP, 1, 1, 1, true)
 			end })
 		elseif watching then
-			Add({ indent = true, text = Grey(L.CHATS_TAB_STEPS:format(MainTabWord(), newWindow)), onClick = function()
-				ShowPointer()
+			Add({ indent = true, text = Grey(TabSteps()), onClick = function()
+				StepsAgain()
 				Render()
 			end, tip = AddTip })
 		else
@@ -1805,6 +1868,44 @@ local function Button(parent, text, width)
 	return b
 end
 
+-- 1.1.2: the tab's "?" (its explanation, Answers.lua), on the top row, and the Answers button (the
+-- author, the High Council and the Stewards: a ready answer into this box, Answers.lua), at the
+-- box's end (PlaceInput).
+local function MakeHelp(p)
+	local h = CreateFrame("Button", nil, p)
+	h:SetSize(GEAR_W, GEAR_W)
+	h.icon = h:CreateTexture(nil, "ARTWORK")
+	h.icon:SetSize(18, 18)
+	h.icon:SetPoint("CENTER", h, "CENTER", 0, 0)
+	h.icon:SetTexture("Interface\\Common\\help-i")
+	h:SetHighlightTexture("Interface\\Common\\help-i", "ADD")
+	h:SetScript("OnClick", function()
+		ns.SafeCall("chat help", function() if ns.Answers and ns.Answers.ExplainPage then ns.Answers.ExplainPage("chat/") end end)
+	end)
+	h:SetScript("OnEnter", function(self)
+		Tip(self, function(tt)
+			tt:AddLine(L.PAGE_HELP, 1, 0.82, 0)
+			tt:AddLine(L.PAGE_HELP_TIP, 1, 1, 1, true)
+		end)
+	end)
+	h:SetScript("OnLeave", function(self) Untip(self) end)
+	p.help = h
+	local a = Button(p, L.ANSWERS_BTN, 70)
+	a:SetHeight(SEARCH_H)
+	a:SetScript("OnClick", function()
+		ns.SafeCall("chat answers", function() if ns.Answers and ns.Answers.Open then ns.Answers.Open(p.input) end end)
+	end)
+	a:SetScript("OnEnter", function(self)
+		Tip(self, function(tt)
+			tt:AddLine(L.ANSWERS_BTN, 1, 0.82, 0)
+			tt:AddLine(L.ANSWERS_BTN_TIP, 1, 1, 1, true)
+		end)
+	end)
+	a:SetScript("OnLeave", function(self) Untip(self) end)
+	a:Hide()
+	p.answers = a
+end
+
 -- A strip over the lines (the pinned line, the Olympus tab's line, the count of the hidden lines): a
 -- button with wrapped text.
 local function StripButton(p, lines)
@@ -1882,6 +1983,7 @@ local function Build(h)
 	-- On the same row, right of the search: the channels' switch, and the gear at the row's end.
 	MakeSwitch(p)
 	MakeGear(p)
+	MakeHelp(p)
 
 	-- The pinned line.
 	p.pin = StripButton(p, PIN_LINES)
@@ -1899,7 +2001,7 @@ local function Build(h)
 	p.guide = StripButton(p, GUIDE_LINES)
 	p.guide:SetScript("OnClick", function()
 		ns.SafeCall("olympus tab", function()
-			if watching then ShowPointer() else ChatWindow.AddTab() end
+			if watching then StepsAgain() else ChatWindow.AddTab() end
 			Render()
 		end)
 	end)
@@ -2064,7 +2166,7 @@ local function Place(p, places)
 	eb:ClearAllPoints()
 	eb:SetHeight(input.h)
 	eb:SetPoint("BOTTOMLEFT", p, "BOTTOMLEFT", input.left + 10, input.y)
-	eb:SetPoint("BOTTOMRIGHT", p, "BOTTOMRIGHT", input.right - 10, input.y)
+	PlaceInput(p)
 end
 
 ---------------------------------------------------------------------------
