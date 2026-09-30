@@ -144,8 +144,8 @@ end
 
 -- Sender names are set by the server and cannot be forged, so we tie every sender to the
 -- one guild it reports. A (modified) client that reports several guilds is ignored, and a
--- guild whose reports disagree about its leader, its size or its officers is flagged as a
--- conflict.
+-- guild whose reports disagree about its leader or its officers is flagged as a conflict (the
+-- census marks it, and sizes that disagree too: Data.Dispute, 1.1).
 local senderGuild = {} -- "Name-Realm" -> { guild, t }
 
 -- One guild per sender, shared by reports and chat: a name that speaks for one guild can't
@@ -217,16 +217,98 @@ Data.Majority = Majority -- for /oly status and tests
 -- called when we move to another channel, e.g. when the realm key arrives.
 function Data.ForgetVotes()
 	for _, g in pairs(ns.rdb and ns.rdb.guilds or {}) do
-		if type(g) == "table" then g.vouch, g.conflict = nil, nil end
+		if type(g) == "table" then g.vouch, g.conflict, g.outvoted = nil, nil, nil end
 	end
+end
+
+-- What the census's mark on a row says (1.1, Fern's #30): its senders split on the guild's leader
+-- or officers (`split`: no picture leads; `outvoted`: a sender's report is not what the others
+-- say), two fresh senders give sizes farther apart than SIZE_SLACK or SIZE_SHARE of the bigger
+-- plus SIZE_DRIFT a minute between their two reports (`sizes`: the pair farthest past that, the
+-- smaller first, { sender, n } each; the reporter speaks every 3 minutes and the runner-up every
+-- 10, and a guild that fills, or has its inactive members removed, changes meanwhile), or one
+-- sender alone stands behind it (`single`: that sender). nil
+-- when nothing is to say: our own guild (our roster, the server's word), and a report older than
+-- FRESH (grey already, and out of the online counts). It changes nothing that counts; a marked
+-- row can still be the true one.
+Data.SIZE_SLACK, Data.SIZE_SHARE = 5, 0.05
+Data.SIZE_DRIFT = 20 -- members a minute (one removal per Members.REMOVE_GAP, 3 s, is 20)
+function Data.Dispute(g, now)
+	if type(g) ~= "table" or g.mine then return nil end
+	now = now or ns.Now()
+	if now - (g.t or 0) > Data.FRESH then return nil end
+	local d, senders, count, sized = {}, {}, 0, {}
+	for src, v in pairs(Votes(g.vouch, now)) do
+		local short = ns.ShortName(src)
+		if not senders[short] then senders[short], count = src, count + 1 end
+		if type(v.n) == "number" and now - (v.t or 0) <= Data.FRESH then sized[#sized + 1] = { sender = src, n = v.n, t = v.t or 0 } end
+	end
+	d.split = g.conflict and true or nil
+	d.outvoted = g.outvoted and true or nil
+	local worst
+	for i = 1, #sized do
+		for j = i + 1, #sized do
+			local lo, hi = sized[i], sized[j]
+			if lo.n > hi.n or (lo.n == hi.n and lo.sender > hi.sender) then lo, hi = hi, lo end
+			local past = hi.n - lo.n - math.max(Data.SIZE_SLACK, hi.n * Data.SIZE_SHARE) - Data.SIZE_DRIFT * math.abs(hi.t - lo.t) / 60
+			if past > 0 and (not worst or past > worst.past or (past == worst.past and lo.sender .. hi.sender < worst.key)) then
+				worst = { past = past, key = lo.sender .. hi.sender, lo = lo, hi = hi }
+			end
+		end
+	end
+	if worst then d.sizes = { { sender = worst.lo.sender, n = worst.lo.n }, { sender = worst.hi.sender, n = worst.hi.n } } end
+	if count <= 1 then d.single = next(senders) and senders[next(senders)] or g.reporterFull or g.reporter or "?" end
+	d.disputed = (d.split or d.outvoted or d.sizes) and true or nil
+	if not (d.disputed or d.single) then return nil end
+	return d
 end
 
 -- No Crown from other guilds' votes until a full reporting cycle has passed since login: a
 -- guild's reporter and runner-up must have had the time to vote before outsiders can win.
 Data.CROWN_AFTER = 200
 
+-- The census after login (1.1): the beta often loads an empty save, and an empty window reads as
+-- "the army is gone", which sends players into /reload after /reload. The census refills on its
+-- own: the channel is joined within 15 s, every guild's reporter answers the census request (Q1,
+-- Comm.AskCensus) or reports within 170 s. For REBUILD_FOR after login the window says so, with
+-- how many guilds were heard since. A line and nothing else: no /who (the game takes it from a
+-- click alone), no window or popup of any kind.
+Data.REBUILD_FOR = 200
+
+-- The guilds heard since login while the census is being rebuilt (0 or more), nil once it is
+-- (or outside an Olympus guild, or before login).
+function Data.Rebuilding(now)
+	local login = ns.Comm and ns.Comm.loginAt
+	if not login or not ns.IsMember() then return nil end
+	now = now or ns.Now()
+	if now - login >= Data.REBUILD_FOR then return nil end
+	local heard = 0
+	for _, g in pairs(ns.rdb and ns.rdb.guilds or {}) do
+		if type(g) == "table" and not g.mine and (g.t or 0) >= login then heard = heard + 1 end
+	end
+	return heard
+end
+
+-- At login: the window drawn once more when the rebuild is over, so its line goes. That redraw
+-- is all it does (UI.RefreshSoon searches nothing, and does nothing while the window is closed).
+function Data.OnLogin()
+	ns.After(Data.REBUILD_FOR + 1, "census rebuilt", function()
+		if ns.UI and ns.UI.RefreshSoon then ns.UI.RefreshSoon() end
+	end)
+end
+ns.On("LOGIN", function() Data.OnLogin() end)
+
+-- 1.1: a guild the moderators took off the network (net-off, Moderation.lua): not counted, not listed.
+local function NetOff(guild)
+	local M = ns.Moderation
+	return M ~= nil and M.Guild ~= nil and M.Guild(guild) ~= nil
+end
+Data.NetOff = NetOff
+
 function Data.Receive(r, sender)
 	if not ns.IsFederation(r.guild) then return false end
+	-- 1.1: a guild the moderators took off (net-off): its report counts for nothing, not even as a vote.
+	if ns.Moderation.Report and ns.Moderation.Report(r, sender) then return false end
 	-- Our own guild comes straight from our roster, never from someone else's claim (in any spelling).
 	local mine = GetGuildInfo("player")
 	if mine and r.guild:lower() == mine:lower() then return false end
@@ -275,7 +357,8 @@ function Data.Receive(r, sender)
 	-- never loads it back).
 	local votes = Votes(previous and previous.vouch, now)
 	local ranks = Ranks(r)
-	votes[who] = { t = now, sig = Signature(r, ranks), ranks = ranks }
+	-- n (1.1): the size this sender gives, for the census's dispute mark (Data.Dispute).
+	votes[who] = { t = now, sig = Signature(r, ranks), ranks = ranks, n = tonumber(r.total) }
 	r.vouch = votes
 	local top, _, tops = Majority(votes, now)
 	-- Against the picture most senders give while that picture is fresh: the vote counts, the
@@ -309,6 +392,7 @@ end
 function Data.KnownRank(sender, guild, soft)
 	local who = ns.FullName(sender)
 	if guild == GetGuildInfo("player") then return ns.Roster.RankOf(who) end
+	if NetOff(guild) then return nil end -- (1.1: a guild off the network ranks nobody on another's client)
 	local g = Data.Guild(guild)
 	local now = ns.Now()
 	-- A report kept from an earlier session proves nothing about who leads the guild now.
@@ -359,7 +443,7 @@ function Data.Summary()
 	local now = ns.Now()
 	local s = { total = 0, online = 0, fresh = 0, newest = 0, guilds = {}, zones = {}, zoneGuilds = {}, zoneList = {} }
 	for name, g in pairs(ns.rdb.guilds) do
-		if ns.IsFederation(name) then
+		if ns.IsFederation(name) and not NetOff(name) then
 			local age = now - (g.t or 0)
 			local fresh = age <= Data.FRESH
 			-- A guild keeps its size from its last report when its reporters log off (the army
@@ -386,10 +470,22 @@ function Data.Summary()
 		if (a.g.total or 0) ~= (b.g.total or 0) then return (a.g.total or 0) > (b.g.total or 0) end
 		return a.name < b.name
 	end)
+	-- 1.1: a count of people. The characters their players linked as alts (Alts.lua: confirmed on
+	-- each character) count once in the army's total, whatever guilds they are in; each guild's own
+	-- size stays its roster's. s.characters: the total before.
+	s.characters, s.alts = s.total, 0
+	local A = ns.Alts
+	if A and A.Duplicates then
+		local counted = {}
+		for _, e in ipairs(s.guilds) do if e.counted then counted[e.name:lower()] = true end end
+		local dup = A.Duplicates(counted) -- (nil from the stand-in until the game restarts)
+		s.alts = math.max(0, math.min(s.total, tonumber(dup) or 0))
+		s.total = s.total - s.alts
+	end
 	-- Guilds only /who has seen, for the census list alone: in no total, tree or map.
 	s.seen = {}
 	for name, e in pairs(Data.Seen()) do
-		if ns.IsFederation(name) and not ns.rdb.guilds[name] and type(e) == "table" and now - (e.t or 0) <= Data.KEEP then
+		if ns.IsFederation(name) and not NetOff(name) and not ns.rdb.guilds[name] and type(e) == "table" and now - (e.t or 0) <= Data.KEEP then
 			s.seen[#s.seen + 1] = { name = name, online = e.online or 0, capped = e.capped, t = e.t }
 		end
 	end
@@ -404,6 +500,55 @@ function Data.Summary()
 	end)
 	return s
 end
+
+-- Tonight's count (1.1, Fern's #16): this client's own view of the evening, from the reports it
+-- already holds. Once a minute (Data.EVENING_EVERY) it reads the online total and each zone's
+-- count (Data.Summary: fresh reports only, zones only from reporters who share them), and keeps
+-- the peak and, per zone, its first count, so the Census shows whether a zone fills or empties.
+-- It starts a full reporting cycle after login (Data.CROWN_AFTER, about 3 minutes): before that
+-- the census is still rebuilding and every count would look like growth. In memory only, never
+-- saved and never sent: another client counts its own evening, so it is labelled "this client".
+Data.EVENING_EVERY = 60
+local evening = { samples = 0, zones = {} }
+function Data.Evening() return evening end
+function Data.ResetEvening() evening = { samples = 0, zones = {} } end -- tests
+
+-- One sample, at `now`; false while the census is rebuilding after login.
+function Data.SampleEvening(now)
+	now = now or ns.Now()
+	local loginAt = ns.Comm and ns.Comm.loginAt
+	if loginAt and now - loginAt < Data.CROWN_AFTER then return false end
+	local s = Data.Summary()
+	local e = evening
+	if e.samples == 0 then e.since = now end
+	e.samples, e.t, e.online = e.samples + 1, now, s.online
+	if not e.peak or s.online > e.peak then e.peak, e.peakAt = s.online, now end
+	-- A zone nobody stood in at the first sample started at 0; one left empty since is at 0 now.
+	for key, z in pairs(e.zones) do
+		if not s.zones[key] then z.now = 0 end
+	end
+	for key, n in pairs(s.zones) do
+		local z = e.zones[key]
+		if not z then
+			z = { first = e.samples == 1 and n or 0 }
+			e.zones[key] = z
+		end
+		z.now = n
+		if not z.peak or n > z.peak then z.peak = n end
+	end
+	return true
+end
+
+-- A zone's count now and how it moved since the first sample (nil before any sample).
+function Data.ZoneTrend(key)
+	local z = evening.zones[key]
+	if not z or evening.samples == 0 then return nil end
+	return z.now or 0, (z.now or 0) - (z.first or 0)
+end
+
+ns.On("LOGIN", function()
+	ns.Every(Data.EVENING_EVERY, "evening count", function() Data.SampleEvening() end)
+end)
 
 function Data.DiscordText()
 	local s = Data.Summary()

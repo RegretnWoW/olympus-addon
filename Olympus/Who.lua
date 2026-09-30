@@ -25,7 +25,9 @@ local L = ns.L
 -- opens its window on every answer (ShowUIPanel), which the gamepad's frame manager follows.
 -- Any of it can end in the game's "blocked" message there. Refresh and the Join screen's
 -- search still search, plainly, and the answer shows in the game's who list as a /who does
--- (Olympus reads it from there). The quiet ones (Auto, SearchGuild) don't search.
+-- (Olympus reads it from there). So does the King's click on his Throne's /who line (1.1, his
+-- key rotation: SearchGuild with `own`, one guild's players). The quiet ones (Auto, SearchGuild
+-- from the Realm tab, a name) don't search.
 --
 -- Past the cap. The server lists at most 50 players per search (MAX_WHOS_FROM_SERVER; on
 -- Forever the total it reports stops at 50 too). When the broad search is capped, the next
@@ -244,11 +246,12 @@ end
 -- `guild`: that one guild only (g-"<guild>", Who.SearchGuild): its players are kept apart
 -- (Who.GuildSeen) and the round goes on where it was. `name`: that one player (n-"<name>",
 -- Who.WantName), for the guild it shows (Who.SeenGuild); the round goes on where it was too.
--- With the gamepad UI only the player's own searches go, plainly (see the top of this file).
+-- With the gamepad UI only the player's own searches go, plainly (see the top of this file):
+-- the round's, and one guild's his click asked for (Who.SearchGuild with `own`); never a name.
 local toldPlain = false
 function Who.Search(quiet, guild, name)
 	local plain = ns.GamepadUI()
-	if plain and (quiet or guild or name) then return false end
+	if plain and (quiet or name) then return false end
 	local now = GetTime()
 	local wait = Wait(now, math.max(Who.lastSend, Who.lastPlain))
 	if wait > 0 then
@@ -323,12 +326,23 @@ function Who.GuildSeen(guild)
 	if not e or GetTime() - e.t > Who.ROUND_TTL then return nil end
 	return e.list, e.capped
 end
-function Who.SearchGuild(guild)
+-- `own`: the player's click asked for this very guild (the King's key rotation, Keys.Confirm).
+-- Quiet with mouse and keyboard, as ever. With the gamepad UI only that one goes, plainly, as
+-- Refresh does there: the answer in the game's who list, nothing silenced, read from there
+-- (Who.OnSaw), its wait said.
+function Who.SearchGuild(guild, own)
 	if type(guild) ~= "string" or guild == "" or guild:find('"', 1, true) then return false end
-	if ns.GamepadUI() then return false end -- quiet: not with the gamepad UI (see the top)
+	local plain = ns.GamepadUI()
+	if plain and not own then return false end -- quiet: not with the gamepad UI (see the top)
 	if not ((C_FriendList and C_FriendList.SendWho) or SendWho) then return false end
 	local now = GetTime()
 	if now - (guildSearched[guild] or -math.huge) < Who.GUILD_AGAIN then return false end
+	if plain then
+		-- (Nothing kept for a later click: no search goes on its own there.)
+		local sent = Who.Search(false, guild)
+		if sent then guildSearched[guild] = now end
+		return sent
+	end
 	if pending or Wait(now, math.max(Who.lastSend, Who.lastPlain)) > 0 or Who.WindowOpen() then
 		wantedGuild = guild
 		return false
@@ -408,6 +422,11 @@ end
 -- most 15 minutes old). [Name-Realm] = { guild, t }.
 Who.SEEN_MAX = 2000
 local seenAt, nSeen = {}, 0
+-- fn(Name-Realm, guild) for each player an answer of ours lists, the guild as SeenGuild tells it
+-- (1.1: the King's key rotation keeps what it depends on, Keys.Saw: this list starts empty after
+-- a /reload, and is forgotten whole past SEEN_MAX names).
+local sawListeners = {}
+function Who.OnSaw(fn) sawListeners[#sawListeners + 1] = fn end
 local function Saw(name, guild)
 	local full = ns.FullName(name)
 	if not seenAt[full] then
@@ -417,7 +436,9 @@ local function Saw(name, guild)
 		end
 		nSeen = nSeen + 1
 	end
-	seenAt[full] = { guild = type(guild) == "string" and guild ~= "" and Who.GuildName(guild) or "", t = GetTime() }
+	local e = { guild = type(guild) == "string" and guild ~= "" and Who.GuildName(guild) or "", t = GetTime() }
+	seenAt[full] = e
+	for _, fn in ipairs(sawListeners) do ns.SafeCall("who seen", fn, full, e.guild) end
 end
 
 -- The guild the last answer of ours that listed `name` showed ("" for none), and how many

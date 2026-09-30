@@ -12,7 +12,8 @@ local L = ns.L
 --                                    here (no copy of the game's art is shipped)
 --   any other member of an Olympus   a plain four-point star, Olympus's own art
 --   guild of our faction             (media/borders/star.tga, drawn by scripts/make-borders.py)
--- Nobody else: hostile players, creatures, the other faction, anyone outside an Olympus guild.
+-- Nobody else: hostile players, creatures, the other faction, anyone outside an Olympus guild,
+-- and (1.1, Konig's review) a character or a guild the moderators took off (net-off, Borders.MarkOf).
 --
 -- Where (the author's choice): left of the name, not by the health bar, so it reads the same on
 -- the "names only" plates of friendly players. How, on Forever's nameplates (Blizzard_NamePlates):
@@ -56,11 +57,14 @@ local L = ns.L
 -- alone (on by default).
 --
 -- The author's preview (`/oly borders test <tier>`, Borders.SetPreview): that tier's mark on the
--- plate of every friendly player, and left of his own name on his player frame, so he sees it
+-- plate of every friendly player, and after his own name on his player frame, so he sees it
 -- without any bar (PlayerFrame.name, the game's PlayerName: textures of Olympus's on the frame's
 -- container, anchored to it, made and placed once out of combat, then only shown and hidden, as
--- the borders'). "member" shows the star alone (no border has it). His screen alone: gone at
--- `/oly borders test off` or a /reload.
+-- the borders'). After the name, not left of it (1.1, the 1.0 review): left of it the mark sat on
+-- his portrait's ring (Forever's PlayerName starts 4 px right of the 60 px portrait). "member"
+-- shows the star alone (no border has it). His screen alone: gone at `/oly borders test off` or a
+-- /reload. While it shows, every plate's own mark is still worked out as ever (1.1: a census
+-- report heard meanwhile left the mark from before it on the plate once the preview ended).
 
 local Nameplates = {}
 ns.Nameplates = Nameplates
@@ -294,15 +298,17 @@ end
 -- A plate's mark again: the one worked out for its unit while it is the same player (fresh: work
 -- it out again, and whether it is a friendly player); the preview's tier for any friendly player
 -- while the author's preview is on.
+-- (Worked out while the preview shows too, as the borders are: what the census, the council's
+-- list or our roster said meanwhile is the plate's own mark once the preview ends.)
 local function Refresh(rig, fresh)
 	local unit = rig.unit
 	if not unit or not IsActive() or not Friend(rig, fresh) then return Hide(rig) end
-	local preview = ns.Borders.Preview()
-	if preview then return Show(rig, Nameplates.PREVIEW[preview]) end
 	local guid = UnitGUID and UnitGUID(unit)
 	if Secret(guid) then guid = nil end
 	local k = known[unit]
 	if fresh or not k or guid == nil or k.guid ~= guid then k = Compute(unit, guid) end
+	local preview = ns.Borders.Preview()
+	if preview then return Show(rig, Nameplates.PREVIEW[preview]) end
 	Show(rig, k.mark)
 end
 
@@ -372,8 +378,23 @@ local function Detach(rig)
 	Hide(rig)
 end
 
+-- Where his own name's marks go: just after the name's last letter, GAP px off (a name longer than
+-- its box ends at the box: Forever's is 96 px, with nothing of the game's right of it but the
+-- group role icon, 12 px further on). Its left edge's point on the name and how far from it.
+function Nameplates.MineSpot(name)
+	local justify = type(name.GetJustifyH) == "function" and name:GetJustifyH() or "LEFT"
+	local width = name:GetStringWidth()
+	local box = type(name.GetWidth) == "function" and name:GetWidth() or nil
+	local gap = Nameplates.GAP
+	if Secret(justify, width, box) or type(width) ~= "number" or width <= 0 then return "RIGHT", gap end
+	if type(box) == "number" and box > 0 and width > box then width = box end
+	if justify == "RIGHT" then return "RIGHT", gap end
+	if justify == "CENTER" then return "CENTER", math.floor(width / 2 + gap + 0.5) end
+	return "LEFT", math.floor(width + gap + 0.5)
+end
+
 -- His own name's marks (the preview): made once out of combat on the player frame's container,
--- anchored left of his name. A client without Forever's player frame gets none.
+-- anchored after his name. A client without Forever's player frame gets none.
 local function InstallMine()
 	local frame = PlayerFrame
 	local container = type(frame) == "table" and rawget(frame, "PlayerFrameContainer") or nil
@@ -387,12 +408,13 @@ local function InstallMine()
 		return
 	end
 	mine = { tex = {} }
+	local point, x = Nameplates.MineSpot(name)
 	for _, key in ipairs(Nameplates.ORDER) do
 		local tex = container:CreateTexture(nil, "OVERLAY", nil, 7)
 		tex:Hide()
 		if Dress(tex, key) then
 			tex:SetSize(Nameplates.SIZE, Nameplates.SIZE)
-			tex:SetPoint("RIGHT", name, "LEFT", -Nameplates.GAP, 0)
+			tex:SetPoint("LEFT", name, point, x, 0)
 			mine.tex[key] = tex
 		end
 	end

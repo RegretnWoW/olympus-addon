@@ -30,8 +30,10 @@ local L = ns.L
 -- Cheap: a unit's border is worked out only when the target or focus changes, when its name or
 -- guild reaches the client (UNIT_NAME_UPDATE, PLAYER_GUILD_UPDATE), or when the census report of
 -- its guild (or the High Council's list, or for a councillor the council's names shown or hidden
--- on the King's screen) changes, and only from lookups: its guild's report by name, never a walk
--- over every guild.
+-- on the King's screen, or whether a net-off word hides him: 1.1) changes, and only from lookups:
+-- its guild's report by name, never a walk over every guild.
+-- A character or a guild the moderators took off (net-off, Moderation.lua; 1.1, Konig's review)
+-- gets no border and no nameplate mark: an Olympus player to nobody's eye.
 --
 -- The author's preview (1.0.0): his character holds no Olympus rank, so his own portrait shows
 -- none of the borders he ships. `/oly borders test <tier>` (a tier's name, as /oly status prints
@@ -128,6 +130,15 @@ local function RankHolds(ranks, rankName)
 	return false
 end
 
+-- 1.1 (Konig's review): a character the moderators took off (net-off, Moderation.lua), or one of a
+-- guild they took off the network, shows as no Olympus player on this client: no border, no
+-- nameplate mark (never the King: nobody takes him off). Our own portrait keeps ours.
+local function NetOff(who, guild)
+	local M = ns.Moderation
+	if type(M) ~= "table" or type(M.Hides) ~= "function" or who == ns.me then return false end
+	return M.Hides(who, guild) ~= nil
+end
+
 -- What decides a unit's border, or nil for anyone no border is for: not a player, of the other
 -- faction (the census is per faction, and so is the King), or a value the client hides.
 local function Facts(unit)
@@ -139,7 +150,8 @@ local function Facts(unit)
 	if faction ~= (ns.faction or "Alliance") then return nil end
 	local who = ns.UnitFullName(unit)
 	if type(who) ~= "string" or who == "" then return nil end
-	local f = { guild = type(guild) == "string" and guild or nil }
+	local f = { guild = type(guild) == "string" and guild or nil, who = who }
+	f.off = NetOff(who, f.guild)
 	f.councillor = ns.IsHighCouncillor(who) == true
 	f.council = f.councillor and not ns.CouncilMasked()
 	if not f.guild or not ns.IsFederation(f.guild) then return f end
@@ -172,7 +184,7 @@ local function Facts(unit)
 end
 
 local function Match(f)
-	if not f then return nil end
+	if not f or f.off then return nil end
 	for _, t in ipairs(Borders.TIERS) do
 		local council = t.council == true or (type(t.council) == "string" and ns[t.council] == true)
 		if (t.king and f.king) or (council and f.council) or (t.leader and f.leader) or (t.officer and f.officer)
@@ -196,7 +208,7 @@ end
 -- the High Council's list, our roster when his rank came from it (our own guild's, the server
 -- giving none; Roster.lua makes a new table at each scan), and for a High Councillor whether the
 -- council's names were hidden (the King's screen while he streams, ns.CouncilMasked: the eye in
--- the Realm, Asmon's view, becoming the King).
+-- the Realm, Asmon's view, becoming the King); and (1.1) his name, and whether a net-off word hid him.
 local function Inputs(f)
 	local report = f and f.report
 	local row = type(report) == "table"
@@ -204,7 +216,7 @@ local function Inputs(f)
 	if f and f.councillor then masked = ns.CouncilMasked() == true end
 	return { guild = f and f.guild, report = report, rt = row and report.t or nil, vouch = row and report.vouch or nil,
 		council = ns.rdb and ns.rdb.council, roster = f and f.fromRoster and (ns.Roster and ns.Roster.byName or false) or nil,
-		masked = masked }
+		masked = masked, who = f and f.who, off = f and f.off }
 end
 
 -- Has anything a unit's border or mark was worked out from (Inputs) changed since? Lookups only:
@@ -216,6 +228,7 @@ function Borders.Changed(k)
 	return report ~= k.report or (row and report.t or nil) ~= k.rt or (row and report.vouch or nil) ~= k.vouch
 		or (rdb and rdb.council) ~= k.council or (k.roster ~= nil and k.roster ~= (ns.Roster and ns.Roster.byName or false))
 		or (k.masked ~= nil and k.masked ~= (ns.CouncilMasked() == true))
+		or (k.who ~= nil and NetOff(k.who, k.guild) ~= k.off)
 end
 
 local function Compute(unit, guid)
@@ -240,7 +253,9 @@ Borders.MARK_OF = { ["gold-elite"] = "silver", ["silver-elite"] = "silver", gold
 function Borders.MarkOf(unit)
 	local f = Facts(unit)
 	local mark
-	if f and f.king then
+	if f and f.off then
+		mark = nil -- (1.1: net-off)
+	elseif f and f.king then
 		mark = "gold"
 	elseif f then
 		local t = Match(f)
@@ -444,10 +459,12 @@ function Borders.SetPreview(word)
 		ns.Print(L.BORDERS_PREVIEW_OFF)
 	elseif TierNamed(word) then
 		preview = word
-		ns.Print(L.BORDERS_PREVIEW_ON:format(word))
+		-- (1.1: with the marks off, it says no mark shows with the border.)
+		ns.Print(ns.Nameplates.Enabled() == false and L.BORDERS_PREVIEW_ON_NO_MARK:format(word) or L.BORDERS_PREVIEW_ON:format(word))
 	elseif word == Borders.MEMBER then
 		preview = word
-		ns.Print(L.BORDERS_PREVIEW_ON_MEMBER)
+		-- (With the marks off it only waits: NAMEPLATES_PREVIEW_WHEN_OFF below says so.)
+		if ns.Nameplates.Enabled() ~= false then ns.Print(L.BORDERS_PREVIEW_ON_MEMBER) end
 	else
 		local names = {}
 		for _, t in ipairs(Borders.TIERS) do names[#names + 1] = t.name end
@@ -489,6 +506,8 @@ function Borders.PreviewLines(lines)
 			tooltip = function(tt)
 				tt:AddLine(L.BORDERS_PREVIEW_TITLE, 1, 0.82, 0)
 				tt:AddLine(name == Borders.MEMBER and L.BORDERS_PREVIEW_TIP_MEMBER or L.BORDERS_PREVIEW_TIP, 1, 1, 1, true)
+				-- (1.1: with the marks off, no mark shows with it.)
+				if ns.Nameplates.Enabled() == false then tt:AddLine(L.NAMEPLATES_PREVIEW_WHEN_OFF, 0.6, 0.6, 0.6, true) end
 			end,
 		}
 	end

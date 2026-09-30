@@ -19,6 +19,7 @@ Court.MAX = 50          -- requests kept per court
 Court.CALL_GAP = 10     -- one call every 10 seconds per subject at most
 Court.ASK_AGAIN = 180   -- not called this long (the court was full, the King busy): ask again
 Court.DISMISSED = 300   -- sent off: no new request from them this long
+Court.CALL_OPEN = 120   -- a call's popup stays this long (and waits no longer in an instance, 1.1)
 
 local holding           -- the King's court: { id, mapID, zone, sentAt, queue = { { name, guild, t, calledAt } }, by = { [name] = entry }, dismissed = { [name] = t } }
 local court             -- the court seen: { id, king, mapID, zone, t, askedAt, calledAt }
@@ -85,6 +86,8 @@ end
 function Court.Request(sender, id, guild)
 	if not holding or holding.id ~= id then return end
 	sender = ns.FullName(sender)
+	-- 1.1: a name the moderators took off (net-off, Moderation.lua) is not queued.
+	if ns.Moderation.Hides and ns.Moderation.Hides(sender, guild) then return end
 	local name, clean = ns.King.CleanName(sender), ns.King.CleanGuild(guild)
 	if not name or not clean or holding.by[sender] or #holding.queue >= Court.MAX then return end
 	local now = ns.Now()
@@ -101,7 +104,7 @@ function Court.Request(sender, id, guild)
 		local who = shown and ("%s <%s>"):format(ns.DisplayName(sender), shown) or ns.DisplayName(sender)
 		ns.Print(L.COURT_REQUEST:format(who) .. (n > 5 and ("  (" .. n .. ")") or ""))
 	end
-	ns.PlayAlert("soft")
+	ns.PlayAlert("soft", "court")
 	ns.King.Changed()
 end
 
@@ -148,7 +151,10 @@ local function OnCourt(sender, id, rest)
 	if Court.InMyZone() and court.toldIn ~= mapID then
 		court.toldIn = mapID
 		ns.Print(L.COURT_HERE:format(ns.KingName(sender), court.zone))
-		ns.PlayAlert("soft")
+		-- (Busy, 1.1: no chime; once back, the court is named in the line of what waited.)
+		local seen = court
+		ns.Alert("court", "soft", { what = L.HELD_COURT:format(court.zone), key = "court" .. tostring(id),
+			open = function() return Court.Current() == seen end })
 	end
 	ns.Fire("COURT_CHANGED")
 end
@@ -191,7 +197,7 @@ end
 StaticPopupDialogs["OLYMPUS_COURT_CALLED"] = {
 	text = L.COURT_CALLED_POPUP,
 	button1 = OKAY or "OK",
-	timeout = 120,
+	timeout = Court.CALL_OPEN,
 	whileDead = true,
 	hideOnEscape = true,
 	preferredIndex = 3,
@@ -205,8 +211,14 @@ function Court.HandleCall(dist, sender, text)
 	if not c or c.id ~= id or c.king ~= ns.FullName(sender) or c.calledAt then return end
 	c.calledAt = ns.Now()
 	c.askedAt = c.askedAt or c.calledAt
-	ns.King.Warn(L.COURT_CALLED:format(ns.KingName(sender), c.zone), true)
-	ns.ShowDialog("OLYMPUS_COURT_CALLED", ns.KingName(sender), c.zone)
+	-- In an instance or on Busy (1.1): the chat line now, the raid warning and the popup once the
+	-- player is out, if the call is still open then (the popup's two minutes).
+	local king, zone = ns.KingName(sender), c.zone
+	ns.King.Warn(L.COURT_CALLED:format(king, zone), true, "court", {
+		what = L.HELD_COURT_CALL:format(king), key = "courtcall" .. tostring(id),
+		open = function() return ns.Now() - c.calledAt < Court.CALL_OPEN end,
+		show = function() ns.ShowDialog("OLYMPUS_COURT_CALLED", king, zone) end,
+	})
 	ns.Fire("COURT_CHANGED")
 end
 ns.Comm.Handle("T5", function(...) Court.HandleCall(...) end)

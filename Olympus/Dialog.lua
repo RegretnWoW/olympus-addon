@@ -116,7 +116,7 @@ local function Build(i)
 	eb.SetFocus = function(self) ns.Focus(self, setFocus) end
 	eb:SetAutoFocus(false)
 	-- Like the game's popup box: no select-all on focus (InputBoxTemplate's), or the first key
-	-- would replace what the dialog put in it (the agenda's "30 ", a recruit message).
+	-- would replace what the dialog put in it (a recruit message, a Board note).
 	eb:SetScript("OnEditFocusGained", nil)
 	eb:SetScript("OnEditFocusLost", nil)
 	eb:SetHeight(22)

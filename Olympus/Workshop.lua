@@ -22,7 +22,7 @@ local L = ns.L
 --   V1~<id>~100    the author asks this player alone (0.9.9; 0.9.8 takes V1 from the channel only)  (whisper)
 --   V2~<id>~<version>~<guild>~<client>~<window>~<flags>~<errors>~<level>~<class>   (whisper)
 --   V3~<latest version>                                                (whisper)
---   V4~<version>                                                       (channel)
+--   V4~<version>[~<released>]  (1.1: the version he marked as out, /oly released; 1.0 and 0.9 read "V4~" alone)  (channel)
 --   V5~<id>~<i>~<n>~<piece>                                            (whisper)
 --   V6~<id>~<1|2>   the author got piece 1 (send the rest) | the whole report   (whisper)
 -- A bug report goes out one piece first: only once the author answers (he is really online)
@@ -192,7 +192,15 @@ local function Answer(id)
 end
 
 -- A player can refuse the author's roll calls and update notices: /oly rollcall off (0.9.2).
-function Workshop.Answers() return not (ns.db and ns.db.rollCall == false) end
+-- 1.1 (Fern's #11): the roll call is answered only after a yes (the first-open page, or /oly
+-- rollcall on): nil, never answered, is off. The update notice sends nothing, so it still shows
+-- until a No (Workshop.Notices).
+function Workshop.Answers() return ns.db ~= nil and ns.db.rollCall == true end
+function Workshop.Notices() return not (ns.db and ns.db.rollCall == false) end
+function Workshop.AnswerState()
+	local v = ns.db and ns.db.rollCall
+	return v == true and "answered" or (v == false and "refused" or "not chosen (not answered)")
+end
 function Workshop.SetAnswers(on)
 	ns.db.rollCall = on and true or false
 	ns.Print(on and L.ROLLCALL_ON or L.ROLLCALL_OFF)
@@ -524,14 +532,15 @@ function Workshop.AskOutdated()
 end
 
 function Workshop.HandleUpdate(dist, sender, text)
-	if dist ~= "WHISPER" or not IsAuthorName(sender) or not Workshop.Answers() then return end
+	if dist ~= "WHISPER" or not IsAuthorName(sender) or not Workshop.Notices() then return end
 	local latest = text:match("^V3~(%d+%.%d+%.%d+)$")
 	if not latest or not Workshop.Newer(latest, ns.VERSION) then return end
 	local now = ns.Now()
 	if now - lastUpdateShown < Workshop.UPDATE_GAP then return end
 	lastUpdateShown = now
-	ns.PlayAlert("soft")
-	ns.ShowDialog("OLYMPUS_AUTHOR_UPDATE", ns.VERSION, latest)
+	-- (In an instance or on Busy, 1.1: once the player is out.)
+	ns.Alert("update", "soft", { what = L.HELD_UPDATE:format(latest), key = "update",
+		show = function() ns.ShowDialog("OLYMPUS_AUTHOR_UPDATE", ns.VERSION, latest) end })
 end
 
 StaticPopupDialogs["OLYMPUS_AUTHOR_UPDATE"] = {
@@ -549,16 +558,125 @@ StaticPopupDialogs["OLYMPUS_AUTHOR_UPDATE"] = {
 
 function Workshop.SendPresence()
 	if not Workshop.IsAuthor() then return end
-	ns.Comm.Send("CHANNEL", "V4~" .. Clean(ns.VERSION, 12), "presence")
+	local released = Workshop.Released()
+	ns.Comm.Send("CHANNEL", "V4~" .. Clean(ns.VERSION, 12) .. (released and ("~" .. released) or ""), "presence")
+end
+
+-- The version his presence names as out (its third field), or nil: the second is the build his
+-- client runs, which may be one CurseForge does not list yet. Later fields, if V4 ever gains
+-- any, are left for later versions.
+local function ReleasedField(text)
+	local v, rest = tostring(text or ""):match("^V4~[^~]*~(%d+%.%d+%.%d+)(.*)$")
+	if not v or (rest ~= "" and rest:sub(1, 1) ~= "~") then return nil end
+	return v
 end
 
 function Workshop.HandlePresence(dist, sender, text)
 	if dist ~= "CHANNEL" or not IsAuthorName(sender) or Workshop.IsAuthor() then return end
 	if not text:match("^V4~") then return end
 	local was = Workshop.AuthorOnline()
+	local wasBehind = Workshop.Behind()
 	authorAt, authorName = ns.Now(), ns.FullName(sender)
-	if not was then ns.Fire("DATA_CHANGED") end
+	Workshop.HeardVersion(ReleasedField(text))
+	if not was or Workshop.Behind() ~= wasBehind then ns.Fire("DATA_CHANGED") end
 end
+
+---------------------------------------------------------------------------
+-- Behind the author's version (1.1). His presence (V4, above) names the version he marked as out
+-- (/oly released, once CurseForge lists it): newer than ours, this client says so, to this player
+-- alone: one line in chat once a session, a line at the foot of the Census, and /oly status. The
+-- build his client runs is never the one named: he runs a new build before it is published (a
+-- preview on his own PC), and nobody is told to update to a version they can't get. Nothing is
+-- sent, and nobody is whispered (the author's own "please update", V3, stays the only one): so it
+-- is no roll call to answer, and it shows whatever /oly rollcall says (Workshop.Answers). Only the
+-- author's own client can name a version here (his name, which the server stamps, on his realm
+-- group); a number anyone else sends never counts. Kept account-wide (ns.db.authorRelease), so
+-- the next login knows it before he says it again; updated, the line goes by itself.
+---------------------------------------------------------------------------
+
+local heardVersion -- { v, t }: the released version his presence named this session
+local toldBehind = false -- the chat line said it this session
+
+-- On his own client: the version he marked as out (ns.db.releasedVersion), never one newer than
+-- the build he runs (a build rolled back: nothing named until he marks again).
+function Workshop.Released()
+	local v = ns.db and ns.db.releasedVersion
+	if type(v) ~= "string" or not Parts(v) or #v > 12 or Workshop.Newer(v, ns.VERSION) then return nil end
+	return v
+end
+
+-- /oly released [x.y.z]: the author marks the version CurseForge lists as out (his own by
+-- default, never a newer one), and his presence says it at once, then every PRESENCE_EVERY.
+function Workshop.MarkReleased(v)
+	if not Workshop.IsAuthor() then
+		ns.Print(L.RELEASED_ONLY_AUTHOR)
+		return false
+	end
+	v = (v == nil or v == "") and ns.VERSION or tostring(v)
+	if not Parts(v) or #v > 12 or Workshop.Newer(v, ns.VERSION) then
+		ns.Print(L.RELEASED_USAGE:format(ns.VERSION))
+		return false
+	end
+	ns.db.releasedVersion = v
+	ns.Print(L.RELEASED_DONE:format(v))
+	Workshop.SendPresence()
+	return true
+end
+
+function Workshop.HeardVersion(v)
+	if type(v) ~= "string" or not v:match("^%d+%.%d+%.%d+$") or #v > 12 then return end
+	local now = ns.Now()
+	heardVersion = { v = v, t = now }
+	if ns.db then ns.db.authorRelease = { v = v, t = now } end
+	local behind = Workshop.Behind()
+	if behind and not toldBehind then
+		toldBehind = true
+		ns.Print(L.BEHIND_CHAT:format(behind, ns.VERSION))
+	end
+end
+
+-- The author's released version as this client last heard it, and when: this session's, else the
+-- saved one.
+function Workshop.AuthorVersion()
+	local e = heardVersion
+	if not e and ns.db and type(ns.db.authorRelease) == "table" then e = ns.db.authorRelease end
+	if type(e) ~= "table" or type(e.v) ~= "string" or not e.v:match("^%d+%.%d+%.%d+$") then return nil end
+	return e.v, tonumber(e.t)
+end
+
+-- The author's released version when it is newer than ours, else nil (always nil on his own client).
+function Workshop.Behind()
+	if Workshop.IsAuthor() then return nil end
+	local v = Workshop.AuthorVersion()
+	if v and Workshop.Newer(v, ns.VERSION) then return v end
+	return nil
+end
+
+-- For /oly status.
+function Workshop.VersionLine()
+	if Workshop.IsAuthor() then
+		return ("author's released version: %s (/oly released; this client %s)"):format(Workshop.Released() or "none marked", ns.VERSION)
+	end
+	local v, t = Workshop.AuthorVersion()
+	if not v then return "author's released version: not heard yet (this client " .. ns.VERSION .. ")" end
+	local state = Workshop.Newer(v, ns.VERSION) and "behind" or (Workshop.Newer(ns.VERSION, v) and "ahead" or "same")
+	return ("author's released version: %s, heard %s (this client %s: %s)"):format(v, t and ns.Ago(t) or "?", ns.VERSION, state)
+end
+
+-- The line at the foot of the Census, or nil.
+function Workshop.BehindLine()
+	local v = Workshop.Behind()
+	if not v then return nil end
+	return {
+		text = "|cffffd200" .. L.BEHIND_LINE:format(v, ns.VERSION) .. "|r",
+		tooltip = function(tt)
+			tt:AddLine(L.BEHIND_LINE:format(v, ns.VERSION), 1, 0.82, 0)
+			tt:AddLine(L.BEHIND_TIP, 1, 1, 1, true)
+		end,
+	}
+end
+
+function Workshop.ResetVersion() heardVersion, toldBehind = nil, false end -- (tests: a new session)
 
 -- The bug report as it travels: no newlines or pipes (they are put back as "\n" and "!").
 local function Pack(text)
@@ -653,7 +771,7 @@ function Workshop.HandleBug(dist, sender, text)
 	ns.Comm.Whisper(sender, ("V6~%s~2"):format(id), "bugack:" .. sender)
 	reports[#reports + 1] = { from = sender, t = now, text = (table.concat(e.parts):gsub("\\n", "\n")) }
 	while #reports > Workshop.MAX_REPORTS do table.remove(reports, 1) end
-	ns.PlayAlert("soft")
+	ns.PlayAlert("soft", "help")
 	ns.Print(L.WORKSHOP_BUG_IN:format(ns.DisplayName(sender)))
 	Changed()
 end
@@ -1015,6 +1133,14 @@ function Workshop.Build(report)
 	if not Workshop.Visible() then return {}, L.TAB_WORKSHOP, "" end
 	local lines = {}
 	if Workshop.Preview() then lines[#lines + 1] = { text = Grey(L.WORKSHOP_PREVIEW), gapAfter = true } end
+	-- The version his presence tells the army is out (1.1): /oly released marks it.
+	lines[#lines + 1] = {
+		text = L.WORKSHOP_RELEASED:format(Workshop.Released() or "-", ns.VERSION), noReport = true, gapAfter = true,
+		tooltip = function(tt)
+			tt:AddLine(L.WORKSHOP_RELEASED:format(Workshop.Released() or "-", ns.VERSION), 1, 0.82, 0)
+			tt:AddLine(L.WORKSHOP_RELEASED_TIP, 1, 1, 1, true)
+		end,
+	}
 	InstallLines(lines)
 	RollLines(lines, report)
 	BugLines(lines)
@@ -1048,6 +1174,7 @@ function Workshop.Reset()
 	lastRoll, lastRollAnswer, lastUpdateShown, lastBug, lastAsk = -math.huge, -math.huge, -math.huge, -math.huge, -math.huge
 	search, shownAnswers, lastAskOne = "", Workshop.ROLL_PAGE, -math.huge
 	changePending = false
+	Workshop.ResetVersion()
 end
 
 ---------------------------------------------------------------------------
@@ -1412,14 +1539,18 @@ function Workshop.TakeTitles(blob, sender, guild)
 	local function Steward() return type(ns.King) == "table" and type(ns.King.IsSteward) == "function" and ns.King.IsSteward() end
 	local was = Steward()
 	local stewards = ns.ReadStewards(list)
-	ns.rdb.councilTitles = { at = at, public = public == "1", realm = realm ~= "" and realm or nil, depts = depts, blob = blob, stewards = stewards }
+	-- The approved guilds (1.1, Core.lua: ns.ReadApprovedGuilds): the list may make our guild Olympus.
+	local wasMember = ns.IsMember()
+	ns.rdb.councilTitles = { at = at, public = public == "1", realm = realm ~= "" and realm or nil, depts = depts, blob = blob, stewards = stewards,
+		guilds = ns.ReadApprovedGuilds(list) }
+	if ns.IsMember() ~= wasMember then Workshop.MembershipChanged(wasMember) end
 	local named = 0
 	for _, names in pairs(stewards) do named = named + #names end
 	ns.Log("High Council: a signed titles list of %d names in %d parts, %d Steward(s) (%s)", n, #depts, named, tostring(at))
 	local now = Steward()
 	if now and not was then
 		ns.Print(L.STEWARD_YOU:format(ns.KingName(ns.KingCharacter())))
-		ns.PlayAlert("soft")
+		ns.PlayAlert("soft", "throne")
 	elseif was and not now then
 		ns.Print(L.STEWARD_NO_LONGER)
 	end
@@ -1438,6 +1569,94 @@ function Workshop.HandleTitles(dist, sender, text)
 	HeardList("HT", blob, dist)
 end
 ns.Comm.Handle("HT", function(...) Workshop.HandleTitles(...) end)
+
+---------------------------------------------------------------------------
+-- The approved guilds (1.1, the author's; Core.lua: ns.IsApprovedGuild): a guild of Asmon's Olympus
+-- whose name the name rule leaves out counts once the author's signed titles list names it. Its
+-- members' addons, no Olympus members until they hold that list, hear only it (over their guild,
+-- Comm.lua), and the first of them can paste it (/oly approved paste: the author hands the signed
+-- text out; it is checked like any list, so nobody can forge one).
+---------------------------------------------------------------------------
+
+-- The list made our guild an Olympus guild, or no longer: the addon starts (the channel, the
+-- census, the roster) or stops, as when one joins or leaves a guild.
+function Workshop.MembershipChanged(wasMember)
+	local guild = (GetGuildInfo and GetGuildInfo("player")) or "?"
+	if ns.IsMember() then
+		ns.Print(L.APPROVED_YOU:format(guild))
+		ns.PlayAlert("soft", "update") -- (the author's word: his signed list)
+	elseif wasMember then
+		ns.Print(L.APPROVED_NO_LONGER:format(guild))
+	end
+	if ns.Comm and ns.Comm.CheckMembership then ns.SafeCall("approved membership", ns.Comm.CheckMembership) end
+	if ns.Roster and ns.Roster.RequestScan then ns.SafeCall("approved roster", ns.Roster.RequestScan, true) end
+end
+
+-- A signed titles list pasted in (the text scripts/council-sign.py prints): taken as a list from
+-- our own guild is, with the same checks (only a newer one, its signature the author's). True when
+-- taken.
+function Workshop.PasteTitles(text)
+	local blob = tostring(text or ""):match("(HT1~%d+~[^~]*~[01]~[^~]*~%x+)")
+	if not blob or #blob > Workshop.TITLES_BLOB then
+		ns.Print(L.APPROVED_PASTE_BAD)
+		return false
+	end
+	local _, held = HeldList("HT")
+	if (tonumber(blob:match("^HT1~(%d+)~")) or 0) <= held then
+		ns.Print(L.APPROVED_PASTE_HELD)
+		return false
+	end
+	if not Workshop.TakeTitles(blob, ns.me, true) then
+		ns.Print(L.APPROVED_PASTE_BAD)
+		return false
+	end
+	ns.Print(L.APPROVED_PASTE_TAKEN)
+	-- To our guildmates at once (they may be waiting for it: ns.ApprovedOnly), and our channel.
+	if ns.ApprovedOnly() then Workshop.RelayGuild(true) end
+	if ns.IsMember() then Workshop.RelayCouncil(true) end
+	return true
+end
+
+StaticPopupDialogs["OLYMPUS_APPROVED_PASTE"] = {
+	text = L.APPROVED_PASTE_PROMPT,
+	button1 = OKAY or "OK",
+	button2 = CANCEL or "Cancel",
+	hasEditBox = true,
+	editBoxWidth = 320,
+	maxLetters = Workshop.TITLES_BLOB,
+	OnShow = function(self)
+		local eb = self.editBox or self.EditBox
+		if eb then eb:SetText(""); eb:SetFocus() end
+	end,
+	OnAccept = function(self)
+		local eb = self.editBox or self.EditBox
+		ns.SafeCall("approved paste", Workshop.PasteTitles, eb and eb:GetText())
+	end,
+	EditBoxOnEnterPressed = function(self)
+		local text = self:GetText()
+		self:GetParent():Hide()
+		ns.SafeCall("approved paste", Workshop.PasteTitles, text)
+	end,
+	EditBoxOnEscapePressed = function(self) self:GetParent():Hide() end,
+	timeout = 0,
+	whileDead = true,
+	hideOnEscape = true,
+	preferredIndex = 3,
+}
+
+-- `/oly approved`: the approved guilds of our faction the list we hold names, and whether ours is
+-- one; `/oly approved paste`: the box to paste the signed list in.
+function Workshop.Approved(word)
+	if tostring(word or ""):lower() == "paste" then return ns.ShowDialog("OLYMPUS_APPROVED_PASTE") end
+	local list = ns.ApprovedGuilds()
+	ns.Print(L.APPROVED_LIST:format(#list > 0 and table.concat(list, ", ") or "-"))
+	local guild = IsInGuild() and GetGuildInfo("player")
+	if type(guild) == "string" and ns.IsApprovedGuild(guild) then
+		ns.Print(L.APPROVED_MINE:format(guild))
+	elseif type(guild) == "string" and not ns.IsFederation(guild) then
+		ns.Print(L.APPROVED_NOT_MINE:format(guild))
+	end
+end
 
 -- Passing the lists along, the names and the titles together: the author's client each 10
 -- minutes; any other one now and then, so about RELAYS clients a half hour, whatever the
@@ -1464,12 +1683,19 @@ end
 -- addon users each time (a guild of a thousand sends a handful), when our send queue has room
 -- (the census report comes first). force: now, whatever these (the author's client at login).
 Workshop.GUILD_QUEUE = 30
+-- A guild that is Olympus by the signed list alone (1.1, ns.ApprovedOnly): its members without
+-- the list are no Olympus members yet, so they can't ask for it and hear nothing on the channel;
+-- they take it over GUILD alone (Comm.lua). There the lists go over GUILD each
+-- APPROVED_RELAY_EVERY (about RELAYS of its addon users that hold them), whatever its realms.
+Workshop.APPROVED_RELAY_EVERY = 300
 function Workshop.RelayGuild(force)
 	local names, titles = HeldList("HS"), (HeldList("HT"))
 	if not names and not titles then return false end
 	local now = ns.Now()
 	if not force then
-		if now - lastGuildSent < Workshop.RELAY_EVERY or not GuildSpansRealms() then return false end
+		local approved = ns.ApprovedOnly and ns.ApprovedOnly()
+		local every = approved and Workshop.APPROVED_RELAY_EVERY or Workshop.RELAY_EVERY
+		if now - lastGuildSent < every or not (approved or GuildSpansRealms()) then return false end
 		if ns.Comm.QueueSize and ns.Comm.QueueSize() > Workshop.GUILD_QUEUE then return false end
 	end
 	lastGuildSent = now
@@ -1758,7 +1984,7 @@ function Workshop.HandleAsk(dist, sender, text)
 	ns.Comm.Whisper(who, "HK~1", "councilack")
 	local msg = ns.Codec.Plain(text:match("^HR~(.*)$") or "")
 	ns.Print(L.COUNCIL_ASKED:format("|Hplayer:" .. ns.TellName(who) .. "|h[" .. ns.DisplayName(who) .. "]|h", msg))
-	ns.PlayAlert("soft")
+	ns.PlayAlert("soft", "help")
 end
 ns.Comm.Handle("HA", function(...) Workshop.HandleAvailable(...) end)
 ns.Comm.Handle("HR", function(...) Workshop.HandleAsk(...) end)

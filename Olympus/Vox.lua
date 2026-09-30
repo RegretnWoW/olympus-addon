@@ -70,7 +70,7 @@ local function Placed(sender, guild)
 	if now - placedAt > 60 then
 		local fresh = {}
 		for _, e in ipairs(ns.Data.Summary().guilds) do
-			if e.fresh and not e.g.twin and not e.g.conflict then
+			if e.fresh and not e.g.conflict then
 				fresh[e.name] = { online = e.g.online or 0, votes = placed[e.name] and placed[e.name].votes or 0 }
 			end
 		end
@@ -266,6 +266,12 @@ function Vox.HandleVote(dist, sender, text)
 	if not picks or ns.Now() > poll.at + Vox.GRACE or not ns.IsFederation(guild) then return end
 	sender = ns.FullName(sender)
 	if poll.votes[sender] or poll.voters + poll.others >= Vox.MAX_VOTES then return end
+	-- 1.1: a name the moderators took off (net-off, Moderation.lua): not counted, not even as a voter.
+	if ns.Moderation.Hides and ns.Moderation.Hides(sender, guild) then return end
+	-- 1.1: one vote per player: a character linked to one that voted (Alts.lua) votes as it did.
+	for _, other in ipairs(ns.Alts.Linked and ns.Alts.Linked(sender) or {}) do
+		if poll.votes[ns.FullName(other)] then return end
+	end
 	poll.votes[sender] = digits
 	if sender == ns.me or Placed(sender, guild) then
 		for _, i in ipairs(picks) do poll.counts[i] = poll.counts[i] + 1 end
@@ -296,6 +302,9 @@ end
 
 local function Vote()
 	if not shown or shown.voted or shown.counts or ns.Now() > shown.at then return end
+	-- 1.1: the moderators took this character off (net-off, Moderation.lua): the vote would not count.
+	local off = ns.Moderation.SelfOff and ns.Moderation.SelfOff()
+	if off then return ns.Print(ns.Moderation.YouText(off)) end
 	local digits = {}
 	for i = 1, #shown.answers do if shown.picks[i] then digits[#digits + 1] = tostring(i) end end
 	if #digits == 0 then return end
@@ -480,20 +489,39 @@ function Vox.Refresh()
 	end
 end
 
-function Vox.Show(asker, id, seconds, q, answers, multi, byKing)
+function Vox.Show(asker, id, seconds, q, answers, multi, byKing, hidden)
 	shown = { id = id, asker = asker, q = q, answers = answers, multi = multi and true or false, at = ns.Now() + seconds,
-		byKing = byKing, picks = {} }
+		byKing = byKing, picks = {}, hidden = hidden and true or nil }
+	-- 1.1 (#31): the player's block terms hit its question or an answer: no window, no sound, no
+	-- line in chat; the Decrees tab offers it with a click while it is open (Vox.Reveal).
+	if hidden then
+		ns.Fire("DECREES_CHANGED")
+		return
+	end
 	if ns.db.voxOff then
 		local list = {}
 		for i, a in ipairs(answers) do list[i] = ("%d) %s"):format(i, a) end
 		ns.Print(L.VOX_CHAT:format(byKing and ns.KingName(asker) or ns.DisplayName(asker), q, table.concat(list, "  "), KindText(multi)))
 		return
 	end
-	frame = frame or MakeFrame()
-	frame.live = nil
-	ns.PlayAlert("soft")
-	frame:Show()
-	Vox.Refresh()
+	-- In an instance or on Busy (1.1): the question in chat now, the window once the player is
+	-- out if it is still open (or at a click on its line on the Decrees tab).
+	local s = shown
+	local function Open()
+		frame = frame or MakeFrame()
+		frame.live = nil
+		frame:Show()
+		Vox.Refresh()
+	end
+	local opened = ns.Alert("vox", "soft", {
+		what = L.HELD_VOX:format(Plain(q, 40)), key = "vox" .. tostring(id), show = Open,
+		open = function() return shown == s and ns.Now() <= s.at and not s.counts and not s.voted end,
+	})
+	if not opened then
+		local list = {}
+		for i, a in ipairs(answers) do list[i] = ("%d) %s"):format(i, a) end
+		ns.Print(L.VOX_HELD:format(byKing and ns.KingName(asker) or ns.DisplayName(asker), q, table.concat(list, "  "), KindText(multi)))
+	end
 end
 
 -- The asker's chart on his screen: live while the question is open, then the final results.
@@ -508,6 +536,8 @@ end
 -- A question from the King or a Hand (King.Authorized checked the sender): not our own.
 local function OnQuestion(sender, id, rest, guild)
 	if ns.FullName(sender) == ns.me then return end
+	-- 1.1: a Hand the moderators took off (net-off, Moderation.lua): no window of theirs.
+	if ns.Moderation.Hides and ns.Moderation.Hides(sender, guild) then return end
 	local byKing = ns.King.FromKing(sender, guild)
 	local seconds, kind, q, a = rest:match("^(%d+)~([1M])~([^~]+)~(.+)$")
 	seconds = tonumber(seconds)
@@ -527,7 +557,36 @@ local function OnQuestion(sender, id, rest, guild)
 	if open and shown.asker ~= from and not (byKing and not shown.byKing) then return end
 	if now - (lastShownBy[from] or -math.huge) < Vox.SHOW_GAP then return end
 	lastShownBy[from] = now
-	Vox.Show(from, id, seconds, q, answers, kind == "M", byKing)
+	-- 1.1 (#31): hidden when the player's block terms hit the question or an answer (Filter.lua).
+	local F, hidden = ns.Filter, false
+	if F and not F.missing then
+		hidden = F.Hides(q)
+		for _, x in ipairs(answers) do hidden = hidden or F.Hides(x) end
+	end
+	Vox.Show(from, id, seconds, q, answers, kind == "M", byKing, hidden)
+end
+
+-- The question the player's block terms hid, while it is open (the Decrees tab), or nil.
+function Vox.HiddenQuestion()
+	if shown and shown.hidden and ns.Now() <= shown.at and not shown.counts then return shown end
+	return nil
+end
+
+-- A click shows it: its window (or its line in chat with /oly vox off), to vote while it is open.
+function Vox.Reveal()
+	if not (shown and shown.hidden) then return end
+	shown.hidden = nil
+	ns.Fire("DECREES_CHANGED")
+	if ns.Now() > shown.at or shown.counts then return end
+	if ns.db.voxOff then
+		local list = {}
+		for i, a in ipairs(shown.answers) do list[i] = ("%d) %s"):format(i, a) end
+		return ns.Print(L.VOX_CHAT:format(shown.byKing and ns.KingName(shown.asker) or ns.DisplayName(shown.asker), shown.q, table.concat(list, "  "), KindText(shown.multi)))
+	end
+	frame = frame or MakeFrame()
+	frame.live = nil
+	frame:Show()
+	Vox.Refresh()
 end
 
 local function OnResults(sender, id, rest)
@@ -541,12 +600,15 @@ local function OnResults(sender, id, rest)
 	end
 	for i = #counts + 1, #shown.answers do counts[i] = 0 end
 	shown.counts, shown.voters, shown.resultsAt = counts, math.min(voters, Vox.MAX_VOTES), ns.Now()
+	-- (1.1, #31: a question the player's block terms hid stays hidden with its results.)
+	if shown.hidden then return end
 	ns.Print(L.VOX_RESULT:format(shown.q, Vox.Verdict(shown.answers, counts, shown.voters, shown.multi),
 		Vox.ResultText(shown.answers, counts, shown.voters, shown.multi)))
 	-- Voted or not, the window shows the chart (chat-only players read the line). The
-	-- asker's own chart, once final, gives way to it.
+	-- asker's own chart, once final, gives way to it. In an instance or on Busy (1.1) the chart
+	-- only fills a window already open: the line in chat says it all.
 	if frame and frame.live and (not poll or poll.closed) then frame.live = nil end
-	if frame and not frame.live and not ns.db.voxOff then
+	if frame and not frame.live and not ns.db.voxOff and (frame:IsShown() or not ns.Quiet()) then
 		frame:Show()
 		Vox.Refresh()
 	end
@@ -770,7 +832,7 @@ function Vox.SetOff(off)
 	ns.db.voxOff = off and true or nil
 	ns.Print(off and L.VOX_OFF or L.VOX_ON)
 	-- Back on while a question is open: its window, to vote now.
-	if not off and shown and ns.Now() <= shown.at and not shown.counts and not shown.voted then
+	if not off and shown and ns.Now() <= shown.at and not shown.counts and not shown.voted and not shown.hidden then
 		frame = frame or MakeFrame()
 		frame.live = nil
 		frame:Show()

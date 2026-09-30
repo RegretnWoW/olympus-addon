@@ -2,7 +2,7 @@ local ADDON, ns = ...
 local L = ns.L
 
 ns.NAME = "Olympus"
-ns.VERSION = "1.0.1"
+ns.VERSION = "1.1.0"
 ns.PREFIX = "OLYMPUS"        -- addon message prefix (max 16 chars)
 ns.CHANNEL = "OlympusNet"    -- hidden chat channel shared by every Olympus guild (Alliance)
 ns.CHANNEL_HORDE = "OlympusNetH" -- the Horde's: the two factions never see each other's guilds
@@ -21,6 +21,7 @@ local DEFAULTS = {
 	showMates = false,
 	showDecrees = true,    -- show decree markers on the map
 	sound = true,          -- alert sounds (throttled)
+	showCamps = true,      -- camps on the world map (1.1, Board.lua)
 }
 
 ---------------------------------------------------------------------------
@@ -234,7 +235,7 @@ local function MergeNewest(dst, src)
 end
 
 -- Inspections: newest wins too, but an officer's mark and note never go with the older entry
--- (false is an explicit unmark: it stays).
+-- (false is an explicit unmark: it stays), nor the gear his click kept (1.1).
 local function MergePlayers(dst, src)
 	if type(src) ~= "table" then return end
 	for k, v in pairs(src) do
@@ -245,6 +246,9 @@ local function MergePlayers(dst, src)
 			if type(other) == "table" then
 				if keep.marked == nil then keep.marked = other.marked end
 				if keep.note == nil then keep.note = other.note end
+				-- (1.1: the gear an officer's click kept, the newer of the two.)
+				local g, o = keep.gear, other.gear
+				if type(o) == "table" and (type(g) ~= "table" or (tonumber(o.t) or 0) > (tonumber(g.t) or 0)) then keep.gear = o end
 			end
 			dst[k] = keep
 		end
@@ -462,15 +466,297 @@ function ns.MakeRoundButton(name, parent, size)
 	return b
 end
 
--- One alert sound at most every 15 seconds, whatever triggers it.
-local lastSound = 0
-function ns.PlayAlert(kind)
-	if not (ns.db and ns.db.sound) or not PlaySound or not SOUNDKIT then return end
+-- Each alert says what it is (its kind), and each kind has a sound switch of its own (1.1): one
+-- switch for them all made players silence the Call to Arms with the chimes they did not want.
+-- ns.db.sound stays the switch for every kind, as in 0.9 and 1.0 (their saves keep working);
+-- ns.db.soundOff[kind] = true silences one kind. Local only: nothing is sent.
+--   arms, muster, royal   the decrees (royal: the Royal decree and the Tabard inspection)
+--   court, vox, agenda    the King's court, Vox Populi, the King's Agenda
+--   throne                the King's other calls: the roll call, the Royal Inspection, writs, a Hand or Steward named
+--   help                  a High Councillor's help requests, the author's bug reports
+--   hop, treasury, patrol a layer hop, a donation, a patrol's player without the tabard
+--   update                the author's update notice
+ns.SOUND_KINDS = { "arms", "muster", "royal", "court", "vox", "agenda", "throne", "help", "hop", "treasury", "patrol", "update" }
+local SOUND_KIND = {}
+for _, k in ipairs(ns.SOUND_KINDS) do SOUND_KIND[k] = true end
+
+-- The kind's own switch, whatever the one for all says.
+function ns.SoundKindOn(kind)
+	local off = ns.db and ns.db.soundOff
+	return not (type(off) == "table" and off[kind])
+end
+-- Does an alert of this kind sound (nil: the switch for all alone)?
+function ns.SoundOn(kind)
+	if not (ns.db and ns.db.sound) then return false end
+	return kind == nil or ns.SoundKindOn(kind)
+end
+-- kind nil: the switch for all. False for a kind there is not.
+function ns.SetSound(kind, on)
+	if kind == nil then
+		ns.db.sound = on and true or false
+		return true
+	end
+	if not SOUND_KIND[kind] then return false end
+	local off = type(ns.db.soundOff) == "table" and ns.db.soundOff or {}
+	off[kind] = (not on) or nil
+	ns.db.soundOff = next(off) ~= nil and off or nil
+	return true
+end
+
+-- One alert sound every 15 seconds at most, but a softer one never silences a louder one: the
+-- Call to Arms (a lane of its own) sounds whatever chimed just before it, a loud alert (a Royal
+-- decree, the King's call) whatever soft one did. A louder one silences the softer ones after it.
+-- tone: "soft" or "loud"; kind: see SOUND_KINDS. True when it played.
+-- own: the player's own click (a decree sent or previewed), heard in an instance too (ns.Quiet).
+local SOUND_GAP = 15
+local lastSound = {}
+function ns.ResetSounds() lastSound = { -math.huge, -math.huge, -math.huge } end -- (tests too)
+ns.ResetSounds()
+local function Rank(tone, kind) return kind == "arms" and 3 or (tone == "soft" and 1 or 2) end
+function ns.PlayAlert(tone, kind, own)
+	if not ns.SoundOn(kind) or not PlaySound or not SOUNDKIT then return false end
+	if not own and ns.Quiet() then return false end
+	local rank = Rank(tone, kind)
 	local now = GetTime()
-	if now - lastSound < 15 then return end
-	lastSound = now
-	local id = kind == "soft" and (SOUNDKIT.READY_CHECK or SOUNDKIT.RAID_WARNING) or SOUNDKIT.RAID_WARNING
+	for r = rank, 3 do
+		if now - lastSound[r] < SOUND_GAP then return false end
+	end
+	lastSound[rank] = now
+	local id = tone == "soft" and (SOUNDKIT.READY_CHECK or SOUNDKIT.RAID_WARNING) or SOUNDKIT.RAID_WARNING
 	if id then pcall(PlaySound, id) end
+	return true
+end
+
+-- The switches in words: for /oly sound and the Decrees tab.
+function ns.SoundLabel(kind) return L["SOUND_" .. kind:upper()] end
+local function KindsOff()
+	local off = {}
+	for _, k in ipairs(ns.SOUND_KINDS) do
+		if not ns.SoundKindOn(k) then off[#off + 1] = k end
+	end
+	return off
+end
+function ns.SoundState()
+	if not (ns.db and ns.db.sound) then return L.SOUNDS_OFF end
+	local off = KindsOff()
+	if #off == 0 then return L.SOUNDS_ALL_ON end
+	return L.SOUNDS_SOME_OFF:format(table.concat(off, ", "))
+end
+
+-- For /oly status and /oly bug (in English, as the rest there).
+function ns.AlertStatus()
+	local off = KindsOff()
+	local sounds = not (ns.db and ns.db.sound) and "sounds all off" or (#off > 0 and ("sounds on, off: " .. table.concat(off, ",")) or "sounds on")
+	if ns.db and ns.db.alertsAlways then return sounds .. "  |  in an instance or Busy: shown (/oly alerts always)" end
+	return ("%s  |  in an instance or Busy: held (now: %s, %d waiting)"):format(sounds, ns.Quiet() or "not held", #ns.Held())
+end
+
+-- /oly sound: alone, the switch for all (as before 1.1); on|off, the same; <kind> [on|off], one kind.
+function ns.SoundSlash(rest)
+	local what, on = tostring(rest or ""):lower():match("^(%S*)%s*(%S*)")
+	if what == "" then
+		ns.SetSound(nil, not ns.db.sound)
+	elseif what == "on" or what == "off" then
+		ns.SetSound(nil, what == "on")
+	elseif SOUND_KIND[what] then
+		if on == "on" or on == "off" then ns.SetSound(what, on == "on") else ns.SetSound(what, not ns.SoundKindOn(what)) end
+	else
+		return ns.Print(L.SOUND_USAGE:format(table.concat(ns.SOUND_KINDS, ", ")))
+	end
+	ns.Print(ns.SoundState())
+	ns.Fire("DECREES_CHANGED") -- (the switches on the Decrees tab)
+end
+
+---------------------------------------------------------------------------
+-- Held alerts (1.1): in an instance or Busy, no raid warning, no sound and no popup from
+-- Olympus. A realm-wide raid warning in the middle of a dungeon made players mute the addon,
+-- and then miss a real muster. Each alert still leaves its chat line and its line in the
+-- Olympus window (the Decrees tab: what waits, on top), and waits. Out of the instance and not
+-- Busy: one line (and one raid warning and one sound) says what waited and is still current,
+-- and only what is still open pops (a Vox question, the court's call, the Agenda to come);
+-- what is over by then only stays in its list. /oly alerts always: never held. Local only.
+---------------------------------------------------------------------------
+
+-- Busy: the game's Do Not Disturb (/dnd). During an encounter, a challenge or a PvP match (and
+-- on a dungeon or raid map), Forever's client hides it from addons (a secret value, which no
+-- addon may test): counted as Busy then, those being the moments not to step on.
+local function Busy()
+	if not UnitIsDND then return false end
+	local ok, dnd = pcall(UnitIsDND, "player")
+	if not ok then return false end
+	if issecretvalue and issecretvalue(dnd) then return true end
+	return dnd and true or false
+end
+
+-- Why alerts wait now: "instance", "busy", or nil (never with /oly alerts always).
+function ns.Quiet()
+	if ns.db and ns.db.alertsAlways then return nil end
+	if IsInInstance and IsInInstance() then return "instance" end
+	if Busy() then return "busy" end
+	return nil
+end
+
+ns.HELD_MAX = 40
+local held = {} -- { kind, tone, what, key, t, open, show }, oldest first
+-- What was over when the list was full and went out of it: still counted in the grey line (the
+-- ones without a key; each key once, unless the same alert is current again by then).
+local goneN, goneKeys = 0, {}
+function ns.ResetHeld() held, goneN, goneKeys = {}, 0, {} end -- (tests)
+
+local function Current(h) return h.open == nil or h.open() == true end
+
+-- Past HELD_MAX: what is over goes first (forty Calls to Arms over by then no longer push a
+-- Muster or the Agenda out). Then, if all is still current: the same alert repeated as one (the
+-- latest, with the popup an earlier one had: ns.Held); then the oldest without a popup or
+-- window, and only if every one has one, the oldest.
+local function Trim()
+	if #held <= ns.HELD_MAX then return end
+	local keep = {}
+	for _, h in ipairs(held) do
+		if Current(h) then keep[#keep + 1] = h
+		elseif h.key then goneKeys[h.key] = true
+		else goneN = goneN + 1 end
+	end
+	held = keep
+	if #held <= ns.HELD_MAX then return end
+	held = ns.Held()
+	while #held > ns.HELD_MAX do
+		local drop = 1
+		for i, h in ipairs(held) do
+			if not h.show then drop = i; break end
+		end
+		table.remove(held, drop)
+	end
+end
+
+-- An alert that interrupts: its raid warning (a.text), its sound, its popup or window (a.show).
+-- The caller prints its chat line. While quiet (and not the player's own click, a.own) it waits:
+-- a.what, its words in the summary and on the Decrees tab (a.text by default); a.open(), still
+-- current (none: as long as the player is away); a.key, the same alert repeated (the Agenda and
+-- its reminders): one line. True when it showed now.
+function ns.Alert(kind, tone, a)
+	a = a or {}
+	if not a.own and ns.Quiet() then
+		held[#held + 1] = { kind = kind, tone = tone, what = a.what or a.text or kind, key = a.key, t = ns.Now(), open = a.open, show = a.show }
+		Trim()
+		ns.Log("alert held (%s): %s", tostring(ns.Quiet()), tostring(kind))
+		ns.Fire("DECREES_CHANGED")
+		return false
+	end
+	if a.text and RaidNotice_AddMessage and RaidWarningFrame then
+		RaidNotice_AddMessage(RaidWarningFrame, a.text, ChatTypeInfo and ChatTypeInfo["RAID_WARNING"] or a.color or { r = 1, g = 0.82, b = 0 })
+	end
+	ns.PlayAlert(tone, kind, a.own)
+	if a.show then a.show() end
+	return true
+end
+
+-- What waits and is still current, one per key (the latest, with the popup an earlier one
+-- had: the Agenda's, before its reminders), oldest first.
+function ns.Held()
+	local out, at = {}, {}
+	for _, h in ipairs(held) do
+		if Current(h) then
+			local i = h.key and at[h.key]
+			if i then
+				local prev = out[i]
+				out[i] = { kind = h.kind, tone = h.tone, what = h.what, key = h.key, t = h.t, open = h.open, show = h.show or prev.show }
+			else
+				out[#out + 1] = h
+				if h.key then at[h.key] = #out end
+			end
+		end
+	end
+	return out
+end
+
+-- On top of the Decrees tab while alerts wait: a click shows one now (its popup or window).
+function ns.HeldLines()
+	local list = ns.Held()
+	if #list == 0 then return {} end
+	local lines = { { header = true, text = L.HELD_TITLE, tooltip = function(tt)
+		tt:AddLine(L.HELD_TITLE, 1, 0.82, 0)
+		tt:AddLine(L.HELD_TIP, 1, 1, 1, true)
+	end } }
+	for _, h in ipairs(list) do
+		lines[#lines + 1] = {
+			text = "|cffffd200" .. h.what .. "|r",
+			right = "|cff9d9d9d" .. ns.Ago(h.t) .. "|r",
+			onClick = h.show and function()
+				for i = #held, 1, -1 do
+					if held[i] == h or (h.key and held[i].key == h.key) then table.remove(held, i) end
+				end
+				h.show()
+				ns.Fire("DECREES_CHANGED")
+			end or nil,
+		}
+	end
+	lines[#lines].gapAfter = true
+	return lines
+end
+
+-- Out of the instance and not Busy: one line for what waited and is still current (a raid
+-- warning and the loudest sound its switches allow), then the popups and windows still open.
+-- What is over by then stays in its list: a grey line says how many.
+ns.HELD_WORDS = 5 -- alerts named in that line; the rest counted
+function ns.ReleaseHeld()
+	if (#held == 0 and goneN == 0 and not next(goneKeys)) or ns.Quiet() then return false end
+	local list = ns.Held()
+	-- The ones over, each counted once (an Agenda and its reminders are one), with those over
+	-- that a full list let go (Trim).
+	local live, counted, gone = {}, {}, goneN
+	for _, h in ipairs(list) do live[h.key or h] = true end
+	for key in pairs(goneKeys) do
+		if not live[key] then counted[key], gone = true, gone + 1 end
+	end
+	for _, h in ipairs(held) do
+		local id = h.key or h
+		if not live[id] and not counted[id] then counted[id], gone = true, gone + 1 end
+	end
+	held, goneN, goneKeys = {}, 0, {}
+	ns.Fire("DECREES_CHANGED")
+	if #list == 0 then
+		if gone > 0 then ns.Print("|cff9d9d9d" .. L.HELD_GONE:format(gone) .. "|r") end
+		return true
+	end
+	-- The same words once, with how many (two Musters in one zone).
+	local count, order = {}, {}
+	for _, h in ipairs(list) do
+		if not count[h.what] then order[#order + 1] = h.what end
+		count[h.what] = (count[h.what] or 0) + 1
+	end
+	local words = {}
+	for i, w in ipairs(order) do
+		if i > ns.HELD_WORDS then
+			words[#words + 1] = L.HELD_MORE:format(#order - ns.HELD_WORDS)
+			break
+		end
+		words[#words + 1] = count[w] > 1 and L.HELD_TIMES:format(w, count[w]) or w
+	end
+	local line = L.HELD_SUMMARY:format(table.concat(words, ", "))
+	ns.Print("|cffffd200" .. line .. "|r" .. (gone > 0 and ("  |cff9d9d9d" .. L.HELD_AND_GONE:format(gone) .. "|r") or ""))
+	if RaidNotice_AddMessage and RaidWarningFrame then
+		RaidNotice_AddMessage(RaidWarningFrame, line, ChatTypeInfo and ChatTypeInfo["RAID_WARNING"] or { r = 1, g = 0.82, b = 0 })
+	end
+	local loudest
+	for _, h in ipairs(list) do
+		if ns.SoundOn(h.kind) and (not loudest or Rank(h.tone, h.kind) > Rank(loudest.tone, loudest.kind)) then loudest = h end
+	end
+	if loudest then ns.PlayAlert(loudest.tone, loudest.kind) end
+	for _, h in ipairs(list) do
+		if h.show then ns.SafeCall("held alert", h.show) end
+	end
+	return true
+end
+
+-- /oly alerts always|quiet: held in an instance or Busy (quiet, the default), or never.
+function ns.AlertsSlash(rest)
+	local how = tostring(rest or ""):lower():match("^%s*(%S*)")
+	if how == "always" or how == "quiet" then ns.db.alertsAlways = how == "always" or nil end
+	if how ~= "" and how ~= "always" and how ~= "quiet" then return ns.Print(L.HELP_ALERTS) end
+	ns.Print(ns.db.alertsAlways and L.ALERTS_ALWAYS or L.ALERTS_QUIET)
+	ns.ReleaseHeld() -- (always: what waited comes now)
+	ns.Fire("DECREES_CHANGED")
 end
 
 -- Captains (officers) are rank index 1, right below the guild master, in every guild. It is
@@ -749,6 +1035,104 @@ function ns.Stewards()
 	return type(list) == "table" and list or {}
 end
 
+-- The approved guilds (1.1, the author's): guilds of Asmon's Olympus whose names the name rule
+-- below leaves out (it leaves Olympian and Olympia out on purpose) count as Olympus guilds when
+-- the author's signed titles list names them, per faction, in an entry of its own after the
+-- departments, like the Steward:
+--   ^guilds^<Alliance|Horde>^<Guild Name>,<Guild Name>,...
+-- Three "^": clients of 0.9.9 and 1.0.0 leave it out unread (a department has two; 1.0.0 reads
+-- "^steward^" alone) and still take, show and pass on the whole list. The list counts on its realm
+-- group only, as every signed list (ns.CouncilTitles), and only the author's key signs it
+-- (scripts/council-sign.py guild).
+ns.APPROVED_MAX = 20
+-- ...and the ones the addon ships with (1.1, the author's too): a guild whose first member nobody
+-- can hand the signed text counts as soon as its members update, with nothing to paste. Each
+-- faction's, any case; the signed list adds to them, and only a new release takes one off.
+ns.APPROVED_BUILTIN = { Alliance = { "OLYMPIAN" } }
+local function ApprovedName(s)
+	s = tostring(s or ""):gsub("^%s+", ""):gsub("%s+$", "")
+	if s == "" or #s > 72 or select(2, s:gsub("[^\128-\191]", "")) > 24 then return nil end
+	if not s:match("^[%a\128-\255][%a\128-\255 ]*$") then return nil end
+	return s
+end
+
+-- The approved guilds a titles list names: { Alliance = { name, ... }, Horde = { ... } }, a
+-- faction left out when it names none (ns.APPROVED_MAX each, each once).
+function ns.ReadApprovedGuilds(text)
+	local out = {}
+	for entry in tostring(text or ""):gmatch("[^;]+") do
+		local faction, list = entry:match("^%^guilds%^(%a+)%^([^%^]*)$")
+		if faction and STEWARD_FACTIONS[faction] then
+			local names, seen = out[faction] or {}, {}
+			for _, n in ipairs(names) do seen[ns.Fold(n)] = true end
+			for n in list:gmatch("[^,]+") do
+				local name = ApprovedName(n)
+				if name and not seen[ns.Fold(name)] and #names < ns.APPROVED_MAX then
+					seen[ns.Fold(name)] = true
+					names[#names + 1] = name
+				end
+			end
+			out[faction] = names
+		end
+	end
+	return out
+end
+
+-- The approved guilds of our faction: those the addon ships with, then those of the titles list
+-- we hold (read again from its signed text when a version before 1.1 took it): { name, ... }.
+function ns.ApprovedGuilds()
+	local faction = ns.faction or "Alliance"
+	local out, seen = {}, {}
+	local function Add(list)
+		for _, name in ipairs(type(list) == "table" and list or {}) do
+			local key = ns.Fold(name)
+			if not seen[key] then seen[key], out[#out + 1] = true, name end
+		end
+	end
+	Add(ns.APPROVED_BUILTIN[faction])
+	local t = ns.CouncilTitles()
+	if t then
+		if type(t.guilds) ~= "table" then
+			t.guilds = ns.ReadApprovedGuilds(type(t.blob) == "string" and t.blob:match("^HT1~%d+~[^~]*~[01]~([^~]*)~%x+$") or "")
+		end
+		Add(t.guilds[faction])
+	end
+	return out
+end
+
+-- Is this guild on it? Asked for every report, line, tooltip and nameplate: the set is kept while
+-- the list, our faction, our character and our realm group are the same, and each name's answer
+-- with it (an empty list answers at once).
+local approvedMemo
+function ns.IsApprovedGuild(guild)
+	if type(guild) ~= "string" or guild == "" then return false end
+	local t = ns.rdb and ns.rdb.councilTitles
+	if type(t) ~= "table" then t = nil end -- (the shipped ones count without a list)
+	local at = t and t.at
+	local m = approvedMemo
+	if not m or m.t ~= t or m.at ~= at or m.faction ~= ns.faction or m.me ~= ns.me or m.group ~= ns.group then
+		local set, any = {}, false
+		for _, name in ipairs(ns.ApprovedGuilds()) do set[ns.Fold(name)], any = true, true end
+		m = { t = t, at = at, faction = ns.faction, me = ns.me, group = ns.group, set = set, any = any, seen = {}, seenCount = 0 }
+		approvedMemo = m
+	end
+	if not m.any then return false end
+	local known = m.seen[guild]
+	if known == nil then
+		known = m.set[ns.Fold(guild)] == true
+		if m.seenCount >= 2000 then m.seen, m.seenCount = {}, 0 end
+		m.seen[guild], m.seenCount = known, m.seenCount + 1
+	end
+	return known
+end
+
+-- Our guild is an Olympus guild by the signed list alone (its name would not make it one): its
+-- members may not hold the list yet, and hear it only over GUILD (Comm.lua, Workshop.RelayGuild).
+function ns.ApprovedOnly()
+	local guild = IsInGuild and IsInGuild() and GetGuildInfo("player")
+	return type(guild) == "string" and ns.IsApprovedGuild(guild) and not ns.IsKingGuild(guild) and not ns.NamedOlympus(guild)
+end
+
 -- Is this character (a sender's name, which the server sets) a Steward of our King?
 function ns.IsSteward(name)
 	if type(name) ~= "string" or name == "" then return false end
@@ -954,6 +1338,9 @@ local AGAINST = { anti = true, against = true, no = true, ["not"] = true, never 
 	doom = true, wreck = true } -- "Ruin Olympus", "Ruins of Olympus", "Burn Olympus" (1.0.1)
 local LINKS = { with = true, to = true, the = true, of = true }
 local AGAINST_AFTER = { haters = true, hater = true, sucks = true, ruined = true, burns = true, falls = true }
+-- ...or after one or two linking words: "Olympus in Ruins", "Olympus in the Ruins" (1.1).
+local LINKS_AFTER = { ["in"] = true, of = true, on = true, to = true, the = true }
+local RUIN_AFTER = { ruin = true, ruins = true, ruined = true, ashes = true }
 
 local function Against(words, i)
 	if words[i]:find("^anti") then return true end -- glued: AntiOlympus
@@ -961,7 +1348,13 @@ local function Against(words, i)
 	if before and AGAINST[before] then return true end
 	if before and LINKS[before] and before2 and AGAINST[before2] then return true end
 	local after = words[i + 1]
-	return after ~= nil and AGAINST_AFTER[after] == true
+	if after ~= nil and AGAINST_AFTER[after] then return true end
+	for j = i + 1, i + 2 do
+		if not (words[j] and LINKS_AFTER[words[j]]) then break end
+		local w = words[j + 1]
+		if w and (RUIN_AFTER[w] or AGAINST_AFTER[w]) then return true end
+	end
+	return false
 end
 
 local federation, federationSize = {}, 0 -- [name] = true|false, asked often: kept
@@ -974,10 +1367,24 @@ local function Federation(guild)
 	return false
 end
 
+-- The name rule alone (cached): what IsFederation says without the King's guild or the signed list.
+function ns.NamedOlympus(guild)
+	if type(guild) ~= "string" or guild == "" then return false end
+	local known = federation[guild]
+	if known == nil then
+		known = Federation(guild)
+		if federationSize >= 2000 then federation, federationSize = {}, 0 end
+		federation[guild], federationSize = known, federationSize + 1
+	end
+	return known
+end
+
 function ns.IsFederation(guild)
 	if type(guild) ~= "string" or guild == "" then return false end
 	-- The King's own guild is Olympus whatever its name (the Horde's is <Mudhutters>, 0.9.4).
 	if ns.IsKingGuild(guild) then return true end
+	-- A guild the author's signed list approves (1.1), whatever its name.
+	if ns.IsApprovedGuild(guild) then return true end
 	local known = federation[guild]
 	if known == nil then
 		known = Federation(guild)
@@ -1134,16 +1541,30 @@ StandIn("Who", { "Search", "SendPlain" })
 StandIn("Channels", { "Send", "ToggleMute" })
 StandIn("King", { "Summon", "Inspect", "AgendaPrompt" })
 StandIn("Hop", { "Ask", "AskKing", "SetHelp", "SetAuto" })
-StandIn("Workshop", { "RollCall" })
+StandIn("Workshop", { "RollCall", "Approved" })
 StandIn("Vox", { "Prompt", "CloseNow", "SetOff" })
 StandIn("Court", { "Toggle" })
 StandIn("Treasury", {})
+StandIn("Dues", {}) -- (1.1)
 StandIn("Acts", { "WritPrompt" })
 StandIn("Dialog", {})
 StandIn("Bank", {})
+StandIn("Backup", { "Slash" }) -- (1.1)
 StandIn("Link", { "Slash" })
 StandIn("Borders", { "SetEnabled", "Report" })
 StandIn("Nameplates", { "SetEnabled", "Report" })
+StandIn("Members", { "Show", "SetWarnDays" }) -- (1.1)
+StandIn("Consent", { "Show" }) -- 1.1: the first-open page (Consent.lua)
+StandIn("Chronicle", { "Slash" }) -- 1.1: the log of acts this client saw (Chronicle.lua)
+StandIn("Filter", { "Slash" }) -- 1.1: block terms (Filter.lua)
+StandIn("Board", { "Slash" }) -- (1.1: the Board)
+StandIn("Week", {}) -- (1.1: the King's week)
+-- 1.1: net-off (Moderation.lua), alt links (Alts.lua), the King's key rotation (Keys.lua).
+StandIn("Moderation", { "Slash" })
+StandIn("Alts", { "Slash" })
+StandIn("Keys", { "RotatePrompt" })
+StandIn("Loot", { "Show" }) -- (1.1)
+StandIn("Crafters", { "Ask", "Slash" }) -- (1.1)
 
 -- Blizzard's gamepad UI (WoW: Forever's controller mode) is on.
 function ns.GamepadUI()
@@ -1222,7 +1643,7 @@ end
 ns.RegisterEvent("PLAYER_LOGIN", function()
 	ns.CheckFaction()
 	local missing = {}
-	for _, key in ipairs({ "Who", "Channels", "King", "Hop", "Workshop", "Vox", "Court", "Treasury", "Acts", "Dialog", "Bank", "Link", "Borders", "Nameplates" }) do
+	for _, key in ipairs({ "Who", "Channels", "King", "Hop", "Workshop", "Vox", "Court", "Treasury", "Dues", "Acts", "Dialog", "Bank", "Link", "Borders", "Nameplates", "Backup", "Loot", "Crafters", "Board", "Week", "Consent", "Chronicle", "Filter", "Members", "Moderation", "Alts", "Keys" }) do
 		if ns[key].missing then missing[#missing + 1] = key .. ".lua" end
 	end
 	if #missing > 0 then
@@ -1234,50 +1655,86 @@ ns.RegisterEvent("PLAYER_LOGIN", function()
 	ns.Fire("LOGIN")
 end)
 
+-- Held alerts (ns.Alert) come out once the player is out of the instance (a loading screen, a
+-- new zone) and not Busy (the game's flags changed): a little after, the screen settled. And
+-- every 10 seconds, whatever event the client missed.
+ns.On("LOGIN", function()
+	local function Soon() ns.After(2, "held alerts", ns.ReleaseHeld) end
+	ns.RegisterEvent("PLAYER_ENTERING_WORLD", Soon)
+	ns.RegisterEvent("ZONE_CHANGED_NEW_AREA", Soon)
+	ns.RegisterEvent("PLAYER_FLAGS_CHANGED", Soon)
+	ns.Every(10, "held alerts", ns.ReleaseHeld)
+end)
+
 ---------------------------------------------------------------------------
 -- Slash commands
 ---------------------------------------------------------------------------
 
 local function Help()
-	ns.Print("v" .. ns.VERSION .. " commands:")
-	print("  /oly - open/close the window")
-	print("  /oly tabard - Heraldry Inspection tab")
-	print("  /oly sound - turn alert sounds on/off")
-	print("  /oly patrol - start/stop inspecting nearby Olympus members")
-	print("  /oly mark [reason] - mark your target")
-	print("  /oly map - show/hide zone counts on the world map")
-	print("  /oly realm - the Realm tree (leaders, officers, ranks)")
-	print("  /oly layers - layers of your zone (in the Realm tab)")
+	ns.Print(L.HELP_CMD_HEAD:format(ns.VERSION))
+	print(L.HELP_CMD_OPEN)
+	print(L.HELP_CMD_TABARD)
+	print(L.HELP_SOUND)
+	print(L.HELP_ALERTS)
+	print(L.HELP_CMD_PATROL)
+	print(L.HELP_CMD_MARK)
+	print(L.HELP_GEAR)
+	print(L.HELP_PATROLSHARE)
+	print(L.HELP_APPROVED)
+	print(L.HELP_LOOT)
+	print(L.HELP_CRAFT)
+	print(L.HELP_CMD_MAP)
+	print(L.HELP_CMD_REALM)
+	print(L.HELP_CMD_LAYERS)
+	print(L.HELP_INACTIVE)
+	print(L.HELP_WARNDAYS)
+	print(L.HELP_MENTORS)
+	print(L.HELP_NOCONTACT)
 	print(L.HELP_HOP)
 	print(L.HELP_LAYERHELP)
 	print(L.HELP_LAYERAUTO)
 	print(L.HELP_LOCATION)
 	print(L.HELP_ROLLCALL)
+	print(L.HELP_PRIVACY_PAGE)
+	print(L.HELP_CHAT)
+	print(L.HELP_LOG)
+	print(L.HELP_FILTER)
 	print(L.HELP_TREASURER)
+	print(L.HELP_BANK)
+	print(L.HELP_NEED)
+	print(L.HELP_DONATIONS)
+	print(L.HELP_BACKUP)
 	print(L.HELP_INSPECTION)
 	print(L.HELP_BORDERS)
 	print(L.HELP_NAMEPLATES)
 	print(L.HELP_ISSUE)
 	print(L.HELP_COUNCIL)
 	print(L.HELP_DISCORD)
-	print("  /oly decrees - decrees")
-	print("  /oly arms [text] | /oly muster [text] - decree (officers; 'test' = local preview)")
+	print(L.HELP_CMD_DECREES)
+	print(L.HELP_CMD_ARMS)
 	print(L.HELP_CHAN_ALL)
 	print(L.HELP_CHAN_CAPTAINS)
 	print(L.HELP_CHAN_LORDS)
 	print(L.HELP_CHAN_MUTE)
+	print(L.HELP_PIN)
 	print(L.HELP_CHATWIN)
 	print(L.HELP_VOX)
-	print("  /oly mates - show/hide guildmates on map and minimap")
-	print("  /oly share - share/stop sharing your position with your guild")
-	print("  /oly bug - copy a bug report (errors + diagnostics)")
-	print("  /oly status - print diagnostics in chat")
-	print("  /oly key <secret> - officers: seal the Olympus channel with a shared secret")
-	print("  /oly block <name> - ignore everything a player sends")
-	print("  /oly layer - show the layer id of your target (test)")
-	print("  /oly minimap - show/hide the minimap button")
-	print("  /oly debug - verbose log in chat")
-	print("  /oly reset - forget all cached guild reports and /who sightings")
+	print(L.HELP_BOARD)
+	print(L.HELP_CAMP)
+	print(L.HELP_WEEK)
+	print(L.HELP_CMD_MATES)
+	print(L.HELP_CMD_SHARE)
+	print(L.HELP_CMD_BUG)
+	print(L.HELP_CMD_STATUS)
+	print(L.HELP_CMD_KEY)
+	if ns.Keys.CanRotate and ns.Keys.CanRotate() then print(L.HELP_KEY_ROTATE) end -- (1.1: the King's alone)
+	print(L.HELP_CMD_BLOCK)
+	print(L.HELP_NETOFF)
+	print(L.HELP_ALT)
+	print(L.HELP_CMD_LAYER)
+	print(L.HELP_CMD_MINIMAP)
+	print(L.HELP_CMD_DEBUG)
+	print(L.HELP_CMD_RESET)
 end
 
 SLASH_OLYMPUS1 = "/olympus"
@@ -1301,12 +1758,38 @@ SlashCmdList.OLYMPUS = function(input)
 		elseif cmd == "inspect" or cmd == "tabard" or cmd == "heraldry" then
 			ns.UI.SelectTab("heraldry")
 		elseif cmd == "sound" then
-			ns.db.sound = not ns.db.sound
-			ns.Print("sound = " .. tostring(ns.db.sound))
+			ns.SoundSlash(rest)
+		elseif cmd == "alerts" then
+			ns.AlertsSlash(rest)
 		elseif cmd == "patrol" then
 			ns.Inspect.SetPatrol(not ns.Inspect.IsPatrolling())
 		elseif cmd == "mark" then
 			ns.Inspect.MarkTarget(rest)
+		elseif cmd == "gear" then
+			-- 1.1 (Fern's #28): officers keep the gear of the player they target, in range.
+			ns.Inspect.InspectGear()
+		elseif cmd == "loot" then
+			-- 1.1 (Fern's #22): the guild's loot notes and points, on the Realm tab.
+			ns.UI.SelectTab("realm")
+			ns.Loot.Show(true)
+		elseif cmd == "craft" then
+			-- 1.1 (Fern's #24): who can make this item (a shift-clicked link) or these words.
+			if rest == "" then
+				ns.UI.SelectTab("realm")
+				ns.Views.ShowPage("crafters")
+			elseif ns.Crafters.Ask(rest) then
+				ns.UI.SelectTab("realm")
+			end
+		elseif cmd == "crafter" then
+			ns.Crafters.Slash(rest)
+		elseif cmd == "approved" then
+			-- 1.1: the guilds the author's signed list makes Olympus guilds; "paste" to paste that list.
+			ns.Workshop.Approved(rest)
+		elseif cmd == "patrolshare" then
+			-- 1.1 (Fern's #29): officers pass their patrols' findings to their guild's officers.
+			local word, on = rest:lower(), nil
+			if word == "on" then on = true elseif word == "off" then on = false end
+			ns.Inspect.SetSharing(on)
 		elseif cmd == "map" then
 			ns.Map.SetEnabled(not ns.db.showMap)
 		elseif cmd == "throne" or cmd == "trono" then
@@ -1326,6 +1809,23 @@ SlashCmdList.OLYMPUS = function(input)
 			end
 		elseif cmd == "realm" or cmd == "tree" or cmd == "layers" then
 			if ns.Views.CloseChat then ns.Views.CloseChat() end
+			ns.UI.SelectTab("realm")
+		elseif cmd == "warndays" then
+			ns.Members.SetWarnDays(rest)
+		elseif cmd == "nocontact" then
+			-- (1.1: recruits' Join screens skip us, Recruit.lua.)
+			local word = rest:lower()
+			if word == "on" or word == "off" then
+				ns.Recruit.SetNoContact(word == "on")
+			else
+				ns.Print(ns.Recruit.NoContactMe() and L.NOCONTACT_ON or L.NOCONTACT_OFF)
+			end
+		elseif cmd == "inactive" or cmd == "members" or cmd == "recruits" or cmd == "mentors" then
+			-- (1.1: our guild's members offline 7, 14 or 30 days and more; the Lord's recruits and
+			-- their mentors. Members.lua.)
+			local days = tonumber(rest)
+			local lordPage = (cmd == "recruits" or cmd == "mentors") and ns.Members.IsLord and ns.Members.IsLord()
+			ns.Members.Show(lordPage and "recruits" or (days == 14 or days == 30) and days or 7)
 			ns.UI.SelectTab("realm")
 		elseif cmd == "decrees" then
 			ns.UI.SelectTab("decrees")
@@ -1357,7 +1857,9 @@ SlashCmdList.OLYMPUS = function(input)
 			-- Taking part in the King's Royal Inspection (a patrol of 2 minutes that reports to him).
 			local on = rest:lower()
 			if on == "on" or on == "off" then ns.db.royalInspection = on == "on" end
-			ns.Print(ns.db.royalInspection == false and L.INSPECTION_OPT_OFF or L.INSPECTION_OPT_ON)
+			-- (1.1: never answered is off, and says so.)
+			local v = ns.db.royalInspection
+			ns.Print(v == true and L.INSPECTION_OPT_ON or (v == false and L.INSPECTION_OPT_OFF or L.INSPECTION_OPT_UNANSWERED))
 		elseif cmd == "nameplates" then
 			-- The marks left of the names on friendly players' nameplates (Nameplates.lua), alone: on or off.
 			local on = rest:lower()
@@ -1386,7 +1888,8 @@ SlashCmdList.OLYMPUS = function(input)
 			if on == "on" or on == "off" then
 				ns.Workshop.SetAnswers(on == "on")
 			else
-				ns.Print(ns.Workshop.Answers() and L.ROLLCALL_ON or L.ROLLCALL_OFF)
+				local v = ns.db.rollCall
+				ns.Print(v == true and L.ROLLCALL_ON or (v == false and L.ROLLCALL_OFF or L.ROLLCALL_UNANSWERED))
 			end
 		elseif cmd == "location" then
 			-- Sharing zone and layer on the Olympus channel (Layers.Sharing); alone, says which.
@@ -1395,6 +1898,24 @@ SlashCmdList.OLYMPUS = function(input)
 				ns.Layers.SetSharing(on == "on")
 			else
 				ns.Print(ns.Layers.Sharing() and L.LOCATION_ON or L.LOCATION_OFF)
+			end
+		elseif cmd == "filter" or cmd == "filtro" then
+			-- 1.1 (Fern's #31): block terms, the player's own and the shared list (Filter.lua).
+			ns.Filter.Slash(rest)
+		elseif cmd == "log" then
+			-- 1.1 (Fern's #12): the acts this client saw (Chronicle.lua): [n], a word, copy, clear.
+			ns.Chronicle.Slash(rest)
+		elseif cmd == "privacy" or cmd == "privacidade" then
+			-- 1.1 (Fern's #11): the page of what this addon shares, each answer to change (Consent.lua).
+			ns.Consent.Show()
+		elseif cmd == "chat" then
+			-- 1.1: the Olympus chats on this client (Channels.ChatOn); alone, says which.
+			local on = rest:lower()
+			if on == "on" or on == "off" then
+				ns.Channels.SetChatOn(on == "on")
+			else
+				local v = ns.db.addonChat
+				ns.Print(v == true and L.CHAT_ON_MSG or (v == false and L.CHAT_OFF_MSG or L.CHAT_OFF_UNANSWERED))
 			end
 		elseif cmd == "officer" then
 			ns.Print(ns.L.OFFICER_FIXED)
@@ -1405,7 +1926,20 @@ SlashCmdList.OLYMPUS = function(input)
 		elseif cmd == "status" then
 			for line in ns.StatusText():gmatch("[^\n]+") do print("  " .. line) end
 		elseif cmd == "key" then
-			ns.Comm.SetRealmKey(rest)
+			-- 1.1: "rotate" is the King's rotation of the army's key (Keys.lua), never a key: anyone
+			-- else is told so (and a /reload before the restart the new file needs), and no guild is
+			-- sealed with that word.
+			if rest:lower() == "rotate" then
+				if ns.Keys.missing then
+					ns.Print(L.RESTART_NEEDED)
+				elseif ns.Keys.CanRotate() then
+					ns.Keys.RotatePrompt()
+				else
+					ns.Print(L.KEY_ROTATE_ONLY_KING)
+				end
+			else
+				ns.Comm.SetRealmKey(rest)
+			end
 		elseif cmd == "block" then
 			if rest ~= "" then
 				-- Stored as the sender reaches Comm (ns.FullName(ns.Normal(name)), the realm's
@@ -1414,7 +1948,7 @@ SlashCmdList.OLYMPUS = function(input)
 				name = name:gsub("%-([^%-]+)$", function(realm) return "-" .. realm:gsub("[%s%-]", "") end)
 				local key = ns.FullName(name):lower()
 				ns.db.blocked[key] = true
-				ns.Print("blocked " .. key)
+				ns.Print(L.BLOCKED_NOW:format(key))
 			end
 		elseif cmd == "layer" then
 			ns.PrintLayer()
@@ -1435,19 +1969,25 @@ SlashCmdList.OLYMPUS = function(input)
 		elseif cmd == "photo" then
 			-- The author's photo mode for the store's screenshots (UI.TogglePhoto, 1.0.0).
 			ns.UI.TogglePhoto()
+		elseif cmd == "released" then
+			-- The author: the version CurseForge lists, which his presence names as out (1.1).
+			ns.Workshop.MarkReleased(rest)
 		elseif cmd == "debug" then
 			ns.db.debug = not ns.db.debug
-			ns.Print("debug = " .. tostring(ns.db.debug))
+			ns.Print(ns.db.debug and L.DEBUG_ON or L.DEBUG_OFF)
 		elseif cmd == "reset" then
 			wipe(ns.rdb.guilds)
 			wipe(ns.Data.Seen())
 			ns.Who.Reset()
 			ns.Fire("DATA_CHANGED")
-			ns.Print("cache cleared")
+			ns.Print(L.CACHE_CLEARED)
 		elseif cmd == "error" then
 			error("test error from /oly error")   -- to check that bug capture works
 		elseif cmd == "all" or cmd == "captains" or cmd == "lords" then
 			ns.Channels.Send(ns.Channels.TierForWord(cmd), rest)
+		elseif cmd == "pin" then
+			-- One line pinned for everyone (1.1, Channels.lua): the King, his Stewards and Hands, the Lords.
+			ns.Channels.PinCommand(rest)
 		elseif cmd == "mute" then
 			ns.Channels.ToggleMute(rest)
 		elseif cmd == "chatwindow" then
@@ -1455,6 +1995,30 @@ SlashCmdList.OLYMPUS = function(input)
 		elseif cmd == "discord" then
 			-- Olympus Link (Link.lua): this character's Discord role; confirmers' keys; watchers.
 			ns.Link.Slash(rest)
+		elseif cmd == "lfg" or cmd == "board" or cmd == "camp" or cmd == "camps" or cmd == "week" then
+			-- The Board (Board.lua, 1.1): who is looking for a group, and where; camps; the King's week.
+			ns.Board.Slash(cmd, rest)
+		elseif cmd == "netoff" or cmd == "neton" then
+			-- 1.1: a character or a guild off Olympus for the army, or back on (Moderation.lua).
+			ns.Moderation.Slash(cmd == "netoff", rest)
+		elseif cmd == "alt" or cmd == "alts" then
+			-- 1.1: this account's characters linked as one player (Alts.lua).
+			ns.Alts.Slash(rest)
+		elseif cmd == "bank" then
+			-- 1.1: a sister guild's treasurer shows his guild bank to the King, his Steward and his
+			-- Hands, by whisper, or not (Bank.lua).
+			local verb, on = rest:lower():match("^(%S*)%s*(%S*)")
+			if verb == "share" and (on == "on" or on == "off") then ns.Bank.SetSisterConsent(on == "on") else ns.Print(L.HELP_BANK) end
+		elseif cmd == "need" then
+			-- 1.1: a Lord or a Captain asks the treasury for an item and a count (Bank.lua).
+			ns.Bank.Slash(rest)
+		elseif cmd == "backup" or cmd == "restore" then
+			-- 1.1: the clipboard backup of this character's book, the channel key and its setup (Backup.lua).
+			ns.Backup.Slash(cmd)
+		elseif cmd == "donations" then
+			-- 1.1: a keeper tells the army he is taking donations, until he logs out (Treasury.lua).
+			local on = rest:lower()
+			if on == "on" or on == "off" then ns.Treasury.SetDonations(on == "on") else ns.Print(L.HELP_DONATIONS) end
 		else
 			Help()
 		end

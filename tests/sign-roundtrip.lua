@@ -4,14 +4,19 @@
 -- departments and titles) are also taken by the addon's own code, as a client takes them.
 -- Councils 3 and 4 (1.0.0) are council 1 with the King's Steward marked ("steward"), then with
 -- him removed ("steward --remove"): the addon's own code makes him the Steward, then no longer.
---   luajit tests/sign-roundtrip.lua <repo root> <key file> <a time ahead of the clock> <list.lua> x3 <council.lua> x4
+-- Councils 5 and 6 (1.1) are the council with an approved guild ("guild"), then without it
+-- ("guild --remove"): the addon's own code makes it an Olympus guild, then no longer.
+--   luajit tests/sign-roundtrip.lua <repo root> <key file> <a time ahead of the clock> <list.lua> x3 <council.lua> x6
 local root, keyPath, future = arg[1], arg[2], tonumber(arg[3])
 
 -- The addon's files that read the lists, with the few game functions they touch while loading
--- (no frame is ever shown, nothing is sent: Comm is left out).
+-- (no frame is ever shown, nothing is sent: Comm is left out). Our guild: none, until council 5.
 local function stub() end
 CreateFrame = function() return setmetatable({}, { __index = function() return stub end }) end
 StaticPopupDialogs, SlashCmdList = {}, {}
+local ourGuild
+IsInGuild = function() return ourGuild ~= nil end
+GetGuildInfo = function() return ourGuild end
 GetLocale = function() return "enUS" end
 time, date = os.time, os.date
 local ns = {}
@@ -46,7 +51,7 @@ for i = 4, #arg do
 		councils[#councils + 1] = { names = lns.COUNCIL_SIGNED, titles = lns.COUNCIL_TITLES }
 	end
 end
-assert(#lists == 3 and #councils == 4, "three lists and four councils")
+assert(#lists == 3 and #councils == 6, "three lists and six councils")
 local function Parts(blob)
 	local text, at, realm, names, sig = blob:match("^(HS1~(%d+)~([^~]*)~([^~]*))~(%x+)$")
 	return text, tonumber(at), realm, names, sig
@@ -166,6 +171,28 @@ Sign.WithKey(n, mu, k, function()
 	check(#loose == 1 and #depts == 2, "the census shows the same departments, no entry for the Steward")
 	check(W.TakeTitles(c4.titles, "Relay4-ClassicBetaPvP"), "council 4: taken")
 	check(not ns.IsSteward("Test Steward-ClassicBetaPvP2"), "removed in a newer list: no longer the Steward")
+
+	-- The approved guilds (1.1): council 5 approves "Test Guild" for the Alliance, council 6 no longer.
+	local c5, c6 = councils[5], councils[6]
+	check(c5.titles:find(";^guilds^Alliance^Test Guild~", 1, true) ~= nil, "the guild's entry, trimmed, last")
+	check(not ns.IsFederation("Test Guild"), "no Olympus guild by its name")
+	ourGuild = "Test Guild"
+	check(not ns.IsMember(), "its members: no Olympus members")
+	check(not W.TakeTitles((c5.titles:gsub("Test Guild", "Fake Guild", 1))), "a changed guild is refused")
+	check(W.TakeCouncil(c5.names) and W.TakeTitles(c5.titles, "Relay5-ClassicBetaPvP"), "council 5: taken")
+	check(ns.IsFederation("Test Guild") and ns.IsFederation("TEST GUILD"), "an Olympus guild now, whatever the case")
+	check(ns.IsMember(), "and its members Olympus members")
+	ns.faction = "Horde"
+	check(not ns.IsFederation("Test Guild"), "the Alliance's alone")
+	ns.faction = "Alliance"
+	ns.realm, ns.me = "Elsewhere", "Tester-Elsewhere"
+	check(not ns.IsFederation("Test Guild"), "on the list's realm group alone")
+	ns.realm, ns.me = "ClassicBetaPvP", "Tester-ClassicBetaPvP"
+	loose, depts = W.CouncilTree()
+	check(#loose == 1 and #depts == 2, "the census shows the same departments, no entry for the guilds")
+	check(W.TakeTitles(c6.titles, "Relay6-ClassicBetaPvP"), "council 6: taken")
+	check(not ns.IsFederation("Test Guild") and not ns.IsMember(), "removed in a newer list: no longer an Olympus guild")
+	ourGuild = nil
 end)
 -- Back to the author's key: the test key's lists are nobody's.
 local text1, _, _, _, sig1 = Parts(lists[1])
@@ -174,6 +201,8 @@ local text, _, _, _, _, sig = TitleParts(councils[1].titles)
 check(not Sign.Verify(text, sig), "the author's key refuses a titles list of the test key")
 text, _, _, _, _, sig = TitleParts(councils[3].titles)
 check(not Sign.Verify(text, sig), "the author's key refuses a Steward marked with the test key")
+text, _, _, _, _, sig = TitleParts(councils[5].titles)
+check(not Sign.Verify(text, sig), "the author's key refuses a guild approved with the test key")
 
 if failed > 0 then
 	print(("%d signing round trip check(s) failed"):format(failed))

@@ -53,6 +53,7 @@ Codec.Split = split
 local function LongGuild(guild)
 	return #guild > 72 or select(2, guild:gsub("[^\128-\191]", "")) > 24
 end
+Codec.LongGuild = LongGuild -- (1.1: the pinned line's guild, Channels.HandlePin)
 
 -- A realm name from the wire: one word of at most 40 characters, no escape codes; nil otherwise.
 function Codec.RealmField(v)

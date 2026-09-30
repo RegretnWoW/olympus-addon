@@ -131,10 +131,12 @@ local function OnlyGuests()
 	return true
 end
 
--- Everyone who shares their layer helps unless they turned it off (/oly layerhelp off). Not
--- the King: he is the one everybody wants, and his screen is on stream.
+-- Everyone who shares their layer helps once they said yes to it (1.1, Fern's #11: the
+-- first-open page, or /oly layerhelp on; nil, never answered, is off). Not the King: he is the
+-- one everybody wants, and his screen is on stream.
+function Hop.Helps() return ns.db ~= nil and ns.db.layerHelp == true end
 function Hop.CanHelp(mapID, zoneUID)
-	if ns.db.layerHelp == false or not ns.IsMember() then return false end
+	if not Hop.Helps() or not ns.IsMember() then return false end
 	-- An offer tells the asker we are on that layer: only for players who share theirs (0.9.2).
 	if not ns.Layers.Sharing() then return false end
 	if ns.King and ns.King.IsKing and ns.King.IsKing() then return false end
@@ -169,7 +171,7 @@ function Hop.Chance(mapID, zoneUID)
 	local s = ns.Data and ns.Data.Summary and ns.Data.Summary()
 	for _, e in ipairs(s and s.guilds or {}) do
 		local g = e.g
-		local here = e.fresh and not g.twin and not g.conflict and g.zones and g.zones["m" .. tostring(mapID)]
+		local here = e.fresh and not g.conflict and g.zones and g.zones["m" .. tostring(mapID)]
 		if here and (g.online or 0) > 0 then users = users + here * math.min(1, (g.users or 0) / g.online) end
 	end
 	if users > 0 then
@@ -185,6 +187,8 @@ function Hop.HandleAsk(dist, sender, text)
 	id, mapID, zoneUID = tonumber(id), tonumber(mapID), tonumber(zoneUID)
 	if not id then return end
 	sender = ns.FullName(sender)
+	-- 1.1: a name the moderators took off (net-off, Moderation.lua) gets no offer.
+	if ns.Moderation.Hides and ns.Moderation.Hides(sender) then return end
 	local short = ns.ShortName(sender)
 	local now = ns.Now()
 	Hop.Hear(mapID, zoneUID, short, now)
@@ -230,6 +234,7 @@ function Hop.HandleRequest(dist, sender, text)
 	if dist ~= "WHISPER" then return end
 	local id = tonumber(text:match("^LR~(%d+)$"))
 	sender = ns.FullName(sender)
+	if ns.Moderation.Hides and ns.Moderation.Hides(sender) then return end -- (1.1: net-off)
 	local key = id and (id .. ns.ShortName(sender))
 	local at = key and offered[key]
 	if not at or ns.Now() - at > 120 then return end
@@ -243,8 +248,12 @@ function Hop.HandleRequest(dist, sender, text)
 	local auto = ns.db.layerAutoInvite or (KingChoice() == "auto" and OnKingLayer(true))
 	if auto and OnlyGuests() then return Invite(sender, id, true) end
 	pending = { from = sender, id = id, t = ns.Now() }
-	ns.PlayAlert("soft")
-	ns.ShowDialog("OLYMPUS_HOP_REQUEST", ns.DisplayName(sender), nil, pending)
+	-- In an instance or on Busy (1.1, ns.Alert): no sound and no window; they come once the player
+	-- is out, while the asker still waits (Hop.WAIT), else the request only lapses.
+	local ask = pending
+	ns.Alert("hop", "soft", { what = L.HELD_HOP:format(ns.DisplayName(sender)), key = "hop:" .. id,
+		open = function() return pending == ask and ns.Now() - ask.t <= Hop.WAIT end,
+		show = function() if pending == ask then ns.ShowDialog("OLYMPUS_HOP_REQUEST", ns.DisplayName(sender), nil, ask) end end })
 	Changed()
 end
 
@@ -374,6 +383,9 @@ end
 -- Ask for an invite to a layer (a zone and its zone UID), named for the messages.
 function Hop.Ask(mapID, zoneUID, label)
 	if not ns.IsMember() then return ns.Print(L.MEMBERS_ONLY) end
+	-- 1.1: the moderators took this character off (net-off, Moderation.lua): nobody would answer.
+	local off = ns.Moderation.SelfOff and ns.Moderation.SelfOff()
+	if off then return ns.Print(ns.Moderation.YouText(off)) end
 	if not mapID or not zoneUID then return ns.Print(L.HOP_NO_LAYER) end
 	-- A zone UID only means something in its zone: the player must be there already.
 	if ns.Layers.CurrentMap() ~= mapID then return ns.Print(L.HOP_OTHER_MAP:format(Hop.ZoneName(mapID))) end
@@ -428,7 +440,8 @@ function Hop.Trusted(name)
 	if ns.Roster.RankOf(name) then return true end
 	local short = ns.ShortName(name)
 	for guild, g in pairs(ns.rdb.guilds or {}) do
-		if type(g) == "table" then
+		-- (1.1: never a guild the moderators took off the network, Moderation.lua.)
+		if type(g) == "table" and not (ns.Data.NetOff and ns.Data.NetOff(guild)) then
 			local listed = g.leader and ns.ShortName(g.leader) == short
 			for _, o in ipairs(not listed and g.officers or {}) do
 				if o.name and ns.ShortName(o.name) == short then listed = true break end
@@ -444,6 +457,7 @@ function Hop.HandleOffer(dist, sender, text)
 	local id, group, load = text:match("^LO~(%d+)~(%d+)~(%d+)$")
 	if tonumber(id) ~= ask.id then return end
 	sender = ns.FullName(sender)
+	if ns.Moderation.Hides and ns.Moderation.Hides(sender) then return end -- (1.1: net-off: no offer of theirs)
 	if ask.offers[sender] or ask.count >= Hop.MAX_OFFERS then return end
 	ask.offers[sender] = { name = sender, group = math.min(tonumber(group), 40), load = math.min(tonumber(load), 99), t = ns.Now(),
 		trusted = Hop.Trusted(sender) }
@@ -483,7 +497,7 @@ function Hop.OnInvite(name)
 		if ask.phase ~= "requested" then ask.phase = "requested" end
 		if ask.hinted ~= helper then
 			ask.hinted = helper
-			ns.PlayAlert("soft")
+			ns.PlayAlert("soft", "hop")
 			ns.Print(L.HOP_ACCEPT_HINT:format(ns.DisplayName(helper)))
 		end
 		Changed()
@@ -512,7 +526,7 @@ end
 local function OfferLeave()
 	if not ask or ask.leaveShown then return end
 	ask.leaveShown = true
-	ns.PlayAlert("soft")
+	ns.PlayAlert("soft", "hop")
 	ns.ShowDialog("OLYMPUS_HOP_LEAVE", L.HOP_MAYBE_MOVED, nil, ask)
 end
 
@@ -672,7 +686,7 @@ function Hop.King(strict)
 	local now = ns.Now()
 	local pin = ns.KingCharacter()
 	for name, g in pairs(ns.rdb.guilds or {}) do
-		if ns.IsKingGuild(name) and type(g) == "table" and g.leader and not g.twin
+		if ns.IsKingGuild(name) and type(g) == "table" and g.leader
 			and now - (g.t or 0) <= ns.Data.FRESH and g.leaderOnline then
 			local full = ns.FullName(g.leader, g.realm or ns.realm)
 			if ns.Data.KnownRank(full, name, not strict) == 0 then
@@ -794,13 +808,13 @@ function Hop.KingLine() return Hop.KingLines()[1] end
 -- come? Asked once a login (never again with the box ticked). Not asked of the King, nor of
 -- players who turned helping off or already invite on their own.
 function Hop.CheckKingPrompt()
-	if promptShown or KingChoice() or ns.db.layerHelp == false or ns.db.layerAutoInvite then return end
+	if promptShown or KingChoice() or not Hop.Helps() or ns.db.layerAutoInvite then return end
 	if not ns.IsMember() or (ns.King and ns.King.IsKing and ns.King.IsKing()) then return end
 	if (IsInGroup and IsInGroup()) or (IsInInstance and IsInInstance()) or (InCombatLockdown and InCombatLockdown()) then return end
 	local mine = ns.Layers.Mine()
 	if not mine or ns.Now() - (mine.t or 0) > Hop.LAYER_FRESH or not OnKingLayer() then return end
 	promptShown = true
-	ns.PlayAlert("soft")
+	ns.PlayAlert("soft", "hop")
 	Hop.ShowKingPrompt()
 end
 
@@ -908,7 +922,7 @@ function Hop.StatusLine()
 	local n = 0
 	for _ in pairs(guests) do n = n + 1 end
 	return ("help=%s auto=%s king=%s  |  asks=%d offers=%d requests=%d invites=%d noes=%d joins=%d moves=%d releases=%d guests=%d  |  now=%s"):format(
-		tostring(ns.db.layerHelp ~= false), tostring(ns.db.layerAutoInvite == true), tostring(KingChoice() or "-"),
+		tostring(Hop.Helps()), tostring(ns.db.layerAutoInvite == true), tostring(KingChoice() or "-"),
 		s.asks, s.offers, s.requests, s.invites, s.noes, s.joins, s.moves, s.releases, n, ask and ask.phase or "-")
 end
 

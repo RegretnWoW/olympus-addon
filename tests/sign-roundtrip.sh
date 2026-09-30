@@ -182,6 +182,58 @@ OLYMPUS_COUNCIL_OUT="$scratch/council4.lua" python3 "$signer" check > check.txt 
 grep -Fq "the Alliance King's Steward: none" check.txt || fail 'the Steward is still in the newer list'
 printf 'ok: the Steward removed: a newer council without him\n'
 
+# The approved guilds (1.1): "guild" adds one to the council file and signs the council at once,
+# printing the titles list whole to paste in game; "guild --remove" signs a newer one without it.
+cp "$OLYMPUS_COUNCIL_JSON" "$scratch/council-before-guild.json"
+OLYMPUS_COUNCIL_OUT="$scratch/council5.lua" python3 "$signer" guild "  Test Guild " > guild.txt
+python3 - "$OLYMPUS_COUNCIL_JSON" "$scratch/council-before-guild.json" <<'PY' || fail 'the council file after "guild"'
+import json, sys
+after, before = json.load(open(sys.argv[1])), json.load(open(sys.argv[2]))
+assert after.pop("guilds") == ["Test Guild"], "the guild, trimmed"
+assert after == before, "everything else kept"
+PY
+grep -Fq 'to paste in game with /oly approved paste:' guild.txt || fail 'guild does not print the list to paste'
+pasted=$(tail -n 1 guild.txt)
+python3 - "$scratch/council5.lua" "$pasted" <<'PY' || fail 'the printed list is not the one written'
+import re, sys
+lua, pasted = open(sys.argv[1]).read(), sys.argv[2]
+m = re.search(r'^ns\.COUNCIL_TITLES = "(.*)"$', lua, re.M)
+body = m.group(1)
+out, i = bytearray(), 0
+while i < len(body):
+    if body[i] == "\\": out.append(int(body[i + 1:i + 4])); i += 4
+    else: out += body[i].encode(); i += 1
+assert out.decode() == pasted, "byte for byte"
+PY
+OLYMPUS_COUNCIL_OUT="$scratch/council5.lua" python3 "$signer" check > check.txt || fail 'check refused the list with the guild'
+grep -Fq "the Alliance's approved guilds: Test Guild" check.txt || fail 'check does not show the approved guild'
+printf 'ok: a guild approved, signed with the council, printed whole to paste, read back and checked\n'
+before=$(last_at)
+refused_guild() {
+	if OLYMPUS_COUNCIL_OUT="$scratch/refused.lua" python3 "$signer" guild "$@" > refused.txt 2>&1; then fail "signed: guild $*"; fi
+	[ ! -e "$scratch/refused.lua" ] || fail "a list was written for: guild $*"
+	if grep -Fq 'Traceback' refused.txt; then fail "a crash, not a refusal: guild $*"; fi
+	printf 'ok: refused, guild %s\n' "$*"
+}
+refused_guild 'Test Guild'
+refused_guild 'test guild'
+refused_guild 'Guild5'
+refused_guild 'Bad^Guild'
+refused_guild 'Bad,Guild'
+refused_guild ' '
+refused_guild "$(printf 'g%.0s' $(seq 1 25))"
+refused_guild 'Good Guild' Neutral
+refused_guild --remove 'Nobody Guild'
+refused_council "$(python3 -c 'import json; print(json.dumps({"guilds": ["Guild %s" % chr(65 + i) for i in range(21)]}))')" '21 approved guilds for one faction'
+refused_council '{"guilds": [{"name": "Good Guild", "side": "Horde"}]}' 'a guild with an unknown field'
+refused_council '{"guilds": "Good Guild"}' 'guilds that are not a list'
+refused_council '{"guilds": ["Same Guild", "same guild"]}' 'a guild twice'
+[ "$(last_at)" = "$before" ] || fail "a refused guild moved the key's last time"
+OLYMPUS_COUNCIL_OUT="$scratch/council6.lua" python3 "$signer" guild --remove 'test guild' > /dev/null
+OLYMPUS_COUNCIL_OUT="$scratch/council6.lua" python3 "$signer" check > check.txt || fail 'check refused the list without the guild'
+grep -Fq "the Alliance's approved guilds: none" check.txt || fail 'the guild is still in the newer list'
+printf 'ok: the guild removed: a newer council without it\n'
+
 luajit "$repo_root/tests/sign-roundtrip.lua" "$repo_root" "$OLYMPUS_COUNCIL_KEY" "$future" \
 	"$scratch/list1.lua" "$scratch/list2.lua" "$scratch/list3.lua" "$scratch/council1.lua" "$scratch/council2.lua" \
-	"$scratch/council3.lua" "$scratch/council4.lua"
+	"$scratch/council3.lua" "$scratch/council4.lua" "$scratch/council5.lua" "$scratch/council6.lua"

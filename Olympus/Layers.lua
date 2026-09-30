@@ -147,6 +147,8 @@ function Layers.SetSharing(on)
 	ns.Print(on and L.LOCATION_ON or L.LOCATION_OFF)
 	ns.Comm.Hello(true)
 	if on then Announce(true) else Layers.Withdraw() end
+	-- Taking donations (1.1): the zone in it follows the answer at once.
+	if ns.Treasury and ns.Treasury.DonationsMoved then ns.Treasury.DonationsMoved() end
 end
 
 function Layers.SharingState()
@@ -179,6 +181,9 @@ function Layers.AskChoice()
 	-- (The King's answer is his crown on the Throne.)
 	if ns.King and ns.King.IsKing and ns.King.IsKing() then return false end
 	if (InCombatLockdown and InCombatLockdown()) or (IsInInstance and IsInInstance()) then return false end
+	-- 1.1 (#11): the first-open page is the first question, this one on it (once a session there);
+	-- this popup only while Consent.lua is not loaded (updated without a restart).
+	if ns.Consent and not ns.Consent.missing then return ns.Consent.Ask("location") == true end
 	asked = true
 	ns.ShowDialog("OLYMPUS_LOCATION_CHOICE", ns.Comm.Audience())
 	return true
@@ -211,7 +216,7 @@ end
 local function FromKing(sender)
 	if ns.IsKingCharacter(sender) then return true end
 	for name, g in pairs(ns.rdb.guilds or {}) do
-		if ns.IsKingGuild(name) and type(g) == "table" and g.leader and not g.twin then
+		if ns.IsKingGuild(name) and type(g) == "table" and g.leader then
 			local full = ns.FullName(g.leader, g.realm or ns.realm)
 			if full == sender and ns.Data.KnownRank(full, name, true) == 0 then return true end
 		end
@@ -245,6 +250,9 @@ end
 function Layers.Receive(sender, l)
 	if not ns.IsFederation(l.guild) then return end
 	sender = ns.FullName(sender)
+	-- 1.1: a name the moderators took off (net-off, Moderation.lua): no layer of theirs, and the
+	-- one they announced before goes.
+	if ns.Moderation.Hides and ns.Moderation.Hides(sender, l.guild) then return Layers.Forget(sender) end
 	-- The King's own layer tells where he plays (1.0.0, Konig's review: Hop.King), whatever a report says.
 	if ns.Hop and ns.Hop.HeardKing then ns.Hop.HeardKing(sender) end
 	local old = where[sender]
@@ -294,7 +302,8 @@ function Layers.ForMap(mapID)
 	for zoneUID, members in pairs(source[mapID] or {}) do
 		local best, count = nil, 0
 		for name, m in pairs(members) do
-			if now - m.t <= EXPIRE then
+			-- (1.1: never a name the moderators took off since, Moderation.lua.)
+			if now - m.t <= EXPIRE and not (ns.Moderation.Hides and ns.Moderation.Hides(name, m.guild)) then
 				count = count + 1
 				local cand = { name = ns.DisplayName(name), rank = m.rank, guild = m.guild }
 				if not best or Better(cand, best, sizes) then best = cand end

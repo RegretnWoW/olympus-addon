@@ -135,8 +135,11 @@ local function RefreshNow()
 	AddContinentTotals(s)
 end
 
--- Totals per continent, drawn only on the world (Azeroth) map.
+-- Totals per continent, drawn on the world (Azeroth) map; a continent outside it (1.1: TBC
+-- Anniversary's Outland, under the Cosmic map) on the map above it, when that is a world or the
+-- Cosmic map.
 local WORLD_MAP = 947
+local TOP_TYPES = { [0] = true, [1] = true } -- Enum.UIMapType.Cosmic, World
 local CONTINENT = (Enum and Enum.UIMapType and Enum.UIMapType.Continent) or 2
 local continentOf = {}
 local function ContinentOf(mapID)
@@ -193,9 +196,14 @@ function Map.LayoutOverlay()
 	for _, f in ipairs(overlay) do f:Hide() end
 	local canvas = Canvas()
 	if not canvas or not WorldMapFrame:IsShown() or not ns.db.showMap or not ns.IsMember() then return end
-	if not WorldMapFrame.GetMapID or WorldMapFrame:GetMapID() ~= WORLD_MAP then return end
+	local shown = WorldMapFrame.GetMapID and WorldMapFrame:GetMapID()
+	local here = {}
+	for _, d in ipairs(overlayData) do
+		if d.on == shown then here[#here + 1] = d end
+	end
+	if #here == 0 then return end
 	local w, h, scale = canvas:GetWidth(), canvas:GetHeight(), CanvasScale()
-	for i, d in ipairs(overlayData) do
+	for i, d in ipairs(here) do
 		local f = overlay[i]
 		if not f then
 			f = CreatePin()
@@ -215,14 +223,29 @@ function Map.LayoutOverlay()
 	end
 end
 
+-- The map a continent's total is drawn on, and the continent's rect there: the Azeroth map, or
+-- the world or Cosmic map right above the continent. nil when neither has it.
+function Map.OverlayMap(cont)
+	if not C_Map.GetMapRectOnMap then return nil end
+	local minX, maxX, minY, maxY = C_Map.GetMapRectOnMap(cont, WORLD_MAP)
+	if minX and maxX and minY and maxY then return WORLD_MAP, minX, maxX, minY, maxY end
+	local info = C_Map.GetMapInfo(cont)
+	local parent = info and info.parentMapID
+	local above = parent and parent ~= WORLD_MAP and C_Map.GetMapInfo(parent)
+	if not (above and TOP_TYPES[above.mapType]) then return nil end
+	minX, maxX, minY, maxY = C_Map.GetMapRectOnMap(cont, parent)
+	if minX and maxX and minY and maxY then return parent, minX, maxX, minY, maxY end
+	return nil
+end
+Map.overlayData = overlayData -- tests
+
 function AddContinentTotals(s)
 	wipe(overlayData)
 	local totals, guilds = Map.ContinentTotals(s)
 	for cont, count in pairs(totals) do
-		local minX, maxX, minY, maxY
-		if C_Map.GetMapRectOnMap then minX, maxX, minY, maxY = C_Map.GetMapRectOnMap(cont, WORLD_MAP) end
-		if minX and maxX and minY and maxY then
-			overlayData[#overlayData + 1] = { cont = cont, count = count, guilds = guilds[cont], x = (minX + maxX) / 2, y = (minY + maxY) / 2 }
+		local on, minX, maxX, minY, maxY = Map.OverlayMap(cont)
+		if on then
+			overlayData[#overlayData + 1] = { cont = cont, count = count, guilds = guilds[cont], on = on, x = (minX + maxX) / 2, y = (minY + maxY) / 2 }
 		end
 	end
 	Map.LayoutOverlay()
@@ -377,16 +400,19 @@ end
 
 -- A square icon made round: the portrait mask (Texture:SetMask, on Forever, Era and
 -- Anniversary), or the game's portrait maker on a client without it.
+-- Its coords are cut once, before the mask: a texture that has one refuses new coords (Forever
+-- 1.60: "Cannot set tex coords when texture has mask"), and a new picture keeps them.
 local function RoundIcon(tex, texture)
 	if tex.olympusRound == nil then
-		tex.olympusRound = tex.SetMask ~= nil and pcall(tex.SetMask, tex, Map.MASK) or false
-	end
-	if tex.olympusRound then
 		tex:SetTexCoord(0.08, 0.92, 0.08, 0.92) -- (the icon's own border cut off)
-	elseif SetPortraitToTexture then
+		tex.olympusRound = tex.SetMask ~= nil and pcall(tex.SetMask, tex, Map.MASK) or false
+		if not tex.olympusRound then tex:SetTexCoord(0, 1, 0, 1) end
+	end
+	if not tex.olympusRound and SetPortraitToTexture then
 		pcall(SetPortraitToTexture, tex, texture)
 	end
 end
+Map.RoundIcon = RoundIcon -- (tests)
 
 -- A badge of `size`: the anchor the pin library places (nothing of it shows or takes the
 -- mouse) and anchor.badge, what shows (tooltips go on it). `round`: an icon in a coloured disc,
@@ -440,6 +466,8 @@ local toggle, menu
 local OPTIONS = {
 	{ key = "showMap", label = "MAPOPT_ZONES", apply = function() Map.Refresh() end },
 	{ key = "showDecrees", label = "MAPOPT_DECREES", apply = function() ns.Decree.RefreshPins() end },
+	-- The Board's camps (1.1, Board.lua).
+	{ key = "showCamps", label = "MAPOPT_CAMPS", apply = function() if ns.Board and ns.Board.RefreshCamps then ns.Board.RefreshCamps() end end },
 }
 
 local function CreateMapToggle()

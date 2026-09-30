@@ -6,6 +6,8 @@
   python3 scripts/council-sign.py council [council.json]                  # names, departments and titles: dist/CouncilList.lua
   python3 scripts/council-sign.py steward "<Name-Realm>" [Alliance|Horde] # mark the King's Steward, then sign as "council"
   python3 scripts/council-sign.py steward --remove "<Name-Realm>"         # end it: sign again without him
+  python3 scripts/council-sign.py guild "<Guild Name>" [Alliance|Horde]  # approve a guild of Olympus, then sign as "council"
+  python3 scripts/council-sign.py guild --remove "<Guild Name>"          # take it off: sign again without it
   python3 scripts/council-sign.py check [CouncilList.lua]                 # (or --check) read back what was signed
 
 The private key never leaves ~/.olympus. The addon carries only the public key (Sign.lua) and
@@ -45,6 +47,20 @@ rest kept) and signs the council at once; "steward --remove" takes him off and s
 newer list ends it on every client. "check" (or --check) reads a written CouncilList.lua back,
 checks both signatures with the key and prints the names, departments and Stewards it holds.
 
+The approved guilds (1.1): guilds of Asmon's Olympus whose names the addon's name rule leaves out
+(it leaves Olympian and Olympia out on purpose) count as Olympus guilds once an optional
+"guilds" list in the same file names them:
+
+  "guilds": ["Guild Name", {"name": "Guild Name", "faction": "Horde"}]
+
+A plain name is an Alliance guild. The titles list carries them after the Stewards, one entry per
+faction ("^guilds^<faction>^<Guild Name>,..."), three "^" again, so clients before 1.1 leave it out
+unread. At most 20 per faction; a name of letters and spaces, 24 characters at most, as the game
+allows; each once. "guild" adds one to the council file and signs the council at once; "guild
+--remove" takes it off and signs again. Both print the signed titles list whole, for pasting in
+game with /oly approved paste: the first member of such a guild has no other way to get it (its
+addon hears nothing of Olympus until it holds it); his addon then passes it to his guild.
+
 Every list gets a newer time than the last one signed with the key (kept in the key file as
 "last_at"): clients keep a list only if it is newer than theirs, so two lists signed in the
 same second both reach them. Anything the addon would not take is refused here, before anything
@@ -66,6 +82,7 @@ BASE, BITS = 1 << 24, 2048
 MAX_NAMES, MAX_NAME, MAX_BLOB = 30, 48, 2000 # what the addon takes (Workshop.TakeCouncil)
 MAX_TITLE, MAX_DEPT, MAX_DEPTS, MAX_TITLES_BLOB = 48, 40, 8, 3000 # and of the titles (Workshop.TakeTitles)
 MAX_STEWARDS, MAX_REALM, FACTIONS = 3, 40, ("Alliance", "Horde") # the King's Steward (Core.lua: ns.ReadStewards)
+MAX_GUILDS, MAX_GUILD_CHARS, MAX_GUILD_BYTES = 20, 24, 72 # the approved guilds (Core.lua: ns.ReadApprovedGuilds)
 SIG_LEN = 512 # hex digits of a signature, always (Sign.Verify)
 
 def is_prime(n, rounds=40):
@@ -234,8 +251,38 @@ def read_stewards(v, realm):
         if len(out[faction]) > MAX_STEWARDS: sys.exit("more than %d Stewards for the %s" % (MAX_STEWARDS, faction))
     return out
 
+# An approved guild's name as the addon takes it (Core.lua, ApprovedName): letters and spaces, a
+# letter first, 24 characters (72 bytes) at most. Returned trimmed.
+def guild_name(v):
+    if not isinstance(v, str): sys.exit("an approved guild is a name, not %r" % (v,))
+    v = v.strip()
+    good = v != "" and plain(v, "^;=,") and v[0].isalpha() and all(c.isalpha() or c == " " for c in v)
+    good = good and len(v) <= MAX_GUILD_CHARS and len(v.encode()) <= MAX_GUILD_BYTES
+    if not good: sys.exit("not a guild name the addon takes (letters and spaces, 24 at most): %r" % v)
+    return v
+
+# The council file's "guilds": each a name (an Alliance guild) or {"name", "faction"}. Returns
+# {faction: [names]}, each faction MAX_GUILDS at most, each guild once.
+def read_guilds(v):
+    if v is None: return {}
+    if not isinstance(v, list): sys.exit("guilds is not a list")
+    out, seen = {}, set()
+    for g in v:
+        if isinstance(g, dict):
+            fields(g, "a guild", ("name", "faction"))
+            name, faction = g.get("name"), g.get("faction", "Alliance")
+        else:
+            name, faction = g, "Alliance"
+        name = guild_name(name)
+        if faction not in FACTIONS: sys.exit("a guild's faction is Alliance or Horde, not %r" % (faction,))
+        if (faction, name.casefold()) in seen: sys.exit("a guild twice: %r" % name)
+        seen.add((faction, name.casefold()))
+        out.setdefault(faction, []).append(name)
+        if len(out[faction]) > MAX_GUILDS: sys.exit("more than %d approved guilds for the %s" % (MAX_GUILDS, faction))
+    return out
+
 def read_council(data):
-    fields(data, "the council", ("realm", "public", "departments", "members", "stewards"))
+    fields(data, "the council", ("realm", "public", "departments", "members", "stewards", "guilds"))
     realm = data.get("realm", REALM)
     if not isinstance(realm, str): sys.exit("not a realm group the addon takes: %r" % (realm,))
     public = data.get("public", False)
@@ -251,7 +298,7 @@ def read_council(data):
         if name.lower() in seen: sys.exit("a department twice: %r" % name)
         seen.add(name.lower())
         depts.append((name, icon_field(d.get("icon"), name), people(d.get("members"), name)))
-    return realm, public, loose, depts, read_stewards(data.get("stewards"), realm)
+    return realm, public, loose, depts, read_stewards(data.get("stewards"), realm), read_guilds(data.get("guilds"))
 
 def load_council(path):
     try:
@@ -264,7 +311,7 @@ def sign_council(path):
     return sign_council_data(load_council(path))
 
 def sign_council_data(data):
-    realm, public, loose, depts, stewards = read_council(data)
+    realm, public, loose, depts, stewards, guilds = read_council(data)
     names = [m[0] for m in loose] + [m[0] for d in depts for m in d[2]]
     check(names, realm)
     with open(KEY) as f: key = json.load(f)
@@ -274,6 +321,8 @@ def sign_council_data(data):
     entries += ["%s^%s^%s" % (name, icon, ",".join("%s=%s" % m for m in members)) for name, icon, members in depts]
     # The King's Stewards after the departments: an entry per faction with three "^".
     entries += ["^steward^%s^%s" % (faction, ",".join(stewards[faction])) for faction in FACTIONS if stewards.get(faction)]
+    # The approved guilds (1.1) after them, the same way.
+    entries += ["^guilds^%s^%s" % (faction, ",".join(guilds[faction])) for faction in FACTIONS if guilds.get(faction)]
     titles_text = "HT1~%d~%s~%d~%s" % (at + 1, realm, 1 if public else 0, ";".join(entries))
     fits(names_text, MAX_BLOB, "the name list")
     fits(titles_text, MAX_TITLES_BLOB, "the titles list")
@@ -328,6 +377,31 @@ def steward(args, path=COUNCIL):
     save_council(path, data)
     return signed
 
+# guild <Guild Name> [faction] | guild --remove <Guild Name>: the council file's "guilds" changed,
+# the council signed from it at once (nothing written if anything is refused).
+def guild(args, path=COUNCIL):
+    remove = bool(args) and args[0] == "--remove"
+    if remove: args = args[1:]
+    if len(args) not in (1, 2) or (remove and len(args) != 1): sys.exit(__doc__)
+    name, faction = guild_name(args[0]), args[1] if len(args) == 2 else "Alliance"
+    if faction not in FACTIONS: sys.exit("a guild's faction is Alliance or Horde, not %r" % faction)
+    data = load_council(path)
+    listed = data.get("guilds") or []
+    if not isinstance(listed, list): sys.exit("guilds is not a list")
+    def who(g): return (g.get("name") if isinstance(g, dict) else g) or ""
+    def side(g): return (g.get("faction", "Alliance") if isinstance(g, dict) else "Alliance")
+    same = lambda g: isinstance(who(g), str) and who(g).strip().casefold() == name.casefold() and (remove or side(g) == faction)
+    kept = [g for g in listed if not same(g)]
+    if remove and len(kept) == len(listed): sys.exit("not an approved guild in %s: %r" % (path, name))
+    if not remove:
+        if len(kept) != len(listed): sys.exit("already approved: %r" % name)
+        kept.append(name if faction == "Alliance" else {"name": name, "faction": faction})
+    data["guilds"] = kept
+    signed = sign_council_data(data)
+    write_out(*signed)
+    save_council(path, data)
+    return signed
+
 # A Lua string literal as lua_string writes it (plain bytes and \ddd), back to its text.
 def lua_unstring(s):
     out, i = bytearray(), 0
@@ -365,16 +439,21 @@ def check_out(path=OUT):
             print("  names:", parts[3] or "-")
             continue
         print("  public:", parts[3] == "1")
-        stewards = {}
+        stewards, guilds = {}, {}
         for entry in parts[4].split(";"):
             if entry.startswith("^steward^"):
                 _, _, faction, names = entry.split("^", 3)
                 stewards[faction] = names
+            elif entry.startswith("^guilds^"):
+                _, _, faction, names = entry.split("^", 3)
+                guilds[faction] = names
             elif entry:
                 part = entry.split("^")
                 print("  %s: %s" % (part[0] or "(outside any department)", part[-1] or "-"))
         for faction in FACTIONS:
             print("  the %s King's Steward: %s" % (faction, stewards.get(faction) or "none"))
+        for faction in FACTIONS:
+            print("  the %s's approved guilds: %s" % (faction, guilds.get(faction) or "none"))
     if bad: sys.exit("a signature does not hold with %s" % KEY)
 
 if __name__ == "__main__":
@@ -392,6 +471,13 @@ if __name__ == "__main__":
         names, titles = steward(sys.argv[2:])
         print(COUNCIL, "updated;", OUT, "written:", names[:-SIG_LEN - 1])
         print("and:", titles[:-SIG_LEN - 1])
+    elif len(sys.argv) >= 3 and sys.argv[1] == "guild":
+        names, titles = guild(sys.argv[2:])
+        print(COUNCIL, "updated;", OUT, "written:", names[:-SIG_LEN - 1])
+        print("and:", titles[:-SIG_LEN - 1])
+        # Whole, for the first member of an approved guild to paste in game (/oly approved paste).
+        print("to paste in game with /oly approved paste:")
+        print(titles)
     elif len(sys.argv) in (2, 3) and sys.argv[1] in ("check", "--check"):
         check_out(sys.argv[2] if len(sys.argv) == 3 else OUT)
     else: sys.exit(__doc__)

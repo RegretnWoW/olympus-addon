@@ -295,6 +295,8 @@ function ns.StatusText()
 	local function add(fmt, ...) lines[#lines + 1] = fmt:format(...) end
 	local guild = GetGuildInfo("player")
 	add("Olympus v%s  |  %s", ns.VERSION, ClientInfo())
+	-- (1.1) The addon's language: the game's, when Olympus has lines for it (Locales.lua).
+	add("language: %s", ns.LocaleReport and ns.LocaleReport() or "?")
 	add("player %s  |  %s  |  guild %s  |  olympus member: %s", tostring(ns.me), tostring(ns.faction), tostring(guild), tostring(ns.IsMember()))
 	local realm, census = RealmLines()
 	add("%s", realm)
@@ -343,6 +345,8 @@ function ns.StatusText()
 				ch.sent, ch.shown, ch.hidden, c.chatQueue or 0, #ch.muted > 0 and table.concat(ch.muted, ",") or "none",
 				ch.bad, ch.dup, ch.rate, ch.flood, ch.forged, ch.unverified, ch.rank)
 			if ns.Channels.WindowStatus then add("chat windows: %s", ns.Channels.WindowStatus()) end
+			-- (1.1) The pinned line this client holds: whose, of what rank, and how long it has left.
+			if ns.Channels.PinStatus then add("pinned line: %s", ns.Channels.PinStatus()) end
 		end
 		-- What leaves this client about where the player is, and who reads the channel (0.9.1).
 		add("privacy: zone and layer %s  |  channel %s  |  chat warning accepted: %s",
@@ -357,10 +361,32 @@ function ns.StatusText()
 		if ns.faction == "Horde" then
 			add("Horde King: %s, realm %s", tostring(ns.KING_CHARACTER.Horde), tostring(ns.KingRealm and ns.KingRealm() or "?"))
 		end
-		add("royal inspection: %s (/oly inspection on|off)", ns.db.royalInspection == false and "not taking part" or "taking part when sampled")
-		add("author's roll call: %s (/oly rollcall on|off)", ns.Workshop and ns.Workshop.Answers and (ns.Workshop.Answers() and "answered" or "refused") or "?")
+		-- (1.1, Fern's #11: each off until answered, on the first-open page or its command.)
+		local ri = ns.db.royalInspection
+		add("royal inspection: %s (/oly inspection on|off)", ri == true and "taking part when sampled" or (ri == false and "not taking part" or "not chosen (not taking part)"))
+		-- 1.1 (Fern's #29): an officer's findings shared with his guild's officers.
+		if ns.Inspect.MayShare then
+			add("patrol share: %s (/oly patrolshare on|off), %d of our officers' findings held", not ns.Inspect.Sharing() and "off"
+				or (ns.Inspect.MayShare() and "on" or "on, not an officer"), ns.Inspect.SharedCount())
+		end
+		-- 1.1: the switch for all alert sounds, and the kinds silenced on their own.
+		add("alerts: %s", ns.AlertStatus and ns.AlertStatus() or "?")
+		add("author's roll call: %s (/oly rollcall on|off)", ns.Workshop and ns.Workshop.AnswerState and ns.Workshop.AnswerState() or "?")
+		-- (1.1) The author's released version as his presence named it, and whether this client is behind it.
+		add("%s", ns.Workshop and ns.Workshop.VersionLine and ns.Workshop.VersionLine() or "author's released version: ?")
+		add("olympus chats: %s (/oly chat on|off)  |  layer help: %s", ns.Channels and ns.Channels.ChatState and ns.Channels.ChatState() or "?",
+			ns.db.layerHelp == true and "on" or (ns.db.layerHelp == false and "off" or "not chosen (off)"))
+		-- (1.1: block terms, #31; the log of acts, #12: counts only, never the words or the entries.)
+		local F = ns.Filter
+		if F and not F.missing and F.Mine then
+			add("block terms: %d yours, %d shared (%s)%s  |  acts log: %d entries", #F.Mine(), #F.SharedTerms(), F.SharedOn() and "used" or "ignored",
+				F.CanEdit() and ", you edit the shared list" or "", ns.Chronicle and ns.Chronicle.Entries and #ns.Chronicle.Entries() or 0)
+		end
 		-- Olympus Link (0.9.10): the key's id and tier only, never the key.
 		add("discord link: %s", ns.Link and ns.Link.StatusLine and ns.Link.StatusLine() or "not loaded")
+		-- The Board (1.1): what this client holds and sends (the ch:G1, ch:G0, ch:GQ counts above).
+		add("board: %s", ns.Board and ns.Board.StatusLine and ns.Board.StatusLine() or "not loaded")
+		add("the King's week: %s", ns.Week and ns.Week.StatusLine and ns.Week.StatusLine() or "not loaded")
 	end
 	local n = 0
 	for _ in pairs(ns.rdb.guilds) do n = n + 1 end
@@ -368,6 +394,9 @@ function ns.StatusText()
 	add("map lib: %s  |  zones indexed=%d  |  tabs: %s", tostring(ns.Map and ns.Map.libOk), ns.Zones and ns.Zones.Count() or 0,
 		ns.UI and ns.UI.tabTemplate and (ns.UI.tabTemplate .. " (" .. tostring(ns.UI.tabStyle) .. " spacing), window "
 			.. tostring(ns.UI.WindowStyle and ns.UI.WindowStyle())) or "not built")
+	-- (1.1) Zone names from the roster no map id matched, names only: a zone a new client added
+	-- somewhere the index does not reach yet, shown as text in the census and left off the map.
+	add("zones without a map id: %s", ns.Zones and ns.Zones.UnmappedLine and ns.Zones.UnmappedLine() or "?")
 	-- Old Guild tab or new Communities window: which ones exist and got the Olympus button.
 	add("guild UI: %s", ns.GuildFrameHook and ns.GuildFrameHook.StatusLine() or "not loaded")
 	local seen = 0
@@ -378,6 +407,16 @@ function ns.StatusText()
 	add("king: %s", ns.Hop and ns.Hop.KingStatusLine and ns.Hop.KingStatusLine() or "not loaded")
 	-- (1.0.0) The King's Steward as the signed titles list names him here, and the Hands held.
 	add("steward: %s", ns.King and ns.King.StewardStatusLine and ns.King.StewardStatusLine() or "not loaded")
+	-- (1.1) Net-off words this client holds (Moderation.lua).
+	add("net-off: %s", ns.Moderation and ns.Moderation.StatusLine and ns.Moderation.StatusLine() or "not loaded")
+	add("alt links: %s", ns.Alts and ns.Alts.StatusLine and ns.Alts.StatusLine() or "not loaded")
+	add("realm key: %s", ns.Keys and ns.Keys.StatusLine and ns.Keys.StatusLine() or "not loaded")
+	-- 1.1: the guilds the author's signed list makes Olympus guilds (our faction's), and whether ours is one.
+	if ns.ApprovedGuilds then
+		local list, guild = ns.ApprovedGuilds(), GetGuildInfo("player")
+		add("approved guilds: %s%s", #list > 0 and table.concat(list, ", ") or "none", (guild and ns.IsApprovedGuild(guild))
+			and (ns.NamedOlympus(guild) and "  |  ours is on it" or "  |  ours is Olympus by the list alone") or "")
+	end
 	add("borders: %s", ns.Borders and ns.Borders.StatusLine and ns.Borders.StatusLine() or "not loaded")
 	add("nameplates: %s", ns.Nameplates and ns.Nameplates.StatusLine and ns.Nameplates.StatusLine() or "not loaded")
 	-- The gamepad UI and what the game refused us this session; what its code reads, as now.

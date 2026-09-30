@@ -161,10 +161,22 @@ local function OnWrit(sender, id, rest)
 	for _, old in ipairs(Read("writs")) do if old.id == id and old.king == ns.FullName(sender) then return end end
 	local list = Store("writs")
 	local w = { id = id, king = ns.FullName(sender), by = ns.KingName(sender), to = to, text = text, t = now }
+	-- 1.1 (#31): a writ the player's block terms hit stays folded: no parchment, no alert, and
+	-- the Decrees tab offers it to read with a click (Filter.lua). His own terms alone: the shared
+	-- list never hides the King's writs (1.1, Konig's review).
+	local F = ns.Filter
+	if F and not F.missing and F.Hides(text, true) then w.hidden = true end
 	list[#list + 1] = w
 	while #list > Acts.WRITS_KEPT do table.remove(list, 1) end
-	ns.King.Warn(L.WRIT_ARRIVED:format(w.by), false)
-	Acts.ShowWrit(w)
+	if not w.hidden then
+		-- In an instance or on Busy (1.1): the chat line and its line on the Decrees tab now, the
+		-- parchment once the player is out, if still unread.
+		ns.King.Warn(L.WRIT_ARRIVED:format(w.by), false, "throne", {
+			what = L.HELD_WRIT:format(w.by), key = "writ:" .. tostring(w.id), -- (each writ its own: two unread both pop)
+			open = function() return not w.acked end,
+			show = function() Acts.ShowWrit(w) end,
+		})
+	end
 	ns.Fire("DECREES_CHANGED")
 end
 ns.King.Register("W", OnWrit)
@@ -194,6 +206,9 @@ function Acts.HandleAck(dist, sender, text)
 end
 ns.Comm.Handle("T6", function(...) Acts.HandleAck(...) end)
 
+-- Writs the player's block terms hid and a click showed, this session (1.1, #31).
+local revealed = setmetatable({}, { __mode = "k" })
+
 -- The Decrees tab's section: the writs we got, or the King's own with how many read them.
 -- Nothing for anyone else.
 function Acts.WritLines()
@@ -206,19 +221,26 @@ function Acts.WritLines()
 	for i = #list, math.max(1, #list - 4), -1 do
 		local w = list[i]
 		local head = Acts.Audience(w.to)
+		-- 1.1 (#31): hidden by the player's block terms (not revealed this session).
+		local veiled = w.hidden and not revealed[w]
 		local state = ""
 		if mine and w.to ~= "E" then state = "|cff40ff40" .. L.WRIT_ACKS:format(w.acks or 0) .. "|r  "
 		elseif not mine and not w.acked and w.to ~= "E" then state = "|cffffd200" .. L.WRIT_UNREAD .. "|r  " end
 		lines[#lines + 1] = {
 			text = "|cffffd200" .. head .. "|r  " .. (mine and "" or ("|cff9d9d9d" .. L.WRIT_FROM:format(w.by or "?") .. "|r")),
 			right = state .. "|cff9d9d9d" .. ns.Ago(w.t) .. "|r",
-			onClick = function() Acts.ShowWrit(w) end,
+			onClick = function()
+				revealed[w] = true
+				Acts.ShowWrit(w)
+				ns.Fire("DECREES_CHANGED")
+			end,
 			tooltip = function(tt)
 				tt:AddLine(L.WRIT_TITLE, 1, 0.82, 0)
-				tt:AddLine(w.text, 1, 1, 1, true)
+				tt:AddLine(veiled and L.FILTER_WRIT_HIDDEN or w.text, 1, 1, 1, true)
 			end,
 		}
-		lines[#lines + 1] = { indent = 1, text = '|cff9d9d9d"' .. (#w.text > 70 and (ns.Cut(w.text, 67) .. "...") or w.text) .. '"|r' }
+		lines[#lines + 1] = { indent = 1, text = veiled and ("|cff9d9d9d" .. L.FILTER_WRIT_HIDDEN .. "|r")
+			or ('|cff9d9d9d"' .. (#w.text > 70 and (ns.Cut(w.text, 67) .. "...") or w.text) .. '"|r') }
 	end
 	lines[#lines].gapAfter = true
 	return lines
@@ -304,7 +326,11 @@ function Acts.OpenGates(guild)
 	gates = { id = ns.King.NewId(), guild = guild, by = ns.me, at = ns.Now() + Acts.GATES_TIME, mine = true, preview = preview or nil }
 	if preview then ns.Print(L.THRONE_PREVIEW_NOTE) end
 	-- Kept across a /reload: the opener's client repeats them for late logins.
-	if not preview then ns.rdb.gates = { id = gates.id, guild = guild, at = gates.at } end
+	if not preview then
+		ns.rdb.gates = { id = gates.id, guild = guild, at = gates.at }
+		-- 1.1 (#12): our own act never comes back to us: in our log as we send it.
+		ns.Chronicle.Add("gates", ns.me, L.ACTS_GATES_OPEN:format(guild), { key = "gates", value = gates.id .. ":" .. guild })
+	end
 	SendGates()
 	ns.Print(L.GATES_OPENED:format(guild))
 	ns.Fire("DATA_CHANGED")
@@ -321,6 +347,7 @@ function Acts.CloseGates()
 	if not Acts.CanClose() then return ns.Print(L.GATES_ONLY_OPENER) end
 	if not gates.preview then
 		ns.Comm.Send("CHANNEL", ("T1~G~%d~%s~0~"):format(gates.id, GetGuildInfo("player") or ""), "gates")
+		ns.Chronicle.Add("gates", ns.me, L.ACTS_GATES_CLOSED, { key = "gates", value = "closed" })
 	end
 	gates = nil
 	ns.rdb.gates = nil
@@ -339,6 +366,8 @@ local function OnGates(sender, id, rest, guild)
 		if gates and (gates.by == sender or king) then
 			if gates.mine then ns.rdb.gates = nil end
 			gates = nil
+			-- 1.1 (#12): in this client's log of acts, with the name the server stamped.
+			ns.Chronicle.Add("gates", sender, L.ACTS_GATES_CLOSED, { key = "gates", value = "closed" })
 			ns.Fire("DATA_CHANGED")
 		end
 		return
@@ -347,6 +376,8 @@ local function OnGates(sender, id, rest, guild)
 	if not target then return end
 	local fresh = not gates or gates.id ~= id
 	gates = { id = id, guild = target, by = sender, at = ns.Now() + math.min(seconds, Acts.GATES_TIME) }
+	-- 1.1 (#12): in this client's log of acts, once per opening (repeated every 10 minutes).
+	ns.Chronicle.Add("gates", sender, L.ACTS_GATES_OPEN:format(target), { key = "gates", value = id .. ":" .. target })
 	-- In chat once a minute at most, whatever arrives.
 	local now = ns.Now()
 	if fresh and now - lastNews >= Acts.NEWS_GAP then
@@ -359,6 +390,18 @@ ns.King.Register("G", OnGates)
 
 StaticPopupDialogs["OLYMPUS_GATES"] = {
 	text = L.GATES_CONFIRM,
+	button1 = YES or "Yes",
+	button2 = NO or "No",
+	OnAccept = function(self, data) ns.SafeCall("gates", Acts.OpenGates, data or (self and self.data)) end,
+	timeout = 0,
+	whileDead = true,
+	hideOnEscape = true,
+	preferredIndex = 3,
+}
+-- The same, for a guild whose census row is marked (1.1, Fern's #30): what the mark says, so the
+-- gates never open on a size nobody else confirms without the King seeing it.
+StaticPopupDialogs["OLYMPUS_GATES_MARKED"] = {
+	text = L.GATES_CONFIRM_MARKED,
 	button1 = YES or "Yes",
 	button2 = NO or "No",
 	OnAccept = function(self, data) ns.SafeCall("gates", Acts.OpenGates, data or (self and self.data)) end,
@@ -386,6 +429,8 @@ function Acts.GatesClick(guild)
 		if not Acts.CanClose() then return ns.Print(L.GATES_ONLY_OPENER) end
 		return ns.ShowDialog("OLYMPUS_GATES_CLOSE", guild)
 	end
+	local marked = ns.Views and ns.Views.DisputeLines and ns.Views.DisputeLines(ns.Data.Dispute(ns.Data.Guild(guild)))
+	if marked then return ns.ShowDialog("OLYMPUS_GATES_MARKED", guild, table.concat(marked, " "), guild) end
 	ns.ShowDialog("OLYMPUS_GATES", guild, nil, guild)
 end
 
@@ -446,6 +491,8 @@ function Acts.Pardon(name)
 		ns.rdb.pardonsGiven = ns.rdb.pardonsGiven or {}
 		ns.rdb.pardonsGiven[short] = ns.Now()
 		SendPardons()
+		-- 1.1 (#12): our own act never comes back to us: in our log as we send it.
+		ns.Chronicle.Add("pardon", ns.me, L.ACTS_PARDON:format(short))
 	else
 		ns.Print(L.THRONE_PREVIEW_NOTE)
 	end
@@ -461,6 +508,8 @@ local function OnPardon(sender, id, rest)
 		if n > 30 then break end
 		if short and not Acts.Pardoned(short) then
 			Apply(short)
+			-- 1.1 (#12): in this client's log of acts, with the name the server stamped.
+			ns.Chronicle.Add("pardon", sender, L.ACTS_PARDON:format(short))
 			ns.Print("|cffffd200" .. L.PARDON_NEWS:format(ns.KingName(sender), short) .. "|r")
 		end
 	end

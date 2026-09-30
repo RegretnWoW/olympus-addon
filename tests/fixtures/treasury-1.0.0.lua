@@ -21,10 +21,10 @@ local L = ns.L
 -- King sees all of it; what the rest of the army sees is the King's choice, three switches (the
 -- balance, the ranking, the book), and with any of them on the Treasury tab appears for every
 -- member with the addon. (The channel is readable by anyone on it: the switches choose what the
--- addon shows, they don't hide the numbers.) The King's word carries the time he gave it; his
--- switches, like his list of keepers, count only from his client and his Stewards' (Konig's
--- review of 1.0.0: the Treasurer's book could name anyone a keeper; of 1.1: it could set the
--- switches too). The Treasurer's book still carries them, for 1.0's addons alone.
+-- addon shows, they don't hide the numbers.) The King's word carries the time he gave it, and
+-- the Treasurer's book repeats his switches: members who never meet the King online still get
+-- them. His list of keepers comes from his client and his Stewards' alone (Konig's review of
+-- 1.0.0: the Treasurer's book could name anyone a keeper).
 -- 1.0's fresh start: the books of 0.9 are closed (kept in the saved variables, never shown or
 -- sent) and each keeper's book of 1.0 opens at his character's gold at his first login on 1.0
 -- (or when the King names him). The epoch travels in the message: 1.0 clients never read 0.9's
@@ -36,8 +36,8 @@ local L = ns.L
 --   (checked when it comes, and refused whole when it fails: ReadBook. The balance is the
 --   opening, plus all in, less all out, plus the transfers in, less the transfers out.)
 --   (the book's lines: i a donation, o a payment, r and s a transfer received and sent; items
---   with copper 0. The switches: only in the Treasurer's, read by 1.0's addons alone (1.1: from
---   nobody's book); the keepers field is "-", and read from nobody's book.)
+--   with copper 0. The switches only count from the Treasurer; the keepers field is "-", and
+--   read from nobody's book.)
 --   T8~<guild>~<balance>~<all in>~<all out>~<week in>~<donors this week>~<switches@time|->~<Name:copper,...>~<i|o:copper:Name:m|t:time,...>
 --     0.9's treasury: the Treasurer's client still sends it, the treasury of 1.0 in short, for
 --     0.9 clients; 1.0 clients never read it.
@@ -64,12 +64,11 @@ Treasury.DAYS_KEPT = 8       -- days of sums kept (today and the week)
 Treasury.SHARE_EVERY = 300   -- a keeper's client repeats his book for late logins
 Treasury.SHARE_GAP = 60      -- and sends a change once a minute at most
 Treasury.FLAGS_EVERY = 300   -- the King's client repeats his switches and his keepers
-Treasury.WORD_FRESH = 120    -- 1.1: a switch given this recently goes out from its giver's client alone
 Treasury.RANK_SENT = 100     -- donors in the ranking sent (0.9.7; the message goes in pieces)
 Treasury.RANK_PAGE = 25      -- ranking lines shown, 25 more a click (the window stays light)
 Treasury.BOOK_SENT = 15      -- latest lines of the book sent
 Treasury.BOOK_SHOWN = 40     -- lines of the book shown, 40 more a click
-Treasury.WEEK_SENT = 40      -- donors of the week a book of 1.0 named (1.1 names none; read, for the merged count)
+Treasury.WEEK_SENT = 40      -- donors of the week named in the message (for the merged count)
 Treasury.ITEMS_SENT = 20     -- items donated sent, the most given first
 Treasury.ITEMS_SHOWN = 25    -- items donated listed on the tab
 Treasury.LEGACY_RANK = 25    -- 0.9's treasury, for 0.9 clients: short
@@ -187,8 +186,6 @@ local function ItemText(id, count)
 	return ((tonumber(count) or 1) > 1 and (count .. "x ") or "") .. text
 end
 Treasury.ItemText = ItemText
-Treasury.ItemName = ItemName
-Treasury.ItemIcon = ItemIcon
 
 -- The item of a link ("item:2589:..."), or nil.
 local function LinkId(link)
@@ -264,18 +261,6 @@ local function TreasurerPin(name)
 	end
 	return nil
 end
-Treasury.TreasurerPin = TreasurerPin
--- 1.1 (Fern's #36): a line of someone's dues: gold given to one of the Treasurer's characters, by
--- trade or mail (the dues' ledger counts every one, Dues.lua). Its name and its time never leave
--- his client in a book: not on the channel (TB, TR, T8), nor in the whole book whispered to the
--- King, his Steward and the keepers (1.1): with one fixed amount a week, they would be a list of
--- who paid it, and Fern's #36 gives it to the King and that guild's Captains alone (the dues' lists).
--- Here, not in Dues.lua, so that it holds even while that file is missing (a restart owed).
-local function DuesLine(keeper, e)
-	if type(e) ~= "table" or e.out or e.item or e.kind == "transfer" or (tonumber(e.money) or 0) <= 0 then return false end
-	return TreasurerPin(keeper) ~= nil
-end
-Treasury.DuesLine = DuesLine
 
 -- One of the keepers pinned by name (the other side of a trade or a mail: its guild is not
 -- known): the Treasurer's characters (his own and his mail's), or the King's character. (The
@@ -349,16 +334,9 @@ end
 -- book came; the author's view always), and every member once the King shows the army something.
 function Treasury.Visible()
 	if Treasury.IsKeeper() or ns.King.Preview() then return true end
-	-- (1.1: the King, his Steward or a Hand holding a sister guild's bank, and a Lord or Captain
-	-- with a request to the treasury: Bank.lua.)
-	if ns.Bank and ns.Bank.SeesSisters and ns.Bank.SeesSisters() and #ns.Bank.Sisters() > 0 then return true end
-	if ns.Bank and ns.Bank.MyRequests and ns.IsMember() and #ns.Bank.MyRequests() > 0 then return true end
 	if ns.King.SetsLists() then return (ns.splitNames and ns.faction ~= "Horde") or Treasury.Report() ~= nil end
 	return ns.IsMember() and Treasury.AnyShown() and Treasury.Report() ~= nil
 end
--- The tab itself (1.1): also for every member who may send the week's dues (Dues.lua), with only
--- what the King shows of the treasury (Visible: nothing while he shows nothing).
-function Treasury.TabVisible() return Treasury.Visible() or ns.Dues.Pays() == true end
 
 ---------------------------------------------------------------------------
 -- The books (each keeper character's, kept by his own client)
@@ -456,8 +434,6 @@ local function Add(s, e, sign, now)
 		s.allIn = math.max(0, s.allIn + copper)
 		s.byDonor[e.name] = (s.byDonor[e.name] or 0) + copper
 		if s.byDonor[e.name] <= 0 then s.byDonor[e.name] = nil end
-		-- 1.1: each donor's sum per week, for the dues (Dues.lua; never sent on the channel).
-		ns.Dues.WeekAdd(s, e, copper)
 	end
 	DayCount(s, e, copper, now)
 end
@@ -476,11 +452,8 @@ local function Sums(b)
 			if not e.excluded then Add(s, e, 1, now) end
 		end
 	end
-	-- 1.1: a book's sums from before the dues get their weeks from the lines it keeps, once.
-	if s.weeks == nil then ns.Dues.Backfill(s, b.lines) end
 	return s
 end
-Treasury.SumsOf = function(b) return Sums(b) end
 local function Count(b, e, sign)
 	local s = Sums(b)
 	local now = ns.Now()
@@ -573,15 +546,10 @@ function Treasury.Record(name, copper, how, out, o)
 	local who = ns.DisplayName(ns.Normal(name)) or name
 	local e = { name = who, money = copper, how = how, t = ns.Now(), out = out or nil, excluded = excluded or nil, kind = kind,
 		item = item, count = item and count or nil }
-	-- 1.1: its week, and a gift's giver's guild (Dues.lua; kept here, never sent).
-	ns.Dues.Stamp(e, name, o)
 	b.lines[#b.lines + 1] = e
 	while #b.lines > Treasury.MAX do table.remove(b.lines, 1) end
 	if not e.excluded then Count(b, e, 1) end
 	Touch(b)
-	-- 1.1: an item given (a counted payment) to a player who asked the treasury for it closes his
-	-- request once he got its count (Bank.lua).
-	if item and out and not e.excluded and kind ~= "transfer" and ns.Bank and ns.Bank.Paid then ns.Bank.Paid(name, item, count) end
 	-- The King (and the army) see it soon (once a minute at most).
 	Treasury.Share()
 	if not o.quiet then
@@ -600,7 +568,7 @@ function Treasury.Record(name, copper, how, out, o)
 				end
 			end
 			ns.Print(line)
-			if not out then ns.PlayAlert("soft", "treasury") end
+			if not out then ns.PlayAlert("soft") end
 		end
 	end
 	ns.Fire("TREASURY_CHANGED")
@@ -709,10 +677,7 @@ function Treasury.TradeShow()
 	if not Treasury.IsKeeper() then return end
 	Treasury.OpenBook() -- (at the gold before this trade, if it is still closed)
 	local name = ns.UnitFullName and ns.UnitFullName("NPC") or (UnitName and UnitName("NPC"))
-	-- 1.1: the guild the game shows on the other side (the dues' guild of a gift, Dues.lua).
-	local ok, guild = pcall(GetGuildInfo, "NPC")
-	trade = name and { name = name, got = 0, gave = 0, gotList = {}, gaveList = {}, book = BookOf(ns.me, true),
-		guild = ok and type(guild) == "string" and guild ~= "" and guild or nil } or nil
+	trade = name and { name = name, got = 0, gave = 0, gotList = {}, gaveList = {}, book = BookOf(ns.me, true) } or nil
 end
 
 function Treasury.Info(a, b)
@@ -727,8 +692,7 @@ function Treasury.Info(a, b)
 	-- so (a click on the line).
 	local net = done.got - done.gave
 	if net > 0 then
-		Treasury.Record(done.name, net, "trade", nil, { book = book, excluded = done.gaveItems or nil, kind = done.gaveItems and "sale" or nil,
-			guild = done.guild })
+		Treasury.Record(done.name, net, "trade", nil, { book = book, excluded = done.gaveItems or nil, kind = done.gaveItems and "sale" or nil })
 	elseif net < 0 then
 		Treasury.Record(done.name, -net, "trade", true, { book = book, excluded = done.gotItems or nil, kind = done.gotItems and "purchase" or nil })
 	end
@@ -853,8 +817,7 @@ end
 local function MailClock() return GetTime and GetTime() or ns.Now() end
 local function Settle(p)
 	if p.returned then return Returned(p.book, p.sender, p.money) end
-	-- (1.1: the mail's subject, the dues' note: its week and guild, Dues.lua.)
-	Treasury.Record(p.sender, p.money, "mail", nil, { book = p.book, note = p.note })
+	Treasury.Record(p.sender, p.money, "mail", nil, { book = p.book })
 end
 local function SettleItem(p)
 	if p.returned then return Returned(p.book, p.sender, 0, p.id, p.n) end
@@ -879,13 +842,13 @@ function Treasury.MailTaking(i)
 	if not m or m.money <= 0 then return end
 	local book = TakeBook(m.sender)
 	if not book then return end
-	if not GetMoney then return Settle({ sender = m.sender, money = m.money, returned = m.returned, book = book, note = m.subject }) end
+	if not GetMoney then return Settle({ sender = m.sender, money = m.money, returned = m.returned, book = book }) end
 	local now = MailClock()
 	DropStale(pending, now)
 	local key = ("%d|%s|%s|%d"):format(i, m.sender, tostring(m.subject or ""), m.money)
 	for _, p in ipairs(pending) do if p.key == key then return end end
 	if #pending == 0 then lastMoney = GetMoney() end
-	pending[#pending + 1] = { key = key, sender = m.sender, money = m.money, returned = m.returned, t = now, book = book, note = m.subject }
+	pending[#pending + 1] = { key = key, sender = m.sender, money = m.money, returned = m.returned, t = now, book = book }
 end
 
 -- The character's gold went up: the takes it pays for are counted (the one of that exact
@@ -1047,34 +1010,6 @@ function Treasury.Totals(b)
 	return t
 end
 
--- 1.1, Konig's review (the ranking): a ranked donor's total in the Treasurer's book grew by the
--- dues' amount the week he paid it (one fixed amount), which told the channel who paid and so who
--- did not (Fern's #36). The ranking (all time, which Fern kept public) that leaves the Treasurer's
--- client (the channel's, the whole book whispered, 0.9's copy, his mail character's he passes on)
--- leaves out, of each giver's gold to the Treasurer's characters, each week's up to that week's
--- amount as the book kept it, and all he sent with the dues' note (Dues.DuesPart): what may be his
--- dues, paid or not. A total grows only by what a week's gold went over the amount, so one that did
--- not grow may be a payer's or not: it shows no payer of the amount the Treasurer's client knew that
--- week (one who paid more by trade or plain mail while it knew less shows by the difference). It is
--- that much lower than on the Treasurer's own screen. Another keeper's book, which is no dues: as it is.
-local function PublicRanking(b, t)
-	t = t or Treasury.Totals(b)
-	if not (b and TreasurerPin(b.name)) then return t.ranking end
-	local part, out = ns.Dues.DuesPart(Sums(b)), {}
-	for _, g in ipairs(t.ranking) do
-		local key = ns.Dues.Key(g.name)
-		local take = key and math.min(g.money, part[key] or 0) or 0
-		if key then part[key] = (part[key] or 0) - take end
-		if g.money - take >= 1 then out[#out + 1] = { name = g.name, money = g.money - take } end
-	end
-	table.sort(out, function(x, y)
-		if x.money ~= y.money then return x.money > y.money end
-		return x.name < y.name
-	end)
-	return out
-end
-Treasury.PublicRanking = PublicRanking
-
 ---------------------------------------------------------------------------
 -- Sharing: each keeper's book, and everyone's copy of them
 ---------------------------------------------------------------------------
@@ -1092,15 +1027,6 @@ function Treasury.Consent()
 	if k ~= nil then return k end
 	if ns.db and ns.IsMember() and ns.IsTreasurer(ns.me, GetGuildInfo("player")) then return ns.db.treasurerShares end
 	return nil
-end
-
--- His answer to 1.0's question alone (true, false, or nil while he gave none): what his line on
--- the first-open page waits for (1.1, Consent.lua: it shows Consent, what goes out now), and
--- AskConsent too.
-function Treasury.ConsentAnswer()
-	local shares = ns.db and ns.db.keeperShares
-	if type(shares) ~= "table" then return nil end
-	return shares[ConsentKey()]
 end
 
 -- Only a real keeper's client sends (never the author's view), and only with his yes.
@@ -1190,10 +1116,6 @@ function Treasury.AskConsent()
 	local shares = ns.db and ns.db.keeperShares
 	if asked or not RealKeeper() or (type(shares) == "table" and shares[ConsentKey()] ~= nil) then return false end
 	if (InCombatLockdown and InCombatLockdown()) or (IsInInstance and IsInInstance()) then return false end
-	-- 1.1 (#11): in an Olympus guild the first-open page is the first question, this one on it
-	-- in the same words (once a session there). This popup only while Consent.lua is not loaded
-	-- (updated without a restart), and for a keeper outside a guild (the page asks members).
-	if ns.Consent and not ns.Consent.missing and ns.IsMember() then return ns.Consent.Ask("treasurer") == true end
 	asked = true
 	ns.ShowDialog("OLYMPUS_TREASURER_SHARE", ns.Comm.Audience and ns.Comm.Audience() or "")
 	return true
@@ -1228,84 +1150,43 @@ local function SentDate(t, unknown)
 end
 
 -- This keeper's book as it goes out (TB), each list cut until it fits Treasury.ROOM.
--- parts (1.1): the army's part alone, as it goes on the channel ({ balance, ranking, book }, what
--- the King's switches show: PublicParts); nil: the whole book, as it goes by whisper to the King,
--- his Stewards and the keepers. A part left out is empty in it, and its totals are then the sums
--- of what it shows (a 1.0 client checks them, and so still takes it): the balance's numbers (the
--- opening, the balance, the totals, the week, the transfers) with "balance", the ranking with
--- "ranking", the book's lines and the items donated with "book". Its keepers' field (read by
--- nobody before 1.1) says which parts it holds: "<balance><ranking><book>@1", "110@1".
--- A 1.0 client takes it as that keeper's whole book: its army shows what the King shows, as
--- before, and the King's switches still reach it from the Treasurer's copy, which 1.0 reads (and
--- which also takes the place of any whole book of 1.0 it kept). But a King's, Steward's or
--- keeper's 1.0 addon, which
--- shows everything whatever the switches, shows a balance of zero there with the balance hidden
--- (every switch off, as the King starts) or the sums of the lists shown, until it updates: 1.1
--- whispers the whole book to 1.1 alone. A 1.1 insider's Treasury tab names them
--- (Treasury.NotUpdated), so they can be told.
-function Treasury.Message(b, parts)
+function Treasury.Message(b)
 	b = b or BookOf(ns.me, true)
 	local t = Treasury.Totals(b)
-	local whole = parts == nil
-	local showBalance, showRanking, showBook = whole or parts.balance == true, whole or parts.ranking == true, whole or parts.book == true
-	-- The King's switches ride the Treasurer's book alone (not a book of his mail character's he
-	-- passes on), for 1.0's addons, which read them there; 1.1 reads them from nobody's book
-	-- (Konig's review of 1.1: TakeFlags). His keepers never do: they are the King's and his
-	-- Stewards' to set, from their own clients (Konig's review of 1.0.0), and the field stays "-"
-	-- (1.1: on the channel, the parts the book holds).
+	-- The King's switches ride the Treasurer's book alone (only his is read; not a book of his
+	-- mail character's he passes on). His keepers never do: they are the King's and his
+	-- Stewards' to set, from their own clients (Konig's review of 1.0.0), and the field stays "-".
 	local mine = ns.IsTreasurer(ns.me, GetGuildInfo("player") or "") and SameChar(b.name or ns.me, ns.me)
-	local flags = mine and FlagsWord() or "-"
-	local keepers = whole and "-" or ((showBalance and "1" or "0") .. (showRanking and "1" or "0") .. (showBook and "1" or "0") .. "@1")
-	local caps = { rank = Treasury.RANK_SENT, book = Treasury.BOOK_SENT, items = Treasury.ITEMS_SENT }
-	-- (1.1, Konig's review: never what may be someone's dues in the Treasurer's ranking.)
-	local ranking = PublicRanking(b, t)
+	local flags, keepers = mine and FlagsWord() or "-", "-"
+	local caps = { rank = Treasury.RANK_SENT, week = Treasury.WEEK_SENT, book = Treasury.BOOK_SENT, items = Treasury.ITEMS_SENT }
 	local function Build()
-		-- 1.1 (Fern's #36): the week's donors go out as a count, never by name. With the dues (one
-		-- fixed amount a week, Dues.lua) their names on the channel would be a public list of who
-		-- paid this week, and so of who did not: every client on it receives the bytes, whatever the
-		-- King's switches show. The ranking (all time, which Fern kept) stays, less what may be each
-		-- giver's dues in the Treasurer's (PublicRanking); so do the book's latest lines, except the
-		-- gold given to the Treasurer's characters: each of those is someone's dues (a name and his
-		-- last payment: DuesLine), and never goes out.
 		local week, rank, lines, items = {}, {}, {}, {}
-		local sums = { rank = 0, i = 0, o = 0, r = 0, s = 0 }
-		if showRanking then
-			for i = 1, math.min(caps.rank, #ranking) do
-				rank[i] = ("%s:%d"):format(Clean(ranking[i].name), U(ranking[i].money))
-				sums.rank = sums.rank + U(ranking[i].money)
-			end
+		for i = 1, math.min(caps.week, #t.givers) do week[i] = Clean(t.givers[i].name) end
+		for i = 1, math.min(caps.rank, #t.ranking) do
+			rank[i] = ("%s:%d"):format(Clean(t.ranking[i].name), U(t.ranking[i].money))
 		end
 		for i = #b.lines, 1, -1 do
-			if not showBook or #lines >= caps.book then break end
+			if #lines >= caps.book then break end
 			local e = b.lines[i]
 			-- Counted lines and transfers; what he said was his (a sale, his own) stays home.
-			if not e.excluded and not DuesLine(b.name or ns.me, e) then
-				local code = LineCode(e)
-				local line = ("%s:%d:%s:%s:%d"):format(code, U(e.money), Clean(e.name), e.how == "mail" and "m" or "t", SentDate(e.t))
+			if not e.excluded then
+				local line = ("%s:%d:%s:%s:%d"):format(LineCode(e), U(e.money), Clean(e.name), e.how == "mail" and "m" or "t", SentDate(e.t))
 				if e.item then line = line .. (":%d:%d"):format(e.item, math.min(tonumber(e.count) or 1, Treasury.MAX_COUNT)) end
 				lines[#lines + 1] = line
-				sums[code] = sums[code] + U(e.money)
 			end
 		end
-		for i = 1, showBook and math.min(caps.items, #t.items) or 0 do
+		for i = 1, math.min(caps.items, #t.items) do
 			local it = t.items[i]
 			local last = it.donors[1]
 			items[i] = ("%d:%d:%d:%s"):format(it.id, math.min(it.n, Treasury.MAX_COUNT), SentDate(it.t, true), Clean(last and last.name or ""))
 		end
-		local opening, allIn, allOut, weekIn, donors, tin, tout = U(Treasury.Opening(b)), U(t.allIn), U(t.allOut), U(t.weekIn), math.min(#t.givers, 9999), U(t.transIn), U(t.transOut)
-		if not showBalance then
-			-- Hidden: none of the balance's numbers, only the sums of the lists it shows.
-			opening, weekIn, donors = 0, 0, 0
-			allIn, allOut, tin, tout = U(math.max(sums.rank, sums.i)), U(sums.o), U(sums.r), U(sums.s)
-		end
-		local balance = showBalance and S(Treasury.Balance(b)) or S(opening + allIn - allOut + tin - tout)
-		return ("TB~%s~%s~%d~%d~%d~%d~%d~%d~%s~%s~%s~%s~%s~%s~%d:%d"):format(Treasury.EPOCH, Clean(GetGuildInfo("player")), opening,
-			balance, allIn, allOut, weekIn, donors, table.concat(week, ","), flags, keepers,
-			table.concat(rank, ","), table.concat(lines, ","), table.concat(items, ","), tin, tout)
+		return ("TB~%s~%s~%d~%d~%d~%d~%d~%d~%s~%s~%s~%s~%s~%s~%d:%d"):format(Treasury.EPOCH, Clean(GetGuildInfo("player")), U(Treasury.Opening(b)),
+			S(Treasury.Balance(b)), U(t.allIn), U(t.allOut), U(t.weekIn), math.min(#t.givers, 9999), table.concat(week, ","), flags, keepers,
+			table.concat(rank, ","), table.concat(lines, ","), table.concat(items, ","), U(t.transIn), U(t.transOut))
 	end
-	-- Too long (it is rare): items first, then the ranking's tail, then lines of the book; the top
-	-- 25 donors last of all.
-	local STEPS = { { "items", 10, 5 }, { "rank", 50, 10 }, { "book", 5, 5 }, { "rank", 25, 5 }, { "items", 5, 5 }, { "rank", 0, 5 } }
+	-- Too long (it is rare): the week's names go first (they only count the donors), then items,
+	-- then the ranking's tail, then lines of the book; the top 25 donors last of all.
+	local STEPS = { { "week", 10, 10 }, { "items", 10, 5 }, { "rank", 50, 10 }, { "book", 5, 5 }, { "rank", 25, 5 }, { "items", 5, 5 }, { "rank", 0, 5 } }
 	local msg = Build()
 	while #msg > Treasury.ROOM do
 		local step
@@ -1318,26 +1199,21 @@ function Treasury.Message(b, parts)
 end
 
 -- 0.9's treasury (T8), for 0.9 clients (they read it from the Treasurer alone): the treasury
--- of 1.0 as his client puts it together, short. 1.0 clients never read it. parts (1.1): it goes
--- on the channel, so only what the King's switches show (Treasury.Message): a part hidden is
--- zero or empty in it.
-function Treasury.LegacyMessage(parts)
+-- of 1.0 as his client puts it together, short. 1.0 clients never read it.
+function Treasury.LegacyMessage()
 	local r = Treasury.Report(true)
 	if not r then return nil end
-	parts = parts or { balance = true, ranking = true, book = true }
 	local rank, lines = {}, {}
-	for i = 1, parts.ranking and math.min(Treasury.LEGACY_RANK, #r.rank) or 0 do rank[i] = ("%s:%d"):format(Clean(r.rank[i].name), U(r.rank[i].money)) end
-	for _, w in ipairs(parts.book and r.book or {}) do
+	for i = 1, math.min(Treasury.LEGACY_RANK, #r.rank) do rank[i] = ("%s:%d"):format(Clean(r.rank[i].name), U(r.rank[i].money)) end
+	for _, w in ipairs(r.book) do
 		if #lines >= Treasury.LEGACY_BOOK then break end
 		local e = w.e
-		-- (1.1: never a line of someone's dues, as in TB: DuesLine.)
-		if not e.item and not e.excluded and e.kind ~= "transfer" and not DuesLine(w.keeper, e) then
+		if not e.item and not e.excluded and e.kind ~= "transfer" then
 			lines[#lines + 1] = ("%s:%d:%s:%s:%d"):format(e.out and "o" or "i", U(e.money), Clean(e.name), e.how == "mail" and "m" or "t", math.floor(tonumber(e.t) or 0))
 		end
 	end
-	local b = parts.balance
-	return ("T8~%s~%d~%d~%d~%d~%d~%s~%s~%s"):format(Clean(GetGuildInfo("player")), b and S(r.balance) or 0, b and U(r.allIn) or 0, b and U(r.allOut) or 0,
-		b and U(r.week) or 0, b and math.min(r.donors, 9999) or 0, FlagsWord(), table.concat(rank, ","), table.concat(lines, ","))
+	return ("T8~%s~%d~%d~%d~%d~%d~%s~%s~%s"):format(Clean(GetGuildInfo("player")), S(r.balance), U(r.allIn), U(r.allOut), U(r.week),
+		math.min(r.donors, 9999), FlagsWord(), table.concat(rank, ","), table.concat(lines, ","))
 end
 
 local function Send(msg, key)
@@ -1367,15 +1243,9 @@ function Treasury.Share(force)
 	end
 	lastShare = now
 	Treasury.OpenBook()
-	-- On the channel the army's part alone (1.1); the whole book by whisper to the King, his
-	-- Stewards and the keepers heard online (none of it while the switches show all of it).
-	local parts, all = Treasury.PublicParts()
-	if ns.IsTreasurer(ns.me, GetGuildInfo("player")) then Send(Treasury.LegacyMessage(parts), "treasury8") end
-	Send(Treasury.Message(nil, not all and parts or nil), "treasury")
+	if ns.IsTreasurer(ns.me, GetGuildInfo("player")) then Send(Treasury.LegacyMessage(), "treasury8") end
+	Send(Treasury.Message(), "treasury")
 	Treasury.Relay()
-	Treasury.SendPrivate()
-	-- (1.1: the open bank requests next to the bank, while the King shows it: Bank.lua.)
-	if ns.Bank and ns.Bank.SharePublic then ns.Bank.SharePublic(force) end
 end
 
 -- The Treasurer's client passes on the book of his mail character kept on his account (TR),
@@ -1385,40 +1255,18 @@ end
 -- counts: kept private, its book is withdrawn instead (TX with its name), repeated as often,
 -- whether the Treasurer shares his own book or not (1.0.0). The time is when that book last
 -- changed (as a book sends a date: SentDate): a copy as new (its own TB, heard when it came) stays.
--- The mail character's book as the Treasurer's client passes it on: TR, its date, its book
--- (parts: the army's part alone, for the channel; nil: whole, by whisper).
-function Treasury.RelayMessage(b, parts)
-	return ("TR~%s~%d~"):format(Clean(b.name), SentDate(BookTime(b))) .. Treasury.Message(b, parts)
-end
--- The books the Treasurer's client passes on whole by whisper (1.1): his mail character's, kept on
--- his account, with its yes and his.
-function Treasury.RelayedBooks()
-	local out = {}
-	if not RealKeeper() or not ns.IsTreasurer(ns.me, GetGuildInfo("player")) or not CanSend() then return out end
-	local shares = type(ns.db.keeperShares) == "table" and ns.db.keeperShares or {}
-	for key, b in pairs(Books()) do
-		if type(b) == "table" and b.epoch == Treasury.EPOCH and b.opening ~= nil and type(b.lines) == "table"
-			and ns.IsTreasurerMail(b.name) and Treasury.IsOwnCharacter(b.name) and shares[key] == true then
-			out[#out + 1] = b
-		end
-	end
-	return out
-end
-
 function Treasury.Relay(force)
 	if not RealKeeper() or not ns.IsTreasurer(ns.me, GetGuildInfo("player")) then return end
 	local now = ns.Now()
 	if not force and now - lastRelay < Treasury.RELAY_EVERY then return end
 	lastRelay = now
 	local shares = type(ns.db.keeperShares) == "table" and ns.db.keeperShares or {}
-	local parts, all = Treasury.PublicParts()
 	for key, b in pairs(Books()) do
 		if type(b) == "table" and b.epoch == Treasury.EPOCH and b.opening ~= nil and type(b.lines) == "table"
 			and ns.IsTreasurerMail(b.name) and Treasury.IsOwnCharacter(b.name) then
-			-- Its book with his yes too (his client sends it); its no with or without his. On the
-			-- channel the army's part alone (1.1), the whole of it by whisper (SendPrivate).
+			-- Its book with his yes too (his client sends it); its no with or without his.
 			if shares[key] == true and CanSend() then
-				Send(Treasury.RelayMessage(b, not all and parts or nil))
+				Send(("TR~%s~%d~"):format(Clean(b.name), SentDate(BookTime(b))) .. Treasury.Message(b))
 			elseif shares[key] == false then
 				ns.Comm.Send("CHANNEL", ("TX~%s~%s"):format(Clean(GetGuildInfo("player")), Clean(b.name)), "treasuryx " .. key)
 			end
@@ -1487,9 +1335,6 @@ local function ReadBook(text, from, t)
 	local function Within(sum, total) return total >= MAX or sum <= total end
 	local r = { epoch = f[2], guild = f[3], from = from, t = t, opening = opening, balance = balance, allIn = allIn, allOut = allOut,
 		week = week, donors = donors, transIn = tin, transOut = tout, weekNames = {}, rank = {}, book = {}, items = {} }
-	-- 1.1: the army's part alone (the channel's copy), and which parts it holds.
-	local pb, pr, pk = f[12]:match("^([01])([01])([01])@1$")
-	if pb then r.part = { balance = pb == "1", ranking = pr == "1", book = pk == "1" } end
 	-- The sums.
 	local expected = opening + allIn - allOut + tin - tout
 	local clamped = allIn >= MAX or allOut >= MAX or tin >= MAX or tout >= MAX or math.abs(expected) >= MAX
@@ -1554,31 +1399,20 @@ local function ReadBook(text, from, t)
 end
 
 -- Our copy of a keeper's book, in place of the one we had of that character (however its name
--- was written). 1.1: on the King's, a Steward's or a keeper's client the army's part (the
--- channel's copy, r.part) never replaces a whole copy of that book (a whisper's, or a 1.0
--- keeper's): the whole one stays until the next whole one comes. Returns whether it was kept.
+-- was written).
 local function Keep(r)
 	local reports, gone = Reports(), {}
-	if r.part and Treasury.IsInsider() then
-		for from, old in pairs(reports) do
-			if SameChar(from, r.from) and type(old) == "table" and not old.part then return false end
-		end
-	end
 	for from in pairs(reports) do if from ~= r.from and SameChar(from, r.from) then gone[#gone + 1] = from end end
 	for _, from in ipairs(gone) do reports[from] = nil end
 	reports[r.from] = r
-	return true
 end
 
 -- A keeper's book (TB): from a keeper himself (his name, which the server sets), of this era.
--- The King's keepers never from a book: the Treasurer's could name anyone a keeper, or take the
--- King's off, with a fresh date (Konig's review of 1.0.0); only the King and his Stewards set them
--- (T1~K). 1.1: nor his switches (Konig's review of 1.1: the same fresh date set them): the
--- Treasurer's copy is only answered when older than ours (TakeFlags).
--- 1.1: on the channel, or by whisper (put together from its pieces: Treasury.HandlePrivate),
--- whole, to the King, a Steward or a keeper.
+-- The King's switches only from the Treasurer (as 0.9's T8 carried them). The King's keepers
+-- never from a book: the Treasurer's could name anyone a keeper, or take the King's off, with a
+-- fresh date (Konig's review of 1.0.0); only the King and his Stewards set them (T1~K).
 function Treasury.HandleReport(dist, sender, text)
-	if (dist ~= "CHANNEL" and dist ~= "WHISPER") or type(text) ~= "string" then return end
+	if dist ~= "CHANNEL" or type(text) ~= "string" then return end
 	local r, f = ReadBook(text, ns.FullName(sender), ns.Now())
 	if not r then
 		if f then ns.Log("treasury book from %s refused: %s", tostring(sender), f) end
@@ -1589,16 +1423,12 @@ function Treasury.HandleReport(dist, sender, text)
 		ns.Log("treasury book from %s (%s) ignored: not a keeper", tostring(sender), tostring(guild))
 		return
 	end
-	-- (A whispered book is whole, and only for the King, a Steward or a keeper.)
-	if dist == "WHISPER" and (r.part or not Treasury.IsInsider()) then return end
-	Treasury.Heard(sender)
 	Treasury.Migrate()
 	Keep(r)
-	-- The Treasurer's copy of the King's switches (for 1.0's addons): never taken, answered by the
-	-- King's or a Steward's client when older than theirs (TakeFlags, relayed).
+	-- The Treasurer repeats the King's switches, if newer than ours.
 	if ns.IsTreasurer(sender, guild) then
 		local b, k, o, at = f[11]:match("^([01])([01])([01])@(%d+)$")
-		if b then Treasury.TakeFlags(b .. k .. o, tonumber(at), sender, true) end
+		if b then Treasury.TakeFlags(b .. k .. o, tonumber(at), sender) end
 	end
 	ns.Fire("TREASURY_CHANGED")
 	ns.Fire("DATA_CHANGED") -- the tab may appear
@@ -1611,7 +1441,7 @@ ns.Comm.Handle("TB", function(...) Treasury.HandleReport(...) end)
 -- The book is checked as a keeper's own is (ReadBook), and its date too: DATE_SLACK ahead of the
 -- server's clock at most (Konig's review of 1.0.0).
 function Treasury.HandleRelay(dist, sender, text)
-	if (dist ~= "CHANNEL" and dist ~= "WHISPER") or type(text) ~= "string" or ns.faction == "Horde" then return end
+	if dist ~= "CHANNEL" or type(text) ~= "string" or ns.faction == "Horde" then return end
 	local whose, at, book = text:match("^TR~([^~]+)~(%d+)~(TB~.*)$")
 	if not whose then return end
 	whose = ns.FullName(whose)
@@ -1625,12 +1455,9 @@ function Treasury.HandleRelay(dist, sender, text)
 		return
 	end
 	if not ns.IsTreasurer(sender, r.guild) or not ns.IsTreasurerMail(whose) then return end
-	-- (1.1: whispered, whole, to the King, a Steward or a keeper; a whole copy as new as the army's
-	-- part we hold takes its place.)
-	if dist == "WHISPER" and (r.part or not Treasury.IsInsider()) then return end
 	Treasury.Migrate()
 	for from, old in pairs(Reports()) do
-		if SameChar(from, whose) and type(old) == "table" and (tonumber(old.t) or 0) >= r.t and (r.part or not old.part) then return end
+		if SameChar(from, whose) and type(old) == "table" and (tonumber(old.t) or 0) >= r.t then return end
 	end
 	r.relayed = true
 	Keep(r)
@@ -1646,8 +1473,7 @@ ns.Comm.Handle("T8", function() end)
 -- one character at a time: theirs never reach it by the channel), and every other keeper's
 -- book as it last reached us. A keeper's book stays while he is one, however old (it says
 -- when it came); a character no longer on the King's list is no longer counted.
--- public: its ranking as it leaves this client (PublicRanking), never its whole one.
-local function LivePart(b, own, public)
+local function LivePart(b, own)
 	local t = Treasury.Totals(b)
 	local names, lines = {}, {}
 	for i = 1, math.min(Treasury.WEEK_SENT, #t.givers) do names[i] = t.givers[i].name end
@@ -1658,7 +1484,7 @@ local function LivePart(b, own, public)
 	-- (Ours is as of now; another character's of this account, as of its latest change.)
 	local when = own and ns.Now() or BookTime(b)
 	return { name = b.name, opening = Treasury.Opening(b), balance = Treasury.Balance(b), allIn = t.allIn, allOut = t.allOut, week = t.weekIn,
-		donors = #t.givers, weekNames = names, rank = public and PublicRanking(b, t) or t.ranking, book = lines, items = t.items, t = when, own = own, b = b }
+		donors = #t.givers, weekNames = names, rank = t.ranking, book = lines, items = t.items, t = when, own = own, b = b }
 end
 -- Another character of this account said yes to sharing its book (the Treasurer's 0.9.3 yes is his,
 -- while he has given no answer since: his no of 1.0 stays a no).
@@ -1669,21 +1495,19 @@ local function SharesBook(key, name)
 	return TreasurerPin(name) == 1 and ns.db.treasurerShares == true
 end
 -- shared: the treasury as it may go out (0.9's T8): a book of another character of this account
--- only with that character's yes. public (and shared): each of this account's books ranks as it
--- leaves this client (PublicRanking: the Discord copy, the review of Konig's fixes, 1.1).
-local function Parts(shared, public)
-	public = shared or public
+-- only with that character's yes.
+local function Parts(shared)
 	local parts, seen = {}, {}
 	if not ns.rdb then return parts end
 	if Treasury.IsKeeper() then
 		local b = BookOf(ns.me, true)
-		parts[1], seen[OwnKey(ns.me)] = LivePart(b, true, public), true
+		parts[1], seen[OwnKey(ns.me)] = LivePart(b, true), true
 	end
 	for key, b in pairs(Books()) do
 		if not seen[key] and type(b) == "table" and b.epoch == Treasury.EPOCH and type(b.lines) == "table" and Treasury.IsOwnCharacter(b.name)
 			and Treasury.KeeperByName(b.name) then
 			-- (Kept private: left out, and no copy of it either.)
-			if not shared or SharesBook(key, b.name) then parts[#parts + 1] = LivePart(b, false, public) end
+			if not shared or SharesBook(key, b.name) then parts[#parts + 1] = LivePart(b, false) end
 			seen[key] = true
 		end
 	end
@@ -1691,13 +1515,9 @@ local function Parts(shared, public)
 		local key = OwnKey(from)
 		if not seen[key] and type(r) == "table" and r.epoch == Treasury.EPOCH and Treasury.IsKeeperName(from, r.guild) then
 			seen[key] = true
-			-- 1.1: the army's part alone (the channel's copy): the balance's numbers only when it
-			-- holds them (without them its totals are the sums of its lists, never the balance).
-			local nums = not r.part or r.part.balance
-			parts[#parts + 1] = { name = from, opening = nums and r.opening or 0, balance = nums and r.balance or 0, allIn = nums and r.allIn or 0,
-				allOut = nums and r.allOut or 0, week = nums and r.week or 0, donors = nums and r.donors or 0, weekNames = r.weekNames or {},
-				rank = r.rank or {}, book = r.book or {}, items = r.items or {}, t = r.t or 0, part = r.part,
-				transIn = nums and r.transIn or 0, transOut = nums and r.transOut or 0 }
+			parts[#parts + 1] = { name = from, opening = r.opening or 0, balance = r.balance or 0, allIn = r.allIn or 0, allOut = r.allOut or 0,
+				week = r.week or 0, donors = r.donors or 0, weekNames = r.weekNames or {}, rank = r.rank or {}, book = r.book or {},
+				items = r.items or {}, t = r.t or 0 }
 		end
 	end
 	-- The Treasurer first, his mail character next, then the King, then the others by name.
@@ -1716,21 +1536,19 @@ end
 -- The treasury, all its keepers' books together, or nil while none reached us: the balance and
 -- the totals summed, the week's donors counted once, the donors and the items one list each,
 -- the book every keeper's lines by time ({ e = line, keeper = name, own = this keeper's, b }).
--- shared: as it may go out (Parts); public: every book it holds, each ranked as it leaves (Parts).
-function Treasury.Report(shared, public)
-	local parts = Parts(shared, public)
+-- shared: as it may go out (Parts).
+function Treasury.Report(shared)
+	local parts = Parts(shared)
 	if #parts == 0 then return nil end
 	local m = { balance = 0, opening = 0, allIn = 0, allOut = 0, week = 0, donors = 0, rank = {}, book = {}, items = {}, keepers = {}, t = 0, parts = parts }
 	local weekSeen, extra, byName, byItem = {}, 0, {}, {}
 	for _, p in ipairs(parts) do
 		m.balance, m.opening = m.balance + (p.balance or 0), m.opening + (p.opening or 0)
 		m.allIn, m.allOut, m.week = m.allIn + (p.allIn or 0), m.allOut + (p.allOut or 0), m.week + (p.week or 0)
-		-- (1.1: a player's linked characters, Alts.lua, are one donor under their main's name.)
-		local Person = ns.Alts and ns.Alts.Person
-		for _, n in ipairs(p.weekNames) do weekSeen[Person and Person(n) or ns.ShortName(n)] = true end
+		for _, n in ipairs(p.weekNames) do weekSeen[ns.ShortName(n)] = true end
 		extra = extra + math.max(0, (p.donors or 0) - #p.weekNames)
 		for _, g in ipairs(p.rank) do
-			local key = Person and Person(g.name) or ns.ShortName(g.name)
+			local key = ns.ShortName(g.name)
 			local r = byName[key]
 			if not r then
 				r = { name = key, money = 0 }
@@ -1751,7 +1569,7 @@ function Treasury.Report(shared, public)
 			if (it.t or 0) > x.t then x.t = it.t end
 			for _, d in ipairs(it.donors or {}) do x.donors[#x.donors + 1] = d end
 		end
-		m.keepers[#m.keepers + 1] = { name = p.name, t = p.t, balance = p.balance, own = p.own, part = p.part }
+		m.keepers[#m.keepers + 1] = { name = p.name, t = p.t, balance = p.balance, own = p.own }
 		if (p.t or 0) > m.t then m.t = p.t end
 	end
 	for _ in pairs(weekSeen) do m.donors = m.donors + 1 end
@@ -1786,342 +1604,12 @@ function Treasury.Report(shared, public)
 end
 
 ---------------------------------------------------------------------------
--- 1.1: what the King's switches hide never goes on the channel (a promise made to a community
--- reviewer: "the parts Asmon hides won't be sent at all"). On the Olympus channel, which anyone
--- can read, each keeper's book carries only what the army may see (Treasury.Message: the
--- balance, the ranking, the book, each with its switch); the guild bank goes there only with the
--- "book" switch (Bank.lua) and the early supporters only with the "ranking" one. The whole of it
--- goes by whisper, in pieces, to the King, his Stewards and the keepers alone, each one whose
--- addon was heard within AUDIENCE_FRESH (the server stamps a whisper's sender and delivers it to
--- that one character). GUILD is not used for it: it reaches every member of <Olympus>, the army
--- too. With every switch on, the whole book goes on the channel as in 1.0, and nothing by whisper.
---   TA~<guild>~<0|1>   on the channel, from the King, a Steward or a keeper (a Hand too, for the
---                      sister guilds' banks, Bank.lua): "send me what is mine to see" (0: this
---                      client holds nothing yet, after a login; 1: what changed), ASK_AFTER after
---                      login and every ASK_EVERY; only its sender's name counts
---   TW~<type>~C<id>:<i>:<n>:<piece>   by whisper: a whole TB, TR or T9 (or a sister guild's bank,
---                      TS: Bank.lua) in pieces; put together by its receiver and read as if it
---                      came on the channel, from that sender
---   TE~...             by whisper too, piece by piece, the early supporters (as on the channel)
--- 1.0 clients leave TA and TW unread: a 1.0 army shows what the King shows, as before. Only a
--- client heard asking (TA: 1.1 or later) is whispered to, so a 1.0 King, Steward or keeper gets
--- nothing by whisper (what he reads from the channel: Treasury.Message's note).
--- The keeper's message budget: the whispers share the addon's one queue (Comm: a message each
--- 1.2 s, 60 waiting at most, the oldest dropped when it is full) with his census, his book on the
--- channel and everything else. So a piece is queued only while that queue is nearly empty
--- (PRIVATE_ROOM), and a changed message goes to the same player PRIVATE_GAP after the last one at
--- the soonest (the latest then: FlushPrivate, every minute); the channel's own messages are never
--- pushed out by ours.
----------------------------------------------------------------------------
-
-Treasury.AUDIENCE_FRESH = 11 * 60  -- the King, a Steward or a keeper heard this recently is online
-Treasury.ASK_AFTER = 40            -- seconds after login such a client asks for what is its to see...
-Treasury.ASK_EVERY = 15 * 60       -- ...and again this often (what changed)
-Treasury.RESET_GAP = 300           -- one player's "I hold nothing" is taken this often at most
-Treasury.PRIVATE_PACE = 1.5        -- seconds between two whispered pieces at the least...
-Treasury.PRIVATE_ROOM = 3          -- ...each one queued only while the addon's queue holds this many at most...
-Treasury.PRIVATE_WAIT = 120        -- ...or once it waited this many turns (never held forever)
-Treasury.PRIVATE_GAP = 180         -- a changed message to the same player this long after the last one at the soonest
-Treasury.PRIVATE_QUEUE = 100       -- whole messages waiting to be whispered, at most
-Treasury.READERS_FOR = 30 * 86400  -- a client heard asking (TA) is remembered as reading whispers this long
-Treasury.PRIVATE_REPEAT = 1800     -- the same one whispered again to the same player this long after at most
-                                   -- (a piece lost on the way, a wipe of his: he gets it whole again)
-
-local heard = {}         -- [Name-Realm] = when the King, a Steward or a keeper was last heard
-local firstHeard = {}    -- [Name-Realm] = when he was first heard this session
-local outbox = {}        -- whispers waiting: { to, kind, key, msg, pieces }
-local sending            -- the one going out now (its pieces, PRIVATE_PACE apart)
-local sentTo = {}        -- [Name-Realm] = { [key] = { msg, at }: the message last whispered whole to him, when }
-local resetAt = {}       -- [Name-Realm] = when his "I hold nothing" was last taken
-local pieceId = 0
-local privAsm = ns.Codec.NewAssembler()
-local lastAsk = -math.huge
-local privateKinds = {}  -- [type] = { from(sender), to(), handle(dist, sender, text) }
-local held = false       -- a changed message was held back by PRIVATE_GAP: FlushPrivate sends it
-
--- The King's switches as he last gave them (never the author's Asmon's view): what goes on the
--- channel. Returns the parts, and whether all of them show (the whole book goes there then).
-function Treasury.PublicParts()
-	local f = ns.rdb and ns.rdb.treasuryFlags
-	f = type(f) == "table" and f or {}
-	local parts = { balance = f.balance == true, ranking = f.ranking == true, book = f.book == true }
-	return parts, parts.balance and parts.ranking and parts.book
-end
-function Treasury.PublicShows(what) return (Treasury.PublicParts())[what] == true end
-
--- The King, a Steward, a keeper: who may hold the whole treasury (by the name the server stamps).
-local function Insider(name)
-	if type(name) ~= "string" or name == "" or ns.faction == "Horde" then return false end
-	return ns.IsKingCharacter(name) or ns.King.IsStewardName(name) or Treasury.KeeperByName(name)
-end
-Treasury.InsiderName = Insider
--- This client is the King's, a Steward's or a keeper's (never the author's views: nothing whole
--- is whispered to them).
-function Treasury.IsInsider()
-	if ns.faction == "Horde" then return false end
-	return ns.King.IsKing() or ns.King.IsSteward() or RealKeeper()
-end
-
--- One of them was heard (any message of theirs: his book, his switches, his ask).
-function Treasury.Heard(name)
-	if not Insider(name) then return end
-	name = ns.FullName(name)
-	heard[name] = ns.Now()
-	firstHeard[name] = firstHeard[name] or heard[name]
-end
-
--- His addon reads whispers (TW, the bank requests): he was heard asking (TA), which 1.1 sends
--- and 1.0 never does. Kept on this realm's saved variables, so a /reload of ours does not wait
--- for his next ask (ASK_EVERY).
-function Treasury.Reads(name)
-	local r = type(name) == "string" and ns.rdb and type(ns.rdb.treasuryReaders) == "table" and ns.rdb.treasuryReaders[ns.FullName(name)]
-	return type(r) == "number" and ns.Now() - r <= Treasury.READERS_FOR
-end
-function Treasury.MarkReader(name)
-	if type(name) ~= "string" or not ns.rdb then return end
-	local r = type(ns.rdb.treasuryReaders) == "table" and ns.rdb.treasuryReaders or {}
-	ns.rdb.treasuryReaders = r
-	local now = ns.Now()
-	r[ns.FullName(name)] = now
-	for n, t in pairs(r) do if type(t) ~= "number" or now - t > Treasury.READERS_FOR then r[n] = nil end end
-end
-
--- The King, the Stewards and the keepers heard within AUDIENCE_FRESH whose addon never asked
--- (1.0: a 1.1 addon asks ASK_AFTER after its login), but us, sorted: while the King hides a part
--- of the treasury, their addon shows only what the army sees of the books of keepers on 1.1
--- (Treasury.Message), so a 1.1 insider's Treasury tab names them.
-function Treasury.NotUpdated()
-	local now, out = ns.Now(), {}
-	for name, t in pairs(heard) do
-		if now - t <= Treasury.AUDIENCE_FRESH and now - (firstHeard[name] or now) > Treasury.ASK_AFTER + 60
-			and not SameChar(name, ns.me) and Insider(name) and not Treasury.Reads(name) then
-			out[#out + 1] = name
-		end
-	end
-	table.sort(out)
-	return out
-end
-
--- The King, the Stewards and the keepers heard within AUDIENCE_FRESH whose addon reads
--- whispers, but us, sorted.
-function Treasury.Online()
-	local now, out = ns.Now(), {}
-	for name, t in pairs(heard) do
-		if now - t <= Treasury.AUDIENCE_FRESH and not SameChar(name, ns.me) and Insider(name) and Treasury.Reads(name) then out[#out + 1] = name end
-	end
-	table.sort(out)
-	return out
-end
-
--- The next whisper waiting goes out, a piece every PRIVATE_PACE at the most, each one only
--- while the addon's queue is nearly empty (PRIVATE_ROOM).
-local function PumpPrivate()
-	-- (One whose timer never came back, an error on the way: not waited for forever.)
-	if sending and ns.Now() - (sending.touched or 0) > 300 then sending = nil end
-	if sending then return end
-	local o = table.remove(outbox, 1)
-	if not o then return end
-	o.touched = ns.Now()
-	if not o.pieces then
-		pieceId = pieceId % 999 + 1
-		o.pieces = {}
-		for i, c in ipairs(ns.Codec.Chunk(o.msg, "w" .. pieceId)) do o.pieces[i] = "TW~" .. o.kind .. "~" .. c end
-	end
-	o.i = 0
-	sending = o
-	local waited = 0
-	local function Next()
-		if sending ~= o then return end
-		o.touched = ns.Now()
-		local size = ns.Comm.QueueSize and ns.Comm.QueueSize() or 0
-		if size > Treasury.PRIVATE_ROOM and waited < Treasury.PRIVATE_WAIT then
-			waited = waited + 1
-			return ns.After(Treasury.PRIVATE_PACE, "treasury private", Next)
-		end
-		waited = 0
-		o.i = o.i + 1
-		ns.Comm.Whisper(o.to, o.pieces[o.i])
-		if o.i < #o.pieces then return ns.After(Treasury.PRIVATE_PACE, "treasury private", Next) end
-		sentTo[o.to] = sentTo[o.to] or {}
-		sentTo[o.to][o.key] = { msg = o.msg, at = ns.Now() }
-		sending = nil
-		if outbox[1] then ns.After(Treasury.PRIVATE_PACE, "treasury private", PumpPrivate) end
-	end
-	Next()
-end
-
--- A whole message (`kind`: its type) for one player alone, by whisper, in pieces; `pieces`: its
--- own messages instead (the early supporters'). Not again while he holds the same one (`key`,
--- the kind unless said): a changed one takes the place of the one still waiting, and is held
--- while the last one went to him less than PRIVATE_GAP ago (or is going now).
-function Treasury.Private(to, kind, msg, key, pieces)
-	if type(to) ~= "string" or to == "" or type(msg) ~= "string" or msg == "" then return false end
-	to = ns.FullName(to)
-	if SameChar(to, ns.me) then return false end
-	key = key or kind
-	local last = sentTo[to] and sentTo[to][key]
-	if last and last.msg == msg and ns.Now() - last.at < Treasury.PRIVATE_REPEAT then return false end
-	if sending and sending.to == to and sending.key == key and sending.msg == msg then return false end
-	for _, o in ipairs(outbox) do
-		if o.to == to and o.key == key then
-			o.msg, o.pieces = msg, pieces
-			return true
-		end
-	end
-	local now = ns.Now()
-	local recent = (sending and sending.to == to and sending.key == key) and now or (last and last.at)
-	if recent and now - recent < Treasury.PRIVATE_GAP then
-		held = true
-		return false
-	end
-	if #outbox >= Treasury.PRIVATE_QUEUE then table.remove(outbox, 1) end
-	outbox[#outbox + 1] = { to = to, kind = kind, key = key, msg = msg, pieces = pieces }
-	PumpPrivate()
-	return true
-end
-
--- What PRIVATE_GAP held goes now, as it is now, where the gap is over (every minute: the
--- treasury's ticker); what is still inside it stays held.
-function Treasury.FlushPrivate()
-	if not held then return 0 end
-	held = false
-	local n = Treasury.SendPrivate()
-	if ns.Bank and ns.Bank.ShareSister then n = n + ns.Bank.ShareSister() end
-	return n
-end
-
--- He holds none of `key` any more (his login): the next one goes to him even when unchanged.
-function Treasury.ForgetSent(to, key)
-	local t = type(to) == "string" and sentTo[ns.FullName(to)]
-	if t then t[key] = nil end
-end
-
--- What a keeper's client whispers to one of them (`to`), or to each one heard: his whole book
--- (and the Treasurer's mail character's), the bank and the early supporters, each one only
--- while a switch keeps a part of it off the channel. Only with his yes to sharing.
-function Treasury.SendPrivate(to)
-	if not CanSend() then return 0 end
-	local parts, all = Treasury.PublicParts()
-	local n = 0
-	for _, name in ipairs(to and { to } or Treasury.Online()) do
-		if not all then
-			if Treasury.Private(name, "TB", Treasury.Message()) then n = n + 1 end
-			for _, b in ipairs(Treasury.RelayedBooks()) do
-				if Treasury.Private(name, "TR", Treasury.RelayMessage(b), "TR " .. OwnKey(b.name)) then n = n + 1 end
-			end
-		end
-		if not parts.book and ns.Bank and ns.Bank.PrivateMessage then
-			local bank = ns.Bank.PrivateMessage()
-			if bank and Treasury.Private(name, "T9", bank) then n = n + 1 end
-		end
-		if not parts.ranking and Treasury.SendEarlyTo(name) then n = n + 1 end
-	end
-	return n
-end
-
--- Pieces of a whisper put together (TW): only while this client may take that kind, from a
--- sender who may send it (each kind says who: Treasury.OnPrivate), then read as it would be on the
--- channel (dist "WHISPER"), the whole checked there again.
-function Treasury.OnPrivate(kind, def) privateKinds[kind] = def end
-function Treasury.HandlePrivate(dist, sender, text)
-	if dist ~= "WHISPER" or type(text) ~= "string" then return end
-	local kind, piece = text:match("^TW~(%w%w)~(C.+)$")
-	local def = kind and privateKinds[kind]
-	if not def or not def.to() or not def.from(sender) then return end
-	local whole = ns.Codec.Feed(privAsm, sender, piece, ns.Now())
-	if not whole or whole:sub(1, 3) ~= kind .. "~" then return end
-	def.handle("WHISPER", sender, whole)
-end
-ns.Comm.Handle("TW", function(...) Treasury.HandlePrivate(...) end)
-Treasury.OnPrivate("TB", { from = function(s) return Treasury.KeeperByName(s) end, to = function() return Treasury.IsInsider() end,
-	handle = function(...) Treasury.HandleReport(...) end })
-Treasury.OnPrivate("TR", { from = function(s) return TreasurerPin(s) == 1 end, to = function() return Treasury.IsInsider() end,
-	handle = function(...) Treasury.HandleRelay(...) end })
-
--- This client asks for what is its to see (TA): the King's, a Steward's or a keeper's (a Hand's,
--- for the sister guilds' banks, Bank.lua). fresh: it holds nothing yet (a login).
-function Treasury.Ask(fresh)
-	if ns.faction == "Horde" or not ns.rdb or not ns.IsMember() then return false end
-	if not (Treasury.IsInsider() or (ns.Bank and ns.Bank.AsksSisters and ns.Bank.AsksSisters())) then return false end
-	lastAsk = ns.Now()
-	ns.Comm.Send("CHANNEL", ("TA~%s~%d"):format(Clean(GetGuildInfo("player")), fresh and 0 or 1), "treasuryask")
-	return true
-end
-function Treasury.AskDue() return ns.Now() - lastAsk >= Treasury.ASK_EVERY end
-
--- Someone asks: the King, a Steward or a keeper gets what our client whispers (SendPrivate); a
--- sister guild's treasurer answers the King, a Steward or a Hand (Bank.lua). "I hold nothing"
--- (0) forgets what was whispered to him, RESET_GAP apart at most.
-function Treasury.HandleAsk(dist, sender, text)
-	if dist ~= "CHANNEL" or type(text) ~= "string" then return end
-	local fresh = text:match("^TA~[^~]*~([01])$")
-	if not fresh then return end
-	sender = ns.FullName(sender)
-	local now = ns.Now()
-	local reset = fresh == "0" and now - (resetAt[sender] or -math.huge) >= Treasury.RESET_GAP
-	if reset then resetAt[sender] = now end
-	if Insider(sender) then
-		heard[sender] = now
-		Treasury.MarkReader(sender)
-		if reset then sentTo[sender] = nil end
-		Treasury.SendPrivate(sender)
-	end
-	if ns.Bank and ns.Bank.HeardAsk then ns.Bank.HeardAsk(sender, reset) end
-end
-ns.Comm.Handle("TA", function(...) Treasury.HandleAsk(...) end)
-
--- The server says a player we whisper is not online: what waits for him is dropped (one line of
--- the game's in the chat, not one a piece), and he is no longer counted online.
-local notFound
-function Treasury.NotFound(text)
-	if type(text) ~= "string" then return end
-	if not notFound then
-		local f = type(ERR_CHAT_PLAYER_NOT_FOUND_S) == "string" and ERR_CHAT_PLAYER_NOT_FOUND_S or nil
-		if not f then return end
-		notFound = "^" .. (f:gsub("[%^%$%(%)%%%.%[%]%*%+%-%?]", "%%%0"):gsub("%%%%s", "(.+)")) .. "$"
-	end
-	local who = text:match(notFound)
-	if not who then return end
-	who = who:lower()
-	local function Is(name) return (ns.TellName(name) or ""):lower() == who or (ns.DisplayName(name) or ""):lower() == who end
-	for i = #outbox, 1, -1 do if Is(outbox[i].to) then table.remove(outbox, i) end end
-	for name in pairs(heard) do if Is(name) then heard[name] = nil end end
-	if ns.Bank and ns.Bank.NotFound then ns.Bank.NotFound(Is) end
-	for name in pairs(firstHeard) do if Is(name) then firstHeard[name] = nil end end
-	if sending and Is(sending.to) then
-		sending = nil
-		PumpPrivate()
-	end
-end
-
--- For tests: what waits, and what goes.
-function Treasury.PrivateState() return { outbox = outbox, sending = sending, sentTo = sentTo, heard = heard, held = held } end
-function Treasury.ResetPrivate()
-	wipe(heard); wipe(firstHeard); wipe(outbox); wipe(sentTo); wipe(resetAt)
-	sending, lastAsk, notFound, held = nil, -math.huge, nil, false
-	if ns.rdb then ns.rdb.treasuryReaders = nil end
-	privAsm = ns.Codec.NewAssembler()
-end
-
-ns.On("LOGIN", function()
-	-- The King, a Steward or a keeper asks once after login, then now and then; the pieces of
-	-- whispers never finished are dropped (Codec.Gc, a minute).
-	ns.After(Treasury.ASK_AFTER, "treasury ask", function() Treasury.Ask(true) end)
-	ns.Every(60, "treasury private", function()
-		ns.Codec.Gc(privAsm, ns.Now())
-		if Treasury.AskDue() then Treasury.Ask(false) end
-	end)
-	pcall(ns.RegisterEvent, "CHAT_MSG_SYSTEM", function(text) ns.SafeCall("treasury private", Treasury.NotFound, text) end)
-end)
-
----------------------------------------------------------------------------
 -- The King's switches (what the army sees) and his keepers
 -- 1.0.0: his Steward sets them too, in his name (King.STEWARD_MAY: T, K). A word carries the
 -- time it was given; the newest wins everywhere, and on the same second the King's own over his
 -- Steward's: the King's newer word always wins. The King's client and his Steward's take the
 -- newest word as theirs and repeat it, and answer an older one they hear with theirs (at most
--- once in WORD_ANSWER). The Treasurer's book carries the switches for 1.0's addons, never the
--- keepers; 1.1 takes neither from it (Konig's review of 1.1).
+-- once in WORD_ANSWER); the Treasurer's book repeats the switches too, never the keepers.
 ---------------------------------------------------------------------------
 
 Treasury.WORD_ANSWER = 30
@@ -2133,7 +1621,6 @@ local function Replaces(kept, at, sender)
 	if not was or at ~= was then return was == nil or at > was end
 	return ns.IsKingCharacter(sender) and not ns.IsKingCharacter(kept.from)
 end
-Treasury.Replaces = Replaces -- (1.1: the King's dues amount too, Dues.lua)
 
 -- Told on the King's screen: his Steward changed one of his words (the name cut short while the
 -- council's names are hidden there, his stream).
@@ -2142,13 +1629,10 @@ local function TellKing(sender, text)
 end
 
 -- The King's client and his Steward's repeat the word, with the time it was given (a client that
--- never heard it sends nothing). 1.1 (#12): never
--- another's word given less than WORD_FRESH ago: a word that new goes out from its giver's client
--- alone, so the log of acts can name him (TakeFlags); after that it is repeated as before.
+-- never heard it sends nothing: it takes the word as the Treasurer repeats it).
 function Treasury.SendFlags(force)
 	local f = ns.rdb and ns.rdb.treasuryFlags
 	if not ns.King.SetsLists() or type(f) ~= "table" or not tonumber(f.at) then return end
-	if not SameChar(f.from, ns.me) and Clock() - tonumber(f.at) < Treasury.WORD_FRESH then return end
 	local now = ns.Now()
 	if not force and now - lastFlagsSent < Treasury.FLAGS_EVERY then return end
 	lastFlagsSent = now
@@ -2170,12 +1654,8 @@ function Treasury.SetFlag(what, on)
 		ns.db.previewTreasuryFlags = f
 		ns.Print(L.THRONE_PREVIEW_NOTE)
 	else
-		local was = FlagDigits(type(prev) == "table" and prev or {})
 		ns.rdb.treasuryFlags = f
 		Treasury.SendFlags(true)
-		-- 1.1 (#12): our own switch never comes back to us: in our log as we send it.
-		Treasury.LogFlags(ns.me, f)
-		Treasury.SwitchesChanged(was)
 	end
 	ns.Fire("TREASURY_CHANGED")
 	ns.Fire("DATA_CHANGED")
@@ -2190,63 +1670,29 @@ local function AnswerOlder(send)
 	send(true)
 end
 
--- The King's word ("101" and the time it was given), from him or his Steward: taken when newer
--- than the one kept (a time ahead of the server's clock by King.DATE_AHEAD at most: a minute, so a
--- modified client never keeps a word over the King's newer one for longer).
--- `relayed`: the Treasurer's copy in his book (1.0's addons read it there). Konig's review of 1.1:
--- only the King and his Stewards set the switches, and a copy can't be told from a word the
--- Treasurer's client made up or dated anew (no signature of the King's travels with it; taken, it
--- was also repeated by the King's and his Stewards' clients as theirs), so it is never taken: an
--- older one is only answered with ours, so that his client, and the 1.0 addons reading his book,
--- catch up. Each client keeps the last word it heard from the King or a Steward themselves.
-function Treasury.TakeFlags(digits, at, sender, relayed)
+-- The King's word ("101" and the time it was given), from him or his Steward, or repeated by
+-- the Treasurer: taken when newer than the one kept (a time ahead of the server's clock by
+-- King.DATE_AHEAD at most: a minute, so a modified client never keeps a word over the King's
+-- newer one for longer).
+function Treasury.TakeFlags(digits, at, sender)
 	local b, r, k = tostring(digits or ""):match("^([01])([01])([01])$")
 	at = tonumber(at)
 	if not b or not at or at > Clock() + ns.King.DATE_AHEAD then return end
 	local kept = ns.rdb.treasuryFlags
-	if relayed or not Replaces(kept, at, sender) then
+	if not Replaces(kept, at, sender) then
 		if type(kept) == "table" and at < (tonumber(kept.at) or 0) then AnswerOlder(Treasury.SendFlags) end
 		return
 	end
 	local was = type(kept) == "table" and FlagDigits(kept) or "000"
 	local f = { balance = b == "1", ranking = r == "1", book = k == "1", at = at, t = ns.Now(), from = ns.FullName(sender) }
 	ns.rdb.treasuryFlags = f
-	-- 1.1 (#12): in this client's log of acts when what the army sees changes (the word is
-	-- repeated), with the name the server stamped, only when heard from whoever gave it: a word
-	-- given less than WORD_FRESH ago comes from his client alone (SendFlags). Never a word caught
-	-- up on later (a later login, a repeat): those are only noted.
-	Treasury.LogFlags(sender, f, Clock() - at >= Treasury.WORD_FRESH)
-	Treasury.Heard(sender)
 	if FlagDigits(f) ~= was then
 		TellKing(sender, L.STEWARD_SET_FLAGS)
 		-- A keeper is told who sees the treasury now.
 		if CanSend() then ns.Print(Treasury.WhoSees()) end
-		Treasury.SwitchesChanged(was)
 		ns.Fire("TREASURY_CHANGED")
 		ns.Fire("DATA_CHANGED") -- the tab appears or goes
 	end
-end
--- What the army sees of the treasury, in this client's log of acts (1.1, #12): once each time it
--- changes; nothing shown is where it starts. `quiet`: this client only caught up on it (noted,
--- so the next change is compared with it, not written).
-function Treasury.LogFlags(sender, f, quiet)
-	if quiet then return ns.Chronicle.Seen("treasury", FlagDigits(f)) end
-	local shown = {}
-	for _, k in ipairs(FLAGS) do
-		if f[k] then shown[#shown + 1] = L["ACTS_TREASURY_" .. k:upper()] end
-	end
-	local what = L.ACTS_TREASURY:format(#shown > 0 and table.concat(shown, ", ") or L.ACTS_TREASURY_NOTHING)
-	return ns.Chronicle.Add("switch", sender, what, { key = "treasury", value = FlagDigits(f), default = "000" })
-end
-
--- The switches changed (1.1): a keeper's client sends at once what the channel may carry now
--- (his book, the bank, the early supporters when the ranking just showed), and by whisper what
--- it may no longer carry.
-function Treasury.SwitchesChanged(was)
-	if not CanSend() then return end
-	Treasury.Share(true)
-	if ns.Bank and ns.Bank.Share then ns.Bank.Share(true) end
-	if Treasury.PublicShows("ranking") and tostring(was or "000"):sub(2, 2) ~= "1" then Treasury.SendEarly(true) end
 end
 ns.King.Register("T", function(sender, id, rest)
 	local digits, at = tostring(rest or ""):match("^([01][01][01])~(%d+)$")
@@ -2347,7 +1793,6 @@ function Treasury.TakeKeepers(at, text, sender)
 	end
 	local was = RealKeeper()
 	ns.rdb.treasuryKeepers = { at = at, names = names, t = ns.Now(), from = ns.FullName(sender) }
-	Treasury.Heard(sender)
 	if table.concat(names, ",") ~= table.concat(before, ",") then TellKing(sender, L.STEWARD_SET_KEEPERS) end
 	-- Books of characters no longer keepers: no longer kept.
 	local reports, gone = Reports(), {}
@@ -2360,8 +1805,6 @@ function Treasury.TakeKeepers(at, text, sender)
 		ns.Print(L.TREASURY_KEEPER_NAMED:format(ns.KingName(sender)))
 		Treasury.OpenBook()
 		Treasury.AskConsent()
-		-- (1.1: the other keepers' whole books come to a keeper by whisper: asked for now.)
-		Treasury.Ask(true)
 	elseif was and not now then
 		ns.Print(L.TREASURY_KEEPER_UNNAMED)
 	end
@@ -2509,7 +1952,6 @@ end
 
 -- 0.9's book was the Treasurer's: its names go out with his own yes to 1.0's question, which
 -- says the names go to everyone on the channel, whichever of his pinned characters holds it.
--- (1.1: his line on the first-open page asks it, and says so too: YesSendsEarly.)
 -- His 0.9.3 yes is not enough (Konig's review of 1.0.0: it was given to a question that never
 -- said so; his book still goes out under it, and he is asked 1.0's question: AskConsent). His
 -- mail character's yes is to its own book, not to his.
@@ -2521,20 +1963,11 @@ local function TreasurerYes()
 end
 local function MaySendEarly() return CanSend() and EarlyHolder() and TreasurerYes() end
 
--- Whether this character's own yes is the one that sends the early supporters' names (the
--- Treasurer's character, holding 0.9's book): his line on the first-open page then says so, as
--- 1.0's question does (1.1, #11).
-function Treasury.YesSendsEarly()
-	return EarlyHolder() and TreasurerPin(ns.me) == 1 and ArchivedSupporters() ~= nil
-end
-
 -- The holder's client sends the list, a piece every EARLY_PACE (the channel's queue stays
 -- light), with its own yes to sharing and the Treasurer's (the names are who gave, as in his
 -- book).
--- 1.1: on the channel only while the King shows the army the ranking; the King, his Stewards and
--- the keepers get it by whisper otherwise (SendEarlyTo).
 function Treasury.SendEarly(force)
-	if not MaySendEarly() or not Treasury.PublicShows("ranking") then return false end
+	if not MaySendEarly() then return false end
 	local list = ArchivedSupporters()
 	if not list then return false end
 	local now = ns.Now()
@@ -2556,26 +1989,11 @@ function Treasury.SendEarly(force)
 	return true
 end
 
--- The list for one player alone, by whisper (1.1: the King, a Steward or a keeper, while the
--- ranking is off the channel), piece by piece as on the channel; not again while he holds it.
-function Treasury.SendEarlyTo(name)
-	if not MaySendEarly() then return false end
-	local list = ArchivedSupporters()
-	if not list then return false end
-	local guild = Clean(GetGuildInfo("player"))
-	local pieces, msgs = EarlyPieces(list, guild), {}
-	for i, piece in ipairs(pieces) do msgs[i] = ("TE~%s~%d~%d~%d~%s"):format(guild, list.at, i, #pieces, piece) end
-	if #msgs == 0 then return false end
-	return Treasury.Private(name, "TE", table.concat(msgs, "\n"), "TE", msgs)
-end
-
 -- A piece of the list: from one of the Treasurer's pinned characters (his name, set by the
 -- server). A list as new as ours changes nothing; a newer one replaces ours once all its
--- pieces are in (an older list's piece meanwhile is dropped). By whisper (1.1) only to the King,
--- a Steward or a keeper.
+-- pieces are in (an older list's piece meanwhile is dropped).
 function Treasury.HandleEarly(dist, sender, text)
-	if (dist ~= "CHANNEL" and dist ~= "WHISPER") or type(text) ~= "string" or not ns.rdb then return end
-	if dist == "WHISPER" and not Treasury.IsInsider() then return end
+	if dist ~= "CHANNEL" or type(text) ~= "string" or not ns.rdb then return end
 	local guild, at, i, n, names = text:match("^TE~([^~]*)~(%d+)~(%d+)~(%d+)~([^~]*)$")
 	at, i, n = tonumber(at), tonumber(i), tonumber(n)
 	if not at or not TreasurerSpeaking(sender, guild) then return end
@@ -2638,23 +2056,9 @@ function Treasury.HandleEarlyAsk(dist, sender, text)
 	local ours = type(held) == "table" and tonumber(held.at) or 0
 	if at <= ours then heardEarlyAsk = ns.Now() end
 	local list = EarlyHolder() and ArchivedSupporters()
-	if not (list and list.at > at) then return end
-	-- (1.1: while the ranking is off the channel, the King, a Steward or a keeper asking gets it
-	-- by whisper; nobody else.)
-	if Treasury.PublicShows("ranking") then Treasury.SendEarly()
-	elseif Treasury.InsiderName(sender) and CanSend() then Treasury.SendEarlyTo(sender) end
+	if list and list.at > at then Treasury.SendEarly() end
 end
 ns.Comm.Handle("TQ", function(...) Treasury.HandleEarlyAsk(...) end)
-
--- Every minute: the books, the King's switches and his keepers, repeated for late logins; what
--- PRIVATE_GAP held back.
-function Treasury.Tick()
-	if ns.Now() - lastShare >= Treasury.SHARE_EVERY then Treasury.Share(true) end
-	Treasury.FlushPrivate()
-	Treasury.SendFlags()
-	Treasury.SendKeepers()
-	Treasury.AskEarly()
-end
 
 ns.On("LOGIN", function()
 	Treasury.Migrate()
@@ -2703,7 +2107,12 @@ ns.On("LOGIN", function()
 		pcall(ns.RegisterEvent, event, function() ns.SafeCall("treasury mail", Treasury.ItemsChanged) end)
 	end
 	-- The books, the King's switches and his keepers, repeated for late logins.
-	ns.Every(60, "treasury share", function() Treasury.Tick() end)
+	ns.Every(60, "treasury share", function()
+		if ns.Now() - lastShare >= Treasury.SHARE_EVERY then Treasury.Share(true) end
+		Treasury.SendFlags()
+		Treasury.SendKeepers()
+		Treasury.AskEarly()
+	end)
 	-- The early supporters: sent by the Treasurer's character holding them once after login
 	-- (after his book), asked for by a client without them a little later.
 	ns.After(45, "treasury early", function() Treasury.SendEarly(true) end)
@@ -2718,152 +2127,6 @@ ns.On("LOGIN", function()
 			ns.Print(Treasury.WhoSees())
 		end
 	end)
-end)
-
----------------------------------------------------------------------------
--- 1.1: "taking donations" (the Treasurer's idea: "being able to let everyone know when I'm around to
--- take donations can be helpful too"). A keeper (the Treasurer, the King, a character he named)
--- turns it on with a click on the Treasury tab or /oly donations on: every client shows a line on
--- the Realm and Treasury tabs, with his zone only if he shares his location (/oly location; the
--- King: his crown on the map), and one line in the [Olympus] chat when he turns it on. It is never
--- saved: off when he logs out (his addon says so as it logs out; otherwise the others drop it
--- DONATIONS_FRESH after his last word), and after a /reload.
---   TD~<guild>~<1|0>~<since>~<uiMapID or empty>   on the channel: at once, then every DONATIONS_EVERY
---                                                  while it is on, and when his zone changes
----------------------------------------------------------------------------
-
-Treasury.DONATIONS_EVERY = 120
-Treasury.DONATIONS_FRESH = 300
-Treasury.DONATIONS_PING = 180   -- the chat line only for an "on" this fresh (a late login gets the lines alone)
-
-local donating                  -- our own: { since, mapID }, while on
-local donors = {}               -- [keeper's Name-Realm] = { since, mapID, t }: keepers taking donations
-local pinged = {}               -- [Name-Realm] = the "since" we already put in the chat
-local lastDonationSent = -math.huge
-
-function Treasury.TakingDonations() return donating ~= nil end
-
--- Where we are, only while we share our location (Layers.Sharing: the King's is his crown).
-local function DonationZone()
-	if not (ns.Layers and ns.Layers.Sharing and ns.Layers.Sharing()) then return nil end
-	local mapID = ns.Court and ns.Court.Here and ns.Court.Here()
-	return tonumber(mapID)
-end
-
-local function DonationMessage(on)
-	local zone = on and donating and donating.mapID
-	return ("TD~%s~%d~%d~%s"):format(Clean(GetGuildInfo("player")), on and 1 or 0, on and donating and math.floor(donating.since) or 0, zone and tostring(zone) or "")
-end
-
-function Treasury.SendDonations(force)
-	if not donating or not RealKeeper() then return false end
-	local now = ns.Now()
-	if not force and now - lastDonationSent < Treasury.DONATIONS_EVERY then return false end
-	lastDonationSent = now
-	-- His zone read again at every send: once he stops sharing his location (/oly location off,
-	-- the King's crown off), no repeat carries the zone he had.
-	donating.mapID = DonationZone()
-	ns.Comm.Send("CHANNEL", DonationMessage(true), "treasurydonations")
-	return true
-end
-
-function Treasury.SetDonations(on)
-	if not RealKeeper() then return ns.Print(L.DONATIONS_ONLY) end
-	if on then
-		donating = { since = ns.Now(), mapID = DonationZone() }
-		Treasury.SendDonations(true)
-		ns.Print(donating.mapID and L.DONATIONS_NOW_ON_ZONE or L.DONATIONS_NOW_ON)
-	elseif donating then
-		donating = nil
-		ns.Comm.Send("CHANNEL", DonationMessage(false), "treasurydonations")
-		ns.Print(L.DONATIONS_NOW_OFF)
-	end
-	ns.Fire("TREASURY_CHANGED")
-	ns.Fire("DATA_CHANGED")
-end
-
--- Our zone changed while on, or we started or stopped sharing it (Layers.SetSharing, the King's
--- crown): said again at once (the zone only while we share it).
-function Treasury.DonationsMoved()
-	if not donating then return end
-	local zone = DonationZone()
-	if zone == donating.mapID then return end
-	donating.mapID = zone
-	Treasury.SendDonations(true)
-end
-
--- Logging out (or a /reload): off, said once as the addon leaves (the others drop it anyway).
-function Treasury.DonationsLogout()
-	if not donating then return end
-	donating = nil
-	local name = ns.Comm.ChannelName and ns.Comm.ChannelName()
-	local id = name and GetChannelName and GetChannelName(name) or 0
-	if id and id > 0 and C_ChatInfo and C_ChatInfo.SendAddonMessage then
-		pcall(C_ChatInfo.SendAddonMessage, ns.PREFIX, DonationMessage(false), "CHANNEL", id)
-	end
-end
-
--- A keeper's word (from a keeper alone, his name, which the server sets): kept while repeated,
--- one line in the [Olympus] chat for a fresh "on", unless that chat is muted.
-function Treasury.HandleDonations(dist, sender, text)
-	if dist ~= "CHANNEL" or type(text) ~= "string" then return end
-	local guild, on, since, zone = text:match("^TD~([^~]*)~([01])~(%d+)~(%d*)$")
-	if not guild or not Treasury.IsKeeperName(sender, guild) then return end
-	sender = ns.FullName(sender)
-	local now = ns.Now()
-	if on == "0" then
-		if donors[sender] then
-			donors[sender] = nil
-			ns.Fire("TREASURY_CHANGED")
-			ns.Fire("DATA_CHANGED")
-		end
-		return
-	end
-	since = math.min(tonumber(since) or now, now)
-	local mapID = tonumber(zone)
-	if mapID and (mapID < 1 or mapID > 100000) then mapID = nil end
-	donors[sender] = { since = since, mapID = mapID, t = now }
-	if pinged[sender] ~= since and now - since <= Treasury.DONATIONS_PING then
-		pinged[sender] = since
-		local muted = ns.db and type(ns.db.chatMute) == "table" and ns.db.chatMute.A
-		local f = not muted and ns.Channels and ns.Channels.Frame and ns.Channels.Frame("A")
-		if f and f.AddMessage then
-			local c = ns.Channels.TIERS and ns.Channels.TIERS.A and ns.Channels.TIERS.A.color or { 1, 0.82, 0 }
-			f:AddMessage("[" .. L.CHAN_ALL .. "] " .. Treasury.DonationText(sender, donors[sender]), c[1], c[2], c[3])
-		end
-	end
-	ns.Fire("TREASURY_CHANGED")
-	ns.Fire("DATA_CHANGED")
-end
-ns.Comm.Handle("TD", function(...) Treasury.HandleDonations(...) end)
-
--- "Pyralis Ashandar is taking donations (in Stormwind City)": the King by the army's name for him.
-function Treasury.DonationText(name, d)
-	local who = (ns.faction ~= "Horde" and ns.IsKingCharacter(name)) and ns.KING_NAME or (ns.DisplayName(name) or "?")
-	local info = d and d.mapID and C_Map and C_Map.GetMapInfo and C_Map.GetMapInfo(d.mapID)
-	local zone = type(info) == "table" and type(info.name) == "string" and info.name ~= "" and info.name or nil
-	return zone and L.DONATIONS_LINE_ZONE:format(who, zone) or L.DONATIONS_LINE:format(who)
-end
-
--- The keepers taking donations now (ours too), a line each, for the Realm and Treasury tabs.
-function Treasury.DonationLines()
-	local out, now, names = {}, ns.Now(), {}
-	for name, d in pairs(donors) do
-		if now - d.t > Treasury.DONATIONS_FRESH or not Treasury.KeeperByName(name) then donors[name] = nil else names[#names + 1] = name end
-	end
-	table.sort(names)
-	if donating and ns.me and RealKeeper() then out[#out + 1] = { text = ns.COIN .. Green(Treasury.DonationText(ns.me, donating)) } end
-	for _, name in ipairs(names) do
-		local d = donors[name]
-		out[#out + 1] = { text = ns.COIN .. Green(Treasury.DonationText(name, d)), right = Grey(ns.Ago(d.since)) }
-	end
-	return out
-end
-
-ns.On("LOGIN", function()
-	ns.Every(30, "treasury donations", function() Treasury.SendDonations() end)
-	pcall(ns.RegisterEvent, "ZONE_CHANGED_NEW_AREA", function() ns.SafeCall("treasury donations", Treasury.DonationsMoved) end)
-	pcall(ns.RegisterEvent, "PLAYER_LOGOUT", function() ns.SafeCall("treasury donations", Treasury.DonationsLogout) end)
 end)
 
 ---------------------------------------------------------------------------
@@ -3128,9 +2391,6 @@ end
 
 -- The guild bank of <Olympus> as last seen (Bank.lua): its gold, then each tab's items in a
 -- grid. The keepers and the King always; the army with the King's "book" switch.
--- Who sees the guild bank: the keepers and the King always, the army with the King's "book".
-local function BankVisible(role) return role ~= "member" or Treasury.Shows("book") end
-
 local function BankLines(lines, role)
 	if role == "member" and not Treasury.Shows("book") then return end
 	local b = ns.Bank and ns.Bank.Current and ns.Bank.Current()
@@ -3142,26 +2402,6 @@ local function BankLines(lines, role)
 	end
 	lines[#lines + 1] = { text = Grey(L.TREASURY_BANK_AS_OF:format(ns.DisplayName(b.by) or "?", ns.Ago(b.t))) }
 	lines[#lines + 1] = { text = L.TREASURY_BANK_GOLD, right = Treasury.Coins(b.money or 0) }
-	-- 1.1: what left the bank since the snapshot before (counts only, never who: the bank's log is
-	-- never read), and in the grid the slots those stacks sat in, faded.
-	local prev = ns.Bank.Previous and ns.Bank.Previous(b)
-	local gone, ghosts = {}, {}
-	if prev then gone, ghosts = ns.Bank.Gone(b, prev) end
-	if #gone > 0 then
-		lines[#lines + 1] = { text = Red(L.BANK_GONE:format(ns.Ago(prev.t))), tooltip = function(tt)
-			tt:AddLine(L.BANK_GONE_TITLE, 1, 0.82, 0)
-			tt:AddLine(L.BANK_GONE_TIP:format(ns.DisplayName(prev.by) or "?"), 1, 1, 1, true)
-		end }
-		for i = 1, math.min(#gone, Treasury.BANK_LISTED) do
-			local x = gone[i]
-			lines[#lines + 1] = { indent = 1, text = ItemText(x.id) .. "  " .. Grey("(" .. table.concat(x.tabs, ", ") .. ")"), right = Red("-" .. x.n .. "x"),
-				tooltip = function(tt)
-					if not (tt.SetItemByID and pcall(tt.SetItemByID, tt, x.id)) then tt:AddLine(ItemName(x.id), 1, 0.82, 0) end
-					tt:AddLine(L.BANK_GONE_TITLE, 1, 0.4, 0.4, true)
-				end }
-		end
-		if #gone > Treasury.BANK_LISTED then lines[#lines + 1] = { indent = 1, text = Grey(L.TREASURY_ITEMS_MORE:format(#gone - Treasury.BANK_LISTED)) } end
-	end
 	-- One tab open at a time, as the bank shows them: its slots, every one, items where they sit.
 	local open = Treasury.bankTab
 	if not (open and b.tabs[open]) then
@@ -3172,152 +2412,23 @@ local function BankLines(lines, role)
 		local count = #tab.items > 0 and L.TREASURY_BANK_ITEMS:format(#tab.items) or L.TREASURY_BANK_EMPTY
 		lines[#lines + 1] = { text = (i == open and Gold or tostring)((i == open and "[-] " or "[+] ") .. (tab.name or "?")), right = Grey(count),
 			key = "banktab" .. i, onClick = function() Treasury.bankTab = i; ns.Fire("TREASURY_CHANGED") end }
-		if i == open then
-			local items = tab.items
-			if ghosts[i] then
-				items = {}
-				for _, it in ipairs(tab.items) do items[#items + 1] = it end
-				for _, it in ipairs(ghosts[i]) do items[#items + 1] = it end
-			end
-			local ask = ns.Bank.MayRequest and ns.Bank.MayRequest()
-			lines[#lines + 1] = { items = items, slots = ns.Bank.SLOTS, columns = 7,
-				onItem = ask and function(it) ns.Bank.RequestPrompt(it.id) end or nil, itemHint = ask and L.BANK_REQUEST_CLICK or nil }
-		end
+		if i == open then lines[#lines + 1] = { items = tab.items, slots = ns.Bank.SLOTS, columns = 7 } end
 	end
 	lines[#lines].gapAfter = true
 end
 
--- 1.1: requests to the treasury (Bank.lua), next to the bank. A keeper, the King or a Steward: every
--- request his client holds, a click to mark it done or declined, what the bank holds of it. The army
--- (with the King's book): the open ones the keepers put on the channel. A Lord or a Captain: his own,
--- where each stands (a click takes it back), and a line to ask for any item.
-local function RequestLines(lines, role)
-	local B = ns.Bank
-	if not (B and B.Requests) then return end
-	local rows = {}
-	local function Holds(item)
-		local n = B.Holds(item)
-		return n and Grey(L.BANK_REQUEST_HOLDS:format(n)) or ""
-	end
-	if Treasury.IsInsider() then
-		for _, e in ipairs(B.Requests()) do
-			local open = e.state == "open"
-			local who = L.BANK_REQUEST_WHO:format(ns.DisplayName(e.from) or "?", e.guild or "?")
-			rows[#rows + 1] = { indent = 1, text = (open and tostring or Grey)(who .. ": " .. ItemText(e.item, e.n)),
-				right = open and Holds(e.item) or Grey(B.StateText({ state = e.state, by = e.by })),
-				key = "request:" .. e.key,
-				onClick = open and function() ns.ShowDialog("OLYMPUS_BANK_REQUEST_ANSWER", who, ItemText(e.item, e.n), e.key) end or nil,
-				tooltip = function(tt)
-					tt:AddLine(who, 1, 0.82, 0)
-					tt:AddLine(ItemText(e.item, e.n) .. ", " .. ns.Ago(e.t), 1, 1, 1, true)
-					if open then tt:AddLine(L.BANK_REQUEST_CLICK_ANSWER, 0.6, 1, 0.6, true) end
-				end }
-		end
-	elseif BankVisible(role) then
-		for _, e in ipairs(B.PublicRequests()) do
-			rows[#rows + 1] = { indent = 1, text = L.BANK_REQUEST_WHO:format(ns.DisplayName(e.from) or "?", e.guild) .. ": " .. ItemText(e.item, e.n), right = Holds(e.item) }
-		end
-	end
-	local mine = B.MyRequests()
-	local ask = B.MayRequest()
-	if #rows == 0 and #mine == 0 and not ask then return end
-	if #rows > 0 then
-		lines[#lines + 1] = { header = true, text = L.BANK_REQUESTS, tooltip = function(tt) tt:AddLine(L.BANK_REQUESTS_TIP, 1, 1, 1, true) end }
-		for _, r in ipairs(rows) do lines[#lines + 1] = r end
-		lines[#lines].gapAfter = true
-	end
-	if #mine > 0 or ask then
-		lines[#lines + 1] = { header = true, text = L.BANK_MY_REQUESTS, tooltip = function(tt) tt:AddLine(L.BANK_REQUESTS_TIP, 1, 1, 1, true) end }
-		for _, e in ipairs(mine) do
-			local open = e.state == "sent" or e.state == "seen"
-			lines[#lines + 1] = { indent = 1, text = ItemText(e.item, e.n), right = (open and tostring or Grey)(B.StateText(e)),
-				onClick = open and function() ns.ShowDialog("OLYMPUS_BANK_REQUEST_CANCEL", ItemText(e.item, e.n), nil, e.id) end or nil }
-		end
-		if ask then lines[#lines + 1] = { text = Gold("+ " .. L.BANK_REQUEST_NEW_LINE), onClick = function() B.RequestPrompt() end } end
-		lines[#lines].gapAfter = true
-	end
-end
-
--- 1.1: the sister guilds' banks (Bank.lua), for the King, his Steward and his Hands: each guild
--- a click to open, then its tabs ("Tab 1": their names are left out), one open at a time.
-local function SisterLines(lines)
-	if not (ns.Bank and ns.Bank.SeesSisters and ns.Bank.SeesSisters()) then return end
-	local list = ns.Bank.Sisters()
-	if #list == 0 then return end
-	lines[#lines + 1] = { header = true, text = L.BANK_SISTERS, tooltip = function(tt) tt:AddLine(L.BANK_SISTERS_TIP, 1, 1, 1, true) end }
-	for _, s in ipairs(list) do
-		local opened = Treasury.sisterOpen == s.guild
-		lines[#lines + 1] = { text = (opened and Gold or tostring)((opened and "[-] " or "[+] ") .. "<" .. s.guild .. ">"), right = Treasury.Coins(s.money or 0),
-			key = "sister:" .. s.guild, onClick = function()
-				Treasury.sisterOpen, Treasury.sisterTab = (not opened) and s.guild or nil, nil
-				ns.Fire("TREASURY_CHANGED")
-			end }
-		if opened then
-			lines[#lines + 1] = { indent = 1, text = Grey(L.TREASURY_BANK_AS_OF:format(ns.DisplayName(s.by) or "?", ns.Ago(s.t))) }
-			local open = Treasury.sisterTab
-			if not (open and s.tabs[open]) then
-				open = 1
-				for i, tab in ipairs(s.tabs) do if #tab.items > 0 then open = i break end end
-			end
-			for i, tab in ipairs(s.tabs) do
-				local count = #tab.items > 0 and L.TREASURY_BANK_ITEMS:format(#tab.items) or L.TREASURY_BANK_EMPTY
-				lines[#lines + 1] = { indent = 1, text = (i == open and Gold or tostring)((i == open and "[-] " or "[+] ") .. tab.name), right = Grey(count),
-					key = "sistertab" .. i, onClick = function() Treasury.sisterTab = i; ns.Fire("TREASURY_CHANGED") end }
-				if i == open then lines[#lines + 1] = { items = tab.items, slots = ns.Bank.SLOTS, columns = 7 } end
-			end
-		end
-	end
-	lines[#lines].gapAfter = true
-end
-
--- 1.1: the stacks of a bank whose item holds the search `q` (Bank.Find): each item once, how many
--- in all, in which tabs; a click opens the first of them. Returns whether any.
-local function FoundLines(lines, title, snap, q, open)
-	local found = ns.Bank.Find(snap, q)
-	if #found == 0 then return false end
-	lines[#lines + 1] = { header = true, text = title }
-	for i = 1, math.min(#found, Treasury.BANK_LISTED) do
-		local x = found[i]
-		lines[#lines + 1] = { indent = 1, text = ItemText(x.id) .. "  " .. Grey("(" .. table.concat(x.tabs, ", ") .. ")"), right = Green(x.n .. "x"),
-			onClick = open and function() open(x.tabs[1]) end or nil,
-			tooltip = function(tt)
-				if not (tt.SetItemByID and pcall(tt.SetItemByID, tt, x.id)) then tt:AddLine(ItemName(x.id), 1, 0.82, 0) end
-				tt:AddLine(L.BANK_FOUND_TIP:format(x.stacks, table.concat(x.tabs, ", ")), 1, 1, 1, true)
-			end }
-	end
-	if #found > Treasury.BANK_LISTED then lines[#lines + 1] = { indent = 1, text = Grey(L.TREASURY_ITEMS_MORE:format(#found - Treasury.BANK_LISTED)) } end
-	lines[#lines].gapAfter = true
-	return true
-end
-local function BankFound(lines, role, q)
-	local any = false
-	local b = BankVisible(role) and ns.Bank and ns.Bank.Current and ns.Bank.Current()
-	if b and FoundLines(lines, L.TREASURY_BANK, b, q, function(name)
-		for i, tab in ipairs(b.tabs) do if tab.name == name then Treasury.bankTab = i end end
-		ns.Fire("TREASURY_CHANGED")
-	end) then any = true end
-	for _, s in ipairs(ns.Bank and ns.Bank.SeesSisters and ns.Bank.SeesSisters() and ns.Bank.Sisters() or {}) do
-		if FoundLines(lines, L.BANK_SISTER_OF:format(s.guild), s, q) then any = true end
-	end
-	return any
-end
-Treasury.BANK_LISTED = 25   -- items found, or gone, listed (the rest counted)
-
--- The summary while the tab's search holds `q`: the donors it finds in the ranking, the bank's
--- items (1.1: and the sister guilds', for the King, his Steward and his Hands), "No match" for
--- none, and the way to the book (searched there too). Nothing else.
+-- The summary while the tab's search holds `q`: the donors it finds in the ranking, "No match"
+-- for none, and the way to the book (searched there too). Nothing else.
 local function SummarySearch(role, q)
 	local r = Treasury.Report()
 	local rank = r and r.rank or {}
 	local lines = {}
-	local any = false
-	if Treasury.MaySee("ranking") and #RankFound(rank, q) > 0 then
+	if #RankFound(rank, q) > 0 then
 		RankLines(lines, rank, q)
 		lines[#lines].gapAfter = true
-		any = true
+	else
+		lines[#lines + 1] = { text = Grey(L.SEARCH_NO_MATCH), gapAfter = true }
 	end
-	if BankFound(lines, role, q) then any = true end
-	if not any then lines[#lines + 1] = { text = Grey(L.SEARCH_NO_MATCH), gapAfter = true } end
 	if Treasury.MaySee("book") then
 		lines[#lines + 1] = { text = Gold("> " .. L.TREASURY_BOOK), onClick = function() Treasury.Show("book") end, gapAfter = true }
 	end
@@ -3327,44 +2438,12 @@ end
 local function SummaryLines(role, q)
 	if q then return SummarySearch(role, q) end
 	local lines = { { header = true, text = L.TREASURY_TITLE } }
-	-- 1.1: the week's dues first (Dues.lua): the way to them, for whoever may see them, and the
-	-- button that fills in a member's own payment. A member the King shows nothing sees that alone.
-	ns.Dues.SummaryLines(lines, role)
-	if role == "member" and not Treasury.AnyShown() then return lines end
 	local keeper = Treasury.IsKeeper()
 	if keeper then
 		Para(lines, Treasury.WhoSees(), tostring)
 		lines[#lines].gapAfter = true
 		Para(lines, L.TREASURY_HOW)
 		lines[#lines].gapAfter = true
-	end
-	-- 1.1: who is taking donations now, and a keeper's own switch for it.
-	local taking = Treasury.DonationLines()
-	for _, l in ipairs(taking) do lines[#lines + 1] = l end
-	if RealKeeper() then
-		local on = Treasury.TakingDonations()
-		lines[#lines + 1] = { text = Gold((on and "[x] " or "[ ] ") .. L.DONATIONS_SWITCH), right = Grey(on and L.DONATIONS_SWITCH_ON or L.DONATIONS_SWITCH_OFF),
-			key = "donations", onClick = function() Treasury.SetDonations(not Treasury.TakingDonations()) end,
-			tooltip = function(tt)
-				tt:AddLine(L.DONATIONS_SWITCH, 1, 0.82, 0)
-				tt:AddLine(L.DONATIONS_SWITCH_TIP, 1, 1, 1, true)
-			end }
-	end
-	if #taking > 0 or RealKeeper() then lines[#lines].gapAfter = true end
-	-- 1.1: a keeper's backup of his book (and his settings), and the way back (Backup.lua).
-	if RealKeeper() and ns.Backup then
-		lines[#lines + 1] = { text = Gold("> " .. L.BACKUP_LINK), onClick = function() ns.Backup.Slash("backup") end,
-			tooltip = function(tt) tt:AddLine(L.HELP_BACKUP, 1, 1, 1, true) end }
-		lines[#lines + 1] = { text = Gold("> " .. L.BACKUP_RESTORE_LINK), onClick = function() ns.Backup.Slash("restore") end, gapAfter = true }
-	end
-	-- 1.1: the King, a Steward or a keeper still on 1.0, heard lately, while the King hides a part.
-	if Treasury.IsInsider() and not select(2, Treasury.PublicParts()) then
-		local old = {}
-		for _, name in ipairs(Treasury.NotUpdated()) do old[#old + 1] = KeeperLabel(name) end
-		if #old > 0 then
-			Para(lines, L.TREASURY_NOT_UPDATED:format(table.concat(old, ", ")), Red)
-			lines[#lines].gapAfter = true
-		end
 	end
 	local r = Treasury.Report()
 	if not r then
@@ -3379,19 +2458,7 @@ local function SummaryLines(role, q)
 			lines[#lines + 1] = { text = Gold("> " .. L.TREASURY_KEEPERS_LINK:format(KeeperCount())), onClick = function() Treasury.Show("keepers") end, gapAfter = true }
 		end
 		BankLines(lines, role)
-		RequestLines(lines, role)
-		SisterLines(lines)
 		return lines
-	end
-	-- 1.1: a keeper's book this client holds only as the army sees it (the channel's copy): its
-	-- whole one comes by whisper once his addon hears ours.
-	if role ~= "member" then
-		local waiting = {}
-		for _, k in ipairs(r.keepers) do if k.part then waiting[#waiting + 1] = KeeperLabel(k.name) end end
-		if #waiting > 0 then
-			Para(lines, L.TREASURY_PART_WAIT:format(table.concat(waiting, ", ")))
-			lines[#lines].gapAfter = true
-		end
 	end
 	if Treasury.MaySee("balance") then
 		lines[#lines + 1] = { text = Gold(L.TREASURY_BALANCE), right = Treasury.Coins(r.balance) }
@@ -3425,8 +2492,6 @@ local function SummaryLines(role, q)
 		lines[#lines + 1] = { text = Gold("> " .. L.TREASURY_KEEPERS_LINK:format(KeeperCount())), onClick = function() Treasury.Show("keepers") end, gapAfter = true }
 	end
 	BankLines(lines, role)
-	RequestLines(lines, role)
-	SisterLines(lines)
 	-- The King: what the army sees now (the switches are the buttons in the box).
 	if role == "king" then
 		local shown = ShownParts()
@@ -3440,9 +2505,6 @@ function Treasury.Build(q)
 	local role = Treasury.Role()
 	if Treasury.mode == "book" and not Treasury.MaySee("book") then Treasury.mode = "summary" end
 	if Treasury.mode == "keepers" and role == "member" then Treasury.mode = "summary" end
-	-- 1.1: the week's dues (Dues.lua), for whoever may see them.
-	if Treasury.mode == "dues" and not ns.Dues.Sees() then Treasury.mode = "summary" end
-	if Treasury.mode == "dues" then return ns.Dues.Build(q) end
 	local lines
 	if Treasury.mode == "book" then lines = BookLines(role, q)
 	elseif Treasury.mode == "keepers" then lines = KeeperLines()
@@ -3455,19 +2517,13 @@ end
 -- A list of donors shows on the tab (the book, or the ranking): its search box too (Views.lua).
 function Treasury.Searchable()
 	if Treasury.mode == "keepers" then return false end
-	if Treasury.mode == "dues" then return ns.Dues.Sees() == true end
 	if Treasury.mode == "book" and Treasury.MaySee("book") then return true end
-	-- (1.1: the bank's items too, and the sister guilds'.)
-	if BankVisible(Treasury.Role()) or (ns.Bank and ns.Bank.SeesSisters and ns.Bank.SeesSisters() and #ns.Bank.Sisters() > 0) then return true end
 	return Treasury.MaySee("ranking")
 end
 
--- For Discord, a public place: each book of this account ranked as it leaves this client, never
--- the Treasurer's screen's whole ranking, which grows by each payer's dues every week
--- (PublicRanking; the review of Konig's fixes, 1.1). Other keepers' books as they came (the
--- Treasurer's already so).
+-- For Discord.
 function Treasury.DiscordText()
-	local r = Treasury.Report(false, true)
+	local r = Treasury.Report()
 	if not r then return "" end
 	local out = { ("**%s**"):format(L.TREASURY_TITLE) }
 	if Treasury.MaySee("balance") then
@@ -3543,96 +2599,6 @@ StaticPopupDialogs["OLYMPUS_TREASURY_OPENING"] = {
 	preferredIndex = 3,
 }
 
----------------------------------------------------------------------------
--- 1.1: the clipboard backup (Backup.lua, Fern's): this character's book, and on the Treasurer's
--- characters the other pinned one's (his account keeps both), and the King's word.
----------------------------------------------------------------------------
-
--- The books a backup holds, as this client keeps them (lines, sums, opening).
-function Treasury.BackupBooks()
-	local out = {}
-	if not ns.rdb or not ns.me then return out end
-	local function Add(name)
-		local b = BookOf(name)
-		if b and b.epoch == Treasury.EPOCH and b.opening ~= nil then out[#out + 1] = b end
-	end
-	Add(ns.me)
-	if TreasurerPin(ns.me) then
-		for _, pin in ipairs(ns.TREASURER_CHARACTERS) do
-			local full = ns.FullName(pin, ns.TREASURER_REALM)
-			if not SameChar(full, ns.me) then Add(full) end
-		end
-	end
-	return out
-end
-
--- A backup's book goes back only into this character's book, or on the Treasurer's characters into
--- the other pinned one's: never another player's.
-function Treasury.MayRestoreBook(name)
-	if type(name) ~= "string" or name == "" or not ns.me then return false end
-	return SameChar(name, ns.me) or (TreasurerPin(ns.me) ~= nil and TreasurerPin(name) ~= nil)
-end
-
-local function LineKey(e)
-	return table.concat({ tostring(e.t), tostring(e.name), tostring(e.money), tostring(e.how), tostring(e.item), tostring(e.count), tostring(e.out), tostring(e.kind) }, "\1")
-end
-
--- A backup's book (checked by Backup.lua) into this client's copy of that character's book. Ours
--- fresh (nothing written since it opened, the usual after a wipe): the backup's, whole. Otherwise
--- the backup's book (its opening, its lines, its sums of all time) with the lines ours holds that
--- it doesn't added after it, each counted once. Returns the book and how many of ours were added.
-function Treasury.RestoreBook(saved)
-	if type(saved) ~= "table" or not Treasury.MayRestoreBook(saved.name) then return nil end
-	local b = BookOf(saved.name, true)
-	local base = { epoch = Treasury.EPOCH, name = b.name or saved.name, opening = saved.opening, openedAt = saved.openedAt, opened = saved.opened,
-		lines = {}, sums = saved.sums }
-	for i, e in ipairs(saved.lines or {}) do base.lines[i] = e end
-	Sums(base) -- (the backup's own sums, or rebuilt from its lines when they are of another shape)
-	local seen, added = {}, 0
-	for _, e in ipairs(base.lines) do seen[LineKey(e)] = true end
-	for _, e in ipairs(b.lines) do
-		if not seen[LineKey(e)] then
-			base.lines[#base.lines + 1] = e
-			if not e.excluded then Count(base, e, 1) end
-			added = added + 1
-		end
-	end
-	table.sort(base.lines, function(x, y) return (tonumber(x.t) or 0) < (tonumber(y.t) or 0) end)
-	while #base.lines > Treasury.MAX do table.remove(base.lines, 1) end
-	b.opening, b.openedAt, b.opened, b.lines, b.sums = base.opening, base.openedAt, base.opened, base.lines, base.sums
-	b.restored = ns.Now()
-	Touch(b)
-	ns.Fire("TREASURY_CHANGED")
-	return b, added
-end
-
--- The King's word from a backup (his client's, or a Steward's): his switches and his keepers, given
--- again as a new word (dated now, as a click gives it), repeated as ever.
-function Treasury.RestoreWord(flags, keepers)
-	if not ns.King.SetsLists() or not ns.rdb then return false end
-	if type(flags) == "table" then
-		local prev = ns.rdb.treasuryFlags
-		local f = { balance = flags.balance == true, ranking = flags.ranking == true, book = flags.book == true }
-		f.t, f.at, f.from = ns.Now(), math.max(Clock(), (type(prev) == "table" and tonumber(prev.at) or 0) + 1), ns.me
-		local was = FlagDigits(type(prev) == "table" and prev or {})
-		ns.rdb.treasuryFlags = f
-		Treasury.SendFlags(true)
-		Treasury.SwitchesChanged(was)
-	end
-	if type(keepers) == "table" then
-		local names = {}
-		for _, n in ipairs(keepers) do
-			local name = KeeperName(n)
-			if name and #names < Treasury.MAX_KEEPERS and not PinnedName(name) then names[#names + 1] = name end
-		end
-		SetKeepers(names)
-	end
-	ns.Fire("TREASURY_CHANGED")
-	ns.Fire("DATA_CHANGED")
-	return true
-end
-Treasury.FlagDigits = FlagDigits
-
 -- Tests start from a clean state.
 function Treasury.Reset()
 	trade, mailOut, lastShare, sharePending, lastFlagsSent, lastKeepersSent = nil, nil, -math.huge, false, -math.huge, -math.huge
@@ -3642,9 +2608,6 @@ function Treasury.Reset()
 	wipe(itemPending)
 	lastMoney, lastRelay = nil, -math.huge
 	lastEarlySent, earlySending, earlyPending, earlyCache = -math.huge, nil, nil, nil
-	Treasury.ResetPrivate()
-	donating, lastDonationSent = nil, -math.huge
-	wipe(donors); wipe(pinged)
 	earlyAsks, lastEarlyAsk, earlyArmed, heardEarlyAsk = 0, -math.huge, false, -math.huge
 	bookShown, rankShown, earlyShown = Treasury.BOOK_SHOWN, Treasury.RANK_PAGE, Treasury.EARLY_SHOWN
 	Treasury.mode = "summary"

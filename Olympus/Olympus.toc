@@ -2,7 +2,7 @@
 ## Title: |cffe6c35cOlympus|r
 ## Notes: Live census of every Olympus guild: army size, leaders and where everyone is on the map.
 ## Author: Olympus addon contributors
-## Version: 1.0.1
+## Version: 1.1.0
 ## SavedVariables: OlympusDB
 ## IconTexture: Interface\AddOns\Olympus\media\logo64
 ## X-License: MIT
@@ -16,6 +16,9 @@ libs\HereBeDragons\HereBeDragons-2.0.lua
 libs\HereBeDragons\HereBeDragons-Pins-2.0.lua
 
 Locales.lua
+Locales\deDE.lua
+Locales\esES.lua
+Locales\frFR.lua
 Core.lua
 Diagnostics.lua
 Dialog.lua
@@ -32,20 +35,33 @@ Hop.lua
 Positions.lua
 Decree.lua
 Channels.lua
+Filter.lua
 Inspect.lua
 King.lua
 Vox.lua
 Court.lua
+Board.lua
+Week.lua
 Treasury.lua
+Dues.lua
 Bank.lua
+Backup.lua
 Acts.lua
+Chronicle.lua
+Moderation.lua
+Alts.lua
+Keys.lua
+Loot.lua
+Crafters.lua
 Workshop.lua
 Ed25519.lua
 libs\QREncode\qrencode.lua
 Link.lua
 Recruit.lua
 Views.lua
+Members.lua
 UI.lua
+Consent.lua
 GuildFrame.lua
 Borders.lua
 Nameplates.lua

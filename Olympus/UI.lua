@@ -222,6 +222,9 @@ table.insert(DETAIL_BUTTONS.realm, { "COUNCIL_ASK_BTN", function() ns.ShowDialog
 -- to councillors alone.
 table.insert(DETAIL_BUTTONS.realm, { "COUNCIL_ICON_BTN", function() ns.Workshop.ShowIconPicker() end,
 	shown = function() return ns.IsHighCouncillor(ns.me) end })
+-- 1.1 (Fern's #28): an officer keeps the gear of the player he targets, in range (Inspect.lua).
+table.insert(DETAIL_BUTTONS.heraldry, 1, { "GEAR_BTN", function() ns.Inspect.InspectGear() end,
+	shown = function() return ns.IsMember() and ns.Roster.IsOfficer() end })
 
 -- Buttons that come and go (def.shown): only the ones shown, in order.
 local function Shown(defs)
@@ -726,7 +729,8 @@ local function CreateMain(style)
 		local portrait = f.portrait or f.Portrait or (f.PortraitContainer and f.PortraitContainer.portrait)
 		if portrait then
 			portrait:SetTexture(ns.LOGO)
-			portrait:SetTexCoord(0, 1, 0, 1)
+			-- (Its coords before its mask, once: a masked texture refuses new ones, Forever 1.60.)
+			if not portrait.olympusMasked then portrait:SetTexCoord(0, 1, 0, 1) end
 			if portrait.SetMask and not portrait.olympusMasked then
 				portrait.olympusMasked = pcall(portrait.SetMask, portrait, "Interface\\CharacterFrame\\TempPortraitAlphaMask")
 			end
@@ -775,6 +779,11 @@ local function CreateMain(style)
 		GameTooltip:SetOwner(self, "ANCHOR_BOTTOMLEFT")
 		GameTooltip:AddLine(L.HEADER_TIP_TITLE, 1, 0.82, 0)
 		GameTooltip:AddLine(L.HEADER_TIP, 1, 1, 1, true)
+		-- 1.1: the characters their players linked as alts count once (Alts.lua).
+		local s = ns.Data.Summary()
+		if (s.alts or 0) > 0 then
+			GameTooltip:AddLine(L.HEADER_TIP_ALTS:format(ns.FormatNumber(s.characters or s.total), ns.FormatNumber(s.alts)), 0.8, 0.8, 0.8, true)
+		end
 		GameTooltip:AddLine(" ")
 		GameTooltip:AddLine(L.HEADER_TIP_DIFFER, 0.8, 0.8, 0.8, true)
 		GameTooltip:Show()
@@ -943,6 +952,9 @@ local function CreateMain(style)
 	f:SetScript("OnShow", function()
 		UI.Refresh()
 		ns.SafeCall("issue reporter", ClearOfIssueReporter, MainClearOfIssueReporter)
+		-- 1.1 (Fern's #11): the first-open page, over the window, while anything is unanswered
+		-- (Consent.lua: once a session, never in combat or an instance). The window works anyway.
+		ns.SafeCall("privacy page", ns.Consent.Ask, "window")
 	end)
 	f:SetScript("OnHide", function(self)
 		local person = personFrames[self.style]
@@ -1297,7 +1309,9 @@ UI.PLACE_HOLD = 1  -- seconds a redraw's place is given again when the client me
 local function PageOf(tab, locked)
 	if locked then return "join" end
 	local sub
-	if tab == "realm" then sub = ns.Views.ChatTier and ns.Views.ChatTier() or "tree"
+	if tab == "realm" then
+		-- (1.1: our guild's members page, Members.lua, a page of its own.)
+		sub = (ns.Views.BoardShown and ns.Views.BoardShown() and "board") or (ns.Views.PageShown and ns.Views.PageShown()) or ns.Views.ChatTier and ns.Views.ChatTier() or ns.Members and ns.Members.PageId and ns.Members.PageId() or "tree"
 	elseif tab == "throne" then sub = ns.King and ns.King.mode
 	elseif tab == "treasury" then sub = ns.Treasury and ns.Treasury.mode end
 	return tab .. "/" .. tostring(sub or "")
@@ -1382,6 +1396,9 @@ function UI.Refresh()
 		local F = ns.FormatNumber
 		main.total:SetText(L.ARMY_TOTAL:format(F(s.total)))
 		main.sub:SetText(L.ARMY_SUB:format(F(s.online), #s.guilds, ns.Ago(s.newest)) .. "  ·  " .. UI.CensusName())
+		-- Right after login (1.1): the census is being rebuilt, and the header says so.
+		local heard = ns.Data.Rebuilding and ns.Data.Rebuilding()
+		if heard then main.sub:SetText(L.REBUILDING_SUB:format(heard) .. "  ·  " .. UI.CensusName()) end
 		-- Outside an Olympus guild nothing but the Join Olympus screen is shown.
 		local locked = not ns.IsMember()
 		-- Joined or left a guild while the window is open: lay it out again.
@@ -1419,7 +1436,7 @@ function UI.Refresh()
 		local only = {
 			throne = ns.King and ns.King.Visible and ns.King.Visible() or false,
 			vox = ns.Vox and ns.Vox.Visible and ns.Vox.Visible() or false,
-			treasury = ns.Treasury and ns.Treasury.Visible and ns.Treasury.Visible() or false,
+			treasury = ns.Treasury and ns.Treasury.TabVisible and ns.Treasury.TabVisible() or false, -- (1.1: the dues' button too)
 			workshop = ns.Workshop and ns.Workshop.Visible and ns.Workshop.Visible() or false,
 		}
 		if only[main.tab] == false then return ShowTab("census") end
@@ -1875,6 +1892,10 @@ end)
 -- The court's line tops the Census and the Realm for the players in its zone.
 ns.On("COURT_CHANGED", function() if main and (main.tab == "census" or main.tab == "realm") then UI.RefreshSoon() end end)
 ns.On("CHAT_CHANGED", function() if main and main.tab == "realm" and ns.Views.ChatShown() then UI.RefreshSoon() end end)
+-- A page of the Realm tab changed (1.1: the loot notes, the crafters' board): redrawn while it shows.
+ns.On("REALM_PAGE_CHANGED", function(key)
+	if main and main.tab == "realm" and ns.Views.PageShown and ns.Views.PageShown() == key then UI.RefreshSoon() end
+end)
 ns.On("WORKSHOP_CHANGED", function() if main and main.tab == "workshop" then UI.RefreshSoon() end end)
 ns.On("RECRUIT_CHANGED", function() UI.RefreshSoon() end)
 -- The screen or the UI scale changed: the window's width in pixels did too, so the tabs
@@ -1926,6 +1947,11 @@ function UI.ShowHelp()
 		L.HELP_LOCATION,
 		L.HELP_ROLLCALL,
 		L.HELP_INSPECTION,
+		L.HELP_CHAT,
+		L.HELP_PRIVACY_PAGE,
+		L.HELP_FILTER,
+		L.HELP_LOG,
+		L.HELP_BACKUP,
 		"",
 		L.HELP_CHATS,
 		L.HELP_CHAN_ALL,
@@ -2068,6 +2094,8 @@ local function CreateMinimapButton()
 		GameTooltip:AddLine(L.TITLE, 1, 0.82, 0)
 		GameTooltip:AddLine(L.ARMY_TOTAL:format(ns.FormatNumber(s.total)), 1, 1, 1)
 		GameTooltip:AddLine(L.ARMY_SUB:format(ns.FormatNumber(s.online), #s.guilds, ns.Ago(s.newest)), 0.8, 0.8, 0.8)
+		local heard = ns.Data.Rebuilding and ns.Data.Rebuilding()
+		if heard then GameTooltip:AddLine(L.REBUILDING_SUB:format(heard), 1, 0.82, 0) end
 		GameTooltip:AddLine(" ")
 		GameTooltip:AddLine(L.MINIMAP_LEFT, 0.6, 0.6, 0.6)
 		GameTooltip:AddLine(L.MINIMAP_RIGHT, 0.6, 0.6, 0.6)
@@ -2100,7 +2128,9 @@ end)
 
 local photo -- [frame] = its alpha before, while photo mode is on
 -- Children of UIParent walked at most (1.0.0, Konig's review of 1.0.0): a screen with thousands of
--- frames (some addons make one per thing they show) is walked this far, and the rest left as they are.
+-- frames (some addons make one per thing they show) is left as it is. Counted first (Konig's
+-- review of 1.1: GetChildren returns every child at once, however many, so capping the loop after
+-- it still listed them all): GetChildren is called only when there are PHOTO_MAX or fewer.
 UI.PHOTO_MAX = 1000
 
 -- The author's character, or the author's own test build (Dev.lua, never published).
@@ -2129,10 +2159,14 @@ function UI.TogglePhoto()
 		return ns.Print(L.PHOTO_OFF)
 	end
 	if ns.GamepadUI() then return ns.Print(L.PHOTO_GAMEPAD) end
+	local count = UIParent.GetNumChildren and UIParent:GetNumChildren()
+	if type(count) ~= "number" or count > UI.PHOTO_MAX then
+		ns.Log("photo mode: %s frames on the screen, more than %d: none walked", tostring(count), UI.PHOTO_MAX)
+		return ns.Print(L.PHOTO_TOO_MANY:format(UI.PHOTO_MAX))
+	end
 	ns.Print(L.PHOTO_ON) -- (first: the chat goes too)
 	photo = {}
 	local children = { UIParent:GetChildren() }
-	if #children > UI.PHOTO_MAX then ns.Log("photo mode: %d frames on the screen, the first %d walked", #children, UI.PHOTO_MAX) end
 	for i = 1, math.min(#children, UI.PHOTO_MAX) do
 		local f = children[i]
 		local keep = f == WorldMapFrame or f == GameTooltip or (f.IsForbidden and f:IsForbidden()) or Ours(f)

@@ -45,7 +45,7 @@ local chatQueue = {}  -- chat lines (Channels.lua): { msg, done, t }
 local lastWasChat = false
 local asm = Codec.NewAssembler()
 local guildAsm = Codec.NewAssembler() -- pieces over GUILD (1.0.0)...
-local GUILD_PIECES = { HS = true, HT = true } -- ...put together for these types alone: the High Council's lists
+local GUILD_PIECES = { HS = true, HT = true, XB = true } -- ...put together for these types alone: the High Council's lists, a guild's loot notes (1.1)
 local msgId = 0
 local lastBroadcast = 0
 local early -- { every, due }: the report due then went out early, as a census answer (see Q1)
@@ -91,6 +91,17 @@ function Comm.PeerCount(sameRealm)
 		if now - t <= COUNT_WINDOW and (not sameRealm or peerRealm[name] == ns.realm) then n = n + 1 end
 	end
 	return n
+end
+
+-- 1.1: our guild's addon users heard lately (by their hello), by name (Loot.lua draws its officers'
+-- turns to answer an ask from them).
+function Comm.Peers()
+	local now, out = ns.Now(), {}
+	for name, t in pairs(peers) do
+		if now - t <= PEER_WINDOW then out[#out + 1] = name end
+	end
+	table.sort(out)
+	return out
 end
 
 -- The addon versions of our guild's users counted now, ours included: { ["0.8.2"] = 3 }.
@@ -145,12 +156,18 @@ function Comm.Stats()
 end
 
 -- urgent: ahead of everything waiting (a player waits for the answer: a layer ask, an offer,
--- a vote), behind the other urgent ones.
-local function Enqueue(dist, msg, key, target, urgent, logged)
+-- a vote), behind the other urgent ones. done (1.1, Keys.lua): called once the message left
+-- (true) or was dropped from the queue (false).
+local function Done(item, sent)
+	local done = item[7]
+	if done then ns.SafeCall("send done", done, sent) end
+end
+local function Enqueue(dist, msg, key, target, urgent, logged, done)
 	if key then
 		for _, item in ipairs(queue) do
 			if item[3] == key then
 				item[2], item[4], item[6] = msg, target, logged or nil
+				if done then item[7] = done end
 				return
 			end
 		end
@@ -161,9 +178,9 @@ local function Enqueue(dist, msg, key, target, urgent, logged)
 		for i, item in ipairs(queue) do
 			if not item[5] then drop = i break end
 		end
-		table.remove(queue, drop)
+		Done(table.remove(queue, drop), false)
 	end
-	local item = { dist, msg, key, target, urgent or nil, logged or nil }
+	local item = { dist, msg, key, target, urgent or nil, logged or nil, done }
 	if urgent then
 		local at = 1
 		while queue[at] and queue[at][5] do at = at + 1 end
@@ -178,19 +195,44 @@ end
 --   Comm.Handle("P1", function(dist, sender, text) ... end)
 -- logged (1.0.0): a player's own words (a decree's), sent with the logged API where the client
 -- has it (SendNow), as chat lines are: the server keeps them, so abuse can be reported.
+--
+-- The top-level types (the first two bytes, then "~"), one module each (1.1): a type registered
+-- twice goes to the module loaded last, and the other never hears it again (the 1.1 review: the
+-- loot notes and the census's route ask had one type). Pick a new one here first; tests/run.lua
+-- fails on a type two files register, or one missing here.
+--   Before any handler, here: K0 K1 (the realm key), H1 (hello), R1 R2 (census reports), and
+--   C<id>:<n>:<of>: (pieces)
+--   Comm.lua Q1 | Positions P1 | Layers L0 L1 | Hop LN LO LQ LR LX | Decree D1 | Channels M1
+--   Inspect S1 U0 U1 | King T1 T2 T3 | Court T4 T5 | Acts T6 | Treasury T8 TB TE TQ TR TX
+--   Bank T9 | Vox Y1 | Loot X1 XQ XB | Crafters W0 W1 WA WL WQ WR
+--   Workshop HA HI HK HQ HR HS HT V1 V2 V3 V4 V5 V6 | Link DA DB DC DE DK DR DV DW
+--   Other 1.1 work: Recruit J1 J3 | Alts AL | Filter BW | Dues FA FB FC FD FQ FS FU
+--   Board G0 G1 GQ | Keys K3 K4 K5 | Channels N1 | Moderation O1 | Treasury TA TD TW
+--   Bank TL TN TO TS | Week Y2. Reserved: J2 (#20's route answer), E0 E1 E2 (1.2's army events),
+--   FK (a 1.1 build's copy of the dues' amount from the Treasurer's client, read by nobody now).
 local handlers = {}
+-- 1.1 (Moderation.lua): a client the moderators took off (net-off) sends none of what they hide.
+local function Held(msg)
+	local M = ns.Moderation
+	return M ~= nil and not M.missing and M.Blocks(msg) == true
+end
 function Comm.Send(dist, msg, key, urgent, logged)
 	if dist == "GUILD" and not IsInGuild() then return end
+	if Held(msg) then return end
 	Enqueue(dist, msg, key, nil, urgent, logged)
 end
--- An addon message to one player only (answers to the King, Throne tab).
-function Comm.Whisper(target, msg, key, urgent)
+-- An addon message to one player only (answers to the King, Throne tab). logged (1.1): a
+-- player's own words (a Board note), with the logged API, as Comm.Send. done: see Enqueue.
+function Comm.Whisper(target, msg, key, urgent, logged, done)
 	if type(target) ~= "string" or target == "" then return end
-	Enqueue("WHISPER", msg, key, target, urgent)
+	if Held(msg) then return end
+	Enqueue("WHISPER", msg, key, target, urgent, logged, done)
 end
 function Comm.Handle(msgType, fn)
 	handlers[msgType] = fn
 end
+-- 1.1: [key] = fn(dist, sender, text), handed every piece heard over GUILD or the channel while set.
+Comm.pieceHooks = {}
 -- Long payloads (> 255 bytes) go through the same chunking as reports; urgent ones (a
 -- question to the army) ahead of the census, their pieces still in order. On the channel, or
 -- over GUILD (1.0.0), where only the types in GUILD_PIECES are put together again.
@@ -207,12 +249,17 @@ end
 function Comm.QueueSize()
 	return #queue
 end
+-- How many more fit before the oldest waiting message is dropped (1.1: the King's key rotation
+-- hands out no more than that, Keys.lua).
+function Comm.QueueRoom()
+	return MAX_QUEUE - #queue
+end
 
 -- Chat lines wait in a short lane of their own: they never go through Enqueue, so they can
 -- never push report chunks out of MAX_QUEUE. done(sent) is called once the part went out
 -- (or was dropped). Returns false when the lane is full.
 function Comm.SendChat(msg, done)
-	if #chatQueue >= CHAT_QUEUE then return false end
+	if #chatQueue >= CHAT_QUEUE or Held(msg) then return false end
 	chatQueue[#chatQueue + 1] = { msg = msg, done = done, t = GetTime() }
 	return true
 end
@@ -242,6 +289,22 @@ local function SendNow(dist, msg, logged, whisperTo)
 	return false
 end
 
+-- The Join screen's own addon whispers (1.1, Fern's #20, Recruit.lua): outside an Olympus guild
+-- the addon sends nothing else, and these only: J1 (which guild should I ask? to a member /who
+-- found) and J3 (my request, with the whisper the player sends himself), one per click or
+-- search, straight to that one player, never through the queue (Pump sends nothing for a
+-- non-member). A member of an Olympus guild sends neither.
+local OUTSIDE_TYPES = { J1 = true, J3 = true }
+function Comm.WhisperOutside(target, msg)
+	if ns.IsMember() or type(target) ~= "string" or target == "" or type(msg) ~= "string" then return false end
+	if not OUTSIDE_TYPES[msg:sub(1, 2)] or msg:sub(3, 3) ~= "~" or #msg > 255 then return false end
+	return SendNow("WHISPER", msg, false, target)
+end
+-- ...and the one message it hears there: J2, a member's answer to its J1 (Recruit.lua checks it
+-- asked that member).
+local outsideHandler
+function Comm.HandleOutside(fn) outsideHandler = fn end
+
 -- Every chat part still waiting is dropped, and its sender is told.
 local function DropChat()
 	local items = {}
@@ -255,7 +318,11 @@ end
 local function Pump()
 	if not queue[1] and not chatQueue[1] then return end
 	if not ns.IsMember() then
-		wipe(queue) -- outside an Olympus guild the addon sends nothing
+		-- Outside an Olympus guild the addon sends nothing.
+		local dropped = {}
+		for i, item in ipairs(queue) do dropped[i] = item end
+		wipe(queue)
+		for _, item in ipairs(dropped) do Done(item, false) end
 		DropChat()
 		return
 	end
@@ -292,9 +359,8 @@ local function Pump()
 		end
 	end
 	if not index then return end
-	local dist, msg, target, logged = queue[index][1], queue[index][2], queue[index][4], queue[index][6]
-	table.remove(queue, index)
-	SendNow(dist, msg, logged == true, target)
+	local item = table.remove(queue, index)
+	Done(item, SendNow(item[1], item[2], item[6] == true, item[4]))
 end
 Comm.Pump = Pump -- for tests
 
@@ -699,6 +765,23 @@ function Comm.Audience()
 	return (ns.rdb and ns.rdb.realmKey) and ns.L.CHANNEL_SEALED or ns.L.CHANNEL_PUBLIC
 end
 
+-- The channel is public (1.1): no realm key, so anyone who joins it by name reads what is sent
+-- there. nil outside an Olympus guild (the addon is on no channel there).
+function Comm.IsPublic()
+	if not ns.IsMember() then return nil end
+	return not (ns.rdb and ns.rdb.realmKey)
+end
+
+-- Our guild's addon users on the sealed channel now, as their hellos say (1.1: while we are on
+-- the public one, they are on another channel than ours).
+function Comm.SealedPeers()
+	local now, n = ns.Now(), 0
+	for name, t in pairs(peers) do
+		if now - t <= COUNT_WINDOW and peerSealed[name] == "s" then n = n + 1 end
+	end
+	return n
+end
+
 -- No key? Ask our guild (officers who have it answer, over GUILD).
 function Comm.RequestKey()
 	if ns.IsMember() and ns.rdb and not ns.rdb.realmKey then Enqueue("GUILD", "K0~", "keyreq") end
@@ -715,8 +798,12 @@ function Comm.SetRealmKey(secret)
 		ns.Print(ns.L.KEY_TOO_SHORT)
 		return
 	end
+	local was = ns.rdb.realmKey
 	ns.rdb.realmKey = secret
 	Enqueue("GUILD", "K1~" .. secret, "key")
+	-- 1.1 (Keys.lua): dated now, so our guild's 1.1 clients take it over a key the King rotated
+	-- before; the key it replaces named with it (a plain K1 of that one no longer pulls them back).
+	if ns.Keys.Typed then ns.Keys.Typed(secret, was) end
 	ns.Print(ns.L.KEY_SET)
 	Comm.JoinChannel()
 end
@@ -935,6 +1022,14 @@ function Comm.MaybeBroadcast(report)
 end
 
 function Comm.Broadcast(report)
+	-- 1.1: our guild is off the Olympus network (net-off, Moderation.lua): its census stays home.
+	local M = ns.Moderation
+	if M and not M.missing and M.OwnGuildOff() then
+		if not Comm.heldReport then ns.Log("census of %s not sent: the guild is off the network", tostring(report and report.guild)) end
+		Comm.heldReport = true
+		return
+	end
+	Comm.heldReport = nil
 	lastBroadcast = ns.Now()
 	msgId = (msgId + 1) % 1000
 	-- Where people are goes out only with their yes (0.9.1): nothing of it unless we share our
@@ -1108,6 +1203,21 @@ function Comm.Admit(sender, now)
 end
 function Comm.ResetAdmission() wipe(admit); admitCount = 0 end
 
+-- A client outside any Olympus guild (1.1): over its own guild it puts together the pieces of the
+-- author's signed titles list alone (HT), which names the approved guilds (ns.IsApprovedGuild):
+-- the members of such a guild have nothing else to learn it from. Nothing else is read, kept or
+-- answered; a blocked sender, and one past the admission budget, are dropped as ever, and the list
+-- is checked like any other (Workshop.TakeTitles: the signature, the budgets of checks).
+local outsiderAsm = Codec.NewAssembler()
+function Comm.Outsider(sender, text)
+	if not IsInGuild() or type(text) ~= "string" or not text:match("^C%w+:") then return end
+	if ns.db.blocked[sender:lower()] or not Comm.Admit(sender, ns.Now()) then return end
+	stats.outsider = (stats.outsider or 0) + 1
+	local full = Codec.Feed(outsiderAsm, sender, text, ns.Now())
+	if full and full:sub(1, 3) == "HT~" and handlers.HT then handlers.HT("GUILD", sender, full) end
+end
+function Comm.ResetOutsider() outsiderAsm = Codec.NewAssembler() end -- (tests)
+
 local function OnAddonMessage(prefix, text, dist, sender, target, zoneChannelID, localID, channelName)
 	if prefix ~= ns.PREFIX then return end
 	if type(sender) ~= "string" or sender == "" or type(text) ~= "string" then return end
@@ -1147,7 +1257,18 @@ local function OnAddonMessage(prefix, text, dist, sender, target, zoneChannelID,
 		stats.echo = stats.echo + 1 -- our own message coming back (proves the channel works)
 		return
 	end
-	if not ns.IsMember() then return end -- outside an Olympus guild the addon hears nothing
+	if not ns.IsMember() then
+		-- Outside an Olympus guild the addon hears nothing of the army, but for two things (1.1): the
+		-- Join screen's answer, J2, whispered by a member it asked (Comm.WhisperOutside), and the
+		-- author's signed titles list over its own guild, which may make that guild an Olympus guild
+		-- (Comm.Outsider).
+		if dist == "WHISPER" and text:sub(1, 3) == "J2~" and outsideHandler and not ns.db.blocked[sender:lower()]
+			and Comm.Admit(sender, ns.Now()) then
+			ns.SafeCall("join route", outsideHandler, sender, text)
+		end
+		if dist == "GUILD" then Comm.Outsider(sender, text) end
+		return
+	end
 	if ns.db.blocked[sender:lower()] then return end
 	if not Comm.Admit(sender, ns.Now()) then return end
 	stats.recv = stats.recv + 1
@@ -1164,9 +1285,15 @@ local function OnAddonMessage(prefix, text, dist, sender, target, zoneChannelID,
 		if rank and rank <= ns.CAPTAIN_RANK then
 			local key = text:sub(4)
 			if key ~= "" and key ~= ns.rdb.realmKey then
-				ns.rdb.realmKey = key
-				ns.Log("realm key received from officer %s", sender)
-				Comm.JoinChannel()
+				-- 1.1 (Keys.lua): a key a newer one replaced here (the King's rotation, an officer's
+				-- 1.1 /oly key) no longer comes back without an epoch; any other still does.
+				if ns.Keys.TakesLegacy and ns.Keys.TakesLegacy(key) == false then
+					ns.Log("realm key from officer %s ignored: a key a newer one replaced", sender)
+				else
+					ns.rdb.realmKey = key
+					ns.Log("realm key received from officer %s", sender)
+					Comm.JoinChannel()
+				end
 			end
 		end
 		return
@@ -1175,7 +1302,13 @@ local function OnAddonMessage(prefix, text, dist, sender, target, zoneChannelID,
 		-- A guildmate asks for the key: officers who have it answer (at most once a minute).
 		if ns.rdb.realmKey and ns.Roster.IsOfficer() and now - (Comm.lastKeyAnswer or 0) > 60 then
 			Comm.lastKeyAnswer = now
-			ns.After(math.random(1, 5), "key answer", function() Enqueue("GUILD", "K1~" .. ns.rdb.realmKey, "key") end)
+			ns.After(math.random(1, 5), "key answer", function()
+				if not ns.rdb.realmKey then return end
+				Enqueue("GUILD", "K1~" .. ns.rdb.realmKey, "key")
+				-- 1.1 (Keys.lua): with its epoch too (and the keys it replaced), for 1.1 guildmates.
+				local k3 = ns.Keys.HandOutMessage and ns.Keys.HandOutMessage()
+				if type(k3) == "string" then Enqueue("GUILD", k3, "key3") end
+			end)
 		end
 		return
 	end
@@ -1203,6 +1336,10 @@ local function OnAddonMessage(prefix, text, dist, sender, target, zoneChannelID,
 	-- heard beginning holds ours back); nil otherwise, and no piece pays for it.
 	local pieceHook = Comm.pieceHook
 	if pieceHook and (dist == "GUILD" or dist == "CHANNEL") then ns.SafeCall("list piece", pieceHook, dist, sender, text) end
+	-- 1.1: other modules' waiting answers the same way (Loot.lua's), each set only while it waits.
+	if next(Comm.pieceHooks) ~= nil and (dist == "GUILD" or dist == "CHANNEL") then
+		for key, fn in pairs(Comm.pieceHooks) do ns.SafeCall(key .. " piece", fn, dist, sender, text) end
+	end
 	if dist == "GUILD" then
 		-- Pieces over GUILD (1.0.0): the High Council's lists cross to guildmates on other realms.
 		-- Only those are put together; versions before 1.0.0 put nothing together from GUILD.
@@ -1299,6 +1436,7 @@ ns.On("LOGIN", function()
 	ns.Every(60, "housekeeping", function()
 		local dropped, sample = Codec.Gc(asm, ns.Now())
 		Codec.Gc(guildAsm, ns.Now())
+		Codec.Gc(outsiderAsm, ns.Now())
 		if dropped > 0 then
 			stats.partial = stats.partial + dropped
 			ns.Log("incomplete report dropped: %s", tostring(sample))
