@@ -263,18 +263,45 @@ WoW channel number to join). Each channel is exclusive to a rank:
 
 - Higher ranks also use the channels below theirs: a Lord writes in all three.
 - `/oly mute captains` (or `olympus`, `lords`) hides a channel in chat; the same command shows it again.
-- `/oly chatwindow Olympus` shows the three channels in your chat window called "Olympus"
-  (make the tab in the game first: right-click a chat tab, Create New Window), by name or by
-  number; `/oly chatwindow Olympus captains` moves one channel only, and `/oly chatwindow main`
-  brings them back. Only where the lines are printed changes: the addon never touches the chat
-  box, so every command typed there works as always. A window closed or renamed sends its
-  lines back to the main window, with a notice. `/oly status` shows where each channel goes.
+- **The Olympus tab (1.1.1).** One click in the Chat tab's settings (the gear), or
+  `/oly chatwindow tab` (`aba` works too), sends the three channels to a tab of your chat named
+  "Olympus". There each line comes without the channel's name, in its channel's colour: gold for
+  [Olympus], teal for [Captains], purple for [Lords] (the tab's first line gives that legend).
+  You make the tab yourself with the game's menu, as the click tells you: right-click the General
+  tab, Create New Window, and name it Olympus; the lines land there as soon as it exists, in the
+  main window until then. The click shows you where on the Chat tab, as its **Add an Olympus tab
+  to the game chat** line does, with a pointer by that tab, and sends the channels there the
+  moment it exists
+  (1.1.1, below). Olympus
+  cannot make it for you: the game's own code for a new chat window, run by
+  an addon, taints the chat box, so `/cast`, `/target`, `/use` or `/click` typed there afterwards
+  get blocked (with the gamepad UI, the game froze in 0.8.5). A new tab also shows Say, Guild,
+  whispers and more: right-click it, Settings, and untick everything to have the Olympus chats
+  alone there (the tab's first line says so, after the legend, when the tab shows other chat;
+  `/oly chatwindow tab` says it again). The main window keeps Olympus's own notices and the
+  pinned line's announcements. `/oly chatwindow main` brings the channels back to the main
+  window.
+- `/oly chatwindow <number or name>` shows the three channels in another chat window of yours
+  (make it in the game first: right-click a chat tab, Create New Window), by name or by number;
+  `/oly chatwindow Officers captains` moves one channel only, and `/oly chatwindow main` brings
+  them back. In a window named anything but Olympus the lines keep the channel's name (name the
+  tab "Oly" and pick it with `/oly chatwindow Oly` to have it). Only where the lines are printed
+  changes: the addon never touches the chat box, so every command typed there works as always.
+  A window closed or renamed sends its lines back to the main window, with a notice.
+  `/oly status` shows where each channel goes.
 - The flood guard keeps a busy channel readable: past 60 lines a minute (or 10 from one player
   while the channel is half full) the rest stay off the chat, and a notice says how many, at
-  most once a minute. Those lines still go to the Realm tab's Olympus chats, which keep the
-  last 100 lines of each channel.
+  most once a minute. Those lines still go to the Chat tab (1.1.1), which keeps the last 100
+  lines of each channel.
+- A line still waiting to leave when the Olympus channel changes (a new realm key, from
+  `/oly key` or the King's rotation) is not sent, to either channel, and you are told: it was
+  written for the old channel's audience. Send it again to write on the new one (1.1.1, GitHub
+  #34). The same holds for a line the privacy warning holds while the channel changes. Of a
+  long line whose first parts had already left, the notice says how many went out, on the old
+  channel.
 - Shift-click an item or spell into the line and it stays a link. Long lines are split into
-  up to 3 messages.
+  up to 3 messages; if the game refuses one of them, the rest of that line is not sent
+  either, and you are told (1.1.1).
 - The channels show only in the chat of players with the addon.
 - **Block terms (1.1).** `/oly filter add <word>` hides, on your screen, every line of addon
   text with that word: the Olympus chats, the King's writs, a decree's words and Vox Populi's
@@ -282,7 +309,7 @@ WoW channel number to join). Each channel is exclusive to a rank:
   digits (`/oly filter remove <word>`, `/oly filter` lists them). It never reads names, guilds,
   the census, the treasury or the game's own chat (Say, Trade, General). A hit hides the line and
   nothing else: its sender is not ignored, blocked or cut off, and their next line shows. The
-  Realm tab's chats say how many lines your filter hides, and a click shows them, marked; the
+  Chat tab says how many lines your filter hides in a channel, and a click shows them, marked; the
   Decrees tab offers a hidden writ, a decree's hidden words or a hidden Vox question with a click.
   The pinned line's words hide the same way (1.1), and a click on the line shows them.
   A companion addon reading the chats (the bridge) still gets hidden lines, as with a muted
@@ -300,16 +327,18 @@ WoW channel number to join). Each channel is exclusive to a rank:
   (another editor's repeat of it does not: it is not his act). Clients before 1.1 ignore the list.
 - **Your choice (1.1).** The chats are off until you say yes on the first-open page (or
   `/oly chat on`). Off, `/ol`, `/olc`, `/oll` and `/oly pin` say so and send nothing, and no line
-  from anyone shows or is kept on this client, nor any pinned line; the Realm tab says the chats
-  are off, a click to choose.
-- The Realm tab links **the Olympus chats**: the last lines of each channel your rank reads,
-  newest first, even what was said while the window was closed. A click whispers the player.
+  from anyone shows or is kept on this client, nor any pinned line; the Realm tab and the Chat
+  tab say the chats are off, a click to choose.
+- The Realm tab links **the Olympus chats**: a click opens the Olympus window on its Chat tab
+  (1.1.1, below), with the last lines of each channel your rank reads, even what was said while
+  the window was closed.
 - Ranks follow the rule of the decrees: whoever founds a guild with "Olympus" in its name is
   its Lord and gets [Lords], and its officers get [Captains].
 - **One pinned line** (1.1): the King, his Stewards and Hands can pin one short line (100
   characters) on top of the Olympus chats and the Realm, for every member, for 2 hours: a raid
-  move, a gates change (**Pin a line for the army...** on the chats page). A guild master pins
-  one for his own guild alone (**Pin a line for your guild...**): it goes over guild chat, and
+  move, a gates change (**Pin a line for the army...** in the Chat tab's settings). A guild
+  master pins one for his own guild alone (**Pin a line for your guild...**): it goes over guild
+  chat, and
   each guildmate's addon reads his rank in its own guild roster, never in the census (which
   anyone on the Olympus channel can report to). (The officers of <Olympus> read [Lords] only on
   its own members' addons, so they pin for the army as the King's Hands.) `/oly pin <text>` pins
@@ -347,9 +376,91 @@ all three channels, and the addon only decides what to show. Anyone on that chan
 [Olympus] line is not verified. Seal the channel with `/oly key`, and never share passwords there.
 Before your first line in each channel the addon tells you this and waits for **Send**.
 Since 1.1, while your channel is public, officers see one quiet grey line saying so on the
-Census, the Realm and the Olympus chats (its tooltip says who can read it and how to seal it);
+Census, the Realm and the Chat tab's settings (its tooltip says who can read it and how to seal
+it);
 every member sees how many guildmates are already on the sealed channel, and `/oly status`
 says public or sealed. It only tells: nothing is sent and nothing changes.
+
+### The Chat tab (1.1.1)
+The Olympus chats in a tab of the Olympus window, **Chat**, right after the Realm, like the chat
+pane of the Guild & Communities window. Click the tab, or type `/oly talk` (or `/ol`, `/olc` or
+`/oll` with nothing after it), Shift-click the minimap button, or click **the Olympus chats** on
+the Realm tab: each opens the Olympus window on its Chat tab, on that channel. `/oly talk lords`
+opens it on [Lords]; the same command again closes the window.
+With the King's tabs the side column of the new look runs out of room: his Treasury moves to the
+window's left edge (for the author, his Workshop goes there first).
+
+- On top, where the other tabs show the army's counts, the search box: a name, a guild or words
+  of a line, and only the lines that hold it show (a line your block terms hide is found by its
+  writer and guild, not its words), with an **x** to empty it; like every tab's, it keeps its text
+  until you log out or `/reload`. On the same row, right of it: for a rank that reads more than
+  one channel, a small switch with the channel shown, in its colour, and **+N** for the lines that
+  came in on the others while the tab was open (a click lists your channels, each with its count,
+  to pick one); then the gear of the settings (below). There is no row of channels: most players
+  read [Olympus] alone, and the lines take that room. A channel muted in chat (`/oly mute`) still
+  shows here, and a line you write here keeps it muted in chat. The pinned line shows over the
+  lines, as on the Realm tab, and takes no room while nothing is pinned.
+- Every line whole, in a bubble that wraps: never cut, nothing to hover to read it. Other
+  players' lines on the left, yours on the right in the channel's colour (a line another of your
+  characters wrote shows under that character's name, on the left); the writer's name, guild and
+  time where a writer starts, and the date where the day changes. The lines take the room of the
+  list and of the box under it (this tab has no detail box). The last 100 lines of each channel
+  are kept, from every session, and scroll back. The tab follows the newest line until you scroll
+  up; then the line you are reading stays in its place while new lines come in and the oldest go,
+  and **N new** at the bottom takes you down to them.
+- By each name, Olympus's marks, by the rules of the borders and the nameplate marks (but not
+  switched off with them), and only where the guild a line names is proven: a nameplate reads the
+  guild from the game, a chat line only claims it. The King's crown, the High Council's mark and
+  colour, the game's silver elite mark for Lords and Captains, bronze for Raiders and Veterans of
+  your own guild (the census does not carry other guilds' rank names), a star for any other member
+  of your guild's roster or anyone the census names in theirs (and the King's Stewards and Hands),
+  the Treasurer's coin, and **Steward** or **Hand** after the King's. A name whose Olympus guild
+  cannot be checked (a plain member of another guild, or anyone claiming a guild's name) gets no
+  mark. A click on a name whispers that player, in Olympus's whisper window.
+- A line your block terms hide shows as a grey bubble, and a click shows it, marked. Over the
+  lines, like the pinned line, how many your filter hides in the channel (no room while it hides
+  none), and a click there shows them all (another hides them again). A link shows its tooltip
+  when you hover it, and a Shift-click puts it in the tab's box.
+- **The box** runs across the bottom, where the other tabs have their buttons, with no Send
+  button: Enter sends. It is Olympus's own, not the game's chat box: it takes the keyboard only
+  when you click into it or press your open-chat key (Enter, unless you changed it) while the tab
+  shows (the tab never takes it when it opens, so your movement keys keep working; in a fight the
+  key changes over when the fight ends). Enter sends to the channel shown and the cursor stays for
+  the next line; Enter on an empty box, Escape or a left-click elsewhere gives the keyboard back to
+  the game; Tab changes channel. With the gamepad UI only a click puts the cursor there, and Enter
+  lets it go. It runs no command: a line that starts with `/` stays in the box and is not sent
+  (commands go in the game's chat box, which Olympus never opens or touches). Your first line in
+  each channel still waits for the privacy warning's **Send**. A line of yours that did not leave
+  shows a note in its channel, and a click puts it back in the box when the box is empty (what you
+  are writing is never replaced: the note waits).
+- **Add an Olympus tab to the game chat**: while your game chat has no Olympus tab (see Channels
+  above), a line over the lines offers one. Olympus cannot make that tab itself, so a click
+  shows you where: a small Olympus pointer by your main chat tab says right-click it, Create New
+  Window, and name it Olympus. The moment a chat window named Olympus exists, Olympus sends the
+  chats there (as `/oly chatwindow tab` does) and says so once; the pointer and the line go. It
+  only reads the game's chat windows to see the new one appear. With the gamepad UI there is no
+  pointer (the game's chat tabs work otherwise there): the line gives the same steps as text. The
+  line stays away while you send a channel to a chat window of your own (`/oly chatwindow`), and
+  its **x** puts it away for good, on every character: the settings and `/oly chatwindow tab`
+  still make the tab.
+- **Settings**: the gear at the end of the top row shows them in place of the lines (a click on it
+  again, or **< Back to the lines**, goes back). The Olympus chats on or off on this client, what
+  that means, and a click to choose (the first-open page); for officers while your channel is
+  public, its quiet grey line. For each channel your rank reads: whether it shows in your game
+  chat (a click mutes it there or shows it again, as `/oly mute`), and the chat window it prints
+  in (a click moves it to the next chat window open in your game, then back to the main one, as
+  `/oly chatwindow`). The Olympus tab of the game chat: add it (as the line over the lines does),
+  the steps while it is awaited, **on**, or waiting for a chat tab named Olympus. And for whoever
+  may pin, **Pin a line for the army...** (or **for your guild...**). Each choice is the one its
+  command makes, kept where it always was, so nothing chosen before 1.1.1 is lost; the game's chat
+  windows are only read, and printed in.
+- The tab has no place or size of its own: it is the Olympus window's, docked by your guild
+  window or wherever you put it. Escape or the window's X closes it; it never opens by itself.
+  With the chats off on this client it says so, what the choice means, and offers it.
+- **Blizzard's gamepad mode**: the same tab, opened with `/oly talk`, `/ol` or the Realm tab's
+  link; click into the box with the gamepad cursor to write. The Olympus window stays off the
+  Escape list there (its X closes it), and the tab opens no game popup: the whisper, a pinned
+  line's takedown and the settings' pin use Olympus's own windows.
 
 ### The Board: who is looking for a group, and where (1.1)
 The Realm tab links **the Board** (or `/oly lfg`): who in Olympus wants a group right now, from
@@ -742,10 +853,11 @@ alone until then).
   donations on`: everyone with the addon sees a line on the Realm and Treasury tabs ("Pyralis
   Ashandar is taking donations in Stormwind City"), his zone only if he shares his location
   (`/oly location`; the King: his crown on the map), and one line in the [Olympus] chat when he
-  turns it on (not with that chat muted, nor for a late login). His addon repeats it every 2
-  minutes and when his zone changes; it is never saved, so it is off when he logs out (his addon
-  says so as it leaves; otherwise it drops off every screen 5 minutes after his last word), and
-  `/oly donations off` turns it off before.
+  turns it on (not with that chat muted or the Olympus chats off, nor for a late login; in the
+  Olympus tab without "[Olympus]"). His addon repeats it every 2 minutes and when his zone
+  changes; it is never saved, so it is off when he logs out (his addon says so as it leaves;
+  otherwise it drops off every screen 5 minutes after his last word), and `/oly donations off`
+  turns it off before.
 - **Requests to the treasury** (1.1): a Lord or a Captain of any Olympus guild asks the treasury
   for an item and a count ("need 10 Ironwood"): a click on the item in the bank's grid (when he
   sees the bank), `/oly need 10 <item>` (the item shift-clicked into the chat line, its name or its
@@ -1147,16 +1259,20 @@ the game is removed at login, with one line saying so.
   and warns when it is one your guild replaced. The players it would block are named one by one
   in the confirm (30 at most) and added only on your yes.
 - **Search**: a box on top of the Census (guilds, Lords, Captains, players, zones, recruiting),
-  the Realm (guilds, Lords, Captains, members seen online, the Olympus chats' lines), the
+  the Realm (guilds, Lords, Captains, members seen online), the
   Tabards (inspected and untabarded players, by name or guild), the Treasury (donors in the
-  ranking and the book, and since 1.1 the bank's items) and, since 1.1, the Decrees (the log of what this client saw). Any case, accents too; only what matches shows, under the headers it belongs to (a Captain under his guild, opened
+  ranking and the book, and since 1.1 the bank's items), the Decrees (since 1.1: the log of what this client saw) and the Chat tab (since 1.1.1: a name, a guild or words of a line). Any case, accents too; only what matches shows, under the headers it belongs to (a Captain under his guild, opened
   for you, a page of guilds at a time), with an **x** to empty it. Each tab keeps its text until
   you log out or `/reload`; a guild clicked in the Census opens in the Realm with its box emptied.
   It only changes what the list shows: **Copy** still gives everything, and nothing is sent.
 - The window opens from `/oly`, the minimap button, or the round button in your guild window:
   the old Guild tab or the new Guild & Communities window, whichever one you use.
+  Shift-click the minimap button for the Chat tab (1.1.1, above).
 - Next to Forever's Guild & Communities window it takes that window's look: icon tabs down
-  the right side, its rows, column headers, buttons and member card.
+  the right side, its rows, column headers, buttons and member card. When the tabs do not all fit
+  down that side, the Workshop and then the Treasury move to the window's left edge, low, until
+  the rest fit: the King's view with the Chat tab moves the Treasury alone, the author's preview
+  both (1.1.1).
 - **Blizzard's gamepad mode** (Forever's controller interface): Olympus asks its questions in
   windows of its own instead of the game's popups, which Blizzard's gamepad code blocks (and
   freezes) when an addon opens one. With mouse and keyboard, the game's popups as always.
@@ -1661,11 +1777,11 @@ Other limits:
 | `/oly craft [item or name]` · `/oly crafter on\|off` | who can make it (the crafters' board on the Realm tab: shift-click an item after `/oly craft`); list your professions read so far, or take them off |
 | `/oly approved` · `/oly approved paste` | the guilds of Asmon's Olympus the author's signed list makes Olympus guilds (their names don't say Olympus), and whether yours is one; paste that signed list (the first member of such a guild: his addon then passes it to the guild) |
 | `/oly arms [text]` · `/oly muster [text]` | send a decree (`test` = local preview) |
-| `/ol <text>` · `/olc <text>` · `/oll <text>` | write in [Olympus], [Captains] or [Lords] |
+| `/ol <text>` · `/olc <text>` · `/oll <text>` | write in [Olympus], [Captains] or [Lords]; alone (`/ol`, `/olc`, `/oll`): open the Chat tab on that channel (1.1.1) |
 | `/oly all <text>` · `/oly captains <text>` · `/oly lords <text>` | the same, as `/oly` commands |
 | `/oly mute olympus` · `/oly mute captains` · `/oly mute lords` | hide or show a channel in chat |
 | `/oly pin <text>` · `/oly pin off` · `/oly pin` | the King, his Stewards and Hands: pin one line for the army on top of the Olympus chats and the Realm (2 hours); a guild master: one for his own guild. Take it down, or see what is pinned |
-| `/oly chatwindow <number or name> [olympus\|captains\|lords]` · `/oly chatwindow main` | show the Olympus chats in another chat window, or back in the main one |
+| `/oly chatwindow tab` · `/oly chatwindow <number or name> [olympus\|captains\|lords]` · `/oly chatwindow main` | the Olympus chats in a chat tab named Olympus (without the channel's name; it says how to make the tab), in another chat window, or back in the main one |
 | `/oly treasurer on\|off` | a keeper of the treasury (the Treasurer, the King, a character he named) shares his book and the guild bank, or keeps them private (1.1: what the King hides goes only to the King, his Steward and the keepers, by whisper) |
 | `/oly backup` · `/oly restore` | copy a backup of your treasury book and your settings as text, or paste one back after a wipe (nothing is sent anywhere, never the channel key) (1.1) |
 | `/oly donations on\|off` | a keeper of the treasury tells everyone with the addon he is taking donations (a line on the Realm and Treasury tabs, with his zone if he shares it, one line in the [Olympus] chat), until he logs out (1.1) |
@@ -1674,6 +1790,7 @@ Other limits:
 | `/oly rollcall on\|off` | answer the author's roll calls (version, client, channel state) or not (1.1: not until you say yes) |
 | `/oly privacy` | the first-open page again: what the addon shares, and your Yes or No to each (1.1) |
 | `/oly chat on\|off` | the Olympus chats on this client; off, nothing is sent or shown (1.1: off until you say yes) |
+| `/oly talk [olympus\|captains\|lords]` | open or close the Olympus window on its Chat tab, on that channel; also `/ol`, `/olc` or `/oll` with nothing after it, or Shift-click the minimap button (1.1.1) |
 | `/oly inspection on\|off` | take part in the King's Royal Inspection when sampled (a 2-minute patrol reported to him), or not (1.1: not until you say yes) |
 | `/oly issuereporter hide\|show` | hide Blizzard's Issue Reporter box (beta clients) at every login, or show it again (also a "Hide" button on it) |
 | `/oly helpme [text]` (or **Ask a High Councillor** on the Realm tab) | ask the High Council (the moderators) for help: it goes by whisper to up to three of them online who take requests |

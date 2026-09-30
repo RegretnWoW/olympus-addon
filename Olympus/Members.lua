@@ -1,7 +1,7 @@
 local ADDON, ns = ...
 local L = ns.L
 
--- Our own guild's members page (1.1), in the Realm tab like the chats. Asked for by Fern, of
+-- Our own guild's members page (1.1), in the Realm tab like the Board. Asked for by Fern, of
 -- Asmongold's moderators:
 -- #38: the members offline 7, 14 or 30 days and more, with rank, class, level and last online,
 --   from our own roster (Roster.Scan: the server's word, what the game's Guild window shows every

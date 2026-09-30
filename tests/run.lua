@@ -1547,13 +1547,34 @@ function Widget:SetOwner(owner, anchor) self.owner, self.ownerAnchor, self.lines
 function Widget:AddLine(text) self.lines = self.lines or {}; self.lines[#self.lines + 1] = text end
 function Widget:IsOwned(owner) return self.owner == owner end
 
+-- The X of PortraitFrameTemplate and BasicFrameTemplateWithInset (UIPanelCloseButtonDefaultAnchors:
+-- Forever's SharedUIPanelTemplates.lua, UIPanelCloseButton_OnClick): the window's onCloseCallback
+-- first, then HideUIPanel unless it said no. HideUIPanel (UIParentPanelManager.lua) does nothing in
+-- combat for a call that is not secure (CheckProtectedFunctionsAllowed), which an addon's window's
+-- X is taken to be; out of combat it hides a window with no panel area. (A test's HideUIPanel, when
+-- it sets one, is called instead.)
+local function TemplateCloseClick(self)
+	local parent = self:GetParent()
+	if not parent then return end
+	local goOn = true
+	if parent.onCloseCallback then goOn = parent.onCloseCallback(self) end
+	if not goOn then return end
+	local hide = rawget(_G, "HideUIPanel")
+	if hide then return hide(parent) end
+	local combat = rawget(_G, "InCombatLockdown")
+	if combat and combat() then return end
+	parent:Hide()
+end
+
 local TEMPLATES = {
 	PortraitFrameTemplate = function(w)
 		w.CloseButton = NewWidget("Button", nil, w)
+		w.CloseButton.scripts.OnClick = TemplateCloseClick
 		w.w, w.h = 338, 424
 	end,
 	BasicFrameTemplateWithInset = function(w)
 		w.CloseButton = NewWidget("Button", nil, w)
+		w.CloseButton.scripts.OnClick = TemplateCloseClick
 		w.TitleText = w:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 	end,
 	-- The same atlas template on every client (see UI.TabStyle); the Lua sizing it differs.
@@ -1666,6 +1687,17 @@ local function LoadUI()
 	return uns.UI
 end
 
+-- 1.1.1: the Chat tab's settings (the gear), as ChatWindow.SettingsLines gives them: ChatWindow.lua
+-- loaded fresh in a namespace of its own, its listeners kept apart (Core.lua's stand-in stays
+-- ns.ChatWindow). The Realm tab's chats page, gone, had the pin's control and the public channel's
+-- line: they are here now.
+local function ChatSettings()
+	local cns = setmetatable({}, { __index = ns })
+	cns.On, cns.RegisterEvent = function() end, function() end
+	assert(loadfile(ADDON_DIR .. "ChatWindow.lua"))("Olympus", cns)
+	return cns.ChatWindow.SettingsLines(), cns.ChatWindow
+end
+
 local function Anchor(frame, i)
 	local p = frame.points[i or 1]
 	return p and table.concat({ p[1], tostring(p[2] and p[2].name), p[3], p[4], p[5] }, " ")
@@ -1709,8 +1741,9 @@ test("tabs of the old window: four or five of Classic's wide tabs shrink to fit 
 				return n, total - 15 * (n - 1)
 			end
 			local n, span = Span()
-			eq(n, 6, "the Throne and Vox Populi too")
-			assert(span <= main:GetWidth() - 10, ("six tabs inside the window: %d of %d"):format(span, main:GetWidth()))
+			-- (1.1.1: seven with the Chat tab, which every member has.)
+			eq(n, 7, "the Chat tab, the Throne and Vox Populi too")
+			assert(span <= main:GetWidth() - 10, ("seven tabs inside the window: %d of %d"):format(span, main:GetWidth()))
 			for _, tab in ipairs(main.tabs) do assert(tab:GetWidth() >= 44, "still a tab") end
 			-- Room enough: Blizzard's own size.
 			main:SetWidth(900)
@@ -1944,9 +1977,11 @@ test("HD window: docked past the Communities window's side tabs, with icon tabs 
 			assert(tab.level > main:GetFrameLevel(), "over the frame's border")
 		end
 		eq(tabs[2].Icon.texture, "Interface\\Icons\\INV_BannerPVP_02", "the Alliance banner")
-		tabs[3]:Click()
-		eq(main.tab, "decrees"); eq(tabs[3].clickSound, true, "Blizzard's own click ran too")
-		for i, tab in ipairs(tabs) do eq(tab:GetChecked(), i == 3, "after the click: tab " .. i) end
+		-- (1.1.1: the Chat tab third, with the Communities window's own chat icon; the Decrees fourth.)
+		eq(tabs[3].key, "chat"); eq(tabs[3].Icon.texture, "Interface\\Icons\\UI_Chat")
+		tabs[4]:Click()
+		eq(main.tab, "decrees"); eq(tabs[4].clickSound, true, "Blizzard's own click ran too")
+		for i, tab in ipairs(tabs) do eq(tab:GetChecked(), i == 4, "after the click: tab " .. i) end
 		for _, wdg in ipairs(createdWidgets) do
 			assert(wdg.template ~= "PanelTabButtonTemplate", "no bottom tabs in the HD window")
 		end
@@ -2220,7 +2255,11 @@ test("HD Join screen: no tabs or column titles, next to a Communities window wit
 	end)
 end)
 
-test("HD window: eight side tabs are one too many, the Workshop hangs from the left edge", function()
+-- 1.1.1: with the Chat tab (every member's) the King's view is eight side tabs, one past the seven
+-- the right column holds: his Treasury, the last of his, goes to the left edge; the author's
+-- preview adds the Workshop, which goes first. (This test had the Workshop alone go left, at eight
+-- with the author's Workshop; the order and the second tab are the author's ask for 1.1.1.)
+test("HD window: side tabs past the seven the right column holds go to the left edge, the Workshop first, then the Treasury; nothing moves while they fit", function()
 	local K, V, T, W = ns.King, ns.Vox, ns.Treasury, ns.Workshop
 	local saved = { K.Visible, V.Visible, T.Visible, W.Visible }
 	local function Yes() return true end
@@ -2229,33 +2268,66 @@ test("HD window: eight side tabs are one too many, the Workshop hangs from the l
 		CommunitiesFrame:Show(); w.buttons[1]:Click()
 		local main = OlympusFrameHD
 		local function Tab(key) for _, tab in ipairs(main.tabs) do if tab.key == key then return tab end end end
-		local ws = Tab("workshop")
+		-- The shown tabs down the right, top to bottom (each anchored under the one before).
+		local function Right()
+			local out = {}
+			for _, tab in ipairs(main.tabs) do if tab:IsShown() and not tab.onLeft then out[#out + 1] = tab end end
+			return out
+		end
+		local function Keys(list) local out = {} for _, tab in ipairs(list) do out[#out + 1] = tab.key end return table.concat(out, " ") end
+		local ws, tr, chat = Tab("workshop"), Tab("treasury"), Tab("chat")
 		eq(UI.SideTabsFit(7, 32, 426), true); eq(UI.SideTabsFit(8, 32, 426), false)
-		-- The author alone: his Workshop under the four everyone has, down the right.
+		-- Every member: five down the right, the Chat tab third; nothing on the left.
+		eq(chat:IsShown(), true, "the Chat tab, every member's")
+		eq(Keys(Right()), "census realm chat decrees heraldry")
+		for _, tab in ipairs(main.tabs) do eq(tab.onLeft or false, false, tab.key) end
+		eq(main.clampInsets[1], 0)
+		-- The author alone: his Workshop under the five everyone has, down the right (six fit).
 		W.Visible = Yes
 		UI.Refresh()
 		eq(ws:IsShown(), true); eq(ws.points[1][2], Tab("heraldry")); eq(Anchor(ws), "TOPLEFT nil BOTTOMLEFT 0 -20")
 		eq(ws.onLeft or false, false); eq(main.clampInsets[1], 0)
-		-- Asmon view: the Throne, Vox Populi and the Treasury make eight.
+		W.Visible = saved[4]
+		-- Asmon's view: the Throne, Vox Populi and the Treasury make eight: the Treasury goes left.
 		K.Visible, V.Visible, T.Visible = Yes, Yes, Yes
 		UI.Refresh()
-		eq(Anchor(ws), "BOTTOMRIGHT OlympusFrameHD BOTTOMLEFT 0 46"); eq(ws:GetNumPoints(), 1)
-		eq(ws.onLeft, true); eq(Anchor(ws.Art), "TOPRIGHT nil TOPRIGHT 3 11"); eq(ws.Art.texCoord, "1 0 0 1", "its art turned round")
+		eq(ws:IsShown(), false, "(not the author)")
+		eq(tr:IsShown(), true); eq(tr.onLeft, true)
+		eq(Anchor(tr), "BOTTOMRIGHT OlympusFrameHD BOTTOMLEFT 0 46"); eq(tr:GetNumPoints(), 1)
+		eq(Anchor(tr.Art), "TOPRIGHT nil TOPRIGHT 3 11"); eq(tr.Art.texCoord, "1 0 0 1", "its art turned round")
 		eq(main.clampInsets[1], -40, "on the screen too"); eq(main.clampInsets[2], 40)
-		-- The other seven still down the right, the Treasury last.
-		local right = {}
-		for _, tab in ipairs(main.tabs) do if tab:IsShown() and tab ~= ws then right[#right + 1] = tab end end
-		eq(#right, 7); eq(right[7].key, "treasury")
+		local right = Right()
+		eq(Keys(right), "census realm chat decrees heraldry throne vox", "the other seven still down the right")
 		eq(Anchor(right[1]), "TOPLEFT OlympusFrameHD TOPRIGHT 0 -36"); eq(right[7].points[1][2], right[6])
-		-- Its tooltip to the left, clear of the window; the others' to the right.
+		-- The author's preview (his Workshop and the King's view): nine; the Workshop goes left first,
+		-- then the Treasury; stacked up from the bottom anchor, in the tabs' order down (the Workshop,
+		-- the last, lowest; the Treasury over it, SIDE_GAP apart).
+		W.Visible = Yes
+		UI.Refresh()
+		eq(ws.onLeft, true); eq(tr.onLeft, true)
+		eq(Anchor(ws), "BOTTOMRIGHT OlympusFrameHD BOTTOMLEFT 0 46"); eq(ws:GetNumPoints(), 1)
+		eq(tr.points[1][2], ws); eq(Anchor(tr), "BOTTOMRIGHT nil TOPRIGHT 0 20"); eq(tr:GetNumPoints(), 1)
+		eq(Keys(Right()), "census realm chat decrees heraldry throne vox")
+		eq(Anchor(ws.Art), "TOPRIGHT nil TOPRIGHT 3 11"); eq(main.clampInsets[1], -40)
+		-- Their tooltips to the left, clear of the window; the others' to the right.
 		ws:Fire("OnEnter"); eq(GameTooltip.owner, ws); eq(GameTooltip.ownerAnchor, "ANCHOR_LEFT")
-		right[1]:Fire("OnEnter"); eq(GameTooltip.ownerAnchor, "ANCHOR_RIGHT")
+		tr:Fire("OnEnter"); eq(GameTooltip.ownerAnchor, "ANCHOR_LEFT")
+		Right()[1]:Fire("OnEnter"); eq(GameTooltip.ownerAnchor, "ANCHOR_RIGHT")
 		ws:Click(); eq(main.tab, "workshop"); eq(ws:GetChecked(), true)
-		-- Asmon view off: back under the others, its art as it was.
+		tr:Click(); eq(main.tab, "treasury"); eq(tr:GetChecked(), true); eq(ws:GetChecked(), false)
+		-- A taller window (docked to a taller guild window): all nine fit down the right, nothing left.
+		main:SetHeight(700)
+		UI.Refresh()
+		eq(ws.onLeft, false); eq(tr.onLeft, false); eq(main.clampInsets[1], 0)
+		eq(Keys(Right()), "census realm chat decrees heraldry throne vox treasury workshop")
+		main:SetHeight(426)
+		-- Asmon's view off: back under the others, their art as it was.
 		K.Visible, V.Visible, T.Visible = saved[1], saved[2], saved[3]
 		UI.Refresh()
 		eq(ws.onLeft, false); eq(Anchor(ws), "TOPLEFT nil BOTTOMLEFT 0 -20"); eq(ws.points[1][2], Tab("heraldry"))
-		eq(Anchor(ws.Art), "TOPLEFT nil TOPLEFT -3 11"); eq(ws.Art.texCoord, "0 1 0 1"); eq(main.clampInsets[1], 0)
+		eq(Anchor(ws.Art), "TOPLEFT nil TOPLEFT -3 11"); eq(ws.Art.texCoord, "0 1 0 1")
+		eq(tr.onLeft, false); eq(Anchor(tr.Art), "TOPLEFT nil TOPLEFT -3 11"); eq(tr.Art.texCoord, "0 1 0 1")
+		eq(main.clampInsets[1], 0)
 	end)
 	K.Visible, V.Visible, T.Visible, W.Visible = saved[1], saved[2], saved[3], saved[4]
 	assert(ok, err)
@@ -6799,7 +6871,10 @@ test("gamepad UI: the King's summons in our dialog; a layer invite is the player
 	end)
 end)
 
-test("gamepad UI: whispers and chat lines written in an Olympus window, never the game's chat box", function()
+-- (Changed on purpose, 1.1.1: the Olympus window for a line of an Olympus chat (UI.ChatWindow,
+-- OLYMPUS_CHAT_WRITE) was the Realm tab's chats page's with the gamepad UI; that page is gone and
+-- such a line is written in the Chat tab's own box (its tests), so the window is gone too.)
+test("gamepad UI: whispers written in an Olympus window, never the game's chat box; no window of its own for an Olympus chat's line (the Chat tab's box)", function()
 	WithUI(function()
 		local UI = LoadUI()
 		local saved = { tell = ChatFrame_SendTell, open = ChatFrame_OpenChat, say = SendChatMessage, send = ns.Channels.Send, split = ns.splitNames }
@@ -6831,11 +6906,9 @@ test("gamepad UI: whispers and chat lines written in an Olympus window, never th
 				-- Empty: nothing sent.
 				UI.WhisperWindow("Faladoriel Skylance").buttons[1]:Click()
 				eq(#said, 1)
-				-- A line for [Olympus].
-				local c = UI.ChatWindow("A", "Olympus")
-				c.editBox:SetText("for olympus")
-				c.buttons[1]:Click()
-				eq(sent[1], "A for olympus"); eq(#opened, 0)
+				-- A line for [Olympus]: the Chat tab's box, not a window of its own any more.
+				eq(UI.ChatWindow, nil, "no window for a chat line"); eq(StaticPopupDialogs.OLYMPUS_CHAT_WRITE, nil)
+				eq(#sent, 0); eq(#opened, 0)
 			end)
 		end)
 		ChatFrame_SendTell, ChatFrame_OpenChat, SendChatMessage, ns.Channels.Send, ns.splitNames = saved.tell, saved.open, saved.say, saved.send, saved.split
@@ -7284,34 +7357,46 @@ test("Round 2 fixes: shares add up to 100, the King is never shut out, a trade i
 	end)
 end)
 
-test("The Realm links the Olympus chats: the channels our rank reads, newest first", function()
+-- (Changed on purpose, 1.1.1, the author's call: the Chat tab replaced the Realm tab's page of the
+-- chats. The Realm's link now opens the Olympus window on its Chat tab, where the lines show (the
+-- channels a rank reads, their order and the sanitized text: the Chat tab's tests); the Realm tab
+-- stays on its tree and shows no chat line. The real window from the link: the Chat tab's ways in.)
+test("The Realm links the Olympus chats: a click opens the Olympus window on its Chat tab; no chat line on the Realm", function()
 	WithThrone(function(w)
 		ns.rdb.chat = {
-			A = { { t = w.clock - 120, sender = "Aa-Realm", guild = "Olympus II", text = "first" },
-				{ t = w.clock - 60, sender = "Bb-Realm", guild = "Olympus Zeus", text = "second |cffff0000red" } },
-			C = { { t = w.clock - 30, sender = "Cc-Realm", guild = "Olympus II", text = "captains only" } },
+			A = { { t = w.clock - 120, sender = "Aa-Realm", guild = "Olympus II", text = "first of the chats" },
+				{ t = w.clock - 60, sender = "Bb-Realm", guild = "Olympus Zeus", text = "second of the chats" } },
+			C = { { t = w.clock - 30, sender = "Cc-Realm", guild = "Olympus II", text = "captains only chat" } },
 		}
 		AsSoldier()
 		local lines = ns.Views.RealmLines()
 		local link
 		for _, l in ipairs(lines) do if l.text and l.text:find(ns.L.CHATS_LINK, 1, true) then link = l end end
 		assert(link and link.onClick, Texts(lines))
-		link.onClick()
-		eq(ns.Views.ChatShown(), true)
-		local chat = ns.Views.RealmLines()
-		eq(chat[1].text:find(ns.L.CHATS_BACK, 1, true) ~= nil, true, "leads back")
-		local text = Texts(chat)
-		assert(not text:find("captains only", 1, true), "a soldier does not read [Captains]")
-		local a, b = text:find("second", 1, true), text:find("first", 1, true)
-		assert(a and b and a < b, "newest first: " .. text)
-		assert(text:find("second ||cffff0000red", 1, true), "sanitized: " .. text)
-		chat[1].onClick()
-		eq(ns.Views.ChatShown(), false)
-		-- A Captain reads both.
+		local tip = {}
+		link.tooltip({ AddLine = function(_, s) tip[#tip + 1] = s end })
+		eq(tip[1], ns.L.CHATS_LINK); eq(tip[2], ns.L.CHATS_TIP); eq(tip[3], ns.L.CHATS_OPEN_WINDOW_TIP, "where they open")
+		local savedCW, opened = ns.ChatWindow, {}
+		local ok, err = pcall(function()
+			ns.ChatWindow = { Open = function(...) opened[#opened + 1] = select("#", ...) end }
+			link.onClick()
+		end)
+		ns.ChatWindow = savedCW
+		if not ok then error(err, 0) end
+		eq(#opened, 1, "the Olympus window on its Chat tab"); eq(opened[1], 0, "on the channel it last showed (none named)")
+		local after = Texts(ns.Views.RealmLines())
+		for _, said in ipairs({ "first of the chats", "second of the chats", "captains only chat" }) do
+			assert(not after:find(said, 1, true), "no chat line on the Realm tab: " .. said)
+		end
+		eq(ns.Views.ShowChat, nil, "no page of the chats"); eq(ns.Views.ChatShown, nil); eq(ns.Views.ChatTier, nil)
+		-- A Captain: the same link, the same tab (the channels he reads are the Chat tab's).
 		AsCaptain()
-		ns.Views.ShowChat("C")
-		assert(Texts(ns.Views.RealmLines()):find("captains only", 1, true))
-		ns.Views.ShowChat(nil)
+		assert(Texts(ns.Views.RealmLines()):find(ns.L.CHATS_LINK, 1, true))
+		-- A client updated without a restart (no ChatWindow.lua yet): Core.lua's stand-in says so.
+		eq(ns.ChatWindow.missing, true)
+		w.printed = {}
+		link.onClick()
+		eq(w.printed[1], ns.L.RESTART_NEEDED)
 	end)
 end)
 
@@ -9051,10 +9136,12 @@ do
 	-- The game's chat windows as GetChatWindowInfo tells them: 1 the main one, 2 the combat log
 	-- (docked), 3 unused, 4 "Olympus" docked behind another tab (hidden, so "not shown"), 5
 	-- "Officers" floating, 6-10 unused. fn(w, printed) runs with them, as a Lord of Olympus II.
+	-- (1.1.1: window 4 is the Olympus tab, whose first line for a character says what it holds,
+	-- ns.db.chatTabIntro: none said yet, and put back as it was.)
 	local function WithWindows(fn)
 		local saved = { info = GetChatWindowInfo, fcf = FCF_GetChatWindowInfo, combat = IsCombatLog, num = NUM_CHAT_WINDOWS,
 			default = DEFAULT_CHAT_FRAME, lines = CHAT_LINES, windows = ns.db.chatWindows, chat = ns.rdb.chat, mute = ns.db.chatMute,
-			me = ns.me, frames = {} }
+			me = ns.me, frames = {}, intro = ns.db.chatTabIntro }
 		local w = {}
 		for i = 1, 10 do
 			saved.frames[i] = _G["ChatFrame" .. i]
@@ -9075,11 +9162,11 @@ do
 		FCF_GetChatWindowInfo = nil
 		IsCombatLog = function(f) return f == w[2] end
 		DEFAULT_CHAT_FRAME = w[1]
-		ns.db.chatWindows, ns.rdb.chat, ns.db.chatMute, ns.me = nil, nil, nil, "Tester-Realm"
+		ns.db.chatWindows, ns.rdb.chat, ns.db.chatMute, ns.me, ns.db.chatTabIntro = nil, nil, nil, "Tester-Realm", nil
 		local ok, err = pcall(AsRank, 0, function(printed) fn(w, printed) end)
 		GetChatWindowInfo, FCF_GetChatWindowInfo, IsCombatLog, NUM_CHAT_WINDOWS = saved.info, saved.fcf, saved.combat, saved.num
 		DEFAULT_CHAT_FRAME, CHAT_LINES, ns.db.chatWindows, ns.rdb.chat, ns.db.chatMute = saved.default, saved.lines, saved.windows, saved.chat, saved.mute
-		ns.me = saved.me
+		ns.me, ns.db.chatTabIntro = saved.me, saved.intro
 		for i = 1, 10 do _G["ChatFrame" .. i] = saved.frames[i] end
 		if not ok then error(err, 0) end
 	end
@@ -9096,7 +9183,10 @@ do
 			eq(ns.db.chatWindows["Tester-Realm"].A, "Olympus", "stored as the game names it")
 			eq(ns.db.chatWindows["Tester-Realm"].C, "Olympus"); eq(ns.db.chatWindows["Tester-Realm"].L, "Olympus")
 			eq(printed[#printed], ns.L.CHATWIN_SET:format("[Olympus], [Captains], [Lords]", '"Olympus"'))
-			eq(Count(w[4].lines, "[Lords]"), 1, "the choice is said in that window too")
+			-- (1.1.1: a window named Olympus is the Olympus tab: it says what it holds, the legend of
+			-- the channels' colours, where another window gets CHATWIN_SET.)
+			eq(Count(w[4].lines, (ns.L.CHATTAB_HERE:gsub("%%s.*$", ""))), 1, "the choice is said in that window too")
+			eq(Count(w[4].lines, "[Lords]"), 1, "its legend names the channels")
 			eq(Chan.ChooseWindow("5 captains"), true, "by number, one channel")
 			eq(ns.db.chatWindows["Tester-Realm"].C, "Officers"); eq(ns.db.chatWindows["Tester-Realm"].A, "Olympus")
 			w[1].lines, w[4].lines, w[5].lines = {}, {}, {}
@@ -9106,6 +9196,9 @@ do
 			eq((Chan.Receive("CHANNEL", "Member1", Msg("L", MY_GUILD, id, "lords to the olympus tab"), 3000002)), true)
 			eq(Count(w[4].lines, "to the olympus tab"), 2); eq(Count(w[5].lines, "to the officers window"), 1)
 			eq(#w[1].lines, 0, "nothing in the main window")
+			-- (1.1.1: in the Olympus tab without the channel's name; in "Officers" with it.)
+			for _, l in ipairs(w[4].lines) do assert(l:find("^|Hplayer:"), l) end
+			assert(w[5].lines[1]:find("^%[Captains%] |Hplayer:"), w[5].lines[1])
 			-- Our own line, shown when sent, lands with the others.
 			WithLane(function() ns.db.chatWarned = { A = true, C = true, L = true }; local ok, why = Chan.Send("A", "my own line", 1e12); eq(ok, true, tostring(why)) end)
 			eq(Count(w[4].lines, "my own line"), 1); eq(#w[1].lines, 0)
@@ -9228,19 +9321,16 @@ do
 		end)
 	end)
 
-	test("the Realm tab shows every chat line the history keeps (#15)", function()
+	-- (Changed on purpose, 1.1.1: the Realm tab's chats page is gone. The history keeps every line
+	-- here; the Chat tab shows every line it keeps, its own test with the Chat tab's.)
+	test("the history keeps every chat line, for the Chat tab to show (#15)", function()
 		WithWindows(function()
 			for i = 1, 100 do
 				Chan.Receive("CHANNEL", "Member" .. (700 + i), Msg("A", MY_GUILD, i, "kept " .. i), 5000000 + i * 1.1)
 			end
-			eq(#Chan.History("A"), 100, "the history keeps 100 lines")
-			ns.Views.ShowChat("A")
-			local ok, lines = pcall(ns.Views.RealmLines)
-			ns.Views.ShowChat(nil)
-			assert(ok, lines)
-			local n = 0
-			for _, l in ipairs(lines) do if (l.text or ""):find("kept ", 1, true) then n = n + 1 end end
-			eq(n, 100, "lines kept but not shown were lost all the same")
+			local h = Chan.History("A")
+			eq(#h, 100, "the history keeps 100 lines")
+			eq(h[1].text, "kept 1"); eq(h[100].text, "kept 100")
 		end)
 	end)
 end
@@ -17264,7 +17354,11 @@ do
 		end)
 	end)
 
-	test("1.0.0 search: the Olympus chats in the Realm: the lines whose writer, guild or words hold it; the way back and the channels stay", function()
+	-- (Changed on purpose, 1.1.1, the author's call: the Realm tab's chats page is gone, and with it
+	-- the Realm's search over the chats' lines. The Chat tab searches them with its own box (a writer,
+	-- a guild or words, any case: its test with the Chat tab's). Here: the Realm's box keeps the
+	-- chats' link and finds no chat line, with the tree's tip.)
+	test("1.0.0 search: the Realm's box finds no line of the Olympus chats (the Chat tab's own box does); the chats' link stays", function()
 		WithThrone(function(w)
 			local savedUI = ns.UI
 			local ok, err = pcall(Quiet, function()
@@ -17274,49 +17368,21 @@ do
 					{ t = w.clock - 30, sender = "Élise-Realm", guild = "Olympus II", text = "third" },
 				} }
 				AsSoldier()
-				V.ShowChat("A")
+				V.SetFilter("realm", "SECOND")
 				local lines = V.Build("realm")
 				local box = Box(lines)
-				assert(box, "the Realm's box over the chats")
+				assert(box, "the Realm's box")
 				local tip = {}
 				box.tooltip({ AddLine = function(_, s) tip[#tip + 1] = s end })
-				eq(tip[2], L.SEARCH_TIP_CHAT)
-				eq(Texts(Body(lines)), Texts(V.RealmLines()), "nothing typed: the chats as ever")
-				local write = L.CHATS_WRITE:format(L[ns.Channels.TIERS.A.label])
-				assert(At(lines, write))
-				local function Said(ls)
-					local out = {}
-					for _, l in ipairs(ls) do
-						for _, word in ipairs({ "first", "second", "third" }) do
-							if l.right and (l.text or ""):find(word, 1, true) then out[#out + 1] = word end
-						end
-					end
-					return table.concat(out, ",")
-				end
-				eq(Said(lines), "third,second,first", "newest first")
-				-- Words of a line, any case: the way back, the channels, the lines found; no Write line.
-				V.SetFilter("realm", "SECOND")
-				lines = V.Build("realm")
-				assert(lines[2].text:find(L.CHATS_BACK, 1, true), "the way back")
-				assert(At(lines, "[" .. L[ns.Channels.TIERS.A.label] .. "]"), "the channel")
-				eq(At(lines, write), nil, "no Write line while searching")
-				eq(Said(lines), "second")
-				-- A writer's guild, a writer's name (accented capitals too), a word after a bar.
-				V.SetFilter("realm", "olympus zeus"); eq(Said(V.Build("realm")), "second")
-				V.SetFilter("realm", "olympus ii"); eq(Said(V.Build("realm")), "third,first")
-				V.SetFilter("realm", "ÉLISE"); eq(Said(V.Build("realm")), "third")
-				V.SetFilter("realm", "red"); eq(Said(V.Build("realm")), "second")
-				-- Nothing found: "No match" under the channels.
-				V.SetFilter("realm", "zzz")
-				lines = V.Build("realm")
-				eq(lines[#lines].text, NO_MATCH); eq(Said(lines), "")
-				-- Back to the tree: the same search there.
-				lines[2].onClick()
-				eq(V.ChatShown(), false)
-				eq(V.Build("realm")[#V.Build("realm")].text, NO_MATCH)
+				eq(tip[2], L.SEARCH_TIP_REALM, "the tree's tip")
+				assert(At(lines, L.CHATS_LINK), "the chats' link stays")
+				eq(At(lines, "second"), nil, "no chat line")
+				eq(lines[#lines].text, NO_MATCH)
+				V.SetFilter("realm", "ÉLISE")
+				eq(At(V.Build("realm"), "third"), nil, "nor by its writer")
 			end)
 			ns.UI = savedUI
-			V.ShowChat(nil)
+			V.ClearFilters()
 			if not ok then error(err, 0) end
 		end)
 	end)
@@ -25007,7 +25073,9 @@ end)
 -- 1.1: a warning while the Olympus channel is public (request #8)
 ---------------------------------------------------------------------------
 
-test("1.1 public channel: while no realm key seals it, a quiet grey line on the Census, the Realm and the Olympus chats for the officers, how to seal it in its tooltip; nothing for members; sealed, no line", function()
+-- (Changed on purpose, 1.1.1: the Olympus chats' line is in the Chat tab's settings now, the Realm
+-- tab's chats page gone: ChatSettings reads them where the page's lines were read.)
+test("1.1 public channel: while no realm key seals it, a quiet grey line on the Census, the Realm and the Chat tab's settings for the officers, how to seal it in its tooltip; nothing for members; sealed, no line", function()
 	local L = ns.L
 	local saved = { key = ns.rdb.realmKey, guilds = ns.rdb.guilds, chat = ns.rdb.chat }
 	local function Has(lines, text)
@@ -25024,9 +25092,7 @@ test("1.1 public channel: while no realm key seals it, a quiet grey line on the 
 			eq(ns.Comm.IsPublic(), true)
 			eq(Has(ns.Views.Build("census"), warning), nil, "a member: nothing on the Census")
 			eq(Has(ns.Views.Build("realm"), warning), nil, "nor the Realm")
-			ns.Views.ShowChat("A")
-			eq(Has(ns.Views.Build("realm"), warning), nil, "nor the chats")
-			ns.Views.ShowChat(nil)
+			eq(Has(ChatSettings(), warning), nil, "nor the Chat tab's settings")
 		end)
 		AsRank(1, function()
 			local census = ns.Views.Build("census")
@@ -25047,18 +25113,18 @@ test("1.1 public channel: while no realm key seals it, a quiet grey line on the 
 			end
 			assert(at and first and at < first, "above the guild rows")
 			assert(Has(ns.Views.Build("realm"), warning), "on the Realm")
-			ns.Views.ShowChat("A")
-			assert(Has(ns.Views.Build("realm"), warning), "on the chats")
-			ns.Views.ShowChat(nil)
+			local set = Has(ChatSettings(), warning)
+			assert(set, "in the Chat tab's settings")
+			tip = {}
+			set.tip({ AddLine = function(_, t) tip[#tip + 1] = t end })
+			eq(tip[1], L.PUBLIC_NET_TITLE); eq(tip[3], L.PUBLIC_NET_OFFICER, "its tooltip there too")
 		end)
 		-- Sealed with a realm key: no warning anywhere.
 		ns.rdb.realmKey = "shared secret"
 		eq(ns.Comm.IsPublic(), false)
 		eq(Has(ns.Views.Build("census"), warning), nil)
 		eq(Has(ns.Views.Build("realm"), warning), nil)
-		ns.Views.ShowChat("A")
-		eq(Has(ns.Views.Build("realm"), warning), nil)
-		ns.Views.ShowChat(nil)
+		eq(Has(ChatSettings(), warning), nil)
 		-- Outside an Olympus guild the addon is on no channel: nothing to warn about.
 		ns.rdb.realmKey = nil
 		local savedGuild = GetGuildInfo
@@ -25067,7 +25133,6 @@ test("1.1 public channel: while no realm key seals it, a quiet grey line on the 
 		GetGuildInfo = savedGuild
 	end)
 	ns.rdb.realmKey, ns.rdb.guilds, ns.rdb.chat = saved.key, saved.guilds, saved.chat
-	ns.Views.ShowChat(nil)
 	if not ok then error(err, 0) end
 end)
 
@@ -25130,7 +25195,6 @@ local function WithPin(fn)
 		end)
 		ns.Comm.ChannelReady, ns.Comm.Send, C_ChatInfo, ns.Comm.DeliveredLogged, ns.Roster.byName = saved.ready, saved.send, saved.info, saved.delivered, saved.byName
 		C.ResetPin()
-		ns.Views.ShowChat(nil)
 		if not ok then error(err, 0) end
 	end)
 end
@@ -25139,6 +25203,8 @@ local function Find(lines, text)
 	return nil
 end
 
+-- (Changed on purpose, 1.1.1: the control to pin is in the Chat tab's settings, where the Realm
+-- tab's chats page, gone, had it; the pin on top of the Chat tab is its strip, the Chat tab's test.)
 test("1.1 pinned line: a Lord pins one short line for his guild with the logged API; it tops the Olympus chats and the Realm for its members, with no popup and no sound", function()
 	WithPin(function(w, K, sent, C)
 		local L = ns.L
@@ -25151,19 +25217,15 @@ test("1.1 pinned line: a Lord pins one short line for his guild with the logged 
 		eq(C.SetPin("Raid moves to Stranglethorn"), false)
 		assert(Printed(w, L.PIN_ONLY), "told who may")
 		eq(#sent, 0)
-		ns.Views.ShowChat("A")
-		eq(Find(ns.Views.Build("realm"), L.PIN_ADD), nil, "no control for a soldier")
-		eq(Find(ns.Views.Build("realm"), L.PIN_ADD_GUILD), nil)
-		ns.Views.ShowChat(nil)
+		eq(Find(ChatSettings(), L.PIN_ADD), nil, "no control for a soldier in the Chat tab's settings")
+		eq(Find(ChatSettings(), L.PIN_ADD_GUILD), nil)
 		-- A Lord: plain text, 100 bytes at most, no escape code or separator; for his guild alone
 		-- (Konig's review of 1.1: never for the army).
 		AsLord()
 		eq(C.CanPin(), true)
 		eq(C.PinScope(), "guild")
-		ns.Views.ShowChat("L")
-		assert(Find(ns.Views.Build("realm"), L.PIN_ADD_GUILD), "the Lord's control on the chats")
-		eq(Find(ns.Views.Build("realm"), L.PIN_ADD), nil, "none for the army")
-		ns.Views.ShowChat(nil)
+		assert(Find(ChatSettings(), L.PIN_ADD_GUILD), "the Lord's control, in the Chat tab's settings")
+		eq(Find(ChatSettings(), L.PIN_ADD), nil, "none for the army")
 		local ok = C.SetPin("  Raid moves to |cffff0000Stranglethorn|r ~ at 9  " .. ("x"):rep(200))
 		eq(ok, true)
 		eq(#sent, 1)
@@ -25193,11 +25255,8 @@ test("1.1 pinned line: a Lord pins one short line for his guild with the logged 
 		assert(line and at == 2, "on top of the Realm, under its search box: " .. tostring(at))
 		assert(line.text:find(L.PIN_LABEL, 1, true))
 		eq(line.onClick, nil, "a soldier can't take it down")
-		ns.Views.ShowChat("A")
-		local chat = ns.Views.Build("realm")
-		local cline, cat = Find(chat, body:sub(1, 30))
-		assert(cline and cat == 3, "on top of the chats, under the box and the way back: " .. tostring(cat))
-		ns.Views.ShowChat(nil)
+		-- (On top of the Chat tab: its strip shows Channels.Pin, the Chat tab's pinned line test.)
+		eq(C.Pin().text, body)
 		assert(ns.StatusText():find("pinned line: by Zed <Olympus Zeus> (Lord)", 1, true), "in /oly status")
 		-- Said again (late logins): the same pin, its end never later.
 		local ends = C.Pin().expires
@@ -25340,9 +25399,8 @@ test("1.1 pinned line: with the gamepad UI the line is typed in Olympus's own di
 		WithGamepadUI(true, function(game)
 			WithPin(function(w, K, sent, C)
 				AsLord()
-				ns.Views.ShowChat("L")
-				local add = Find(ns.Views.Build("realm"), ns.L.PIN_ADD_GUILD)
-				assert(add and add.onClick, "the control")
+				local add = Find(ChatSettings(), ns.L.PIN_ADD_GUILD)
+				assert(add and add.onClick, "the control, in the Chat tab's settings")
 				add.onClick()
 				eq(#game.shown, 0, "never the game's popup")
 				local f = ns.Dialog.Find("OLYMPUS_PIN")
@@ -25422,9 +25480,7 @@ test("1.1 pinned line: an officer of <Olympus> (a Lord on its own members' clien
 			eq(select(2, C.SetPin("Raid moves to Tarren Mill")), "rank")
 			assert(Printed(w, ns.L.PIN_ONLY), "told who may")
 			eq(#sent, 0, "nothing sent")
-			ns.Views.ShowChat("L")
-			eq(Find(ns.Views.Build("realm"), ns.L.PIN_ADD), nil, "no control on the chats")
-			ns.Views.ShowChat(nil)
+			eq(Find(ChatSettings(), ns.L.PIN_ADD), nil, "no control in the Chat tab's settings")
 			-- A pin sent as his: dropped on an <Olympus> member's client, as on every other guild's.
 			local msg = "N1~7~Olympus~7200~0~Raid moves to Tarren Mill"
 			GetGuildInfo = function() return "Olympus", "Member", 4 end
@@ -28466,7 +28522,10 @@ do
 		end)
 	end)
 
-	test("1.1 block terms (#31): a hit hides a line of the Olympus chats from the chat and the Realm tab (a click shows it, marked); names, guilds and the census are never read, and the sender is not ignored, blocked or cut off", function()
+	-- (Changed on purpose, 1.1.1: the count of the hidden lines and the click that shows them, marked,
+	-- are the Chat tab's now, the Realm tab's chats page gone: that part is the Chat tab's test of
+	-- them. Here: the line kept in the history for it, and nothing else read or done.)
+	test("1.1 block terms (#31): a hit hides a line of the Olympus chats from the chat and keeps it for the Chat tab (a click shows it, marked); names, guilds and the census are never read, and the sender is not ignored, blocked or cut off", function()
 		Clean(function()
 			local savedFire, savedFriends, savedUI = ns.Fire, C_FriendList, ns.UI
 			local heard, ignoredCalls = {}, 0
@@ -28484,27 +28543,15 @@ do
 					eq(shown, false); eq(why, "filtered")
 					eq(#CHAT_LINES, 0, "off the chat")
 					eq(#heard, 1, "a companion reading the chats still gets it")
-					eq(#Chan.History("A"), 1, "kept, for the Realm tab's click")
+					eq(#Chan.History("A"), 1, "kept, for the Chat tab's click")
 					-- The same sender's next line shows: a line is hidden, never a player.
 					eq((Chan.Receive("CHANNEL", "Member81", Msg("A", MY_GUILD, 8402, "hello army"), 2e6 + 2)), true)
 					eq(#CHAT_LINES, 1)
 					eq(ns.db.blocked["member81-realm"], nil, "not blocked"); eq(ignoredCalls, 0, "not ignored")
-					-- The Realm tab's chats: the count, a click shows it marked, another hides it.
-					ns.UI = { Refresh = function() end, RefreshSoon = function() end, ChatWindow = function() end, StatusLine = function() return "" end }
-					ns.Views.ShowChat("A")
-					local lines = ns.Views.Build("realm")
-					local count = LineWith(lines, ns.L.FILTER_HIDDEN_LINES:format(1))
-					assert(count, "the count of hidden lines")
-					assert(not Texts(lines):find("selling JUNK", 1, true), "not shown")
-					assert(Texts(lines):find("hello army", 1, true))
-					count.onClick()
-					lines = ns.Views.Build("realm")
-					assert(LineWith(lines, ns.L.FILTER_SHOWING_LINES:format(1)), "showing")
-					local line = LineWith(lines, "selling JUNK")
-					assert(line and line.text:find(ns.L.FILTER_HIDDEN_MARK, 1, true), "shown, marked")
-					LineWith(lines, ns.L.FILTER_SHOWING_LINES:format(1)).onClick()
-					assert(not Texts(ns.Views.Build("realm")):find("selling JUNK", 1, true), "hidden again")
-					ns.Views.CloseChat()
+					eq(Chan.History("A")[1].text, "selling JUNK cheap", "whole in the history")
+					-- (The Chat tab: the count, a click shows it marked, another hides it: its test.)
+					ns.UI = { Refresh = function() end, RefreshSoon = function() end, StatusLine = function() return "" end }
+					assert(not Texts(ns.Views.Build("realm")):find("selling JUNK", 1, true), "no chat line on the Realm tab")
 					-- The census and the Realm's guilds are never filtered.
 					ns.rdb.guilds = SampleGuilds()
 					assert(Texts(ns.Views.Build("census")):find("Olympus II", 1, true), "the census untouched")
@@ -28512,7 +28559,6 @@ do
 				end)
 			end)
 			ns.Fire, C_FriendList, ns.UI, ns.rdb.chat = savedFire, savedFriends, savedUI, savedChat
-			ns.Views.SetChatReveal(false)
 			ns.Views.CloseChat()
 			if not ok then error(err, 0) end
 			-- The game's own chat (Say, Trade, General) is never read: Filter.lua hooks none of it.
@@ -37853,7 +37899,6 @@ local function PinBench(fn)
 		ns.Roster.byName, ns.db.filterWords, ns.rdb.filterShared, ns.rdb.netoff, ns.db.addonChat = saved.byName, saved.filter, saved.shared, saved.netoff, saved.chat
 		if ns.Moderation.Reset then ns.Moderation.Reset(); ns.Moderation.Load() end
 		C.ResetPin()
-		ns.Views.ShowChat(nil)
 		if not ok then error(err, 0) end
 	end)
 end
@@ -38149,10 +38194,7 @@ test("1.1 pinned line (Konig's review): net-off hides a pin and stops its setter
 		Word("c", true, "Helper-Realm")
 		assert(M.Hidden("Helper-Realm"), "hidden")
 		eq(C.Pin(), nil)
-		eq(FindLine(ns.Views.Build("realm"), "Gold for sale"), nil, "gone from the Realm")
-		ns.Views.ShowChat("A")
-		eq(FindLine(ns.Views.Build("realm"), "Gold for sale"), nil, "and from the chats")
-		ns.Views.ShowChat(nil)
+		eq(FindLine(ns.Views.Build("realm"), "Gold for sale"), nil, "gone from the Realm (and from the Chat tab, whose strip is Channels.Pin)")
 		w.printed = {}
 		SlashCmdList.OLYMPUS("pin")
 		eq(Printed(w, "Gold for sale"), false, "/oly pin shows nothing of it")
@@ -41094,7 +41136,6 @@ do
 			ns.rdb.netoff, ns.db.addonChat, C.PIN_DOWN_KEEP, C.PIN_DOWN_EACH = saved.netoff, saved.chat, saved.keep, saved.each
 			M.Reset(); M.Load()
 			C.ResetPin()
-			ns.Views.ShowChat(nil)
 			if not ok then error(err, 0) end
 		end)
 	end
@@ -42120,6 +42161,3167 @@ do
 	end)
 end
 
+---------------------------------------------------------------------------
+-- 1.1.1: the Olympus chats in the Olympus window's Chat tab (ChatWindow.lua, drawn in UI.lua's
+-- window) and its ways in (/ol alone, /oly talk, the minimap button's Shift-click, the Realm tab's
+-- link to the chats: its page of them is gone since, the Chat tab replacing it), and the marks by a
+-- name (Borders.MarkOfName). The first 1.1.1 build had the chats
+-- in a window of their own; these tests were written for it and moved to the tab (what changed on
+-- purpose is said where it is asserted: the Olympus window instead of a window of its own, no Send
+-- button, no place or size of its own, the search box).
+---------------------------------------------------------------------------
+do
+	local L = ns.L
+	local CW_LINE = 14
+	local T0 = os.time({ year = 2026, month = 9, day = 30, hour = 12, min = 0, sec = 0 })
+	local MOONCLOTH_LINK = "item:14342::::::::60:::::"
+	local MOONCLOTH_TEXT = "|cff1eff00|H" .. MOONCLOTH_LINK .. "|h[Mooncloth]|h|r"
+
+	-- What the client gives that the widget toolkit does not, installed for these tests alone and
+	-- taken off after each (the older tests keep the toolkit they were written for: Dialog.lua's
+	-- height fallback expects no GetStringHeight there). A FontString's height: its lines at 14
+	-- each, a line per width of text where it wraps (the client wraps at word breaks, so a real
+	-- height can be a line more: the tests assert growth and nothing cut, not pixels). An EditBox's
+	-- focus as the client keeps it (HasFocus, ClearFocus), Insert at the end (where the cursor is
+	-- after SetText), SetFocus and SetAutoFocus recorded, StartSizing recorded, and each named
+	-- frame's Show logged (the order of the box's SetAutoFocus(false) and the window's first Show).
+	local function Mocks(orig, w)
+		return {
+			GetStringHeight = function(self)
+				local width = self.w or 0
+				local lines = 1
+				if self.wrap ~= false and width > 0 then lines = math.max(1, math.ceil(self:GetUnboundedStringWidth() / width)) end
+				return lines * CW_LINE
+			end,
+			HasFocus = function(self) return self.focused == true end,
+			Insert = function(self, text) self:SetText((self:GetText() or "") .. text) end,
+			-- (1.1.1, the "Open chat" key: SetFocus gives the box the keyboard, as the client does;
+			-- until then the tests only asked that nothing called it.)
+			SetFocus = function(self) w.focus[#w.focus + 1] = self.name or "?"; self.focused = true end,
+			ClearFocus = function(self) self.focused = false; self.cleared = (self.cleared or 0) + 1 end,
+			SetAutoFocus = function(self, on) self.autoFocus = on; w.log[#w.log + 1] = "autofocus " .. tostring(on) end,
+			StartSizing = function(self, point) self.sizing = point end,
+			Show = function(self)
+				if self.name then w.log[#w.log + 1] = "show " .. self.name end
+				return orig.Show(self)
+			end,
+			-- (Review of 1.1.1) What the window's asks rest on, recorded where the toolkit made them
+			-- no-ops (each could be deleted with every test green): a bubble's links and clicks, a long
+			-- word's wrap, the resize bounds, the window kept on the screen, the box's byte cap.
+			SetHyperlinksEnabled = function(self, on) self.hyperlinks = on and true or false end,
+			SetNonSpaceWrap = function(self, on) self.nonSpaceWrap = on and true or false end,
+			EnableMouse = function(self, on) self.mouse = on and true or false end,
+			SetResizeBounds = function(self, ...) self.resizeBounds = { ... } end,
+			SetClampedToScreen = function(self, on) self.clamped = on and true or false end,
+			SetMaxBytes = function(self, n) self.maxBytes = n end,
+			-- As the client: a frame's links answer the mouse only with its hyperlinks on
+			-- (SetHyperlinksEnabled) and the mouse on (the client's own link frames that are not
+			-- chat frames set enableMouse with hyperlinksEnabled, Blizzard_CatalogShop), and its
+			-- OnMouseDown/OnMouseUp only with the mouse on. A Button or an EditBox has the mouse on
+			-- from the start, a plain Frame not (EnableMouse).
+			Fire = function(self, kind, ...)
+				local mouse = self.mouse
+				if mouse == nil then mouse = self.kind == "Button" or self.kind == "CheckButton" or self.kind == "EditBox" end
+				if type(kind) == "string" and kind:find("^OnHyperlink") and not (self.hyperlinks and mouse) then return end
+				if (kind == "OnMouseDown" or kind == "OnMouseUp") and not mouse then return end
+				return orig.Fire(self, kind, ...)
+			end,
+		}
+	end
+
+	-- The Olympus window (UI.lua, fresh) and its Chat tab on the widget toolkit, as a soldier of
+	-- Olympus II with an empty history: ChatWindow.lua loaded fresh in a namespace of its own, its
+	-- ns.On listeners kept so a test fires them (w.fire) and its game events too (w.event), and put
+	-- where UI, Views and the commands reach it (ns.ChatWindow). w.UI: the window's UI.lua.
+	local function WithWindow(fn)
+		WithUI(function()
+			local w = { printed = {}, focus = {}, log = {}, on = {}, events = {} }
+			local orig = {}
+			local mocks = Mocks(orig, w)
+			for k in pairs(mocks) do orig[k] = rawget(Widget, k) end
+			for k, f in pairs(mocks) do Widget[k] = f end
+			local C = ns.Channels
+			local saved = { chat = ns.rdb.chat, me = ns.me, print = ns.Print, win = ns.db.chatWin, cw = ns.ChatWindow, send = C.Send,
+				shift = IsShiftKeyDown, addonChat = ns.db.addonChat, mute = ns.db.chatMute, dialog = ns.ShowDialog, hides = ns.Filter.Hides,
+				pin = C.Pin, canDown = C.CanTakeDown, consent = ns.Consent.Show, borders = ns.Borders, council = ns.rdb.council,
+				history = C.History, getTime = GetTime, selfOff = ns.Moderation.SelfOff, youText = ns.Moderation.YouText,
+				setup = rawget(C, "SetupTab"), tabState = rawget(C, "TabState"), findTab = rawget(C, "FindTab") }
+			local ok, err = pcall(function()
+				ns.Print = function(m) w.printed[#w.printed + 1] = tostring(m) end
+				ns.rdb.chat = {}
+				ns.db.chatWin = nil
+				ns.Views.ClearFilters()
+				AsSoldier()
+				local cns = setmetatable({}, { __index = ns })
+				cns.On = function(name, f) w.on[name] = w.on[name] or {}; table.insert(w.on[name], f) end
+				cns.RegisterEvent = function(name, f) w.events[name] = w.events[name] or {}; table.insert(w.events[name], f) end
+				assert(loadfile(ADDON_DIR .. "ChatWindow.lua"))("Olympus", cns)
+				w.CW = cns.ChatWindow
+				ns.ChatWindow = w.CW
+				w.UI = LoadUI()
+				w.fire = function(name, ...) for _, f in ipairs(w.on[name] or {}) do f(...) end end
+				w.event = function(name, ...) for _, f in ipairs(w.events[name] or {}) do f(...) end end
+				fn(w)
+			end)
+			for k in pairs(mocks) do Widget[k] = orig[k] end
+			ns.rdb.chat, ns.me, ns.Print, ns.db.chatWin, ns.ChatWindow, C.Send = saved.chat, saved.me, saved.print, saved.win, saved.cw, saved.send
+			IsShiftKeyDown, ns.db.addonChat, ns.db.chatMute, ns.ShowDialog, ns.Filter.Hides = saved.shift, saved.addonChat, saved.mute, saved.dialog, saved.hides
+			C.Pin, C.CanTakeDown, ns.Consent.Show, ns.Borders, ns.rdb.council = saved.pin, saved.canDown, saved.consent, saved.borders, saved.council
+			C.History, GetTime, ns.Moderation.SelfOff, ns.Moderation.YouText = saved.history, saved.getTime, saved.selfOff, saved.youText
+			C.SetupTab, C.TabState, C.FindTab = saved.setup, saved.tabState, saved.findTab
+			ns.Views.ClearFilters()
+			if not ok then error(err, 0) end
+		end)
+	end
+
+	local function Line(t, sender, text, extra)
+		local e = { t = t, sender = sender, guild = "Olympus II", text = text }
+		for k, v in pairs(extra or {}) do e[k] = v end
+		return e
+	end
+	local function Visible(list)
+		local out = {}
+		for _, x in ipairs(list) do if x:IsShown() then out[#out + 1] = x end end
+		return out
+	end
+	local function Said(w, text)
+		for _, p in ipairs(w.printed) do if p:find(text, 1, true) then return true end end
+		return false
+	end
+	local function RowWith(f, text)
+		for _, r in ipairs(Visible(f.rows)) do if (r.text:GetText() or ""):find(text, 1, true) then return r end end
+	end
+	local function BubbleWith(f, text)
+		for _, b in ipairs(Visible(f.bubbles)) do if (b.body:GetText() or ""):find(text, 1, true) then return b end end
+	end
+	-- A bubble's place from the top of the box's content.
+	local function Top(b)
+		local a = b:Anchor("TOPLEFT") or b:Anchor("TOPRIGHT")
+		return -a[5]
+	end
+	local function TipLines()
+		local out = {}
+		for _, l in ipairs(GameTooltip.lines or {}) do out[#out + 1] = tostring(l) end
+		return out
+	end
+	-- (The review of the Chat tab's layout: the channel pills' row is gone.) A channel picked with
+	-- the switch on the top row: its list, then the channel's line there.
+	local function PickChannel(f, t)
+		assert(f.switch:IsShown(), "the channels' switch")
+		f.switch:Click()
+		assert(f.menu:IsShown(), "its list")
+		f.menu.rows[t]:Click()
+	end
+	-- A line of the settings (the gear) shown, whose text holds `text`.
+	local function Setting(f, text)
+		for _, r in ipairs(Visible(f.setRows)) do if (r.text:GetText() or ""):find(text, 1, true) then return r end end
+	end
+	-- Channels' send gap (lastSend, Channels.Send's own) fresh for fn, and as it was after: the
+	-- earlier tests' clocks never refuse fn's lines, and fn's clock never refuses a later test's.
+	-- (Moved here from the review's block below: the settings' tests send a line too.)
+	local function KeepSendGap(fn)
+		local send, at, was = ns.Channels.Send, nil, nil
+		for i = 1, 200 do
+			local n, v = debug.getupvalue(send, i)
+			if n == nil then break end
+			if n == "lastSend" then at, was = i, v break end
+		end
+		assert(at, "(Channels.Send's lastSend)")
+		debug.setupvalue(send, at, -math.huge)
+		local ok, err = pcall(fn)
+		debug.setupvalue(send, at, was)
+		if not ok then error(err, 0) end
+	end
+
+	test("1.1.1 marks by a name (Borders.MarkOfName): the King gold; the High Council, Lords and Captains silver; Raiders and Veterans of our guild bronze; members the star; nobody for net-off or outside Olympus", function()
+		WithBorders(function(w)
+			local B = w.B
+			local saved = { byName = ns.Roster.byName, rankName = GuildControlGetRankName, hides = ns.Moderation.Hides }
+			local ok, err = pcall(function()
+				-- Our guild (Olympus II): its ranks from our roster, their names from the game's list.
+				ns.Roster.byName = { ["Guildie Master-Realm"] = 0, ["Guildie Officer-Realm"] = 1, ["Raider Guy-Realm"] = 2,
+					["Vet Guy-Realm"] = 3, ["Plain Guy-Realm"] = 4 }
+				GuildControlGetRankName = function(i) return ({ "Master", "Officer", "Raider", "Veteran", "Member" })[i] end
+				eq(B.MarkOfName("Asmongold Asmongler-Realm", "OLYMPUS"), "gold", "the King by his pinned name in his guild")
+				-- (Review of 1.1.1: a name our roster lacks is not proven one of ours, so no star; it was
+				-- "member" before, from the guild the line names alone. REVIEW star below.)
+				eq(B.MarkOfName("Asmongold Asmongler-Realm", "Olympus II"), nil, "his name in another guild is not him, nor proven one of ours")
+				local mark, facts = B.MarkOfName("Sage Owl", "Olympus II")
+				eq(mark, "silver", "a High Councillor"); eq(facts.council, true); eq(facts.who, "Sage Owl-Realm", "the name made whole")
+				eq(B.MarkOfName("Guildie Master-Realm", "Olympus II"), "silver", "our guild master")
+				eq(B.MarkOfName("Guildie Officer-Realm", "Olympus II"), "silver", "our officer")
+				eq(B.MarkOfName("Raider Guy-Realm", "Olympus II"), "bronze", "our Raider")
+				eq(B.MarkOfName("Vet Guy-Realm", "Olympus II"), "bronze", "our Veteran")
+				eq(B.MarkOfName("Plain Guy-Realm", "Olympus II"), "member", "our Member")
+				eq(B.MarkOfName("Stranger-Realm", "Olympus II"), nil, "not in our roster: nothing proves him one of ours (it was the star before the review)")
+				-- Another guild: the census, two senders naming him.
+				eq(B.MarkOfName("Zeusy-Realm", "Olympus Zeus"), "silver", "another guild's Lord, two senders")
+				eq(B.MarkOfName("Capt-Realm", "Olympus Zeus"), "silver", "another guild's Captain, two senders")
+				ns.rdb.guilds["Olympus Lone"] = Vouched({ guild = "Olympus Lone", leader = "Loner", officers = { { name = "Lone Capt" } }, realm = "Realm",
+					t = ns.Now() }, "W1-Realm")
+				-- (Review of 1.1.1: it was the star before. A guild master one sender names has no rank from
+				-- the census (the Crown needs two), so Channels does not verify him either: no mark.)
+				eq(ns.Data.KnownRank("Loner-Realm", "Olympus Lone"), nil, "(the census gives the master one sender names no rank)")
+				eq(B.MarkOfName("Loner-Realm", "Olympus Lone"), nil, "one sender names him master: not proven, no mark")
+				eq(ns.Data.KnownRank("Lone Capt-Realm", "Olympus Lone"), 1, "(the census's rank for a Captain one sender names)")
+				eq(B.MarkOfName("Lone Capt-Realm", "Olympus Lone"), "member", "a Captain one sender names: a member, as the borders ask two")
+				-- Nobody outside Olympus; nobody the moderators took off.
+				eq(B.MarkOfName("Joe-Realm", "Wanderers"), nil)
+				eq(B.MarkOfName("Joe-Realm", nil), nil)
+				eq(B.MarkOfName(nil, "Olympus II"), nil)
+				ns.Moderation.Hides = function(who) if who == "Zeusy-Realm" then return { kind = "c" } end end
+				eq(B.MarkOfName("Zeusy-Realm", "Olympus Zeus"), nil, "net-off")
+				ns.Moderation.Hides = saved.hides
+				-- Independent of /oly borders off (the chat's marks are the chat's).
+				ns.db.borders = false
+				eq(B.MarkOfName("Raider Guy-Realm", "Olympus II"), "bronze")
+				-- MarkOf and the borders unchanged: the unit functions still decide theirs.
+				w.target(BorderUnit("Raider Guy", "Olympus II", "Raider", 2))
+				eq(B.MarkOf("target"), "bronze")
+			end)
+			ns.Roster.byName, GuildControlGetRankName, ns.Moderation.Hides = saved.byName, saved.rankName, saved.hides
+			if not ok then error(err, 0) end
+		end)
+	end)
+
+	-- (Changed on purpose, the author's ask: the chats open in the Olympus window, on its Chat tab,
+	-- not in a window of their own; toggled again, that window closes. Escape closes the Olympus
+	-- window as ever, the tab with it; the gamepad UI keeps it off the Escape list.)
+	test("1.1.1 Chat tab: it opens the Olympus window on its Chat tab for a member, on a channel the rank reads, never taking the keyboard; toggled, the window closes; Escape closes it with mouse and keyboard, the X with the gamepad UI", function()
+		WithWindow(function(w)
+			GetGuildInfo = function() return "Wanderers", "Member", 3 end
+			eq(w.CW.Open(), nil)
+			assert(Said(w, L.MEMBERS_ONLY), "told"); eq(rawget(_G, "OlympusFrame"), nil, "nothing made"); eq(w.CW.IsShown(), false)
+			AsSoldier()
+			w.printed = {}
+			eq(w.CW.Open("C"), nil)
+			eq(w.printed[1], L.CHAN_ONLY_CAPTAINS:format(L.CHAN_CAPTAINS), "a soldier asking for [Captains]"); eq(w.CW.IsShown(), false)
+			local f = w.CW.Open()
+			assert(f and f:IsShown(), "open"); eq(w.CW.Frame(), f); eq(w.CW.Tier(), "A")
+			local main = OlympusFrame
+			assert(main and main:IsShown(), "the Olympus window"); eq(main.tab, "chat", "on its Chat tab")
+			eq(w.CW.Window(), main); eq(f:GetParent(), main, "the tab is in the window"); eq(f, OlympusFrameChat)
+			eq(rawget(_G, "OlympusChatWindow"), nil, "no window of its own (the first 1.1.1 build's)")
+			local eb = OlympusFrameChatInput
+			eq(eb, f.input); eq(eb.autoFocus, false, "the box never takes the keyboard by itself"); eq(eb.olympusBox, true)
+			eq(f.search.autoFocus, false, "nor the search box"); eq(f.search.olympusBox, true)
+			local af, sh
+			for i, e in ipairs(w.log) do
+				if e == "autofocus false" and not af then af = i end
+				if e == "show OlympusFrameChat" and not sh then sh = i end
+			end
+			assert(af and sh and af < sh, "autofocus off before the tab first shows: " .. table.concat(w.log, ", "))
+			eq(#w.focus, 0, "no SetFocus")
+			local listed = 0
+			for _, n in ipairs(UISpecialFrames) do if n == "OlympusFrame" then listed = listed + 1 end end
+			eq(listed, 1, "Escape closes the Olympus window, the tab with it, with mouse and keyboard")
+			-- (Changed on purpose, the author's ask: no row of channel pills; one channel, no switch.)
+			eq(f.pills, nil, "no pills"); eq(f.switch:IsShown(), false, "a soldier reads [Olympus] alone: no switch")
+			eq(f.gear:IsShown(), true, "the settings' gear")
+			w.CW.Toggle(); eq(w.CW.IsShown(), false, "toggled closed"); eq(main:IsShown(), false, "the Olympus window closed")
+			eq(f:IsShown(), false, "the tab gone with it")
+			w.CW.Toggle("A"); eq(w.CW.IsShown(), true); eq(main.tab, "chat")
+			w.CW.Toggle("A"); eq(w.CW.IsShown(), false, "the same channel: closed")
+			w.CW.Toggle(); eq(w.CW.IsShown(), true)
+			w.CW.Toggle("C"); eq(w.CW.IsShown(), true, "a channel the rank does not read: stays"); eq(w.CW.Tier(), "A")
+			w.CW.Close(); eq(w.CW.IsShown(), false); eq(main:IsShown(), false)
+			-- Its X hides it itself, in combat too, as the first build's window did (the template's
+			-- button would call HideUIPanel, which does nothing in combat; review of the Chat tab).
+			local combat = rawget(_G, "InCombatLockdown")
+			InCombatLockdown = function() return true end
+			w.CW.Open()
+			main.CloseButton:Click()
+			InCombatLockdown = combat
+			eq(main:IsShown(), false, "the X closes the window in combat"); eq(w.CW.IsShown(), false); eq(f:IsShown(), false)
+			eq(main.onCloseCallback(), false, "(it says no to HideUIPanel)")
+			-- The window open on another tab: the Chat tab is not shown, and a toggle turns to it.
+			w.UI.SelectTab("census")
+			eq(main:IsShown(), true); eq(f:IsShown(), false); eq(w.CW.IsShown(), false)
+			w.CW.Toggle()
+			eq(main.tab, "chat"); eq(w.CW.IsShown(), true, "the window kept open, on its Chat tab")
+			-- The tab itself, clicked: the same (the channel it last showed).
+			w.UI.SelectTab("realm"); eq(w.CW.IsShown(), false)
+			w.UI.SelectTab("chat"); eq(w.CW.IsShown(), true); eq(w.CW.Tier(), "A")
+			-- A rank that reads nothing any more: at the tab's next drawing, the window turns to the Census.
+			GetGuildInfo = function() return "Wanderers", "Member", 3 end
+			f:Fire("OnUpdate", 0.3)
+			eq(f:IsShown(), false, "out of Olympus: the tab hidden"); eq(main.tab, "census"); eq(w.CW.IsShown(), false)
+			-- The gamepad UI: nothing on the escape list, no game popup, no focus.
+			AsSoldier()
+			main:Hide()
+			w.CW.Reset()
+			for i = #UISpecialFrames, 1, -1 do UISpecialFrames[i] = nil end
+			WithGamepadUI(true, function(game)
+				local g = w.CW.Open()
+				assert(g and g:IsShown(), "opens with the gamepad UI")
+				eq(#UISpecialFrames, 0, "nothing on the escape list"); eq(#game.shown, 0); eq(#w.focus, 0)
+				eq(g.input.autoFocus, false)
+				main:Hide(); w.CW.Open()
+				eq(#UISpecialFrames, 0, "nor when it shows again")
+				-- The X, the way out there (with /oly): it closes the window, no HideUIPanel.
+				main.CloseButton:Click()
+				eq(main:IsShown(), false, "the X with the gamepad UI"); eq(w.CW.IsShown(), false); eq(#game.shown, 0)
+			end)
+		end)
+	end)
+
+	test("1.1.1 Chat tab: a bubble per line, others' on the left and ours on the right, a header where a writer starts, a long line wrapped whole; a resize wraps again and the bubbles are reused", function()
+		WithWindow(function(w)
+			local long = ("word "):rep(120)
+			ns.rdb.chat = { A = {
+				Line(T0 - 86400, "Old Timer-Realm", "yesterday"),
+				Line(T0, "Aa-Realm", "hello there"),
+				Line(T0 + 30, "Aa-Realm", "second from Aa"),
+				Line(T0 + 60, "Soldier-Realm", "mine", { mine = true }),
+				Line(T0 + 90, "Bb-Realm", long, { guild = "Olympus Zeus" }),
+				Line(T0 + 500, "Bb-Realm", "after a pause", { guild = "Olympus Zeus" }),
+			} }
+			local f = w.CW.Open("A")
+			local bs = Visible(f.bubbles)
+			eq(#bs, 6, "one bubble a line")
+			local rows = Visible(f.rows)
+			eq(rows[1].text:GetText(), "|cff9d9d9d" .. L.CHATWIN_KEPT:format(100) .. "|r", "the kept lines, on top")
+			assert(RowWith(f, date("%Y-%m-%d", T0 - 86400)) and RowWith(f, date("%Y-%m-%d", T0)), "a row at each day")
+			-- Sides.
+			assert(bs[2]:Anchor("TOPLEFT") and not bs[2]:Anchor("TOPRIGHT"), "someone else's: left")
+			assert(bs[4]:Anchor("TOPRIGHT") and not bs[4]:Anchor("TOPLEFT"), "ours: right")
+			eq(bs[4]:Anchor("TOPRIGHT")[2], f.content)
+			-- Headers where a writer starts: a new day, a new writer, ours, a pause over 5 minutes.
+			eq(bs[1].header:IsShown(), true); eq(bs[2].header:IsShown(), true)
+			eq(bs[3].header:IsShown(), false, "the same writer within 300 s")
+			eq(bs[4].header:IsShown(), true); eq(bs[4].who:GetText(), L.CHATWIN_YOU)
+			eq(bs[5].header:IsShown(), true); eq(bs[6].header:IsShown(), true, "400 s later")
+			assert(bs[2].who:GetText():find("Aa", 1, true) and bs[2].who:GetText():find("<Olympus II>", 1, true), bs[2].who:GetText())
+			assert(bs[2].time:GetText():find(date("%H:%M", T0), 1, true), "its time")
+			-- Gaps: 3 within a writer's lines, 10 between writers; top to bottom in order.
+			eq(Top(bs[3]) - (Top(bs[2]) + bs[2]:GetHeight()), 3)
+			eq(Top(bs[4]) - (Top(bs[3]) + bs[3]:GetHeight()), 10)
+			for i = 2, #bs do assert(Top(bs[i]) > Top(bs[i - 1]), "in order") end
+			-- The long line: whole, wrapped, taller than a one-line bubble, within 82 % of the box.
+			local b = bs[5]
+			eq(b.body:GetText(), ns.Codec.SanitizeChat(long), "never cut")
+			assert(b.body.wrap ~= false, "wraps"); eq(b.body:IsTruncated(), false)
+			assert(b:GetHeight() > bs[2]:GetHeight() + CW_LINE * 3, "taller")
+			local width = f.content:GetWidth()
+			assert(b:GetWidth() <= width * 0.82, ("%d wide in %d"):format(b:GetWidth(), width))
+			assert(bs[2]:GetWidth() < b:GetWidth(), "a short line, a narrow bubble")
+			-- A wider window (the Olympus window, docked to a wider guild window): the long line wraps
+			-- again, on fewer lines; the same bubbles.
+			local tall, wide = b:GetHeight(), b:GetWidth()
+			w.CW.Window():SetSize(800, 600)
+			w.CW.Render()
+			assert(b:GetWidth() > wide and b:GetHeight() < tall, "wrapped again")
+			assert(b:GetWidth() <= f.content:GetWidth() * 0.82)
+			eq(#f.bubbles, 6); w.CW.Render(); eq(#f.bubbles, 6, "reused")
+			-- (The review of the page's removal: the Realm tab's chats page asserted this, and no Chat
+			-- tab test did.) A colour code typed in a line shows as typed: escaped (SanitizeChat), its
+			-- bar doubled, never a colour.
+			ns.rdb.chat.A = { Line(T0, "Bb-Realm", "second |cffff0000red") }
+			w.CW.Render()
+			local coded = BubbleWith(f, "red")
+			assert(coded and coded.body:GetText():find("second ||cffff0000red", 1, true), coded and coded.body:GetText() or "no bubble")
+			eq(coded.body:GetText():find("second |cffff0000red", 1, true), nil, "no bare colour code")
+			-- A channel with fewer lines: the others hidden, not dropped.
+			ns.rdb.chat.A = { Line(T0, "Aa-Realm", "alone") }
+			w.CW.Render()
+			eq(#Visible(f.bubbles), 1); eq(#f.bubbles, 6)
+			-- Nothing said yet.
+			ns.rdb.chat.A = {}
+			w.CW.Render()
+			eq(#Visible(f.bubbles), 0); assert(RowWith(f, L.CHATWIN_EMPTY:format(L.CHAN_ALL)), "the empty channel says so")
+			eq(#ns.rdb.chat.A, 0)
+		end)
+	end)
+
+	test("1.1.1 Chat tab: the marks in a header: the King's crown, the High Council's mark and colour, silver, bronze, the star, the Treasurer's coin, Steward and Hand", function()
+		WithWindow(function(w)
+			local saved = { byName = ns.Roster.byName, rankName = GuildControlGetRankName, loginAt = ns.Comm.loginAt, steward = ns.King.IsStewardName,
+				hand = ns.King.IsHandName, tex = C_Texture, masked = ns.CouncilMasked }
+			local ok, err = pcall(function()
+				local bns = setmetatable({ On = function() end, RegisterEvent = function() end }, { __index = ns })
+				assert(loadfile(ADDON_DIR .. "Borders.lua"))("Olympus", bns)
+				ns.Borders = bns.Borders
+				ns.rdb.council = { names = { ["sage owl"] = true } } -- (made-up names only)
+				ns.Roster.byName = { ["Raider Guy-Realm"] = 2, ["Vet Guy-Realm"] = 3, ["Plain Guy-Realm"] = 4 }
+				GuildControlGetRankName = function(i) return ({ "Master", "Officer", "Raider", "Veteran", "Member" })[i] end
+				ns.Comm.loginAt = ns.Now() - ns.Data.CROWN_AFTER - 1
+				ns.rdb.guilds["Olympus Zeus"] = Vouched({ guild = "Olympus Zeus", leader = "Zeusy", officers = {}, realm = "Realm", t = ns.Now() }, "W1-Realm", "W2-Realm")
+				ns.King.IsStewardName = function(n) return n == "Stew Ard-Realm" end
+				ns.King.IsHandName = function(n) return n == "Hand Some-Realm" end
+				C_Texture = nil
+				ns.rdb.chat = { A = {
+					Line(T0, "Asmongold Asmongler-Realm", "the king speaks", { guild = "Olympus" }),
+					Line(T0 + 1000, "Sage Owl-Realm", "a councillor speaks"),
+					Line(T0 + 2000, "Zeusy-Realm", "a lord speaks", { guild = "Olympus Zeus" }),
+					Line(T0 + 3000, "Raider Guy-Realm", "a raider speaks"),
+					Line(T0 + 4000, "Vet Guy-Realm", "a veteran speaks"),
+					Line(T0 + 5000, "Plain Guy-Realm", "a member speaks"),
+					Line(T0 + 6000, "Pyralis Ashandar-Realm", "the treasurer speaks", { guild = "Olympus" }),
+					Line(T0 + 7000, "Stew Ard-Realm", "a steward speaks", { guild = "Olympus" }),
+					Line(T0 + 8000, "Hand Some-Realm", "a hand speaks", { guild = "Olympus" }),
+					Line(T0 + 9000, "Stew Ard-Realm", "not his guild's rule", { guild = "Olympus II" }),
+				} }
+				local f = w.CW.Open()
+				local function Header(text)
+					local b = BubbleWith(f, text)
+					assert(b, text)
+					return b.who:GetText()
+				end
+				local SILVER = "|A:nameplates-icon-elite-silver:14:14|a"
+				local BRONZE = "|A:nameplates-icon-elite-gold:14:14:0:0:158:118:86|a"
+				local STAR = "|TInterface\\AddOns\\Olympus\\media\\borders\\star:14:14|t"
+				local h = Header("the king speaks")
+				eq(h:sub(1, #("|T" .. ns.CROWN_ICON .. ":14:14|t")), "|T" .. ns.CROWN_ICON .. ":14:14|t", "the King's crown first: " .. h)
+				h = Header("a councillor speaks")
+				assert(h:find(ns.HIGH_COUNCIL_MARK, 1, true) and h:find("|c" .. ns.HIGH_COUNCIL_COLOR .. "Sage Owl|r", 1, true), h)
+				assert(not h:find(SILVER, 1, true), "the skull, not the silver mark")
+				assert(Header("a lord speaks"):find(SILVER, 1, true), "a Lord: silver")
+				assert(Header("a raider speaks"):find(BRONZE, 1, true), "a Raider: bronze")
+				assert(Header("a veteran speaks"):find(BRONZE, 1, true), "a Veteran: bronze")
+				assert(Header("a member speaks"):find(STAR, 1, true), "a member: the star")
+				assert(Header("the treasurer speaks"):find("UI-GoldIcon:0|t", 1, true), "the Treasurer's coin")
+				assert(Header("a steward speaks"):find("|cffffd200" .. L.CHATWIN_TAG_STEWARD .. "|r", 1, true), "Steward")
+				assert(Header("a hand speaks"):find("|cffffd200" .. L.CHATWIN_TAG_HAND .. "|r", 1, true), "Hand")
+				assert(not Header("not his guild's rule"):find(L.CHATWIN_TAG_STEWARD, 1, true), "the tags by the King's guild's rule only")
+				-- An atlas the client does not know: the star.
+				C_Texture = { GetAtlasInfo = function() return nil end }
+				w.CW.Render()
+				h = Header("a lord speaks")
+				assert(h:find(STAR, 1, true) and not h:find(SILVER, 1, true), h)
+				C_Texture = { GetAtlasInfo = function() return { width = 14, height = 14 } end }
+				w.CW.Render()
+				assert(Header("a lord speaks"):find(SILVER, 1, true))
+				-- The King's screen while the councillors' names are hidden (his stream): no skull.
+				ns.CouncilMasked = function() return true end
+				w.fire("COUNCIL_MASK_CHANGED"); w.CW.Render()
+				h = Header("a councillor speaks")
+				ns.CouncilMasked = saved.masked
+				assert(not h:find(ns.HIGH_COUNCIL_MARK, 1, true) and not h:find(ns.HIGH_COUNCIL_COLOR, 1, true), h)
+				-- Without Borders.lua (a client updated without a restart): no mark, the rest as ever.
+				ns.Borders = setmetatable({ missing = true }, { __index = function() return function() end end })
+				w.CW.Render()
+				h = Header("a lord speaks")
+				assert(h:find("Zeusy", 1, true) and not h:find("|A:", 1, true), h)
+			end)
+			ns.Roster.byName, GuildControlGetRankName, ns.Comm.loginAt = saved.byName, saved.rankName, saved.loginAt
+			ns.King.IsStewardName, ns.King.IsHandName, C_Texture, ns.CouncilMasked = saved.steward, saved.hand, saved.tex, saved.masked
+			if not ok then error(err, 0) end
+		end)
+	end)
+
+	-- (Changed on purpose, the owner's ask after trying the tab: "Enter and keep typing, Enter and keep
+	-- typing, without going back to the game's controls". With mouse and keyboard a line sent, a
+	-- refused one and a command kept leave the cursor in the box; an empty Enter, Escape and the
+	-- privacy warning still let it go. It was: every Enter let the keyboard go, as the Communities
+	-- box does, which the gamepad UI keeps: the key's tests below.)
+	test("1.1.1 Chat tab: its own box: Enter sends through Channels.Send and the cursor stays for the next line; a refusal keeps the text and the cursor, the privacy warning empties it and lets go; no slash command; an empty Enter or Escape lets go; Tab changes channel", function()
+		WithWindow(function(w)
+			AsCaptain()
+			local sent, answers = {}, {}
+			ns.Channels.Send = function(t, text)
+				sent[#sent + 1] = t .. " " .. text
+				local a = table.remove(answers, 1) or { true, "ok" }
+				return a[1], a[2]
+			end
+			local f = w.CW.Open("A")
+			local eb = f.input
+			eq(eb.hint:IsShown(), true, "a grey hint while empty")
+			eq(eb.hint:GetText(), L.CHATWIN_PLACEHOLDER:format(L.CHAN_ALL) .. L.CHATWIN_PUBLIC, "the channel is public here")
+			assert(eb.label:GetText():find("[" .. L.CHAN_ALL .. "]:", 1, true), "the channel's label")
+			eb.focused = true
+			eb:Fire("OnEditFocusGained")
+			eq(eb.hint:IsShown(), false, "no hint while typing")
+			eb:SetText("  hi  ")
+			eb:Fire("OnEnterPressed")
+			eq(sent[1], "A hi"); eq(eb:GetText(), ""); eq(eb.focused, true, "sent: the cursor stays for the next line")
+			eq(eb.hint:IsShown(), false, "no hint while it is there")
+			answers = { { false, "fast" } }
+			eb:SetText("again")
+			eb:Fire("OnEnterPressed")
+			eq(sent[2], "A again"); eq(eb:GetText(), "again", "refused: the text stays"); eq(eb.focused, true, "and the cursor")
+			answers = { { false, "confirm" } }
+			eb:Fire("OnEnterPressed")
+			eq(sent[3], "A again"); eq(eb:GetText(), "", "held by the privacy warning: the box empties")
+			eq(eb.focused, false, "and lets go: the warning's Send or Cancel is next")
+			eb.focused = true
+			eb:SetText("/cast Fireball")
+			eb:Fire("OnEnterPressed")
+			eq(#sent, 3, "no command sent, none run"); eq(eb:GetText(), "/cast Fireball", "kept"); eq(eb.focused, true)
+			assert(Said(w, L.CHATWIN_NO_SLASH:format(L.CHAN_ALL)), "told where commands go")
+			eb:SetText("   ")
+			eb:Fire("OnEnterPressed")
+			eq(#sent, 3, "nothing to send"); eq(eb.focused, false, "an empty Enter lets go"); eq(eb:GetText(), "")
+			-- (Changed on purpose, the author's ask: no Send button, so the box is not cramped: Enter sends.)
+			eq(f.send, nil, "no Send button")
+			eb:SetText("by enter")
+			eb.focused = true
+			eb:Fire("OnEnterPressed")
+			eq(sent[4], "A by enter"); eq(eb:GetText(), ""); eq(eb.focused, true, "sent, and the cursor still there")
+			eb.focused = true
+			eb:Fire("OnEscapePressed")
+			eq(eb.focused, false, "Escape lets go")
+			eb:Fire("OnTabPressed")
+			eq(w.CW.Tier(), "C", "Tab: the next channel"); assert(eb.label:GetText():find("[" .. L.CHAN_CAPTAINS .. "]:", 1, true))
+			eb:SetText("for captains")
+			eb:Fire("OnEnterPressed")
+			eq(sent[5], "C for captains")
+			eb:Fire("OnTabPressed")
+			eq(w.CW.Tier(), "A", "and round")
+			-- Taken off by the moderators: their word in the hint (Send refuses, as ever).
+			ns.Moderation.SelfOff = function() return { kind = "c" } end
+			ns.Moderation.YouText = function() return "YOU ARE OFF" end
+			w.CW.Render()
+			eq(eb.hint:GetText(), "YOU ARE OFF")
+			-- The box hidden with the window: the keyboard let go.
+			eb.focused = true
+			w.CW.Window():Hide()
+			eq(eb.focused, false)
+			-- And with another tab picked.
+			w.CW.Open()
+			eb.focused = true
+			w.UI.SelectTab("census")
+			eq(eb.focused, false)
+			eq(#w.focus, 0, "never SetFocus")
+		end)
+	end)
+
+	-- (Changed on purpose, the author's ask: the pills' row is gone; another channel's lines count on
+	-- the switch of the top row, "+N", and on that channel's line in its list, as they did on its pill.)
+	test("1.1.1 Chat tab: new lines show at the bottom while it follows; scrolled up, an \"N new\" pill; another channel's lines count on the channels' switch; nothing drawn while hidden, then at most every 0.2 s", function()
+		WithWindow(function(w)
+			AsCaptain()
+			local list = {}
+			for i = 1, 30 do list[i] = Line(T0 + i * 10, "Aa-Realm", "line " .. i) end
+			ns.rdb.chat = { A = list, C = {} }
+			local f = w.CW.Open("A")
+			local s = f.scroll
+			s:Settle()
+			assert(s:GetVerticalScrollRange() > 0, "more lines than the view")
+			eq(s:GetVerticalScroll(), s:GetVerticalScrollRange(), "opened at the newest line")
+			local function Arrive(t, text)
+				local l = ns.rdb.chat[t]
+				l[#l + 1] = Line(T0 + 1000 + #l, "Bb-Realm", text)
+				w.fire("CHAT_CHANGED", t)
+				w.fire("CHAT_LINE", t, "Bb-Realm", text)
+			end
+			Arrive("A", "fresh one")
+			w.CW.Render(); s:Settle()
+			assert(BubbleWith(f, "fresh one"), "drawn")
+			eq(s:GetVerticalScroll(), s:GetVerticalScrollRange(), "still at the newest line")
+			eq(f.newPill:IsShown(), false)
+			-- The player scrolls up: the view stays; new lines count on the pill.
+			s:SetVerticalScroll(0)
+			Arrive("A", "while up")
+			w.CW.Render(); s:Settle()
+			eq(s:GetVerticalScroll(), 0, "where he put it")
+			eq(f.newPill:IsShown(), true); eq(f.newPill:GetText(), L.CHATWIN_NEW_LINES:format(1))
+			Arrive("A", "and another")
+			w.CW.Render(); s:Settle()
+			eq(f.newPill:GetText(), L.CHATWIN_NEW_LINES:format(2)); eq(s:GetVerticalScroll(), 0)
+			f.newPill:Click()
+			s:Settle()
+			eq(s:GetVerticalScroll(), s:GetVerticalScrollRange(), "the pill: down to them"); eq(f.newPill:IsShown(), false)
+			-- Scrolled back down by hand: it follows again.
+			s:SetVerticalScroll(0)
+			s:SetVerticalScroll(s:GetVerticalScrollRange())
+			Arrive("A", "followed")
+			w.CW.Render(); s:Settle()
+			eq(s:GetVerticalScroll(), s:GetVerticalScrollRange()); eq(f.newPill:IsShown(), false)
+			-- Our own line: to the bottom.
+			ns.Channels.Send = function() return true, "ok" end
+			s:SetVerticalScroll(0)
+			f.input:SetText("mine")
+			f.input:Fire("OnEnterPressed")
+			local l = ns.rdb.chat.A
+			l[#l + 1] = Line(T0 + 2000, "Cap-Realm", "mine", { mine = true })
+			w.fire("CHAT_CHANGED", "A")
+			w.CW.Render(); s:Settle()
+			eq(s:GetVerticalScroll(), s:GetVerticalScrollRange(), "after our own line")
+			-- Another channel: counted on the switch and on its line in the switch's list, until picked.
+			Arrive("C", "for captains")
+			Arrive("C", "again for captains")
+			w.CW.Render()
+			eq(f.switch:IsShown(), true, "a Captain reads two channels: the switch")
+			eq(f.switch.text:GetText(), L.CHAN_ALL, "the channel shown"); eq(f.switch.count:GetText(), "+2")
+			f.switch:Fire("OnEnter")
+			local tip = table.concat(TipLines(), "\n")
+			assert(tip:find(L.CHATWIN_NEW_IN:format(L.CHAN_CAPTAINS, 2), 1, true), tip)
+			f.switch:Fire("OnLeave")
+			f.switch:Click()
+			eq(f.menu:IsShown(), true, "its list")
+			eq(f.menu.rows.C.text:GetText(), L.CHAN_CAPTAINS .. " (2)"); eq(f.menu.rows.A.text:GetText(), L.CHAN_ALL)
+			eq(f.menu.rows.L:IsShown(), false, "not a Lord's")
+			eq(f.menu.rows.A.mark:IsShown(), true, "the one shown marked"); eq(f.menu.rows.C.mark:IsShown(), false)
+			f.menu.rows.C:Click()
+			eq(w.CW.Tier(), "C"); eq(f.menu:IsShown(), false, "picked: the list closes")
+			eq(f.switch.text:GetText(), L.CHAN_CAPTAINS); eq(f.switch.count:IsShown(), false)
+			assert(BubbleWith(f, "again for captains"))
+			-- Muted in chat: its line in the list says the tab still shows it.
+			ns.db.chatMute = { C = true }
+			f.switch:Click()
+			f.menu.rows.C:Fire("OnEnter")
+			tip = table.concat(TipLines(), "\n")
+			assert(tip:find(L.CHATWIN_MUTED_TIP, 1, true), tip)
+			f.menu.rows.C:Fire("OnLeave")
+			f.catcher:Click()
+			eq(f.menu:IsShown(), false, "a click elsewhere closes the list"); eq(w.CW.Tier(), "C")
+			-- Hidden: the listeners draw nothing. Shown: once, after 0.2 s.
+			local calls = 0
+			local real = ns.Channels.History
+			ns.Channels.History = function(...) calls = calls + 1; return real(...) end
+			f:Hide()
+			Arrive("C", "while hidden")
+			w.fire("DATA_CHANGED"); w.fire("PIN_CHANGED"); w.fire("FILTER_CHANGED"); w.fire("NETOFF_CHANGED", {}); w.fire("CONSENT_CHANGED", "chat", true)
+			eq(calls, 0, "nothing drawn while hidden")
+			f:Show()
+			f:Fire("OnUpdate", 0.1)
+			eq(calls, 0, "not before 0.2 s")
+			f:Fire("OnUpdate", 0.15)
+			eq(calls, 1, "drawn once")
+			f:Fire("OnUpdate", 0.3)
+			eq(calls, 1, "nothing new: not again")
+			-- The census: at most once every 5 seconds.
+			local clock = 100
+			GetTime = function() return clock end
+			w.fire("DATA_CHANGED")
+			f:Fire("OnUpdate", 0.3)
+			eq(calls, 2, "the census's first change")
+			w.fire("DATA_CHANGED")
+			clock = 102
+			f:Fire("OnUpdate", 0.3)
+			eq(calls, 2, "not within 5 s")
+			clock = 105
+			f:Fire("OnUpdate", 0.3)
+			eq(calls, 3, "then once")
+			-- Unread counts start again when it opens.
+			PickChannel(f, "A")
+			Arrive("C", "one more for captains")
+			w.CW.Render()
+			eq(f.switch.count:GetText(), "+1")
+			f:Hide()
+			w.CW.Open("A")
+			eq(f.switch.count:IsShown(), false, "none since it opened")
+		end)
+	end)
+
+	test("1.1.1 Chat tab: a line the block terms hide is a short grey bubble, shown by a click; ours never hidden; the history untouched", function()
+		WithWindow(function(w)
+			ns.Filter.Hides = function(text) return text:find("badword", 1, true) ~= nil end
+			ns.rdb.chat = { A = { Line(T0, "Aa-Realm", "a badword here"), Line(T0 + 10, "Soldier-Realm", "my badword", { mine = true }),
+				Line(T0 + 20, "Bb-Realm", "clean words") } }
+			local f = w.CW.Open()
+			local b = BubbleWith(f, L.CHATWIN_HIDDEN)
+			assert(b and b.hidden, "a grey bubble")
+			eq(BubbleWith(f, "a badword here"), nil, "its words not shown")
+			assert(BubbleWith(f, "my badword"), "ours never hidden")
+			assert(BubbleWith(f, "clean words"))
+			assert(b.header:IsShown(), "who wrote it still shows")
+			b:Fire("OnMouseUp", "LeftButton")
+			assert(BubbleWith(f, "a badword here"), "shown by a click")
+			eq(BubbleWith(f, L.CHATWIN_HIDDEN), nil)
+			eq(ns.rdb.chat.A[1].revealed, nil, "the history untouched"); eq(ns.rdb.chat.A[1].text, "a badword here")
+			-- Another window (a new session of it): hidden again.
+			w.CW.Reset()
+			f = w.CW.Open()
+			assert(BubbleWith(f, L.CHATWIN_HIDDEN))
+		end)
+	end)
+
+	test("1.1.1 Chat tab: the pinned line on top, as the Realm tab shows it: veiled words shown by a click, taken down through ns.ShowDialog; none, no strip", function()
+		WithWindow(function(w)
+			local p = { sender = "Kingly Man-Realm", guild = "Olympus", text = "raid at the gates at nine", setAt = ns.Now(), expires = ns.Now() + 3600, rank = 5 }
+			ns.Channels.Pin = function() return p end
+			ns.Channels.CanTakeDown = function() return true end
+			local dialogs = {}
+			ns.ShowDialog = function(which) dialogs[#dialogs + 1] = which end
+			local f = w.CW.Open()
+			eq(f.pin:IsShown(), true)
+			local text = f.pin.text:GetText()
+			assert(text:find(L.CHATWIN_PINNED, 1, true) and text:find("raid at the gates at nine", 1, true) and text:find("Kingly Man", 1, true), text)
+			local withPin = f.box:Anchor("TOPLEFT")[5]
+			f.pin:Fire("OnEnter")
+			local tip = table.concat(TipLines(), "\n")
+			assert(tip:find(L.PIN_DOWN_TIP, 1, true), tip)
+			f.pin:Click()
+			eq(dialogs[1], "OLYMPUS_PIN_DOWN", "taken down after the question")
+			-- Veiled by the block terms: a click shows the words, nothing taken down.
+			ns.Filter.Hides = function(t) return t:find("raid", 1, true) ~= nil end
+			w.fire("FILTER_CHANGED"); w.CW.Render()
+			text = f.pin.text:GetText()
+			assert(text:find(L.FILTER_WORDS_HIDDEN, 1, true) and not text:find("raid at", 1, true), text)
+			f.pin:Click()
+			eq(p.revealed, true); eq(#dialogs, 1)
+			assert(f.pin.text:GetText():find("raid at the gates", 1, true))
+			-- None: no strip, the lines higher.
+			ns.Channels.Pin = function() return nil end
+			w.fire("PIN_CHANGED"); w.CW.Render()
+			eq(f.pin:IsShown(), false)
+			assert(f.box:Anchor("TOPLEFT")[5] > withPin, "the box moves up")
+			eq(#w.focus, 0)
+		end)
+	end)
+
+	test("1.1.1 Chat tab: the chats off on this client: the window says so and offers the choice, no box; on again, the lines and the box", function()
+		WithWindow(function(w)
+			ns.db.addonChat = false
+			local asked = 0
+			ns.Consent.Show = function() asked = asked + 1 end
+			ns.rdb.chat = { A = { Line(T0, "Aa-Realm", "kept while on") } }
+			local f = w.CW.Open()
+			eq(w.CW.Window().tab, "chat", "the tab shows for a member with the chats off too")
+			-- (The Chat tab says what the Realm tab's chats line says when they are off: the choice and
+			-- what it means, CONSENT_CHAT_TEXT, with /oly chat on|off; the window said CHATWIN_OFF alone.)
+			eq(f.off:IsShown(), true); eq(f.off.text:GetText(), L.CHATWIN_OFF .. "\n\n" .. L.CONSENT_CHAT_TEXT)
+			eq(f.off.button:GetText(), L.CHATWIN_OFF_BUTTON)
+			eq(f.input:IsShown(), false, "no box"); eq(f.scroll:IsShown(), false); eq(f.search:IsShown(), false, "no search")
+			eq(f.guide:IsShown(), false, "no Olympus tab line")
+			-- (The Olympus window asks its first-open page when it opens, whatever the tab: counted apart.)
+			local before = asked
+			f.off.button:Click()
+			eq(asked, before + 1, "the first-open page, Olympus's own")
+			ns.db.addonChat = true
+			w.fire("CHAT_CHANGED")
+			f:Fire("OnUpdate", 0.3)
+			eq(f.off:IsShown(), false); eq(f.input:IsShown(), true); eq(f.search:IsShown(), true)
+			assert(BubbleWith(f, "kept while on"))
+		end)
+	end)
+
+	test("1.1.1 Chat tab: a name's click whispers through Olympus's whisper window; nothing opens or writes the game's chat box, with mouse and keyboard or the gamepad UI", function()
+		WithWindow(function(w)
+			local calls, saved = {}, {}
+			local traps = { "ChatFrame_SendTell", "ChatFrame_OpenChat", "SetItemRef", "ChatEdit_InsertLink", "HandleModifiedItemClick",
+				"ChatEdit_ActivateChat", "ChatFrame_ActivateChat", "ChatEdit_FocusActiveWindow", "ChatFrameUtil" }
+			for _, name in ipairs(traps) do saved[name] = rawget(_G, name) end
+			local ok, err = pcall(function()
+				for _, name in ipairs(traps) do _G[name] = function() calls[#calls + 1] = name end end
+				ChatFrameUtil = setmetatable({}, { __index = function(_, k) return function() calls[#calls + 1] = "ChatFrameUtil." .. k end end })
+				local told = {}
+				ns.UI.WhisperWindow = function(n) told[#told + 1] = n end
+				ns.Channels.Send = function() return true, "ok" end
+				ns.rdb.chat = { A = { Line(T0, "Aa Bb-Realm", "hello from Aa"), Line(T0 + 10, "Soldier-Realm", "mine", { mine = true }),
+					Line(T0 + 20, "Cc-Realm", "look " .. MOONCLOTH_TEXT) } }
+				for _, pad in ipairs({ false, true }) do
+					WithGamepadUI(pad, function(game)
+						w.CW.Reset()
+						local f = w.CW.Open()
+						assert(f, "open")
+						local b = BubbleWith(f, "hello from Aa")
+						b.header:Fire("OnEnter")
+						local tip = table.concat(TipLines(), "\n")
+						assert(tip:find(L.CHATWIN_WHISPER_TIP:format("Aa Bb"), 1, true), tip)
+						b.header:Click()
+						eq(told[#told], "Aa Bb", "the name the server finds")
+						local n = #told
+						BubbleWith(f, "mine").header:Click()
+						eq(#told, n, "our own name: nothing")
+						local lb = BubbleWith(f, "[Mooncloth]")
+						IsShiftKeyDown = function() return true end
+						lb:Fire("OnHyperlinkEnter", MOONCLOTH_LINK, MOONCLOTH_TEXT)
+						lb:Fire("OnHyperlinkClick", MOONCLOTH_LINK, MOONCLOTH_TEXT, "LeftButton")
+						lb:Fire("OnHyperlinkLeave")
+						f.input:Fire("OnEnterPressed")
+						w.CW.Toggle()
+						eq(#game.shown, 0, "no game popup")
+					end)
+				end
+				eq(#told, 2)
+				eq(#calls, 0, "the game's chat untouched: " .. table.concat(calls, " "))
+				eq(#w.focus, 0)
+			end)
+			for _, name in ipairs(traps) do _G[name] = saved[name] end
+			if not ok then error(err, 0) end
+		end)
+	end)
+
+	test("1.1.1 Chat tab: a link in a line shows its tooltip on hover, and a Shift-click puts it in the window's own box", function()
+		WithWindow(function(w)
+			ns.rdb.chat = { A = { Line(T0, "Aa-Realm", "look " .. MOONCLOTH_TEXT .. " cheap") } }
+			local f = w.CW.Open()
+			local b = BubbleWith(f, "[Mooncloth]")
+			assert(b, "the link kept in the line")
+			local shown
+			GameTooltip.SetHyperlink = function(_, link) shown = link end
+			GameTooltip:Hide()
+			b:Fire("OnHyperlinkEnter", MOONCLOTH_LINK, MOONCLOTH_TEXT)
+			eq(shown, MOONCLOTH_LINK); eq(GameTooltip.owner, b); eq(GameTooltip:IsShown(), true)
+			b:Fire("OnHyperlinkLeave")
+			eq(GameTooltip:IsShown(), false)
+			shown = nil
+			b:Fire("OnHyperlinkEnter", "player:Someone", "[Someone]")
+			eq(shown, nil, "only the links a line may carry")
+			-- A tooltip that fails: hidden, no error.
+			GameTooltip.SetHyperlink = function() error("bad link") end
+			b:Fire("OnHyperlinkEnter", MOONCLOTH_LINK, MOONCLOTH_TEXT)
+			eq(GameTooltip:IsShown(), false)
+			-- Shift-click: into our box, where it was; without Shift, nothing.
+			f.input:SetText("wts ")
+			IsShiftKeyDown = function() return false end
+			b:Fire("OnHyperlinkClick", MOONCLOTH_LINK, MOONCLOTH_TEXT, "LeftButton")
+			eq(f.input:GetText(), "wts ")
+			IsShiftKeyDown = function() return true end
+			b:Fire("OnHyperlinkClick", MOONCLOTH_LINK, MOONCLOTH_TEXT, "LeftButton")
+			eq(f.input:GetText(), "wts " .. MOONCLOTH_TEXT)
+			eq(#w.focus, 0, "the keyboard stays where it was")
+			-- And it goes out as typed.
+			local sent
+			ns.Channels.Send = function(_, text) sent = text return true, "ok" end
+			f.input:Fire("OnEnterPressed")
+			eq(sent, "wts " .. MOONCLOTH_TEXT)
+			-- The window closed: its tooltip goes with it.
+			b:Fire("OnHyperlinkEnter", MOONCLOTH_LINK, MOONCLOTH_TEXT)
+			GameTooltip.SetHyperlink = function(_, link) shown = link end
+			b:Fire("OnHyperlinkEnter", MOONCLOTH_LINK, MOONCLOTH_TEXT)
+			eq(GameTooltip:IsShown(), true)
+			f:Hide()
+			eq(GameTooltip:IsShown(), false)
+		end)
+	end)
+
+	test("1.1.1 Chat tab: a line of ours that did not leave (CHAT_SEND_FAILED) is a note in its channel, and a click puts it back in the box", function()
+		WithWindow(function(w)
+			AsCaptain()
+			ns.rdb.chat = { A = { Line(T0, "Aa-Realm", "hi") }, C = {} }
+			local f = w.CW.Open("A")
+			w.fire("CHAT_SEND_FAILED", "A", "moved", "my lost line", 0)
+			w.CW.Render()
+			local moved = L.CHATWIN_NOT_SENT:format(L.CHATWIN_WHY_MOVED)
+			local r = RowWith(f, moved)
+			assert(r, "the note")
+			assert(r.text:GetText():find(L.CHATWIN_PUT_BACK, 1, true))
+			r:Click()
+			eq(f.input:GetText(), "my lost line", "back in the box"); eq(#w.focus, 0, "not focused")
+			eq(RowWith(f, moved), nil, "the note gone")
+			for why, key in pairs({ late = "CHATWIN_WHY_LATE", failed = "CHATWIN_WHY_FAILED", left = "CHATWIN_WHY_LEFT", odd = "CHATWIN_WHY_FAILED" }) do
+				w.fire("CHAT_SEND_FAILED", "A", why, "line " .. why)
+				w.CW.Render()
+				assert(RowWith(f, L.CHATWIN_NOT_SENT:format(L[key])), why)
+			end
+			-- Another channel's: in that channel.
+			w.fire("CHAT_SEND_FAILED", "C", "moved", "for captains")
+			w.CW.Render()
+			eq(#Visible(f.rows) - 2, 4, "four notes here (the kept row and a day row besides)")
+			PickChannel(f, "C")
+			assert(RowWith(f, moved), "the Captains' note")
+			-- Nonsense: nothing.
+			w.fire("CHAT_SEND_FAILED", "X", "moved", "x"); w.fire("CHAT_SEND_FAILED", "A", "moved", nil); w.fire("CHAT_SEND_FAILED", "A", "moved", "")
+			PickChannel(f, "A")
+			eq(#Visible(f.rows) - 2, 4)
+			-- A line sent: the notes of that channel go.
+			ns.Channels.Send = function() return true, "ok" end
+			f.input:SetText("new line")
+			f.input:Fire("OnEnterPressed")
+			w.CW.Render()
+			eq(RowWith(f, L.CHATWIN_PUT_BACK), nil)
+			PickChannel(f, "C")
+			assert(RowWith(f, moved), "the other channel's stays")
+		end)
+	end)
+
+	-- (Changed on purpose: the chats are a tab of the Olympus window now, which has its own place and
+	-- size; ns.db.chatWin keeps the channel last shown alone, and the first build's place and size
+	-- are dropped at load. The window's dragging and docking have their own tests above.)
+	test("1.1.1 Chat tab: the channel last shown is kept and opened again; nothing of a place or size of its own, and the first build's are dropped at load", function()
+		WithWindow(function(w)
+			AsCaptain()
+			local f = w.CW.Open()
+			local main = w.CW.Window()
+			eq(f.grip, nil, "no resize grip"); eq(f.resizeBounds, nil)
+			assert(f:Anchor("TOPLEFT") and f:Anchor("BOTTOMRIGHT"), "the tab fills its window")
+			eq(f:Anchor("TOPLEFT")[2], main); eq(f:Anchor("BOTTOMRIGHT")[2], main)
+			PickChannel(f, "C")
+			eq(ns.db.chatWin.tier, "C", "the channel"); eq(ns.db.chatWin.x, nil); eq(ns.db.chatWin.w, nil)
+			main:Hide()
+			w.CW.Reset()
+			f = w.CW.Open()
+			eq(w.CW.Tier(), "C", "the channel it was on")
+			-- A soldier now: the channel he reads.
+			main:Hide()
+			w.CW.Reset()
+			AsSoldier()
+			assert(w.CW.Open(), "open")
+			eq(w.CW.Tier(), "A")
+			-- Loaded: a channel's letter alone is kept.
+			ns.db.chatWin = "junk"
+			w.fire("INIT"); eq(ns.db.chatWin, nil)
+			ns.db.chatWin = { x = "a", y = 1, w = 400, h = 400, tier = "Z" }
+			w.fire("INIT"); eq(ns.db.chatWin, nil)
+			ns.db.chatWin = { x = 1, y = 2, w = 400, h = 400, tier = "C", extra = 1 }
+			w.fire("INIT")
+			eq(ns.db.chatWin.tier, "C"); eq(ns.db.chatWin.x, nil, "the first build's place dropped"); eq(ns.db.chatWin.h, nil); eq(ns.db.chatWin.extra, nil)
+			ns.db.chatWin = { x = 1 / 0, y = 2, w = 400, h = 400 }
+			w.fire("INIT"); eq(ns.db.chatWin, nil, "nothing left to keep")
+			-- (The review of the Chat tab: the Olympus tab's line put away with its x is kept too, as
+			-- true alone.)
+			ns.db.chatWin = { tier = "C", noTabLine = true, x = 1 }
+			w.fire("INIT")
+			eq(ns.db.chatWin.tier, "C"); eq(ns.db.chatWin.noTabLine, true); eq(ns.db.chatWin.x, nil)
+			ns.db.chatWin = { tier = "Z", noTabLine = true }
+			w.fire("INIT"); eq(ns.db.chatWin.tier, nil); eq(ns.db.chatWin.noTabLine, true, "alone")
+			ns.db.chatWin = { tier = "A", noTabLine = "yes" }
+			w.fire("INIT"); eq(ns.db.chatWin.tier, "A"); eq(ns.db.chatWin.noTabLine, nil)
+			ns.db.chatWin = { noTabLine = 1 }
+			w.fire("INIT"); eq(ns.db.chatWin, nil)
+		end)
+	end)
+
+	-- (Changed on purpose: every way in opens the Olympus window on its Chat tab, on the channel
+	-- asked for, where the first build opened a window of its own; toggled, the window closes. And,
+	-- the author's call, the Realm tab's chats page is gone: the Realm's link to the chats is the way
+	-- in from there, where the page's "Open the Chat tab" and "Write in" lines were; the page's
+	-- Olympus tab line is in the Chat tab's settings, their own test.)
+	test("1.1.1 Chat tab's ways in: /oly talk (and falar), the minimap button's Shift-click, the Realm tab's link to the chats (both input modes, never the game's chat box) open the Olympus window on its Chat tab, on that channel", function()
+		WithWindow(function(w)
+			local saved = { open = rawget(_G, "ChatFrame_OpenChat"), map = ns.Map.SetEnabled,
+				setup = ns.Channels.SetupTab, state = ns.Channels.TabState }
+			local ok, err = pcall(function()
+				local function OnTab(tier, why)
+					local main = w.CW.Window()
+					eq(w.CW.IsShown(), true, why); eq(main and main:IsShown(), true, why); eq(main.tab, "chat", why)
+					if tier then eq(w.CW.Tier(), tier, why) end
+				end
+				-- /oly talk
+				SlashCmdList.OLYMPUS("talk")
+				OnTab("A", "/oly talk")
+				SlashCmdList.OLYMPUS("talk")
+				eq(w.CW.IsShown(), false); eq(OlympusFrame:IsShown(), false, "again: the window closes")
+				AsLord()
+				SlashCmdList.OLYMPUS("talk lords")
+				OnTab("L", "/oly talk lords")
+				SlashCmdList.OLYMPUS("falar capitães")
+				OnTab("C", "another channel: that one")
+				SlashCmdList.OLYMPUS("talk captains")
+				eq(w.CW.IsShown(), false)
+				AsSoldier()
+				w.printed = {}
+				SlashCmdList.OLYMPUS("talk lords")
+				eq(w.CW.IsShown(), false); eq(w.printed[1], L.CHAN_ONLY_LORDS:format(L.CHAN_LORDS))
+				-- The minimap button.
+				local UI = w.UI
+				Minimap = NewWidget("Frame", "Minimap", UIParent)
+				Minimap.w, Minimap.h = 140, 140
+				UI.UpdateMinimapButton()
+				local b = OlympusMinimapButton
+				local toggled, mapped = 0, 0
+				local realToggle = UI.Toggle
+				UI.Toggle = function() toggled = toggled + 1 end
+				ns.Map.SetEnabled = function() mapped = mapped + 1 end
+				IsShiftKeyDown = function() return true end
+				b:Fire("OnClick", "LeftButton")
+				OnTab("A", "Shift-click: the Chat tab"); eq(toggled, 0)
+				b:Fire("OnClick", "LeftButton")
+				eq(w.CW.IsShown(), false); eq(OlympusFrame:IsShown(), false)
+				IsShiftKeyDown = function() return false end
+				b:Fire("OnClick", "LeftButton")
+				eq(toggled, 1, "a plain click: the Olympus window"); eq(w.CW.IsShown(), false)
+				IsShiftKeyDown = nil
+				b:Fire("OnClick", "LeftButton")
+				eq(toggled, 2)
+				b:Fire("OnClick", "RightButton")
+				eq(mapped, 1, "right-click: the map, as ever")
+				UI.Toggle = realToggle
+				b:Fire("OnEnter")
+				local lines = TipLines()
+				local left, shift
+				for i, l in ipairs(lines) do
+					if l == L.MINIMAP_LEFT then left = i end
+					if l == L.MINIMAP_SHIFT then shift = i end
+				end
+				assert(left and shift == left + 1, "the Shift-click line after the click's: " .. table.concat(lines, " / "))
+				-- The Realm tab's link to the chats: the Olympus window turns from its Realm tab to its Chat
+				-- tab, on the channel last shown; never the game's chat box, nor a game popup.
+				local opened = 0
+				ChatFrame_OpenChat = function() opened = opened + 1 end
+				local function At(ls, text)
+					for i, l in ipairs(ls) do if (l.text or ""):find(text, 1, true) then return l, i end end
+				end
+				for _, pad in ipairs({ false, true }) do
+					WithGamepadUI(pad, function(game)
+						w.UI.SelectTab("realm")
+						eq(OlympusFrame.tab, "realm")
+						local link = At(ns.Views.RealmLines(), L.CHATS_LINK)
+						assert(link and link.onClick, "the Realm's link to the chats")
+						link.onClick()
+						OnTab("A", "the Realm's link")
+						eq(opened, 0, "never the game's chat box"); eq(#game.shown, 0, "no game popup"); eq(#w.focus, 0, "no keyboard taken")
+						w.CW.Close()
+					end)
+				end
+				-- A Captain whose Chat tab last showed [Captains]: there again.
+				AsCaptain()
+				w.CW.Open("C"); w.CW.Close()
+				w.UI.SelectTab("realm")
+				At(ns.Views.RealmLines(), L.CHATS_LINK).onClick()
+				OnTab("C", "the channel last shown")
+				-- The page and its ways are gone: nothing on the Realm tab to open or write from.
+				eq(ns.Views.ShowChat, nil); eq(ns.Views.ChatShown, nil); eq(ns.UI.ChatWindow, nil)
+				w.CW.Close()
+				AsSoldier()
+			end)
+			ChatFrame_OpenChat, ns.Map.SetEnabled = saved.open, saved.map
+			ns.Channels.SetupTab, ns.Channels.TabState = saved.setup, saved.state
+			ns.Views.ClearFilters()
+			if not ok then error(err, 0) end
+		end)
+	end)
+
+	-- The two halves of 1.1.1 together (checked after the merge, as the design asked): /ol alone
+	-- opens the real window on its channel, and the Olympus tab's line runs the real SetupTab.
+	-- (Changed on purpose: that line was the Realm tab's chats page's, gone; it is the Chat tab's
+	-- settings' now.)
+	test("1.1.1 merged: /ol, /olc and /oll alone open the real Olympus window on its Chat tab, on their channel; the Chat tab's settings' Olympus tab line sets up the real Olympus tab", function()
+		WithWindow(function(w)
+			local saved = { windows = ns.db.chatWindows, intro = ns.db.chatTabIntro, info = GetChatWindowInfo, num = NUM_CHAT_WINDOWS,
+				frame2 = rawget(_G, "ChatFrame2") }
+			local ok, err = pcall(function()
+				AsCaptain()
+				SlashCmdList.OLYMPUSALL("")
+				eq(w.CW.IsShown(), true, "/ol alone opens it"); eq(w.CW.Tier(), "A")
+				eq(OlympusFrame:IsShown(), true, "the Olympus window"); eq(OlympusFrame.tab, "chat", "on its Chat tab")
+				SlashCmdList.OLYMPUSCAPTAINS("  ")
+				eq(w.CW.IsShown(), true); eq(w.CW.Tier(), "C", "/olc alone: the Captains' channel")
+				eq(OlympusFrame.tab, "chat")
+				SlashCmdList.OLYMPUSCAPTAINS("")
+				eq(w.CW.IsShown(), false, "again: it closes"); eq(OlympusFrame:IsShown(), false, "the window with it")
+				-- The window on another tab: /oll alone turns it to the Chat tab, on [Lords].
+				AsLord()
+				w.UI.SelectTab("decrees")
+				SlashCmdList.OLYMPUSLORDS("")
+				eq(OlympusFrame.tab, "chat"); eq(w.CW.Tier(), "L"); eq(w.CW.IsShown(), true)
+				w.CW.Close()
+				AsCaptain()
+				-- The tab line with the real Channels.SetupTab: no tab made yet, so the Chat tab shows
+				-- how (its line's steps; the pointer with mouse and keyboard, none with the gamepad UI),
+				-- and the real SetupTab runs when the player has made it. (Changed on purpose, the review
+				-- of the Chat tab: the line ran SetupTab at once, which printed the steps and waited.)
+				ns.db.addonChat = true
+				for _, pad in ipairs({ false, true }) do
+					WithGamepadUI(pad, function(game)
+						w.CW.Close()
+						w.CW.Reset()
+						ns.db.chatWindows, ns.db.chatTabIntro = nil, nil
+						NUM_CHAT_WINDOWS = 2
+						local olympus = nil
+						ChatFrame2 = { name = "", AddMessage = function(self, text) self.said = (self.said or 0) + 1 end }
+						GetChatWindowInfo = function(i)
+							if i == 1 then return "General", 14, 0, 0, 0, 1, true, false, nil, false end
+							return olympus or "", 14, 0, 0, 0, 1, olympus ~= nil, false, nil, false
+						end
+						local f = w.CW.Open("A")
+						f.gear:Click()
+						eq(w.CW.SettingsShown(), true)
+						local tab = Setting(f, L.CHATS_TAB_ADD)
+						assert(tab, "the tab line in the settings, from the real TabState")
+						w.printed = {}
+						tab:Click()
+						eq(ns.Channels.TabState(), "none", "nothing chosen before the tab exists")
+						eq(w.CW.Watching(), true); eq(OlympusFrame.tab, "chat")
+						assert(Setting(f, L.CHATS_TAB_STEPS:match("^(.-)%%s")), "the steps, in the settings")
+						f.gear:Click()
+						eq(w.CW.SettingsShown(), false, "back to the lines")
+						local guide = f.guide
+						eq(guide:IsShown(), true)
+						assert(guide.text:GetText():find(L.CHATS_TAB_STEPS:match("^(.-)%%s"), 1, true), guide.text:GetText())
+						local p = w.CW.Pointer()
+						if pad then
+							eq(p, nil, "no pointer with the gamepad UI"); eq(#game.shown, 0, "no game popup")
+						else
+							assert(p and p:IsShown(), "the pointer")
+						end
+						-- The player names a new window Olympus: the chats go there, said once.
+						olympus = "Olympus"
+						w.event("UPDATE_FLOATING_CHAT_WINDOWS")
+						eq(ns.Channels.TabState(), "open", "the real SetupTab ran"); eq(w.CW.Watching(), false)
+						local set = 0
+						for _, m in ipairs(w.printed) do if m:find(L.CHATTAB_SET:match("^(.-)%%s"), 1, true) then set = set + 1 end end
+						eq(set, 1, "said once: " .. table.concat(w.printed, " / "))
+						eq(ChatFrame2.said, 1, "and in the tab"); eq(#w.focus, 0)
+					end)
+				end
+			end)
+			ChatFrame2 = saved.frame2
+			ns.db.chatWindows, ns.db.chatTabIntro, GetChatWindowInfo, NUM_CHAT_WINDOWS = saved.windows, saved.intro, saved.info, saved.num
+			if not ok then error(err, 0) end
+		end)
+	end)
+
+	test("1.1.1 Chat tab: a client updated without a restart (no ChatWindow.lua yet): /oly talk says to restart the game, and the login names the file", function()
+		eq(ns.ChatWindow.missing, true, "Core.lua's stand-in")
+		local printed, logged = {}, {}
+		local saved = { print = ns.Print, log = ns.Log, faction = ns.CheckFaction, me = ns.me }
+		local ok, err = pcall(function()
+			ns.Print = function(m) printed[#printed + 1] = tostring(m) end
+			SlashCmdList.OLYMPUS("talk")
+			eq(printed[1], L.RESTART_NEEDED)
+			ns.ChatWindow.Open("A"); ns.ChatWindow.Toggle()
+			eq(printed[3], L.RESTART_NEEDED)
+			ns.ChatWindow.Close() -- (the rest do nothing)
+			eq(#printed, 3)
+			ns.Log = function(fmt, ...) logged[#logged + 1] = select("#", ...) > 0 and fmt:format(...) or fmt end
+			ns.CheckFaction = function() end
+			for _, fn in ipairs(EVENT_SCRIPTS) do fn(nil, "PLAYER_LOGIN") end
+		end)
+		ns.Print, ns.Log, ns.CheckFaction, ns.me = saved.print, saved.log, saved.faction, saved.me
+		if not ok then error(err, 0) end
+		local found
+		for _, l in ipairs(logged) do if l:find("not loaded until the game restarts", 1, true) and l:find("ChatWindow.lua", 1, true) then found = l end end
+		assert(found, "the login's list: " .. table.concat(logged, " / "))
+	end)
+
+	-- (Changed on purpose: no title of its own, CHATWIN_TITLE gone (the author: no Olympus name on top
+	-- of the chat, it is in our tab); the tab's label, the Olympus tab's button and pointer added; the
+	-- pages' section is the Chat tab's. And the Realm tab's chats page gone (the author's call): its
+	-- "Open the Chat tab" and "Make an Olympus tab" lines, its Write lines and its gamepad Write
+	-- window gone with it; the settings' words (the gear) and the channels' switch's added.)
+	test("1.1.1 Chat tab: its words in English and pt-BR, the same codes in both; the help and the pages say how to open it", function()
+		local pt = {}
+		local savedLocale = GetLocale
+		GetLocale = function() return "ptBR" end
+		local okPt, errPt = pcall(function() assert(loadfile(ADDON_DIR .. "Locales.lua"))("Olympus", pt) end)
+		GetLocale = savedLocale
+		if not okPt then error(errPt, 0) end
+		-- The format and escape codes of a line, in order.
+		local function Codes(str)
+			str = tostring(str):gsub("%%%%", "")
+			local specs = {}
+			for spec in str:gmatch("%%[%-%d%.]*%a") do specs[#specs + 1] = spec end
+			return table.concat(specs, " ") .. " / " .. select(2, str:gsub("|", ""))
+		end
+		for _, k in ipairs({ "CHATWIN_PLACEHOLDER", "CHATWIN_PUBLIC", "CHATWIN_YOU", "CHATWIN_TAG_STEWARD", "CHATWIN_TAG_HAND",
+			"CHATWIN_KEPT", "CHATWIN_EMPTY", "CHATWIN_NEW_LINES", "CHATWIN_HIDDEN", "CHATWIN_NO_SLASH", "CHATWIN_NOT_SENT", "CHATWIN_WHY_MOVED",
+			"CHATWIN_WHY_LATE", "CHATWIN_WHY_FAILED", "CHATWIN_WHY_LEFT", "CHATWIN_PUT_BACK", "CHATWIN_WHISPER_TIP", "CHATWIN_OFF",
+			"CHATWIN_OFF_BUTTON", "CHATWIN_MUTED_TIP", "CHATWIN_PINNED", "CHATS_OPEN_WINDOW_TIP",
+			"CHATS_TAB_WAITING", "CHATS_TAB_ON", "CHATS_TAB_TIP", "HELP_TALK", "MINIMAP_SHIFT", "HELP_TAB_CHAT", "CHATS_TAB_ADD",
+			"CHATS_TAB_ADD_TIP", "CHATS_TAB_STEPS", "CHATTAB_POINTER_TITLE", "CHATTAB_POINTER", "CHATS_TAB_AWAY", "CHATS_TAB_AWAY_TIP",
+			"CHATWIN_NEW_IN", "CHATSET_TITLE", "CHATSET_TIP", "CHATSET_SWITCH_TIP", "CHATSET_BACK", "CHATSET_CHATS_ON", "CHATSET_CHATS_OFF",
+			"CHATSET_SHOWN", "CHATSET_MUTED", "CHATSET_MUTE_TIP", "CHATSET_WHERE", "CHATSET_WHERE_NEXT", "CHATSET_WHERE_TIP", "CHATSET_TAB" }) do
+			assert(type(rawget(ns.L, k)) == "string" and rawget(ns.L, k) ~= "", "English: " .. k)
+			assert(type(rawget(pt.L, k)) == "string" and rawget(pt.L, k) ~= rawget(ns.L, k), "pt-BR: " .. k)
+			eq(Codes(rawget(pt.L, k)), Codes(rawget(ns.L, k)), "codes: " .. k)
+		end
+		-- The Realm tab's chats page's own words, gone with it (the languages' files hold no line
+		-- English lacks: their test); the words that still name it name the Chat tab.
+		for _, k in ipairs({ "CHATS_OPEN_WINDOW", "CHATS_TAB_MAKE", "CHATS_WRITE", "CHATS_WRITE_TO", "CHATS_EMPTY", "CHATS_LINE_TIP" }) do
+			eq(rawget(ns.L, k), nil, "English: " .. k); eq(rawget(pt.L, k), nil, "pt-BR: " .. k)
+		end
+		for _, k in ipairs({ "CHATS_TAB_AWAY_TIP", "CHAN_FLOOD_NOTICE", "HELP_CHATS" }) do
+			assert(not ns.L[k]:find("Realm", 1, true) and not pt.L[k]:find("Reino", 1, true), "no Realm page in " .. k)
+			assert(ns.L[k]:find(ns.L.TAB_CHAT, 1, true) and pt.L[k]:find(pt.L.TAB_CHAT, 1, true), "the Chat tab in " .. k)
+		end
+		eq(ns.L.CHATWIN_NEW, "Create New Window", "the game's menu name /oly chatwindow falls back to: untouched")
+		eq(pt.L.CHATWIN_NEW, "Nova janela")
+		eq(rawget(ns.L, "CHATWIN_TITLE"), nil, "no title of its own"); eq(rawget(pt.L, "CHATWIN_TITLE"), nil)
+		eq(pt.L.CHATWIN_NEW_LINES, "%d novas")
+		-- The tab's label: the same word in every language Olympus carries, but French.
+		eq(ns.L.TAB_CHAT, "Chat"); eq(pt.L.TAB_CHAT, "Chat")
+		for code, word in pairs({ deDE = "Chat", esES = "Chat", frFR = "Discussion" }) do
+			local src = assert(ReadFile(ADDON_DIR .. "Locales/" .. code .. ".lua"))
+			assert(src:find('\tTAB_CHAT = "' .. word .. '",', 1, true), code)
+		end
+		-- (The review of the Chat tab: the help page's line for each tab, the Chat tab's too, in each
+		-- language that has the others: it read in English among German, Spanish or French lines.)
+		local helpTabs = {}
+		for tab, help in ReadFile(ADDON_DIR .. "UI.lua"):gmatch('L%.TAB_(%u+) %.%. ": " %.%. L%.HELP_TAB_(%u+)') do
+			eq(help, tab, "the help page's line for the " .. tab .. " tab")
+			helpTabs[#helpTabs + 1] = tab
+		end
+		assert(#helpTabs >= 5, "the help page's tab lines: " .. table.concat(helpTabs, " "))
+		-- Locales.lua, then the language's own file, as a game in that language loads them.
+		local function Lang(code, file)
+			local lns = {}
+			local saved = GetLocale
+			GetLocale = function() return code end
+			local okLang, errLang = pcall(function()
+				assert(loadfile(ADDON_DIR .. "Locales.lua"))("Olympus", lns)
+				if file then assert(loadfile(ADDON_DIR .. "Locales/" .. file .. ".lua"))("Olympus", lns) end
+			end)
+			GetLocale = saved
+			if not okLang then error(errLang, 0) end
+			return lns.L
+		end
+		local english = Lang("enUS")
+		for code, file in pairs({ deDE = "deDE", esES = "esES", esMX = "esES", frFR = "frFR" }) do
+			local lang = Lang(code, file)
+			for _, tab in ipairs(helpTabs) do
+				local k = "HELP_TAB_" .. tab
+				assert(lang[k] ~= english[k], code .. " translates " .. k)
+			end
+			for _, chan in ipairs({ "CHAN_ALL", "CHAN_CAPTAINS", "CHAN_LORDS" }) do
+				assert(lang.HELP_TAB_CHAT:find("[" .. lang[chan] .. "]", 1, true), code .. ": the channel's name as the language has it, " .. lang[chan])
+			end
+		end
+		-- (The review of the page's removal: the help's line for the Realm tab still listed the Olympus
+		-- chats among the Realm's own, the Chat tab's line right under it.) It says the Realm links
+		-- them, on the Chat tab, by the tab's name in each language.
+		for code, where in pairs({ enUS = "the Chat tab", ptBR = "aba Chat", deDE = "Reiter Chat", esES = "pestaña Chat",
+			esMX = "pestaña Chat", frFR = "onglet Discussion" }) do
+			local file = ({ deDE = "deDE", esES = "esES", esMX = "esES", frFR = "frFR" })[code]
+			local lang = Lang(code, file)
+			assert(lang.HELP_TAB_REALM:find(where, 1, true) and lang.HELP_TAB_REALM:find(lang.TAB_CHAT, 1, true),
+				code .. ": the Realm's help line names the Chat tab: " .. lang.HELP_TAB_REALM)
+		end
+		eq(select(2, ns.L.CHATS_TAB_STEPS:gsub("%%s", "")), 2, "the main tab, Create New Window")
+		eq(select(2, ns.L.CHATTAB_POINTER:gsub("%%s", "")), 1, "Create New Window")
+		-- The help's page (UI.ShowHelp): the Chat tab's line after the Realm's.
+		assert(ReadFile(ADDON_DIR .. "UI.lua"):find('"  " .. L.TAB_REALM .. ": " .. L.HELP_TAB_REALM,\n\t\t"  " .. L.TAB_CHAT .. ": " .. L.HELP_TAB_CHAT,', 1, true),
+			"the help page's line")
+		-- /oly help: the line after /oly chatwindow's.
+		local printed = {}
+		local savedPrint, savedNsPrint = print, ns.Print
+		print = function(s) printed[#printed + 1] = tostring(s) end
+		ns.Print = function(s) printed[#printed + 1] = tostring(s) end
+		local ok, err = pcall(SlashCmdList.OLYMPUS, "no-such-command")
+		print, ns.Print = savedPrint, savedNsPrint
+		if not ok then error(err, 0) end
+		local at
+		for i, p in ipairs(printed) do if p == L.HELP_CHATWIN then at = i end end
+		assert(at, "the help"); eq(printed[at + 1], L.HELP_TALK)
+		-- README and the CurseForge page: the section before the Board's, the command's row after /oly chat's, the Shift-click.
+		for _, path in ipairs({ "README.md", "docs/CURSEFORGE.md" }) do
+			local doc = assert(ReadFile(ROOT .. path))
+			local section, board = doc:find("\n### The Chat tab (1.1.1)\n", 1, true), doc:find("\n### The Board: who is looking for a group", 1, true)
+			assert(section and board and section < board, path .. ": the section, before the Board's")
+			local chat = doc:find("\n| `/oly chat on\\|off` |", 1, true)
+			assert(chat, path .. ": /oly chat's row")
+			local nextRow = doc:find("\n", chat + 1, true)
+			assert(doc:sub(nextRow, nextRow + 20):find("| `/oly talk", 1, true), path .. ": /oly talk's row right after it")
+			assert(doc:find("Shift-click the minimap button for the Chat tab", 1, true), path .. ": the Shift-click")
+			assert(not doc:find("### The chat window (1.1.1)", 1, true), path .. ": no chat window section any more")
+			-- What the tab is now, in the same words on both pages.
+			local flat = doc:gsub("%s+", " ")
+			for _, phrase in ipairs({ "The Olympus chats in a tab of the Olympus window, **Chat**, right after the Realm",
+				"each opens the Olympus window on its Chat tab, on that channel", "the same command again closes the window",
+				"On top, where the other tabs show the army's counts, the search box",
+				-- (Changed on purpose, the author's ask: the pills' row where the other tabs have their
+				-- column titles is gone; the switch and the gear on the search's row, the settings, the
+				-- Realm tab's link where its page's lines were.)
+				"On the same row, right of it: for a rank that reads more than one channel, a small switch with the channel shown, in its colour, and **+N**",
+				"There is no row of channels: most players read [Olympus] alone, and the lines take that room",
+				"The pinned line shows over the lines, as on the Realm tab, and takes no room while nothing is pinned",
+				"or click **the Olympus chats** on the Realm tab: each opens the Olympus window on its Chat tab",
+				-- (Changed on purpose, the review of the page's removal: the pages no longer mention the
+				-- Realm tab's page of the chats, not even as gone (the brief: they do not mention it); the
+				-- count of the hidden lines is a strip over the lines, taking no room without one.)
+				"Over the lines, like the pinned line, how many your filter hides in the channel (no room while it hides none), and a click there shows them all (another hides them again)",
+				"**Settings**: the gear at the end of the top row shows them in place of the lines",
+				"a click mutes it there or shows it again, as `/oly mute`",
+				"a click moves it to the next chat window open in your game, then back to the main one, as `/oly chatwindow`",
+				"Each choice is the one its command makes, kept where it always was, so nothing chosen before 1.1.1 is lost",
+				"its **x** puts it away for good, on every character: the settings and `/oly chatwindow tab` still make the tab",
+				"(this tab has no detail box)", "**The box** runs across the bottom, where the other tabs have their buttons, with no Send button: Enter sends",
+				"**Add an Olympus tab to the game chat**", "a small Olympus pointer by your main chat tab says right-click it, Create New Window, and name it Olympus",
+				"It only reads the game's chat windows to see the new one appear", "With the gamepad UI there is no pointer",
+				-- (The review of the Chat tab: the line's x and the window of one's own; the Realm page's click.)
+				"The line stays away while you send a channel to a chat window of your own (`/oly chatwindow`), and its **x** puts it away for good, on every character",
+				"The click shows you where on the Chat tab, as its **Add an Olympus tab to the game chat** line does",
+				-- (The review of the Chat tab: the order UI.lua's SIDE_LEFT_ORDER moves them in, the
+				-- Workshop first; the pages said the Treasury first.)
+				"his Treasury moves to the window's left edge (for the author, his Workshop goes there first)",
+				"the Workshop and then the Treasury move to the window's left edge, low, until the rest fit: the King's view with the Chat tab moves the Treasury alone, the author's preview both",
+				"| `/oly talk [olympus\\|captains\\|lords]` | open or close the Olympus window on its Chat tab, on that channel" }) do
+				assert(flat:find(phrase, 1, true), path .. ": " .. phrase)
+			end
+			for _, gone in ipairs({ "340 x 300 to 900 x 1000", "Olympus chat window", "the Treasury and then the author's Workshop",
+				"where the other tabs have their column titles", "Realm tab's chats page", "**Open the Chat tab**", "**Write in [Olympus]**",
+				"a line under the channels", "Realm tab's Olympus chats", "Realm tab's chats say", "on the chats page",
+				"members seen online, the Olympus chats' lines", "newest first, even what was said",
+				"page of the chats", "Realm tab's page", "gone since 1.1.1", "offers everything it did" }) do
+				assert(not flat:find(gone, 1, true), path .. ": no more " .. gone)
+			end
+		end
+		local sections = {}
+		for _, path in ipairs({ "README.md", "docs/CURSEFORGE.md" }) do
+			sections[#sections + 1] = assert(ReadFile(ROOT .. path)):match("\n### The Chat tab %(1%.1%.1%)\n(.-)\n### The Board")
+		end
+		assert(sections[1] and sections[1] == sections[2], "the same section on both pages")
+	end)
+
+	---------------------------------------------------------------------------
+	-- The review of the 1.1.1 chat window: the view held by the line read at a channel's 100 lines,
+	-- no member star for a guild a line only claims, the mute kept by a line written in the window,
+	-- an alt's lines under his name, a note never replacing a draft, and the widget calls the
+	-- window's asks rest on.
+	---------------------------------------------------------------------------
+	do
+		local STAR = "|TInterface\\AddOns\\Olympus\\media\\borders\\star:14:14|t"
+		local function BubbleOf(f, e)
+			for _, b in ipairs(Visible(f.bubbles)) do if b.entry == e then return b end end
+		end
+		-- The bubble at the view's top, and how far its top sits from the view's.
+		local function AtTop(f)
+			local at = f.scroll:GetVerticalScroll()
+			for _, b in ipairs(Visible(f.bubbles)) do
+				if Top(b) + b:GetHeight() > at then return b.entry, Top(b) - at end
+			end
+		end
+		-- A line from the channel through Channels.Receive, whose history keeps 100 (the oldest goes);
+		-- the channel muted in chat, so the line only goes to the history (no chat frame, no flood
+		-- guard: nothing left for a later test). Then the window's own redraw, and the client
+		-- measuring the new range.
+		local arrivals = 0
+		local function Arrive(w, f, text)
+			arrivals = arrivals + 1
+			local sender = "Newcomer" .. arrivals .. "-Realm"
+			local _, why = ns.Channels.Receive("CHANNEL", sender, ns.Codec.EncodeChat("A", "Olympus Zeus", 700 + arrivals, "", text), 9000 + arrivals)
+			eq(why, "muted", "kept")
+			w.fire("CHAT_CHANGED", "A"); w.fire("CHAT_LINE", "A", sender, text)
+			f:Fire("OnUpdate", 0.3)
+			f.scroll:Settle()
+		end
+		test("1.1.1 review: scrolled up in a channel at its 100 lines, the line being read stays in its place while new lines drop the oldest (the next one's place when it goes); a resize keeps it too", function()
+			WithWindow(function(w)
+				ns.db.addonChat = true
+				ns.db.chatMute = { A = true }
+				local list = {}
+				for i = 1, 100 do
+					list[i] = Line(T0 + i * 400, (i % 2 == 0) and "Aa-Realm" or "Bb-Realm", "line number " .. i .. " " .. ("words "):rep(i % 7 * 5))
+				end
+				ns.rdb.chat = { A = list }
+				local f = w.CW.Open("A")
+				local s = f.scroll
+				s:Settle()
+				s:SetVerticalScroll(math.floor(s:GetVerticalScrollRange() / 2))
+				local read, off = AtTop(f)
+				assert(read and read ~= list[1], "a line in the middle")
+				for k = 1, 3 do Arrive(w, f, "new " .. k) end
+				eq(#ns.rdb.chat.A, 100, "Channels keeps 100")
+				assert(BubbleWith(f, "new 3"), "the new lines drawn")
+				eq(BubbleWith(f, "line number 1 "), nil, "the oldest gone")
+				local now, nowOff = AtTop(f)
+				eq(now, read, "the same line at the view's top")
+				eq(nowOff, off, "in the same place")
+				eq(f.newPill:IsShown(), true); eq(f.newPill:GetText(), L.CHATWIN_NEW_LINES:format(3))
+				-- The line read taken off the view (the moderators took its writer off: net-off): the next
+				-- line under it stays where it was.
+				local saved = { any = ns.Moderation.Any, hides = ns.Moderation.Hides }
+				local ok, err = pcall(function()
+					local gone = read.sender
+					local after
+					for _, b in ipairs(Visible(f.bubbles)) do
+						if Top(b) > Top(BubbleOf(f, read)) and b.entry.sender ~= gone then after = b.entry break end
+					end
+					local afterOff = Top(BubbleOf(f, after)) - s:GetVerticalScroll()
+					ns.Moderation.Any = function() return true end
+					ns.Moderation.Hides = function(who) if who == gone then return { kind = "c" } end end
+					w.fire("NETOFF_CHANGED", {})
+					f:Fire("OnUpdate", 0.3)
+					s:Settle()
+					eq(BubbleOf(f, read), nil, "(off the view)")
+					eq(Top(BubbleOf(f, after)) - s:GetVerticalScroll(), afterOff, "the next line where it was")
+				end)
+				ns.Moderation.Any, ns.Moderation.Hides = saved.any, saved.hides
+				if not ok then error(err, 0) end
+				w.fire("NETOFF_CHANGED", {})
+				f:Fire("OnUpdate", 0.3)
+				s:Settle()
+				-- Reading the oldest kept, at the top of the history: when it goes, the view stays at the
+				-- top, the next line whole in it.
+				local oldest, second = ns.rdb.chat.A[1], ns.rdb.chat.A[2]
+				s:SetVerticalScroll(Top(BubbleOf(f, oldest)) + 4)
+				eq((AtTop(f)), oldest)
+				Arrive(w, f, "new 4")
+				eq(BubbleOf(f, oldest), nil, "dropped")
+				eq(s:GetVerticalScroll(), 0, "at the top")
+				eq((AtTop(f)), second); assert(Top(BubbleOf(f, second)) - s:GetVerticalScroll() >= 0, "whole in the view")
+				-- A narrower window (the Olympus window the tab is in): every line above wraps on more
+				-- lines; once the client measured the longer range, the line read is back in its place.
+				s:SetVerticalScroll(s:GetVerticalScrollRange() - 40)
+				read, off = AtTop(f)
+				local before = f.content:GetHeight()
+				w.CW.Window():SetSize(300, 424)
+				f:Fire("OnUpdate", 0.3)
+				s:Settle()
+				assert(f.content:GetHeight() > before, "(taller)")
+				now, nowOff = AtTop(f)
+				eq(now, read); eq(nowOff, off)
+				-- Followed again at the bottom: the newest line, as ever.
+				s:SetVerticalScroll(s:GetVerticalScrollRange())
+				Arrive(w, f, "new 5")
+				eq(s:GetVerticalScroll(), s:GetVerticalScrollRange())
+				eq(f.newPill:IsShown(), false)
+			end)
+		end)
+
+		test("1.1.1 review: no member star for a guild a line only claims (an unknown name in a made-up Olympus guild, a stranger in our guild's name); our roster, a census and the King's names still give theirs; a redraw records no guild claim", function()
+			WithWindow(function(w)
+				local saved = { byName = ns.Roster.byName, steward = ns.King.IsStewardName, loginAt = ns.Comm.loginAt }
+				local ok, err = pcall(function()
+					local bns = setmetatable({ On = function() end, RegisterEvent = function() end }, { __index = ns })
+					assert(loadfile(ADDON_DIR .. "Borders.lua"))("Olympus", bns)
+					ns.Borders = bns.Borders
+					ns.db.addonChat = true
+					ns.db.chatMute = { A = true }
+					ns.Roster.byName = { ["Plain Guy-Realm"] = 4, ["Soldier-Realm"] = 3 }
+					ns.King.IsStewardName = function(n) return n == "Stew Ard-Realm" end
+					ns.rdb.guilds["Olympus Lone"] = Vouched({ guild = "Olympus Lone", leader = "Loner", officers = { { name = "Lone Capt" }, { name = "Plain Guy" } }, realm = "Realm",
+						t = ns.Now() }, "W1-Realm")
+					ns.rdb.chat = { A = {
+						Line(T0, "Plain Guy-Realm", "a guildmate speaks"),
+						Line(T0 + 100, "Stranger-Realm", "a stranger in our guild's name"),
+						Line(T0 + 200, "Lone Capt-Realm", "a captain his census names", { guild = "Olympus Lone" }),
+						Line(T0 + 300, "Stew Ard-Realm", "the king's steward", { guild = "Olympus" }),
+						Line(T0 + 400, "Drifter-Realm", "a drifter's claim", { guild = "Olympus Nowhere" }),
+					} }
+					-- Anyone on the channel: Channels keeps his [Olympus] line, unverified.
+					eq(ns.IsFederation("Olympus Nowhere"), true, "(a name the Olympus rule takes)")
+					local have, verified = ns.Channels.VerifiedLevel("Outsider-Realm", "Olympus Nowhere")
+					eq(have, 1); eq(verified, false)
+					local _, why = ns.Channels.Receive("CHANNEL", "Outsider-Realm", ns.Codec.EncodeChat("A", "Olympus Nowhere", 42, "", "hello from outside"), 1000)
+					eq(why, "muted", "kept")
+					local f = w.CW.Open("A")
+					local function Header(text)
+						local b = BubbleWith(f, text)
+						assert(b, text)
+						return b.who:GetText()
+					end
+					local h = Header("hello from outside")
+					assert(not h:find(STAR, 1, true) and not h:find("|A:", 1, true), "no mark: " .. h)
+					assert(h:find("Outsider", 1, true) and h:find("<Olympus Nowhere>", 1, true), "his name and the guild his line names still show: " .. h)
+					h = Header("a stranger in our guild's name")
+					assert(not h:find(STAR, 1, true), "our guild's name, not in our roster: " .. h)
+					assert(Header("a guildmate speaks"):find(STAR, 1, true), "in our roster: the star")
+					assert(Header("a captain his census names"):find(STAR, 1, true), "named in his guild's census: the star")
+					assert(Header("the king's steward"):find(STAR, 1, true), "the King's Steward, by the name Channels verifies him by: the star")
+					-- Our guild's name spelled another way, by a name our census names but our roster lacks:
+					-- not one of ours (Channels says 0), no mark from the census either.
+					ns.rdb.guilds["Olympus II"] = Vouched({ guild = "Olympus II", leader = "Old Boss", officers = {}, realm = "Realm", t = ns.Now() },
+						"W1-Realm", "W2-Realm")
+					ns.Comm.loginAt = ns.Now() - ns.Data.CROWN_AFTER - 1
+					eq(ns.Channels.VerifiedLevel("Old Boss-Realm", "OLYMPUS II"), 0, "(not one of ours)")
+					eq(ns.Borders.MarkOfName("Old Boss-Realm", "OLYMPUS II"), nil, "no mark")
+					-- A guildmate of ours speaking for another guild, even one whose census names him: no mark
+					-- (Channels says 0 for him there).
+					eq(ns.Data.KnownRank("Plain Guy-Realm", "Olympus Lone"), 1, "(its census names him)")
+					eq(ns.Channels.VerifiedLevel("Plain Guy-Realm", "Olympus Lone"), 0, "(not his guild)")
+					eq(ns.Borders.MarkOfName("Plain Guy-Realm", "Olympus Lone"), nil, "no mark")
+					eq(ns.Borders.MarkOfName("Plain Guy-Realm", "Olympus II"), "member", "his own guild: the star")
+					-- Drawn again: the window left no guild claim (Channels.VerifiedLevel's Data.ClaimGuild
+					-- would have, and his next line for his real guild would be refused as forged).
+					w.CW.Render()
+					eq(ns.Data.ClaimGuild("Drifter-Realm", "Olympus Zeus"), true, "no claim left by the window")
+				end)
+				ns.Roster.byName, ns.King.IsStewardName, ns.Comm.loginAt = saved.byName, saved.steward, saved.loginAt
+				if not ok then error(err, 0) end
+			end)
+		end)
+
+		test("1.1.1 review: a line written in the window keeps its channel muted in chat, the privacy warning's Send too; /ol typed in chat still unmutes it", function()
+			WithWindow(function(w)
+				local saved = { room = ns.Comm.ChatRoom, warned = ns.db.chatWarned }
+				local ok, err = pcall(KeepSendGap, function()
+					WithLane(function(sent)
+						ns.db.addonChat = true
+						ns.db.chatMute = { A = true }
+						ns.db.chatWarned = { A = true }
+						ns.Comm.ChatRoom = function() return 3 end
+						local clock = 1e7
+						GetTime = function() return clock end
+						local f = w.CW.Open("A")
+						f.input:SetText("from the window")
+						f.input:Fire("OnEnterPressed")
+						eq(#sent, 1, "sent: " .. table.concat(w.printed, " / ")); assert(sent[1]:find("from the window", 1, true), sent[1])
+						eq(ns.db.chatMute.A, true, "still muted in chat")
+						assert(not Said(w, L.CHAN_UNMUTED:format(L.CHAN_ALL)), "no word of unmuting")
+						f:Fire("OnUpdate", 0.3)
+						local b = BubbleWith(f, "from the window")
+						assert(b and b.mine, "in the window, ours")
+						-- The first line in a channel, held by the privacy warning: its Send keeps the mute too.
+						ns.db.chatWarned = {}
+						local dialogs = {}
+						ns.ShowDialog = function(which, _, _, data) dialogs[#dialogs + 1] = { which = which, data = data } end
+						clock = clock + 10
+						f.input:SetText("a first line")
+						f.input:Fire("OnEnterPressed")
+						eq(dialogs[1].which, "OLYMPUS_CHAT_PRIVACY"); eq(#sent, 1, "held")
+						clock = clock + 10
+						ns.Channels.Confirm(dialogs[1].data, true)
+						eq(#sent, 2, "sent on the OK"); eq(ns.db.chatMute.A, true, "still muted")
+						-- /ol typed in chat: unmuted, as ever.
+						clock = clock + 10
+						ns.Channels.Send("A", "typed in chat")
+						eq(#sent, 3); eq(ns.db.chatMute.A, nil, "unmuted")
+						assert(Said(w, L.CHAN_UNMUTED:format(L.CHAN_ALL)), "and told")
+					end)
+				end)
+				ns.Comm.ChatRoom, ns.db.chatWarned = saved.room, saved.warned
+				if not ok then error(err, 0) end
+			end)
+		end)
+
+		test("1.1.1 review: a line another character of the account wrote shows under his name, on the left, with a whisper; this character's own as You on the right", function()
+			WithWindow(function(w)
+				ns.rdb.chat = { A = {
+					Line(T0, "Altchar-Realm", "written by my alt", { mine = true, guild = "Olympus Zeus" }),
+					Line(T0 + 10, "Soldier-Realm", "written by me", { mine = true }),
+				} }
+				local f = w.CW.Open("A")
+				local alt, me = BubbleWith(f, "written by my alt"), BubbleWith(f, "written by me")
+				eq(alt.mine, false)
+				assert(alt:Anchor("TOPLEFT") and not alt:Anchor("TOPRIGHT"), "the alt's: left")
+				local h = alt.who:GetText()
+				assert(h:find("Altchar", 1, true) and h:find("<Olympus Zeus>", 1, true) and not h:find(L.CHATWIN_YOU, 1, true), h)
+				eq(alt.header.whisper, "Altchar", "a click whispers him")
+				eq(me.mine, true); eq(me.who:GetText(), L.CHATWIN_YOU)
+				assert(me:Anchor("TOPRIGHT") and not me:Anchor("TOPLEFT"), "ours: right")
+				-- The same history, played from the alt.
+				AsSoldier("Altchar")
+				w.CW.Render()
+				eq(BubbleWith(f, "written by my alt").who:GetText(), L.CHATWIN_YOU)
+				assert(BubbleWith(f, "written by me").who:GetText():find("Soldier", 1, true))
+			end)
+		end)
+
+		test("1.1.1 review: a note's click never replaces what the player is writing (the draft and the note stay, and he is told); into an empty box it goes", function()
+			WithWindow(function(w)
+				local f = w.CW.Open("A")
+				w.fire("CHAT_SEND_FAILED", "A", "moved", "my lost line", 0)
+				w.CW.Render()
+				local moved = L.CHATWIN_NOT_SENT:format(L.CHATWIN_WHY_MOVED)
+				f.input:SetText("a new draft I am typing")
+				RowWith(f, moved):Click()
+				eq(f.input:GetText(), "a new draft I am typing", "the draft stays")
+				assert(RowWith(f, moved), "the note stays")
+				assert(Said(w, L.CHATWIN_PUT_BACK_BUSY), "told")
+				f.input:SetText("   ")
+				RowWith(f, moved):Click()
+				eq(f.input:GetText(), "my lost line", "an empty box: back in it")
+				eq(RowWith(f, moved), nil, "the note gone")
+				eq(#w.focus, 0, "never focused")
+			end)
+		end)
+
+		-- (Changed on purpose: no resize bounds of its own, the tab takes its window's size; the
+		-- Olympus window is the one kept on the screen.)
+		test("1.1.1 review: what the Chat tab's asks rest on is set: a bubble's links and clicks, a long word's wrap, the window kept on the screen, the box's byte cap", function()
+			WithWindow(function(w)
+				ns.rdb.chat = { A = { Line(T0, "Aa-Realm", "look " .. MOONCLOTH_TEXT), Line(T0 + 10, "Soldier-Realm", "mine", { mine = true }) } }
+				local f = w.CW.Open("A")
+				local bs = Visible(f.bubbles)
+				eq(#bs, 2)
+				for _, b in ipairs(bs) do
+					eq(b.hyperlinks, true, "its links answer the mouse (tooltip, Shift-click)")
+					eq(b.mouse, true, "the mouse on: its links, and the click that shows a hidden line")
+					eq(b.body.nonSpaceWrap, true, "a long word or link wraps inside the bubble")
+					eq(b.body.wrap, true)
+				end
+				eq(f.resizeBounds, nil, "no size of its own: its window's")
+				eq(w.CW.Window().clamped, true, "the Olympus window kept on the screen")
+				eq(f.input.maxBytes, ns.Codec.CHAT_PARTS * 210 + 1, "the box holds what Channels.Send can send")
+				-- (The toolkit here answers links and mouse clicks only where they are on, as the client.)
+				local plain = NewWidget("Frame", nil, UIParent)
+				local fired = 0
+				plain:SetScript("OnHyperlinkEnter", function() fired = fired + 1 end)
+				plain:SetScript("OnMouseUp", function() fired = fired + 1 end)
+				plain:Fire("OnHyperlinkEnter", MOONCLOTH_LINK); plain:Fire("OnMouseUp", "LeftButton")
+				eq(fired, 0, "a plain frame: neither")
+				plain:SetHyperlinksEnabled(true)
+				plain:Fire("OnHyperlinkEnter", MOONCLOTH_LINK)
+				eq(fired, 0, "links on, the mouse off: nothing")
+				plain:EnableMouse(true)
+				plain:Fire("OnHyperlinkEnter", MOONCLOTH_LINK); plain:Fire("OnMouseUp", "LeftButton")
+				eq(fired, 2)
+			end)
+		end)
+
+		test("1.1.1 review: the new words in English and pt-BR, and the pages say what changed", function()
+			local pt = {}
+			local savedLocale = GetLocale
+			GetLocale = function() return "ptBR" end
+			local okPt, errPt = pcall(function() assert(loadfile(ADDON_DIR .. "Locales.lua"))("Olympus", pt) end)
+			GetLocale = savedLocale
+			if not okPt then error(errPt, 0) end
+			for _, k in ipairs({ "CHATWIN_PUT_BACK_BUSY", "CHATWIN_MUTED_TIP" }) do
+				assert(type(rawget(ns.L, k)) == "string" and rawget(ns.L, k) ~= "", "English: " .. k)
+				assert(type(rawget(pt.L, k)) == "string" and rawget(pt.L, k) ~= rawget(ns.L, k), "pt-BR: " .. k)
+				eq(rawget(pt.L, k):find("%", 1, true), nil, "no format code: " .. k)
+			end
+			assert(ns.L.CHATWIN_MUTED_TIP:find("keeps it muted", 1, true), ns.L.CHATWIN_MUTED_TIP)
+			for _, path in ipairs({ "README.md", "docs/CURSEFORGE.md" }) do
+				local doc = assert(ReadFile(ROOT .. path)):gsub("%s+", " ")
+				assert(doc:find("a line you write here keeps it muted in chat", 1, true), path .. ": the mute")
+				assert(doc:find("the line you are reading stays in its place while new lines come in and the oldest go", 1, true), path .. ": the scroll")
+				assert(doc:find("and only where the guild a line names is proven", 1, true), path .. ": the marks")
+				assert(doc:find("A name whose Olympus guild cannot be checked", 1, true), path .. ": no mark then")
+				assert(not doc:find("from the same facts as the borders and the nameplate marks", 1, true), path .. ": no longer the same facts")
+				assert(doc:find("a click puts it back in the box when the box is empty", 1, true), path .. ": the note")
+				assert(doc:find("a line another of your characters wrote shows under that character's name, on the left", 1, true), path .. ": an alt's line")
+			end
+		end)
+	end
+
+	---------------------------------------------------------------------------
+	-- 1.1.1, the chats inside the Olympus window (the author's ask after trying the window of their
+	-- own): the Chat tab's place in each look, its search, its ways in, and the way to the Olympus
+	-- tab of the game's chat (Olympus's pointer, the game's chat windows only read).
+	---------------------------------------------------------------------------
+	do
+		local function Grey(s) return "|cff9d9d9d" .. s .. "|r" end
+		local function Shown(frame) return frame ~= nil and frame:IsShown() end
+
+		-- (Changed on purpose, the author's ask: "remove this Olympus with the underline, taking space
+		-- and shrinking the conversations". The channel pills' row on the column titles' row is gone:
+		-- the lines start where the list's box starts without column titles (old look -56, was -80
+		-- under the pills; HD -60, was -85), the pinned line 3 under that (-59, was -83). On the top
+		-- row the gear takes the search box's end (it ends 24 further left, -50, was -26), and a rank
+		-- that reads more than one channel has the switch left of the gear, never a row of its own.)
+		test("1.1.1 Chat tab: no soldiers' counts, no detail box, no column titles or buttons; the search where the counts were, the channels' switch and the gear at its end, no row of pills, the lines over the list and the detail box, the box across the buttons' row, in both looks", function()
+			WithWindow(function(w)
+				ns.Channels.TabState = function() return "open" end -- (no Olympus tab line: the places alone)
+				ns.Channels.Pin = function() return nil end
+				ns.rdb.chat = { A = { Line(T0, "Aa-Realm", "hello") } }
+				local f = w.CW.Open()
+				local main = OlympusFrame
+				eq(main.style, "old")
+				for _, key in ipairs({ "total", "sub", "headerHover", "listBox", "scroll", "detail", "colHeader" }) do
+					eq(Shown(main[key]), false, "the Chat tab has no " .. key)
+				end
+				for _, b in ipairs(main.buttons) do eq(b:IsShown(), false, "no buttons") end
+				for _, b in ipairs(main.detailButtons) do eq(b:IsShown(), false) end
+				-- The search where the counts were (right of the portrait), the gear at that row's end
+				-- (HEADER_RIGHT 26 from the window's right), no pills and, for a soldier's one channel,
+				-- no switch; the lines from the list box's top (GEOMETRY.old.box: -56) down to the buttons'
+				-- row (8 + 22 + 4), the box across that row (its buttons' x 8, margin 16).
+				local s = f.search:Anchor("TOPLEFT")
+				eq(s[2], f); eq(s[5], -30); assert(s[4] > main.headerX, "right of the portrait")
+				eq(f.gear:Anchor("TOPRIGHT")[4], -26); eq(f.gear:Anchor("TOPRIGHT")[5], -30); eq(f.gear:IsShown(), true)
+				eq(f.search:Anchor("TOPRIGHT")[4], -50, "the search ends where the gear begins"); eq(f.search:Anchor("TOPRIGHT")[5], -30)
+				eq(f.searchLabel:GetText(), L.SEARCH); eq(f.searchLabel:Anchor("TOPLEFT")[4], main.headerX)
+				eq(f.pills, nil, "no row of pills"); eq(f.switch:IsShown(), false, "one channel: no switch")
+				eq(f.box:Anchor("TOPLEFT")[4], 6); eq(f.box:Anchor("TOPLEFT")[5], -56, "the lines take the pills' row")
+				eq(f.box:Anchor("BOTTOMRIGHT")[4], -6); eq(f.box:Anchor("BOTTOMRIGHT")[5], 34, "down to the buttons' row: the detail box's room too")
+				local bl, br = f.input:Anchor("BOTTOMLEFT"), f.input:Anchor("BOTTOMRIGHT")
+				eq(bl[4], 18); eq(bl[5], 8); eq(br[4], -18); eq(br[5], 8); eq(f.input:GetHeight(), 22)
+				eq(f.input:IsShown(), true); eq(f.send, nil, "no Send button")
+				assert(f.input:GetRight() - f.input:GetLeft() >= main:GetWidth() - 40, "across the row")
+				assert(BubbleWith(f, "hello"), "the lines")
+				-- The pinned line over the lines pushes them down while it shows, and takes no room without it.
+				ns.Channels.Pin = function() return { sender = "Kingly Man-Realm", guild = "Olympus", text = "raid", setAt = ns.Now(), expires = ns.Now() + 60 } end
+				w.CW.Render()
+				eq(f.pin:Anchor("TOPLEFT")[5], -59); assert(f.box:Anchor("TOPLEFT")[5] < -56)
+				ns.Channels.Pin = function() return nil end
+				w.CW.Render()
+				eq(f.pin:IsShown(), false); eq(f.box:Anchor("TOPLEFT")[5], -56, "no pin: no room kept")
+				-- A Captain (two channels): the switch on the same row, left of the gear, the search box
+				-- shorter; still no row of its own.
+				AsCaptain()
+				w.CW.Render()
+				eq(f.switch:IsShown(), true); eq(f.switch:Anchor("TOPRIGHT")[4], -50); eq(f.switch:Anchor("TOPRIGHT")[5], -30)
+				eq(f.switch:GetHeight(), 20, "the search box's height")
+				eq(f.search:Anchor("TOPRIGHT")[4], -50 - f.switch:GetWidth() - 4, "the search ends where the switch begins")
+				eq(f.box:Anchor("TOPLEFT")[5], -56, "no row of its own")
+				AsSoldier()
+				w.CW.Render()
+				-- Back on the Census: its header, list, detail box and buttons again; the tab hidden.
+				w.UI.SelectTab("census")
+				eq(f:IsShown(), false)
+				for _, key in ipairs({ "total", "sub", "listBox", "scroll", "detail", "colHeader" }) do eq(Shown(main[key]), true, key) end
+				eq(main.buttons[1]:IsShown(), true)
+				-- A soldier who leaves Olympus: the Join screen, no Chat tab.
+				w.UI.SelectTab("chat")
+				GetGuildInfo = function() return "Wanderers", "Member", 3 end
+				w.UI.Refresh()
+				eq(main.tab, "census"); eq(f:IsShown(), false)
+				for _, tab in ipairs(main.tabs) do eq(tab:IsShown(), false) end
+				AsSoldier()
+				main:Hide()
+				-- The HD look (next to Forever's Guild & Communities window): its numbers (GEOMETRY.hd:
+				-- column titles at -59, 24 tall; buttons at x 5, y 5, 20 tall, margin 10).
+				local world = ForeverWorld(true)
+				CommunitiesFrame:Show(); world.buttons[1]:Click()
+				local hd = OlympusFrameHD
+				local g = w.CW.Open("A")
+				eq(w.CW.Window(), hd); eq(hd.tab, "chat"); eq(g, OlympusFrameHDChat); eq(g:GetParent(), hd)
+				for _, key in ipairs({ "total", "sub", "listBox", "scroll", "detail", "colHeader" }) do eq(Shown(hd[key]), false, "HD: " .. key) end
+				eq(g.gear:Anchor("TOPRIGHT")[4], -26); eq(g.switch:IsShown(), false)
+				eq(g.box:Anchor("TOPLEFT")[5], -60, "the list's box without column titles (topNoCols)"); eq(g.box:Anchor("BOTTOMRIGHT")[5], 29)
+				bl, br = g.input:Anchor("BOTTOMLEFT"), g.input:Anchor("BOTTOMRIGHT")
+				eq(bl[4], 15); eq(bl[5], 5); eq(br[4], -15); eq(g.input:GetHeight(), 20)
+				eq(g.input.autoFocus, false); eq(#w.focus, 0)
+				-- The Chat tab's side tab, third, with the Communities window's chat icon.
+				local tab
+				for _, t in ipairs(hd.tabs) do if t.key == "chat" then tab = t end end
+				eq(tab, hd.tabs[3]); eq(tab:GetChecked(), true); eq(tab.tooltip, L.TAB_CHAT)
+				-- Its X closes it in combat too (review of the Chat tab: the template's HideUIPanel would not).
+				local combat = rawget(_G, "InCombatLockdown")
+				InCombatLockdown = function() return true end
+				hd.CloseButton:Click()
+				InCombatLockdown = combat
+				eq(hd:IsShown(), false, "HD: the X, in combat"); eq(w.CW.IsShown(), false)
+			end)
+		end)
+
+		test("1.1.1 Chat tab: the search box keeps the lines that hold its text (a writer, a guild, words; a hidden line by its writer alone), from the newest; No match; its x empties it; it stays with the tab for the session", function()
+			WithWindow(function(w)
+				AsCaptain()
+				ns.Filter.Hides = function(text) return text:find("badword", 1, true) ~= nil end
+				local list = {}
+				for i = 1, 20 do list[i] = Line(T0 + i * 10, "Filler-Realm", "filler line " .. i) end
+				list[#list + 1] = Line(T0 + 300, "Aa-Realm", "Hello from the gates")
+				list[#list + 1] = Line(T0 + 310, "Zed-Realm", "zeus speaks", { guild = "Olympus Zeus" })
+				list[#list + 1] = Line(T0 + 320, "Hider-Realm", "a badword gates")
+				ns.rdb.chat = { A = list, C = { Line(T0, "Aa-Realm", "gates for captains"), Line(T0 + 5, "Bb-Realm", "other") } }
+				local f = w.CW.Open("A")
+				local sb = f.search
+				eq(sb:IsShown(), true); eq(sb:GetText() or "", "")
+				sb:Fire("OnEnter")
+				local tip = table.concat(TipLines(), "\n")
+				assert(tip:find(L.SEARCH_TIP_CHAT, 1, true), tip)
+				eq(#Visible(f.bubbles), 23)
+				f.scroll:SetVerticalScroll(0) -- (scrolled up: a search starts from the newest match)
+				local function Search(text)
+					sb:SetText(text)
+					sb:Fire("OnTextChanged", true)
+					f:Fire("OnUpdate", 0.3)
+					f.scroll:Settle()
+				end
+				-- Words, any case.
+				Search("GATES")
+				eq(ns.Views.Filter("chat"), "GATES", "the tab's search, kept by Views")
+				local bs = Visible(f.bubbles)
+				eq(#bs, 1, "the line whose words hold it; the hidden one not by its words")
+				assert(BubbleWith(f, "Hello from the gates"))
+				eq(f.scroll:GetVerticalScroll(), f.scroll:GetVerticalScrollRange(), "from the newest")
+				eq(sb.clear:IsShown(), true, "its x")
+				-- A writer's name; a guild.
+				Search("zed")
+				eq(#Visible(f.bubbles), 1); assert(BubbleWith(f, "zeus speaks"))
+				Search("olympus zeus")
+				eq(#Visible(f.bubbles), 1); assert(BubbleWith(f, "zeus speaks"))
+				-- A line the block terms hide: by its writer, still hidden.
+				Search("hider")
+				local b = BubbleWith(f, L.CHATWIN_HIDDEN)
+				assert(b and b.hidden, "found by its writer, its words still hidden"); eq(#Visible(f.bubbles), 1)
+				Search("badword")
+				eq(#Visible(f.bubbles), 0, "not by the words it hides")
+				assert(RowWith(f, L.SEARCH_NO_MATCH), "No match")
+				assert(RowWith(f, L.CHATWIN_KEPT:format(100)), "the kept lines' note stays")
+				-- Another channel: the same search.
+				Search("gates")
+				PickChannel(f, "C")
+				eq(#Visible(f.bubbles), 1); assert(BubbleWith(f, "gates for captains"))
+				-- Kept with the tab for the session: the window closed and opened again.
+				w.CW.Close()
+				f = w.CW.Open("A")
+				eq(f.search:GetText(), "gates"); eq(#Visible(f.bubbles), 1)
+				-- Its x: every line again, the keyboard let go.
+				sb.focused = true
+				sb.clear:Click()
+				f:Fire("OnUpdate", 0.3)
+				eq(sb:GetText(), ""); eq(ns.Views.Filter("chat"), ""); eq(sb.focused, false); eq(sb.clear:IsShown(), false)
+				eq(#Visible(f.bubbles), 23)
+				-- It never takes the keyboard by itself; Enter and Escape let go; other tabs' searches untouched.
+				eq(sb.autoFocus, false); eq(#w.focus, 0)
+				sb.focused = true; sb:Fire("OnEnterPressed"); eq(sb.focused, false)
+				sb.focused = true; sb:Fire("OnEscapePressed"); eq(sb.focused, false)
+				eq(ns.Views.Filter("realm"), ""); eq(ns.Views.Filter("census"), "")
+				eq(#ns.rdb.chat.A, 23, "the history untouched")
+				-- (The review of the page's removal: the Realm tab's search of the chats checked these,
+				-- and no Chat tab test did.) A writer's name with an accented capital, typed in capitals;
+				-- a word after a colour code typed in a line; the code itself, found as the line shows it
+				-- (escaped, SanitizeChat), not as the colour it would have been.
+				ns.rdb.chat.A = { Line(T0, "Élise-Realm", "third"), Line(T0 + 10, "Bb-Realm", "second |cffff0000red"),
+					Line(T0 + 20, "Cc-Realm", "plain words") }
+				Search("ÉLISE")
+				eq(#Visible(f.bubbles), 1); assert(BubbleWith(f, "third"), "the accented writer")
+				Search("red")
+				eq(#Visible(f.bubbles), 1); assert(BubbleWith(f, "second ||cffff0000red"), "a word after the code")
+				Search("|cff")
+				eq(#Visible(f.bubbles), 1, "the code as the line shows it"); assert(BubbleWith(f, "second ||cffff0000red"))
+				Search("")
+				eq(#Visible(f.bubbles), 3)
+			end)
+		end)
+
+		test("1.1.1 Chat tab: a client updated without a restart (no ChatWindow.lua yet) still has the tab, and it says to restart the game", function()
+			WithUI(function()
+				eq(ns.ChatWindow.missing, true, "(Core.lua's stand-in)")
+				AsSoldier()
+				local UI = LoadUI()
+				UI.SelectTab("chat")
+				local main = OlympusFrame
+				eq(main.tab, "chat")
+				local rows = main.views.chat.rows
+				eq(rows[1].left:GetText(), Grey(L.RESTART_NEEDED))
+				eq(main.scroll:IsShown(), true, "its list shows it")
+			end)
+		end)
+
+		-- The game's chat windows (ChatFrame1-10, the main one "General", 2 the combat log) and the
+		-- main chat tab (ChatFrame1Tab), as stand-ins that record what Olympus does with them: a read
+		-- (GetName, IsVisible and the like) is allowed and noted in g.reads, AddMessage (a secure
+		-- elevation barrier) takes a line; any other method called, any field written, and any of
+		-- the game's functions that make, name, dock or set up a chat window, open the chat box or show
+		-- a popup, lands in g.unsafe, asked empty at the end. g.Make(i): the player's own new window
+		-- i named Olympus (the game's doing, written raw).
+		local GAME_UNSAFE = { "FCF_OpenNewWindow", "FCF_NewChatWindow", "FCF_SetWindowName", "FCF_DockFrame", "FCF_SetWindowColor",
+			"FCF_SetWindowAlpha", "FCF_StartAlertFlash", "FCF_SelectDockFrame", "StaticPopup_Show", "ChatFrame_OpenChat", "ChatEdit_ActivateChat",
+			"ChatFrame_AddMessageEventFilter", "SetChatWindowName", "SetChatWindowShown", "SetChatWindowDocked", "AddChatWindowMessages",
+			"RemoveChatWindowMessages", "AddChatWindowChannel", "RemoveChatWindowChannel", "ChatFrame_SendTell", "ChatEdit_InsertLink", "SetItemRef" }
+		local READS = { GetName = true, IsVisible = true, IsShown = true, GetRect = true, GetLeft = true, GetRight = true, GetTop = true,
+			GetBottom = true, GetWidth = true, GetHeight = true, GetEffectiveScale = true }
+		local function WithGameChat(fn)
+			local saved = { info = GetChatWindowInfo, fcf = FCF_GetChatWindowInfo, combat = IsCombatLog, num = NUM_CHAT_WINDOWS,
+				msgs = GetChatWindowMessages, chans = GetChatWindowChannels, util = ChatFrameUtil, new = NEW_CHAT_WINDOW,
+				config = CHAT_CONFIGURATION, default = DEFAULT_CHAT_FRAME, tab = rawget(_G, "ChatFrame1Tab"), frames = {}, spies = {},
+				windows = ns.db.chatWindows, intro = ns.db.chatTabIntro }
+			local g = { unsafe = {}, reads = {} }
+			local function Spy(name) return function() g.unsafe[#g.unsafe + 1] = name end end
+			local function Game(name, t)
+				return setmetatable(t, {
+					__index = function(_, k)
+						if type(k) ~= "string" or not k:match("^%u") then return nil end
+						if READS[k] then
+							return function(self, ...)
+								g.reads[#g.reads + 1] = name .. ":" .. k
+								local answer = rawget(t, "_" .. k)
+								if answer then return answer(self, ...) end
+							end
+						end
+						return Spy(name .. ":" .. k)
+					end,
+					__newindex = function(tt, k, v)
+						g.unsafe[#g.unsafe + 1] = name .. "." .. tostring(k) .. " written"
+						rawset(tt, k, v)
+					end,
+				})
+			end
+			for i = 1, 10 do
+				saved.frames[i] = rawget(_G, "ChatFrame" .. i)
+				local lines = {}
+				g[i] = Game("ChatFrame" .. i, { name = "", shown = false, lines = lines,
+					AddMessage = function(_, text) lines[#lines + 1] = text end,
+					_GetName = function() return "ChatFrame" .. i end })
+				_G["ChatFrame" .. i] = g[i]
+			end
+			rawset(g[1], "name", "General"); rawset(g[1], "shown", true)
+			rawset(g[2], "name", "Combat Log"); rawset(g[2], "isDocked", true)
+			g.tab = Game("ChatFrame1Tab", { name = "ChatFrame1Tab", visible = true,
+				_IsVisible = function(self) return rawget(self, "visible") end, _GetRect = function() return 32, 215, 60, 24 end })
+			ChatFrame1Tab = g.tab
+			g.Make = function(i)
+				rawset(g[i], "name", "Olympus"); rawset(g[i], "isDocked", true)
+			end
+			g.Close = function(i) rawset(g[i], "isDocked", nil); rawset(g[i], "shown", false) end
+			NUM_CHAT_WINDOWS = 10
+			GetChatWindowInfo = function(i)
+				local f = g[i]
+				return rawget(f, "name"), 14, 0, 0, 0, 1, rawget(f, "shown"), false, rawget(f, "isDocked") and 1 or nil, false
+			end
+			FCF_GetChatWindowInfo = nil
+			IsCombatLog = function(f) return f == g[2] end
+			GetChatWindowMessages, GetChatWindowChannels = function() end, function() end
+			NEW_CHAT_WINDOW, CHAT_CONFIGURATION = "Create New Window", "Settings"
+			for _, name in ipairs(GAME_UNSAFE) do
+				saved.spies[name] = rawget(_G, name)
+				_G[name] = Spy(name)
+			end
+			ChatFrameUtil = setmetatable({}, { __index = function(_, k) return Spy("ChatFrameUtil." .. tostring(k)) end })
+			DEFAULT_CHAT_FRAME = g[1]
+			ns.db.chatWindows, ns.db.chatTabIntro = nil, nil
+			local ok, err = pcall(fn, g)
+			GetChatWindowInfo, FCF_GetChatWindowInfo, IsCombatLog, NUM_CHAT_WINDOWS = saved.info, saved.fcf, saved.combat, saved.num
+			GetChatWindowMessages, GetChatWindowChannels, ChatFrameUtil = saved.msgs, saved.chans, saved.util
+			NEW_CHAT_WINDOW, CHAT_CONFIGURATION, DEFAULT_CHAT_FRAME, ChatFrame1Tab = saved.new, saved.config, saved.default, saved.tab
+			for _, name in ipairs(GAME_UNSAFE) do _G[name] = saved.spies[name] end
+			for i = 1, 10 do _G["ChatFrame" .. i] = saved.frames[i] end
+			ns.db.chatWindows, ns.db.chatTabIntro = saved.windows, saved.intro
+			if not ok then error(err, 0) end
+			eq(#g.unsafe, 0, "the game's chat: only read (and AddMessage): " .. table.concat(g.unsafe, ", "))
+		end
+		local function Count(list, text)
+			local n = 0
+			for _, l in ipairs(list) do if l == text then n = n + 1 end end
+			return n
+		end
+		local SET = L.CHATTAB_SET:format("[" .. L.CHAN_ALL .. "], [" .. L.CHAN_CAPTAINS .. "], [" .. L.CHAN_LORDS .. "]")
+		local HERE = L.CHATTAB_HERE:match("^(.-)%%s")
+
+		test("1.1.1 Chat tab: while the game chat has no Olympus tab, a line adds one: the player's click shows Olympus's pointer by the main chat tab and the steps; the game's chat windows are read until one named Olympus is there, then the real SetupTab runs once and the pointer and the line go; nothing but reads on the game's chat", function()
+			WithWindow(function(w)
+				WithGameChat(function(g)
+					AsCaptain()
+					ns.db.addonChat = true
+					ns.Channels.Pin = function() return nil end
+					local f = w.CW.Open()
+					local guide = f.guide
+					eq(ns.Channels.TabState(), "none")
+					eq(guide:IsShown(), true, "the line, while there is no Olympus tab")
+					eq(guide.text:GetText(), "|cff40ff40+ " .. L.CHATS_TAB_ADD .. "|r")
+					eq(guide:Anchor("TOPLEFT")[5], -59, "over the lines' top (no pills' row any more)")
+					local boxTop = f.box:Anchor("TOPLEFT")[5]
+					assert(boxTop < -56, "the lines under it")
+					guide:Fire("OnEnter")
+					local tip = table.concat(TipLines(), "\n")
+					assert(tip:find(L.CHATS_TAB_ADD_TIP, 1, true), tip)
+					eq(w.CW.Pointer(), nil, "no pointer before the click"); eq(w.CW.Watching(), false)
+					-- The player's click: the pointer by the game's main chat tab, the steps in the line.
+					guide:Click()
+					local p = w.CW.Pointer()
+					assert(p and p:IsShown(), "the pointer")
+					eq(p:GetName(), "OlympusChatTabPointer", "Olympus's own frame")
+					eq(Anchor(p), "BOTTOMLEFT ChatFrame1Tab TOPLEFT 0 34", "by the main chat tab: ours anchored to theirs")
+					eq(p.title:GetText(), L.CHATTAB_POINTER_TITLE); eq(p.text:GetText(), L.CHATTAB_POINTER:format("Create New Window"))
+					eq(p:GetFrameStrata(), "DIALOG"); assert(p.arrow.texture or p.arrow.atlas, "its arrow")
+					eq(w.CW.Watching(), true)
+					eq(guide.text:GetText(), Grey(L.CHATS_TAB_STEPS:format("General", "Create New Window")))
+					eq(ns.Channels.TabState(), "none", "nothing chosen before the tab exists")
+					local found = false
+					for _, r in ipairs(g.reads) do if r == "ChatFrame1Tab:IsVisible" then found = true end end
+					assert(found, "the main chat tab read: " .. table.concat(g.reads, " "))
+					-- Nothing yet: the timer and the game's word read, find nothing.
+					p:Fire("OnUpdate", 1.1)
+					w.event("UPDATE_CHAT_WINDOWS")
+					eq(p:IsShown(), true); eq(w.CW.Watching(), true)
+					-- A window of another name: still waiting.
+					rawset(g[5], "name", "Trade"); rawset(g[5], "shown", true)
+					p:Fire("OnUpdate", 1.1)
+					eq(w.CW.Watching(), true); eq(ns.Channels.TabState(), "none")
+					-- The player names the new window Olympus (the game's menu): the game says its chat
+					-- windows changed, and Olympus sends the chats there, said once, in the main window and
+					-- in the tab.
+					w.printed = {}
+					g.Make(6)
+					w.event("UPDATE_CHAT_WINDOWS")
+					eq(w.CW.Watching(), false); eq(p:IsShown(), false, "the pointer goes")
+					eq(ns.Channels.TabState(), "open", "the real SetupTab ran")
+					local chosen = ns.db.chatWindows[ns.me]
+					eq(chosen.A, "Olympus"); eq(chosen.C, "Olympus"); eq(chosen.L, "Olympus")
+					eq(Count(w.printed, SET), 1, "said once: " .. table.concat(w.printed, " / "))
+					eq(#g[6].lines, 1); assert(g[6].lines[1]:find(HERE, 1, true), g[6].lines[1])
+					-- Later words from the game, the timer: nothing more.
+					w.event("UPDATE_CHAT_WINDOWS"); w.event("UPDATE_FLOATING_CHAT_WINDOWS"); p:Fire("OnUpdate", 2)
+					eq(Count(w.printed, SET), 1); eq(#g[6].lines, 1)
+					-- The line goes, the lines back up to the top row.
+					f:Fire("OnUpdate", 0.3)
+					eq(guide:IsShown(), false, "the tab open: no line")
+					assert(f.box:Anchor("TOPLEFT")[5] > boxTop, "the lines back up")
+					eq(#w.focus, 0, "no keyboard taken")
+				end)
+			end)
+		end)
+
+		test("1.1.1 Chat tab: the Olympus tab's line: an Olympus window there already is taken at the click; the pointer's X leaves the game's word and the tab's own reading; none while the tab is open, the chats are off or this client has no Olympus tab; the gamepad UI gets the steps and no pointer", function()
+			WithWindow(function(w)
+				WithGameChat(function(g)
+					AsCaptain()
+					ns.db.addonChat = true
+					-- A window named Olympus the player made before (never chosen): the click takes it.
+					g.Make(4)
+					local f = w.CW.Open()
+					eq(ns.Channels.TabState(), "none"); eq(f.guide:IsShown(), true)
+					w.printed = {}
+					f.guide:Click()
+					eq(ns.Channels.TabState(), "open"); eq(w.CW.Pointer(), nil, "nothing to point at"); eq(w.CW.Watching(), false)
+					eq(Count(w.printed, SET), 1)
+					f:Fire("OnUpdate", 0.3)
+					eq(f.guide:IsShown(), false, "open: no line")
+					-- The player closed that window: waiting, the line again.
+					g.Close(4)
+					eq(ns.Channels.TabState(), "waiting")
+					w.CW.Render()
+					eq(f.guide:IsShown(), true)
+					-- The pointer's X: the pointer goes, the game's word still finds the tab.
+					f.guide:Click()
+					local p = w.CW.Pointer()
+					assert(p and p:IsShown())
+					eq(UISpecialFrames[#UISpecialFrames], "OlympusChatTabPointer", "Escape closes it too (mouse and keyboard)")
+					p.CloseButton:Click()
+					eq(p:IsShown(), false); eq(w.CW.Watching(), true, "still awaited")
+					w.printed = {}
+					g.Make(4)
+					w.event("UPDATE_FLOATING_CHAT_WINDOWS")
+					eq(ns.Channels.TabState(), "open"); eq(w.CW.Watching(), false); eq(Count(w.printed, SET), 1)
+					-- Without a word from the game: the Chat tab's own reading, every second while it shows.
+					g.Close(4)
+					w.CW.Render()
+					f.guide:Click()
+					p.CloseButton:Click()
+					w.printed = {}
+					g.Make(4)
+					f:Fire("OnUpdate", 0.5)
+					eq(w.CW.Watching(), true, "not before a second")
+					f:Fire("OnUpdate", 0.6)
+					eq(ns.Channels.TabState(), "open"); eq(w.CW.Watching(), false); eq(Count(w.printed, SET), 1)
+					-- The chats off: no line.
+					g.Close(4)
+					ns.db.addonChat = false
+					w.CW.Render()
+					eq(f.guide:IsShown(), false)
+					ns.db.addonChat = true
+					w.CW.Render()
+					eq(f.guide:IsShown(), true)
+					-- A client whose Channels.lua has no Olympus tab: no line, no way.
+					local setup = ns.Channels.SetupTab
+					ns.Channels.SetupTab = nil
+					w.CW.Render()
+					eq(f.guide:IsShown(), false); eq(w.CW.AddTab(), nil)
+					ns.Channels.SetupTab = setup
+				end)
+				-- The gamepad UI: no pointer (the game's chat tabs work otherwise there), the steps as
+				-- text in the line; found by the tab's own reading; no game popup.
+				WithGameChat(function(g)
+					AsCaptain()
+					ns.db.addonChat = true
+					WithGamepadUI(true, function(game)
+						w.CW.Close()
+						w.CW.Reset()
+						local f = w.CW.Open()
+						eq(f.guide:IsShown(), true)
+						f.guide:Click()
+						eq(w.CW.Pointer(), nil, "no pointer with the gamepad UI"); eq(w.CW.Watching(), true)
+						eq(f.guide.text:GetText(), Grey(L.CHATS_TAB_STEPS:format("General", "Create New Window")))
+						w.printed = {}
+						g.Make(7)
+						f:Fire("OnUpdate", 1.1)
+						eq(ns.Channels.TabState(), "open"); eq(Count(w.printed, SET), 1)
+						eq(#game.shown, 0, "no game popup"); eq(#w.focus, 0)
+					end)
+				end)
+			end)
+		end)
+
+		-- The review of the Chat tab: the line showed for anyone without an open Olympus tab, a player
+		-- who sent his chats to a tab named otherwise (to keep the channels' names there) or back to
+		-- the main window included, and nothing put it away.
+		-- (Changed on purpose: the Realm tab's chats page, gone, made the Olympus tab after the x too;
+		-- the Chat tab's settings do now, and the lines start at -56, the pills' row gone.)
+		test("1.1.1 Chat tab: the Olympus tab's line stays away from a player whose chats go to a window of his choosing, shows while the tab is chosen and not there, and its x puts it away for good (the pointer too); the settings' line still shows the steps", function()
+			WithWindow(function(w)
+				WithGameChat(function(g)
+					AsCaptain()
+					ns.db.addonChat = true
+					ns.Channels.Pin = function() return nil end
+					-- A window of his own, named otherwise: his [Captains] go there. No line.
+					rawset(g[5], "name", "Oly"); rawset(g[5], "shown", true)
+					eq(ns.Channels.ChooseWindow("Oly captains"), true)
+					eq(ns.Channels.ChosenWindow("C"), "Oly"); eq(ns.Channels.ChosenWindow("A"), nil)
+					local f = w.CW.Open()
+					eq(ns.Channels.TabState(), "none")
+					eq(f.guide:IsShown(), false, "his chats go where he chose: no line")
+					eq(f.box:Anchor("TOPLEFT")[5], -56, "the lines right under the top row")
+					g.Close(5)
+					w.CW.Render()
+					eq(f.guide:IsShown(), false, "(that window closed: still his choice)")
+					-- All back in the main window: the line again.
+					eq(ns.Channels.ChooseWindow("main"), true)
+					eq(ns.Channels.ChosenWindow("C"), nil)
+					w.CW.Render()
+					eq(f.guide:IsShown(), true)
+					-- The Olympus tab chosen and not there (the one click before the tab was made), a channel
+					-- in his own window too: the line, the tab being his choice.
+					rawset(g[5], "shown", true)
+					eq(ns.Channels.ChooseWindow("tab"), true)
+					eq(ns.Channels.ChooseWindow("Oly lords"), true)
+					eq(ns.Channels.TabState(), "waiting")
+					w.CW.Render()
+					eq(f.guide:IsShown(), true)
+					-- Its x: the line goes for good, and the pointer with it (no more reading of the game's chat).
+					local away = f.guide.away
+					eq(away:GetParent(), f.guide); eq(Anchor(away), "TOPRIGHT nil TOPRIGHT 2 2")
+					away:Fire("OnEnter")
+					local tip = table.concat(TipLines(), "\n")
+					assert(tip:find(L.CHATS_TAB_AWAY, 1, true) and tip:find(L.CHATS_TAB_AWAY_TIP, 1, true), tip)
+					f.guide:Click()
+					local p = w.CW.Pointer()
+					assert(p and p:IsShown()); eq(w.CW.Watching(), true)
+					away:Click()
+					eq(f.guide:IsShown(), false, "put away"); eq(p:IsShown(), false, "the pointer too"); eq(w.CW.Watching(), false)
+					eq(ns.db.chatWin.noTabLine, true, "for good")
+					-- The next session (and the load's check): still away.
+					w.fire("INIT")
+					w.CW.Close()
+					w.CW.Reset()
+					f = w.CW.Open()
+					eq(f.guide:IsShown(), false, "the next session")
+					eq(ns.Channels.ChooseWindow("main"), true)
+					w.CW.Render()
+					eq(f.guide:IsShown(), false, "whatever he chooses")
+					-- The settings' line still makes it: the steps on the Chat tab while it is awaited.
+					f.gear:Click()
+					Setting(f, L.CHATS_TAB_ADD):Click()
+					eq(w.CW.Watching(), true); eq(OlympusFrame.tab, "chat")
+					assert(Setting(f, L.CHATS_TAB_STEPS:match("^(.-)%%s")), "the steps, in the settings")
+					f.gear:Click()
+					f:Fire("OnUpdate", 0.3)
+					eq(f.guide:IsShown(), true, "awaited: the steps")
+					eq(f.guide.text:GetText(), Grey(L.CHATS_TAB_STEPS:format("General", "Create New Window")))
+					w.printed = {}
+					g.Make(6)
+					w.event("UPDATE_CHAT_WINDOWS")
+					eq(ns.Channels.TabState(), "open"); eq(Count(w.printed, SET), 1)
+					f:Fire("OnUpdate", 0.3)
+					eq(f.guide:IsShown(), false)
+					eq(#w.focus, 0)
+				end)
+			end)
+		end)
+
+		---------------------------------------------------------------------------
+		-- 1.1.1: the Realm tab's "Olympus chats" page is gone (the author's call: the Chat tab replaces
+		-- it). What it offered and the tab did not is the Chat tab's now: the count of the lines the
+		-- block terms hide, every line the history keeps, and the settings (the gear): the chats on or
+		-- off, the public channel's line, each channel muted in chat or not and the chat window it
+		-- goes to, the Olympus tab of the game chat, the pin's control. Saved choices kept as they were.
+		---------------------------------------------------------------------------
+
+		-- (A function of its own: the main chunk's 200 locals.)
+		;(function()
+		-- A row of the settings under the heading that holds `header` (up to the next heading).
+		local function Under(f, header, text)
+			local seen = false
+			for _, r in ipairs(Visible(f.setRows)) do
+				local t = r.text:GetText() or ""
+				if seen then
+					if r.line and r.line.header then return nil end
+					if t:find(text, 1, true) then return r end
+				elseif r.line and r.line.header and t:find(header, 1, true) then
+					seen = true
+				end
+			end
+		end
+		local function TipOf(r)
+			r:Fire("OnEnter")
+			local tip = table.concat(TipLines(), "\n")
+			r:Fire("OnLeave")
+			return tip
+		end
+		local ALLH, CAPTH, LORDH = "[" .. L.CHAN_ALL .. "]", "[" .. L.CHAN_CAPTAINS .. "]", "[" .. L.CHAN_LORDS .. "]"
+
+		test("1.1.1 Chat tab: every line the history keeps shows, a channel's 100 (#15, the Realm tab's chats page's before)", function()
+			WithWindow(function(w)
+				local list = {}
+				for i = 1, 100 do list[i] = Line(T0 + i * 10, "Member" .. (700 + i) .. "-Realm", "kept line " .. i .. ".") end
+				ns.rdb.chat = { A = list }
+				local f = w.CW.Open()
+				eq(#Visible(f.bubbles), 100, "lines kept but not shown were lost all the same")
+				assert(BubbleWith(f, "kept line 1.") and BubbleWith(f, "kept line 100."))
+			end)
+		end)
+
+		-- (Changed on purpose, the review of the page's removal: the count was a grey row at the top of
+		-- the scrolled lines, out of sight when the tab opens on the newest line; it is a strip over the
+		-- lines now, as the pinned line is, so the rows among the lines are the kept note and the day.)
+		test("1.1.1 Chat tab: the lines the block terms hide, counted on a strip over the lines as the Realm tab's chats page counted them: a click shows them all, marked, another hides them; ours never counted", function()
+			WithWindow(function(w)
+				ns.Filter.Hides = function(text) return text:find("junk", 1, true) ~= nil end
+				ns.rdb.chat = { A = { Line(T0, "Aa-Realm", "selling junk cheap"), Line(T0 + 10, "Bb-Realm", "hello army"),
+					Line(T0 + 20, "Soldier-Realm", "my junk", { mine = true }), Line(T0 + 30, "Cc-Realm", "more junk") } }
+				local f = w.CW.Open()
+				eq(#Visible(f.rows), 2, "the kept note and the day: the count is not among the lines")
+				local count = f.hiddenCount
+				eq(count:IsShown(), true, "the count, over the lines")
+				eq(count.text:GetText(), Grey(L.FILTER_HIDDEN_LINES:format(2)), "two: ours never hidden")
+				local tip = TipOf(count)
+				assert(tip:find(L.FILTER_TIP_TITLE, 1, true) and tip:find(L.FILTER_TIP, 1, true), tip)
+				eq(BubbleWith(f, "selling junk"), nil, "not shown"); assert(BubbleWith(f, "hello army"))
+				count:Click()
+				eq(count.text:GetText(), Grey(L.FILTER_SHOWING_LINES:format(2)), "showing them")
+				for _, text in ipairs({ "selling junk cheap", "more junk" }) do
+					local b = BubbleWith(f, text)
+					assert(b and b.body:GetText():find(L.FILTER_HIDDEN_MARK, 1, true), "shown, marked: " .. text)
+					eq(b.hidden, false)
+				end
+				eq(BubbleWith(f, "my junk").body:GetText():find(L.FILTER_HIDDEN_MARK, 1, true), nil, "ours never marked")
+				eq(BubbleWith(f, "hello army").body:GetText():find(L.FILTER_HIDDEN_MARK, 1, true), nil)
+				count:Click()
+				eq(BubbleWith(f, "selling junk"), nil, "hidden again"); eq(count.text:GetText(), Grey(L.FILTER_HIDDEN_LINES:format(2)))
+				-- One shown by its own click: the count still offers them all.
+				BubbleWith(f, L.CHATWIN_HIDDEN):Fire("OnMouseUp", "LeftButton")
+				eq(count.text:GetText(), Grey(L.FILTER_HIDDEN_LINES:format(2)), "one of two shown: the count stays")
+				-- The history untouched; nothing hidden, no count.
+				eq(ns.rdb.chat.A[1].text, "selling junk cheap"); eq(ns.rdb.chat.A[1].revealed, nil)
+				ns.Filter.Hides = function() return false end
+				w.fire("FILTER_CHANGED"); w.CW.Render()
+				eq(count:IsShown(), false, "no count"); eq(#Visible(f.rows), 2)
+				eq(#w.focus, 0)
+			end)
+		end)
+
+		-- (The review of the page's removal: the count sat at the top of the scrolled lines, above the
+		-- oldest, and the tab opens on the newest: with a full channel it showed only after scrolling
+		-- all the way up.)
+		test("1.1.1 review: the count of the lines the block terms hide is in sight when the tab opens on a full channel: a strip over the lines, under the pinned line, pushing the lines down; no room without a hidden line; none on the settings or with the chats off", function()
+			WithWindow(function(w)
+				ns.Channels.TabState = function() return "open" end -- (no Olympus tab line: the places alone)
+				ns.Channels.Pin = function() return nil end
+				ns.db.addonChat = true
+				ns.Filter.Hides = function(text) return text:find("junk", 1, true) ~= nil end
+				local list = { Line(T0, "Aa-Realm", "old junk"), Line(T0 + 5, "Bb-Realm", "junk again") }
+				for i = 1, 98 do list[#list + 1] = Line(T0 + 10 + i * 10, "Member" .. (800 + i) .. "-Realm", "line " .. i) end
+				ns.rdb.chat = { A = list }
+				local f = w.CW.Open()
+				f.scroll:Settle()
+				local range = f.scroll:GetVerticalScrollRange()
+				assert(range > 0, "a full channel scrolls"); eq(f.scroll:GetVerticalScroll(), range, "opened on the newest")
+				local count = f.hiddenCount
+				eq(count:IsShown(), true, "in sight"); eq(count.text:GetText(), Grey(L.FILTER_HIDDEN_LINES:format(2)))
+				eq(count:GetParent(), f, "on the tab, not scrolled with the lines")
+				eq(count:Anchor("TOPLEFT")[2], f); eq(count:Anchor("TOPLEFT")[5], -59, "at the lines' top (-56 in the old look)")
+				assert(f.box:Anchor("TOPLEFT")[5] <= -56 - count:GetHeight(), "the lines under it")
+				-- A pinned line: the count under it.
+				ns.Channels.Pin = function() return { sender = "Kingly Man-Realm", guild = "Olympus", text = "raid", setAt = ns.Now(), expires = ns.Now() + 60 } end
+				w.CW.Render()
+				eq(f.pin:Anchor("TOPLEFT")[5], -59)
+				assert(count:Anchor("TOPLEFT")[5] <= -59 - f.pin:GetHeight(), "under the pin")
+				assert(f.box:Anchor("TOPLEFT")[5] <= count:Anchor("TOPLEFT")[5] - count:GetHeight(), "the lines under both")
+				ns.Channels.Pin = function() return nil end
+				-- The settings and the chats off: no count.
+				f.gear:Click()
+				eq(count:IsShown(), false, "not on the settings")
+				f.gear:Click()
+				eq(count:IsShown(), true)
+				ns.db.addonChat = false
+				w.CW.Render()
+				eq(count:IsShown(), false, "not with the chats off")
+				ns.db.addonChat = true
+				w.CW.Render()
+				eq(count:IsShown(), true)
+				-- Nothing hidden: no count, and no room kept.
+				ns.Filter.Hides = function() return false end
+				w.fire("FILTER_CHANGED"); w.CW.Render()
+				eq(count:IsShown(), false); eq(f.box:Anchor("TOPLEFT")[5], -56, "no room kept")
+				eq(#w.focus, 0)
+			end)
+		end)
+
+		test("1.1.1 Chat tab settings (the gear, where the Realm tab's chats page was): in place of the lines and back; the chats on or off; each channel muted in chat or not and its chat window, through /oly mute's and /oly chatwindow's own code; nothing but reads and AddMessage on the game's chat; the keyboard never taken", function()
+			WithWindow(function(w)
+				WithGameChat(function(g)
+					AsCaptain()
+					ns.db.addonChat = true
+					ns.Channels.Pin = function() return nil end
+					local asked = 0
+					ns.Consent.Show = function() asked = asked + 1 end
+					ns.rdb.chat = { A = { Line(T0, "Aa-Realm", "hello") }, C = {} }
+					rawset(g[3], "name", "Guild"); rawset(g[3], "shown", true)
+					rawset(g[5], "name", "Oly"); rawset(g[5], "isDocked", true)
+					local f = w.CW.Open("A")
+					f.input.focused, f.search.focused = true, true
+					-- The gear at the top row's end: a click shows the settings in place of the lines.
+					local tip = TipOf(f.gear)
+					assert(tip:find(L.CHATSET_TITLE, 1, true) and tip:find(L.CHATSET_TIP, 1, true), tip)
+					eq(w.CW.SettingsShown(), false)
+					f.gear:Click()
+					eq(w.CW.SettingsShown(), true)
+					eq(f.setScroll:IsShown(), true); eq(f.scroll:IsShown(), false, "no lines"); eq(f.input:IsShown(), false, "no box")
+					eq(f.search:IsShown(), false); eq(f.switch:IsShown(), false, "no switch"); eq(f.guide:IsShown(), false)
+					eq(f.setTitle:IsShown(), true); eq(f.setTitle:GetText(), L.CHATSET_TITLE); eq(f.gear:IsShown(), true)
+					eq(f.input.focused, false, "the box let go of the keyboard"); eq(f.search.focused, false); eq(#w.focus, 0)
+					eq(Visible(f.setRows)[1].text:GetText(), "|cffffd200" .. L.CHATSET_BACK .. "|r", "the way back first")
+					-- The chats on this client: said, what it means in its tooltip, a click to choose.
+					local chats = Under(f, L.CONSENT_CHAT, L.CHATSET_CHATS_ON)
+					assert(chats, "on")
+					assert(TipOf(chats):find(L.CONSENT_CHAT_TEXT, 1, true))
+					-- (The Olympus window asks its first-open page when it opens, whatever the tab: counted apart.)
+					local before = asked
+					chats:Click()
+					eq(asked, before + 1, "the choice: the first-open page, Olympus's own")
+					-- A Captain's two channels, not the Lords'.
+					assert(Setting(f, ALLH) and Setting(f, CAPTH)); eq(Setting(f, LORDH), nil)
+					-- Muted in chat through /oly mute's code, said as it says it; again, shown there again.
+					local shown = Under(f, CAPTH, L.CHATSET_SHOWN)
+					assert(shown, "[Captains] shows in chat")
+					assert(TipOf(shown):find(L.CHATSET_MUTE_TIP:format("captains"), 1, true))
+					w.printed = {}
+					shown:Click()
+					eq(ns.db.chatMute.C, true, "kept where /oly mute keeps it")
+					eq(w.printed[1], L.CHAN_MUTED:format(L.CHAN_CAPTAINS, "captains"))
+					assert(Under(f, CAPTH, L.CHATSET_MUTED), "said muted"); assert(Under(f, ALLH, L.CHATSET_SHOWN), "[Olympus] still shown")
+					Under(f, CAPTH, L.CHATSET_MUTED):Click()
+					eq(ns.db.chatMute.C, nil); eq(w.printed[2], L.CHAN_UNMUTED:format(L.CHAN_CAPTAINS))
+					-- Its chat window through /oly chatwindow's code: the main one, then each open in order
+					-- (the combat log never), then the main one again; that channel alone.
+					local where = Under(f, ALLH, L.CHATSET_WHERE:format(L.CHATWIN_MAIN_NAME))
+					assert(where, "[Olympus] in the main window")
+					assert(TipOf(where):find(L.CHATSET_WHERE_TIP:format("Create New Window"), 1, true))
+					w.printed = {}
+					where:Click()
+					eq(ns.Channels.ChosenWindow("A"), "Guild"); eq(ns.Channels.ChosenWindow("C"), nil, "that channel alone")
+					eq(w.printed[1], L.CHATWIN_SET:format(ALLH, '"Guild"'), "said as /oly chatwindow says it")
+					eq(g[3].lines[#g[3].lines]:find(L.CHATWIN_SET:format(ALLH, '"Guild"'), 1, true) ~= nil, true, "and in that window (AddMessage)")
+					Under(f, ALLH, L.CHATSET_WHERE:format('"Guild"')):Click()
+					eq(ns.Channels.ChosenWindow("A"), "Oly")
+					Under(f, ALLH, L.CHATSET_WHERE:format('"Oly"')):Click()
+					eq(ns.Channels.ChosenWindow("A"), nil, "the main one again")
+					assert(Under(f, ALLH, L.CHATSET_WHERE:format(L.CHATWIN_MAIN_NAME)))
+					-- A window chosen and gone: said so; a click takes the first one open.
+					eq(ns.Channels.ChooseWindow("Oly captains"), true)
+					g.Close(5)
+					w.CW.Render()
+					local gone = Under(f, CAPTH, L.CHATSET_WHERE:format('"Oly" ' .. L.CHATWIN_GONE_TAG))
+					assert(gone, "gone")
+					gone:Click()
+					eq(ns.Channels.ChosenWindow("C"), "Guild")
+					-- Back to the lines: the first line, or the gear again. The keyboard never taken.
+					Setting(f, L.CHATSET_BACK):Click()
+					eq(w.CW.SettingsShown(), false); eq(f.scroll:IsShown(), true); eq(f.input:IsShown(), true); eq(f.switch:IsShown(), true)
+					eq(f.setScroll:IsShown(), false); eq(f.setTitle:IsShown(), false)
+					assert(BubbleWith(f, "hello"))
+					f.gear:Click(); eq(w.CW.SettingsShown(), true)
+					f.gear:Click(); eq(w.CW.SettingsShown(), false)
+					-- A channel asked for (/oly talk captains, /olc alone) while they show: its lines.
+					f.gear:Click()
+					w.CW.Open("C")
+					eq(w.CW.SettingsShown(), false); eq(w.CW.Tier(), "C"); eq(f.scroll:IsShown(), true)
+					-- Opened again: the lines, not the settings.
+					f.gear:Click()
+					w.CW.Close()
+					w.CW.Open()
+					eq(w.CW.SettingsShown(), false, "the lines when it opens")
+					eq(#w.focus, 0)
+					-- The gamepad UI: the same, no game popup, no keyboard taken.
+					WithGamepadUI(true, function(game)
+						f.gear:Click()
+						Under(f, CAPTH, L.CHATSET_SHOWN):Click()
+						Under(f, CAPTH, L.CHATSET_WHERE:format('"Guild"')):Click()
+						eq(ns.db.chatMute.C, true); eq(ns.Channels.ChosenWindow("C"), nil)
+						eq(#game.shown, 0, "no game popup"); eq(#w.focus, 0)
+						f.gear:Click()
+					end)
+				end)
+			end)
+		end)
+
+		-- (The review of the page's removal: nothing drew the settings again for a change made
+		-- elsewhere while they showed, and a label left stale did the opposite of what it said: "Shows
+		-- in your chat (click to mute it there)" on a channel /oly mute had muted, whose click
+		-- unmuted it.)
+		test("1.1.1 review: the settings follow what changes while they show: /oly mute, /oly chatwindow and its tab, a line typed with /olc that unmutes its channel, a game chat window closed or open again", function()
+			WithWindow(function(w)
+				WithGameChat(function(g)
+					local saved = { fire = ns.Fire, room = ns.Comm.ChatRoom, warned = ns.db.chatWarned }
+					local ok, err = pcall(function()
+						-- (The tab's ChatWindow.lua is loaded apart: the addon's own events reach it here as
+						-- they reach it in the game.)
+						ns.Fire = function(name, ...) saved.fire(name, ...); w.fire(name, ...) end
+						AsCaptain()
+						ns.db.addonChat = true
+						ns.db.chatMute = {}
+						ns.Channels.Pin = function() return nil end
+						rawset(g[3], "name", "Guild"); rawset(g[3], "shown", true)
+						local f = w.CW.Open("A")
+						f.gear:Click()
+						assert(Under(f, CAPTH, L.CHATSET_SHOWN), "[Captains] shows in chat")
+						-- /oly mute captains, typed while they show: said muted, and its click shows it again.
+						SlashCmdList.OLYMPUS("mute captains")
+						eq(ns.db.chatMute.C, true)
+						f:Fire("OnUpdate", 0.3)
+						local muted = Under(f, CAPTH, L.CHATSET_MUTED)
+						assert(muted, "said muted"); eq(Under(f, CAPTH, L.CHATSET_SHOWN), nil, "not said shown")
+						muted:Click()
+						eq(ns.db.chatMute.C, nil, "its click does what it says")
+						assert(Under(f, CAPTH, L.CHATSET_SHOWN))
+						-- /olc typed in the game's chat box unmutes [Captains], as ever (Channels.Send): said
+						-- shown again, the lines of [Olympus] still the ones shown.
+						SlashCmdList.OLYMPUS("mute captains")
+						f:Fire("OnUpdate", 0.3)
+						assert(Under(f, CAPTH, L.CHATSET_MUTED))
+						KeepSendGap(function()
+							WithLane(function(sent)
+								ns.Comm.ChatRoom = function() return 3 end
+								ns.db.chatWarned = { A = true, C = true, L = true }
+								GetTime = function() return 1e7 end
+								ns.Channels.Send("C", "typed in chat")
+								eq(#sent, 1, "sent: " .. table.concat(w.printed, " / ")); eq(ns.db.chatMute.C, nil, "unmuted")
+							end)
+						end)
+						f:Fire("OnUpdate", 0.3)
+						assert(Under(f, CAPTH, L.CHATSET_SHOWN), "said shown again"); eq(w.CW.Tier(), "A")
+						-- /oly chatwindow Guild olympus: the window named.
+						SlashCmdList.OLYMPUS("chatwindow Guild olympus")
+						eq(ns.Channels.ChosenWindow("A"), "Guild")
+						f:Fire("OnUpdate", 0.3)
+						assert(Under(f, ALLH, L.CHATSET_WHERE:format('"Guild"')), "the window named")
+						-- The game's chat window closed (the game says its chat windows changed): gone; open
+						-- again: back.
+						g.Close(3)
+						w.event("UPDATE_CHAT_WINDOWS")
+						f:Fire("OnUpdate", 0.3)
+						assert(Under(f, ALLH, L.CHATSET_WHERE:format('"Guild" ' .. L.CHATWIN_GONE_TAG)), "said gone")
+						rawset(g[3], "shown", true)
+						w.event("UPDATE_FLOATING_CHAT_WINDOWS")
+						f:Fire("OnUpdate", 0.3)
+						assert(Under(f, ALLH, L.CHATSET_WHERE:format('"Guild"'))); eq(Under(f, ALLH, L.CHATWIN_GONE_TAG), nil, "not gone")
+						-- /oly chatwindow tab, no Olympus window yet: the Olympus tab awaited, each channel there.
+						assert(Under(f, L.CHATSET_TAB, L.CHATS_TAB_ADD), "the Olympus tab to add")
+						SlashCmdList.OLYMPUS("chatwindow tab")
+						eq(ns.Channels.TabState(), "waiting")
+						f:Fire("OnUpdate", 0.3)
+						assert(Under(f, L.CHATSET_TAB, L.CHATS_TAB_WAITING), "waiting for it")
+						assert(Under(f, CAPTH, L.CHATSET_WHERE:format('"Olympus" ' .. L.CHATWIN_GONE_TAG)))
+						-- A window named Olympus there (no word from the game yet), and /oly chatwindow tab again: on.
+						g.Make(4)
+						SlashCmdList.OLYMPUS("chatwindow tab")
+						eq(ns.Channels.TabState(), "open")
+						f:Fire("OnUpdate", 0.3)
+						assert(Under(f, L.CHATSET_TAB, L.CHATS_TAB_ON), "on")
+						assert(Under(f, CAPTH, L.CHATSET_WHERE:format('"Olympus"'))); eq(Under(f, CAPTH, L.CHATWIN_GONE_TAG), nil)
+						-- Still the settings; nothing taken from the keyboard.
+						eq(w.CW.SettingsShown(), true); eq(#w.focus, 0)
+					end)
+					ns.Fire, ns.Comm.ChatRoom, ns.db.chatWarned = saved.fire, saved.room, saved.warned
+					if not ok then error(err, 0) end
+				end)
+			end)
+		end)
+
+		test("1.1.1 Chat tab settings: the Olympus tab of the game chat (added as the line over the lines adds it, the steps while awaited, on, waiting), the pin's control for whoever may pin, the public channel's line for officers; the chats off: the gear and the choice still there", function()
+			WithWindow(function(w)
+				WithGameChat(function(g)
+					local saved = { canPin = ns.Channels.CanPin, scope = ns.Channels.PinScope, public = ns.Comm.IsPublic, officer = ns.Roster.IsOfficer }
+					local ok, err = pcall(function()
+						AsCaptain()
+						ns.db.addonChat = true
+						ns.Channels.Pin = function() return nil end
+						local dialogs = {}
+						ns.ShowDialog = function(which) dialogs[#dialogs + 1] = which end
+						local f = w.CW.Open()
+						f.gear:Click()
+						-- The Olympus tab: not there, the line to add it.
+						eq(ns.Channels.TabState(), "none")
+						local add = Under(f, L.CHATSET_TAB, L.CHATS_TAB_ADD)
+						assert(add, "the Olympus tab's line in the settings")
+						eq(add.text:GetText(), "|cff40ff40+ " .. L.CHATS_TAB_ADD .. "|r")
+						assert(TipOf(add):find(L.CHATS_TAB_ADD_TIP, 1, true))
+						add:Click()
+						local p = w.CW.Pointer()
+						assert(p and p:IsShown(), "Olympus's pointer"); eq(w.CW.Watching(), true); eq(ns.Channels.TabState(), "none")
+						local steps = Under(f, L.CHATSET_TAB, L.CHATS_TAB_STEPS:format("General", "Create New Window"))
+						assert(steps, "the steps while it is awaited")
+						p:Hide()
+						steps:Click()
+						eq(p:IsShown(), true, "a click shows the pointer again")
+						-- The player makes it: the real SetupTab, once; the line says on.
+						w.printed = {}
+						g.Make(6)
+						w.event("UPDATE_CHAT_WINDOWS")
+						eq(ns.Channels.TabState(), "open"); eq(w.CW.Watching(), false); eq(p:IsShown(), false)
+						eq(Count(w.printed, SET), 1)
+						w.CW.Render()
+						local on = Under(f, L.CHATSET_TAB, L.CHATS_TAB_ON)
+						eq(on.text:GetText(), Grey(L.CHATS_TAB_ON))
+						assert(TipOf(on):find(L.CHATS_TAB_TIP, 1, true))
+						assert(Under(f, ALLH, L.CHATSET_WHERE:format('"Olympus"')), "each channel there")
+						on:Click()
+						eq(Count(w.printed, SET), 2, "open: a click sends them there again, said again")
+						-- Closed: waiting for it; a click is the guided way again.
+						g.Close(6)
+						w.CW.Render()
+						local waiting = Under(f, L.CHATSET_TAB, L.CHATS_TAB_WAITING)
+						eq(waiting.text:GetText(), Grey(L.CHATS_TAB_WAITING))
+						waiting:Click()
+						eq(w.CW.Watching(), true); eq(p:IsShown(), true)
+						-- Its x put the line over the lines away: the settings still add the tab.
+						w.CW.Reset()
+						ns.db.chatWin = { noTabLine = true }
+						ns.Channels.ChooseWindow("main")
+						f = w.CW.Open()
+						eq(f.guide:IsShown(), false, "the line put away")
+						f.gear:Click()
+						assert(Under(f, L.CHATSET_TAB, L.CHATS_TAB_ADD), "the settings still offer it")
+						-- A client whose Channels.lua has no Olympus tab: no such heading.
+						local setup = ns.Channels.SetupTab
+						ns.Channels.SetupTab = nil
+						w.CW.Render()
+						eq(Setting(f, L.CHATSET_TAB), nil)
+						ns.Channels.SetupTab = setup
+						-- The pin's control, for whoever may pin (Channels.CanPin), through Olympus's own dialog.
+						ns.Channels.CanPin = function() return false end
+						w.CW.Render()
+						eq(Setting(f, L.PIN_ADD), nil); eq(Setting(f, L.PIN_ADD_GUILD), nil, "a Captain: none")
+						AsLord()
+						ns.Channels.CanPin, ns.Channels.PinScope = function() return true end, function() return "guild" end
+						w.CW.Render()
+						assert(Setting(f, LORDH), "a Lord's three channels")
+						local pin = Under(f, L.PIN_LABEL, L.PIN_ADD_GUILD)
+						assert(pin, "a guild master's control"); eq(Setting(f, L.PIN_ADD), nil)
+						assert(TipOf(pin):find(L.PIN_ADD_GUILD_TIP, 1, true))
+						pin:Click()
+						eq(dialogs[1], "OLYMPUS_PIN", "Olympus's own dialog")
+						ns.Channels.PinScope = function() return "army" end
+						w.CW.Render()
+						assert(Under(f, L.PIN_LABEL, L.PIN_ADD), "the King's, his Stewards' and Hands'")
+						-- The public channel's line, for officers (Views.PublicLines), under the chats' own.
+						ns.Comm.IsPublic, ns.Roster.IsOfficer = function() return true end, function() return true end
+						w.CW.Render()
+						local public = Under(f, L.CONSENT_CHAT, L.PUBLIC_NET:format(ns.Comm.ChannelSpec and ns.Comm.ChannelSpec() or ns.CHANNEL))
+						assert(public, "the public channel's line")
+						assert(TipOf(public):find(L.PUBLIC_NET_OFFICER, 1, true))
+						ns.Roster.IsOfficer = function() return false end
+						w.CW.Render()
+						eq(Setting(f, L.PUBLIC_NET:format(ns.Comm.ChannelSpec and ns.Comm.ChannelSpec() or ns.CHANNEL)), nil, "none for a member")
+						-- The chats off: the gear and the settings still there, the choice said off, no pin.
+						ns.db.addonChat = false
+						w.CW.Render()
+						eq(f.gear:IsShown(), true); eq(w.CW.SettingsShown(), true)
+						assert(Under(f, L.CONSENT_CHAT, L.CHATSET_CHATS_OFF), "said off")
+						eq(Setting(f, L.PIN_ADD), nil, "no pin while the chats are off")
+						f.gear:Click()
+						eq(f.off:IsShown(), true, "back: the chats-off page"); eq(f.input:IsShown(), false); eq(f.setScroll:IsShown(), false)
+						eq(#w.focus, 0)
+					end)
+					ns.Channels.CanPin, ns.Channels.PinScope, ns.Comm.IsPublic, ns.Roster.IsOfficer = saved.canPin, saved.scope, saved.public, saved.officer
+					if not ok then error(err, 0) end
+				end)
+			end)
+		end)
+
+		test("1.1.1 Chat tab settings: the choices saved before the update show as they were (a channel muted, a window chosen, the channel last shown, the Olympus tab's line put away); nothing lost", function()
+			WithWindow(function(w)
+				WithGameChat(function(g)
+					AsCaptain()
+					ns.db.addonChat = true
+					ns.Channels.Pin = function() return nil end
+					rawset(g[5], "name", "Oly"); rawset(g[5], "isDocked", true)
+					-- As 1.1.0's saved variables and the first 1.1.1 build's left them.
+					ns.db.chatMute = { A = true }
+					ns.db.chatWindows = { [ns.me] = { C = "Oly" } }
+					ns.db.chatWin = { tier = "C", noTabLine = true, x = 10, y = 20 }
+					w.fire("INIT")
+					local f = w.CW.Open()
+					eq(w.CW.Tier(), "C", "the channel last shown")
+					eq(f.guide:IsShown(), false, "the line put away stays away")
+					f.gear:Click()
+					assert(Under(f, ALLH, L.CHATSET_MUTED), "[Olympus] muted in chat")
+					assert(Under(f, CAPTH, L.CHATSET_SHOWN))
+					assert(Under(f, ALLH, L.CHATSET_WHERE:format(L.CHATWIN_MAIN_NAME)))
+					assert(Under(f, CAPTH, L.CHATSET_WHERE:format('"Oly"')), "[Captains] in its window")
+					eq(Under(f, CAPTH, L.CHATWIN_GONE_TAG), nil)
+					eq(ns.db.chatMute.A, true); eq(ns.db.chatWindows[ns.me].C, "Oly"); eq(ns.db.chatWin.noTabLine, true)
+				end)
+			end)
+		end)
+		end)()
+	end
+
+	---------------------------------------------------------------------------
+	-- 1.1.1, the owner's ask after trying the Chat tab: with the tab open, the game's "Open chat" key
+	-- starts typing in its box, and the cursor stays there line after line until he takes it out.
+	-- The client's key bindings as a stand-in: GetBindingKey answers the keys the player bound
+	-- (k.keys; its overrides left out, as the client does unless asked), SetOverrideBindingClick and
+	-- ClearOverrideBindings keep the overrides by owner, and a call in combat lockdown is refused and
+	-- recorded (k.blocked: the client's ADDON_ACTION_BLOCKED). The game's "Open chat with /"
+	-- (OPENCHATSLASH) is k.slash, and GetBindingText names a key as the game shows it (k.names; the
+	-- key itself when none is given, as the client's own names do for "/"). k.Press runs a key as the client
+	-- does: into the box that has the keyboard, else its override's click, on the press and on the
+	-- release as the button registered for them (RegisterForClicks; a Button's default is the
+	-- release, LeftButtonUp).
+	---------------------------------------------------------------------------
+	do
+		local function WithKeys(fn)
+			local saved = { get = GetBindingKey, set = SetOverrideBindingClick, clear = ClearOverrideBindings,
+				combat = InCombatLockdown, reg = rawget(Widget, "RegisterForClicks"), text = GetBindingText }
+			local k = { keys = { "ENTER" }, slash = { "/" }, names = {}, binds = {}, blocked = {}, cleared = {}, calls = 0, combat = false }
+			local ok, err = pcall(function()
+				GetBindingKey = function(action)
+					if action == "OPENCHAT" then return unpack(k.keys) end
+					if action == "OPENCHATSLASH" then return unpack(k.slash) end
+				end
+				GetBindingText = function(key) return k.names[key] or key end
+				InCombatLockdown = function() return k.combat end
+				SetOverrideBindingClick = function(owner, priority, key, name, button)
+					k.calls = k.calls + 1
+					if k.combat then k.blocked[#k.blocked + 1] = "SetOverrideBindingClick " .. tostring(key) return end
+					k.binds[key] = { owner = owner, priority = priority, name = name, button = button }
+				end
+				ClearOverrideBindings = function(owner)
+					k.calls = k.calls + 1
+					k.cleared[#k.cleared + 1] = owner
+					if k.combat then k.blocked[#k.blocked + 1] = "ClearOverrideBindings" return end
+					for key, b in pairs(k.binds) do if b.owner == owner then k.binds[key] = nil end end
+				end
+				Widget.RegisterForClicks = function(self, ...) self.clicks = { ... } end
+				k.Bound = function()
+					local out = {}
+					for key in pairs(k.binds) do out[#out + 1] = key end
+					table.sort(out)
+					return table.concat(out, " ")
+				end
+				k.Press = function(key, box)
+					local function Click(down)
+						local b = k.binds[key]
+						if not b then return end
+						local target = _G[b.name]
+						local on = {}
+						for _, c in ipairs(target.clicks or { "LeftButtonUp" }) do on[c] = true end
+						if on[down and "AnyDown" or "AnyUp"] or on[b.button .. (down and "Down" or "Up")] then
+							target:Fire("OnClick", b.button, down)
+						end
+					end
+					if box and box.focused then
+						box:Fire(key == "ESCAPE" and "OnEscapePressed" or "OnEnterPressed")
+					else
+						Click(true)
+					end
+					if not (box and box.focused) then Click(false) end
+				end
+				fn(k)
+			end)
+			GetBindingKey, SetOverrideBindingClick, ClearOverrideBindings, InCombatLockdown = saved.get, saved.set, saved.clear, saved.combat
+			Widget.RegisterForClicks, GetBindingText = saved.reg, saved.text
+			if not ok then error(err, 0) end
+		end
+		local function Focused(eb) return eb.focused == true end
+
+		test("1.1.1 Chat tab key: the game's Open chat key is bound to Olympus's own button while the Chat tab shows, and taken off when it hides, the window closes, another tab is picked or the chats go off; / stays the game's", function()
+			WithWindow(function(w)
+				WithKeys(function(k)
+					AsCaptain()
+					ns.db.addonChat = true
+					eq(k.Bound(), "", "nothing before the tab shows")
+					local f = w.CW.Open("A")
+					eq(k.Bound(), "ENTER", "the key of the game's Open chat")
+					local b = k.binds.ENTER
+					eq(b.name, "OlympusChatKey"); eq(b.button, "LeftButton")
+					eq(b.owner, rawget(_G, "OlympusChatKey"), "owned by Olympus's own button"); eq(b.owner:GetObjectType(), "Button")
+					eq(b.priority, false, "not over the priority bindings (the gamepad UI's own)")
+					eq(b.owner.clicks and table.concat(b.owner.clicks, " "), "AnyDown", "on the press, as the game's own binding runs")
+					eq(k.binds["/"], nil, "/ stays the game's: commands run in its box")
+					eq(Focused(f.input), false, "opening takes no keyboard"); eq(#w.focus, 0)
+					w.CW.Close()
+					eq(k.Bound(), "", "the window closed")
+					w.CW.Open()
+					eq(k.Bound(), "ENTER")
+					w.UI.SelectTab("census")
+					eq(k.Bound(), "", "another tab")
+					w.UI.SelectTab("chat")
+					eq(k.Bound(), "ENTER", "the Chat tab again")
+					w.CW.Window():Hide()
+					eq(k.Bound(), "", "the window hidden (its X, Escape)")
+					f = w.CW.Open()
+					eq(k.Bound(), "ENTER")
+					ns.db.addonChat = false
+					w.fire("CHAT_CHANGED")
+					f:Fire("OnUpdate", 0.3)
+					eq(f.input:IsShown(), false, "(the chats off: no box)"); eq(k.Bound(), "", "the chats off")
+					ns.db.addonChat = true
+					w.fire("CHAT_CHANGED")
+					f:Fire("OnUpdate", 0.3)
+					eq(f.input:IsShown(), true); eq(k.Bound(), "ENTER", "on again")
+					-- Out of Olympus (no channel read any more): the tab goes, the key with it.
+					GetGuildInfo = function() return "Wanderers", "Member", 3 end
+					w.CW.Render()
+					eq(f:IsShown(), false, "(the tab gone)"); eq(k.Bound(), "")
+					for _, owner in ipairs(k.cleared) do eq(owner, b.owner, "only our own button's overrides cleared") end
+					eq(#k.blocked, 0)
+				end)
+			end)
+		end)
+
+		test("1.1.1 Chat tab key: no binding changed in combat; the tab opened in a fight is bound when it ends, closed in one the key goes back then; pressed meanwhile it opens nothing and says why, once a fight", function()
+			WithWindow(function(w)
+				WithKeys(function(k)
+					AsCaptain()
+					ns.db.addonChat = true
+					k.combat = true
+					local f = w.CW.Open("A")
+					assert(f and f:IsShown(), "the tab opens in a fight")
+					eq(k.calls, 0, "no binding call in combat"); eq(k.Bound(), "")
+					k.combat = false
+					w.event("PLAYER_REGEN_ENABLED")
+					eq(k.Bound(), "ENTER", "bound when the fight ends, the tab still open")
+					-- Closed in a fight: kept through it, taken off after.
+					k.combat = true
+					local calls = k.calls
+					w.CW.Close()
+					eq(k.calls, calls, "nothing changed in combat"); eq(k.Bound(), "ENTER")
+					w.printed = {}
+					k.Press("ENTER", f.input)
+					k.Press("ENTER", f.input)
+					eq(Focused(f.input), false, "nothing typed in"); eq(#w.focus, 0)
+					-- (Changed on purpose, the review: the message is CHATWIN_KEY_LATER and then the player's own
+					-- key for the game's chat with /, read from the game; it was that line alone, "/" written in
+					-- it. Its words and the key's are the test after the gamepad UI's.)
+					local told = 0
+					for _, p in ipairs(w.printed) do if p:find(L.CHATWIN_KEY_LATER, 1, true) == 1 then told = told + 1 end end
+					eq(told, 1, "said once a fight: " .. table.concat(w.printed, " / "))
+					eq(k.calls, calls, "still nothing changed in combat")
+					k.combat = false
+					w.event("PLAYER_REGEN_ENABLED")
+					eq(k.Bound(), "", "the key back to the game when the fight ends")
+					-- Opened and closed within one fight: nothing to do after it.
+					k.combat = true
+					w.CW.Open()
+					w.CW.Close()
+					k.combat = false
+					calls = k.calls
+					w.event("PLAYER_REGEN_ENABLED")
+					eq(k.calls, calls, "nothing to change"); eq(k.Bound(), "")
+					-- Closed and opened again within one fight: as it was.
+					f = w.CW.Open()
+					eq(k.Bound(), "ENTER")
+					k.combat = true
+					w.CW.Close()
+					f = w.CW.Open()
+					k.combat = false
+					calls = k.calls
+					w.event("PLAYER_REGEN_ENABLED")
+					eq(k.calls, calls, "nothing to change"); eq(k.Bound(), "ENTER")
+					k.Press("ENTER", f.input)
+					eq(Focused(f.input), true, "and it types in the box")
+					f.input:Fire("OnEscapePressed")
+					-- Another fight, the tab gone again: said again.
+					k.combat = true
+					w.CW.Close()
+					w.printed = {}
+					k.Press("ENTER", f.input)
+					assert((w.printed[1] or ""):find(L.CHATWIN_KEY_LATER, 1, true) == 1, "another fight: said again")
+					k.combat = false
+					w.event("PLAYER_REGEN_ENABLED")
+					eq(k.Bound(), "")
+					eq(#k.blocked, 0, "no binding call the game would refuse: " .. table.concat(k.blocked, ", "))
+				end)
+			end)
+		end)
+
+		test("1.1.1 Chat tab key: the key is the player's own, read from the game (another key, two keys, changed in the game's Key Bindings while the tab shows); none bound, no binding", function()
+			WithWindow(function(w)
+				WithKeys(function(k)
+					AsCaptain()
+					ns.db.addonChat = true
+					k.keys = { "CTRL-T" }
+					local f = w.CW.Open("A")
+					eq(k.Bound(), "CTRL-T", "his own key"); eq(k.binds.ENTER, nil, "Enter left to the game")
+					k.Press("CTRL-T", f.input)
+					eq(Focused(f.input), true, "it starts typing here")
+					f.input:Fire("OnEscapePressed")
+					w.CW.Close()
+					k.keys = { "ENTER", "NUMPADENTER" }
+					f = w.CW.Open()
+					eq(k.Bound(), "ENTER NUMPADENTER", "both his keys")
+					k.Press("NUMPADENTER", f.input)
+					eq(Focused(f.input), true)
+					f.input:Fire("OnEscapePressed")
+					-- Changed in the game's Key Bindings while the tab shows: followed.
+					k.keys = { "SHIFT-ENTER" }
+					w.event("UPDATE_BINDINGS")
+					eq(k.Bound(), "SHIFT-ENTER")
+					-- None bound: no binding at all (nothing assumed).
+					k.keys = {}
+					w.event("UPDATE_BINDINGS")
+					eq(k.Bound(), "")
+					w.CW.Close()
+					f = w.CW.Open()
+					eq(k.Bound(), "", "none, and nothing assumed")
+					k.Press("ENTER", f.input)
+					eq(Focused(f.input), false)
+					-- A client without GetBindingKey: none either.
+					k.keys = { "ENTER" }
+					GetBindingKey = nil
+					w.CW.Render()
+					eq(k.Bound(), "")
+					eq(#k.blocked, 0)
+				end)
+			end)
+		end)
+
+		test("1.1.1 Chat tab key: the key puts the cursor in the box (the settings give way to the lines); Enter sends and the empty box keeps it for the next line; a refused line keeps its text and the cursor and says why; an empty Enter or Escape gives the keyboard back", function()
+			WithWindow(function(w)
+				WithKeys(function(k)
+					local saved = { room = ns.Comm.ChatRoom, warned = ns.db.chatWarned }
+					local ok, err = pcall(KeepSendGap, function()
+						WithLane(function(sent)
+							AsCaptain()
+							ns.db.addonChat = true
+							ns.db.chatWarned = { A = true }
+							ns.Comm.ChatRoom = function() return 3 end
+							local clock = 1e7
+							GetTime = function() return clock end
+							local f = w.CW.Open("A")
+							local eb = f.input
+							eq(Focused(eb), false)
+							k.Press("ENTER", eb)
+							eq(Focused(eb), true, "the key: the box has the keyboard"); eq(w.focus[1], "OlympusFrameChatInput")
+							eb:SetText("first line")
+							k.Press("ENTER", eb)
+							eq(#sent, 1, "sent: " .. table.concat(w.printed, " / ")); assert(sent[1]:find("first line", 1, true), sent[1])
+							eq(eb:GetText(), "", "the box empty"); eq(Focused(eb), true, "the cursor stays")
+							clock = clock + 10
+							eb:SetText("second line")
+							k.Press("ENTER", eb)
+							eq(#sent, 2); eq(eb:GetText(), ""); eq(Focused(eb), true, "and again")
+							-- The flood guard: too soon after it.
+							w.printed = {}
+							eb:SetText("too soon")
+							k.Press("ENTER", eb)
+							eq(#sent, 2, "refused"); eq(eb:GetText(), "too soon", "the text stays"); eq(Focused(eb), true, "and the cursor")
+							assert(Said(w, L.CHAN_TOO_FAST), "told why")
+							-- The game's chat lockdown.
+							clock = clock + 10
+							local info = C_ChatInfo
+							C_ChatInfo = { InChatMessagingLockdown = function() return true end }
+							w.printed = {}
+							k.Press("ENTER", eb)
+							C_ChatInfo = info
+							eq(#sent, 2); eq(eb:GetText(), "too soon"); eq(Focused(eb), true); assert(Said(w, L.CHAN_LOCKDOWN), "told why")
+							-- The chats turned off (another way) before the box goes: refused, kept, said.
+							ns.db.addonChat = false
+							w.printed = {}
+							k.Press("ENTER", eb)
+							ns.db.addonChat = true
+							eq(#sent, 2); eq(eb:GetText(), "too soon"); eq(Focused(eb), true); assert(Said(w, L.CHAT_OFF), "told why")
+							-- Sent at last.
+							k.Press("ENTER", eb)
+							eq(#sent, 3); eq(eb:GetText(), ""); eq(Focused(eb), true)
+							-- An empty Enter lets go (and its release takes nothing back); the key again, back in.
+							local asked = #w.focus
+							k.Press("ENTER", eb)
+							eq(Focused(eb), false, "an empty Enter: the game's controls back"); eq(#w.focus, asked, "the release took nothing")
+							k.Press("ENTER", eb)
+							eq(Focused(eb), true, "the key again: typing")
+							-- Escape lets go too; what was typed stays.
+							eb:SetText("half a thought")
+							k.Press("ESCAPE", eb)
+							eq(Focused(eb), false, "Escape: the game's controls back"); eq(eb:GetText(), "half a thought")
+							eq(#sent, 3)
+							-- The settings shown: the key brings the lines and the box back, and types there.
+							f.gear:Click()
+							eq(w.CW.SettingsShown(), true); eq(eb:IsShown(), false)
+							eq(k.Bound(), "ENTER", "(still bound: the tab shows)")
+							k.Press("ENTER", eb)
+							eq(w.CW.SettingsShown(), false, "the lines again"); eq(eb:IsShown(), true); eq(Focused(eb), true)
+							eq(#k.blocked, 0)
+						end)
+					end)
+					ns.Comm.ChatRoom, ns.db.chatWarned = saved.room, saved.warned
+					if not ok then error(err, 0) end
+				end)
+			end)
+		end)
+
+		test("1.1.1 Chat tab key: with the gamepad UI nothing changes: no binding, the box a click only, and every Enter lets the keyboard go as before", function()
+			WithWindow(function(w)
+				WithKeys(function(k)
+					AsCaptain()
+					ns.db.addonChat = true
+					local sent, answers = {}, {}
+					ns.Channels.Send = function(t, text)
+						sent[#sent + 1] = t .. " " .. text
+						local a = table.remove(answers, 1) or { true, "ok" }
+						return a[1], a[2]
+					end
+					local f
+					WithGamepadUI(true, function()
+						f = w.CW.Open("A")
+						local eb = f.input
+						eq(k.calls, 0, "no binding"); eq(k.Bound(), "")
+						k.Press("ENTER", eb)
+						eq(Focused(eb), false, "the key stays the game's"); eq(#w.focus, 0)
+						eb.focused = true -- (the player's click, with the gamepad cursor)
+						eb:SetText("hi")
+						k.Press("ENTER", eb)
+						eq(sent[1], "A hi"); eq(eb:GetText(), ""); eq(Focused(eb), false, "sent, and the keyboard let go, as before")
+						answers = { { false, "fast" } }
+						eb.focused = true
+						eb:SetText("again")
+						k.Press("ENTER", eb)
+						eq(eb:GetText(), "again", "refused: the text stays"); eq(Focused(eb), false, "the keyboard let go, as before")
+						w.CW.Close()
+						w.CW.Open()
+						w.UI.SelectTab("census")
+						w.UI.SelectTab("chat")
+						eq(k.calls, 0, "never a binding with the gamepad UI"); eq(#w.focus, 0)
+					end)
+					-- Mouse and keyboard again: bound at the next redraw (the switch's own event is the next test's).
+					w.CW.Render()
+					eq(k.Bound(), "ENTER")
+					-- (Changed on purpose, the review of the key: switched to the gamepad UI with the key bound,
+					-- the key pressed and a redraw took it off there, a binding changed under the gamepad UI (its
+					-- UPDATE_BINDINGS handlers run from ours). Under it now nothing but the switch itself changes a
+					-- binding: the key pressed types nothing and the binding is left to the switch.)
+					local calls = k.calls
+					WithGamepadUI(true, function()
+						k.Press("ENTER", f.input)
+						w.CW.Render()
+						eq(Focused(f.input), false, "the key pressed: nothing typed in"); eq(k.calls, calls, "no binding call under the gamepad UI")
+					end)
+					eq(#w.focus, 0); eq(#k.blocked, 0)
+				end)
+			end)
+		end)
+
+		-- (The review of the key, its first point: switched to the gamepad UI with the key bound, Olympus
+		-- took the binding off later, under the gamepad UI (at a redraw, the tab hidden, the key pressed),
+		-- each change running the gamepad UI's UPDATE_BINDINGS handlers from ours; and back to mouse and
+		-- keyboard the key waited for a redraw. Now the switch itself (INPUT_DEVICE_INTERFACE_TRANSITION)
+		-- takes it off and puts it back; a switch in a fight waits for its end.)
+		test("1.1.1 Chat tab key review: a switch to the gamepad UI takes the key off at the switch, and under it no redraw, hiding, key press or Key Bindings change makes a binding call; back to mouse and keyboard it is bound at once; a switch in a fight waits for its end", function()
+			WithWindow(function(w)
+				WithKeys(function(k)
+					AsCaptain()
+					ns.db.addonChat = true
+					local f = w.CW.Open("A")
+					eq(k.Bound(), "ENTER")
+					WithGamepadUI(true, function()
+						w.event("INPUT_DEVICE_INTERFACE_TRANSITION", 1, 0)
+						eq(k.Bound(), "", "taken off at the switch")
+						local calls = k.calls
+						w.CW.Render()
+						k.Press("ENTER", f.input)
+						k.keys = { "CTRL-T" }
+						w.event("UPDATE_BINDINGS")
+						k.keys = { "ENTER" }
+						w.event("UPDATE_BINDINGS")
+						w.UI.SelectTab("census")
+						w.UI.SelectTab("chat")
+						w.CW.Close()
+						f = w.CW.Open()
+						w.CW.Render()
+						eq(k.calls, calls, "no binding call under the gamepad UI"); eq(k.Bound(), "")
+						eq(Focused(f.input), false); eq(#w.focus, 0)
+					end)
+					-- Back to mouse and keyboard with the tab open: bound at the switch, no redraw needed.
+					w.event("INPUT_DEVICE_INTERFACE_TRANSITION", 0, 1)
+					eq(k.Bound(), "ENTER", "bound at the switch back")
+					k.Press("ENTER", f.input)
+					eq(Focused(f.input), true, "and it types in the box")
+					f.input:Fire("OnEscapePressed")
+					-- The switch in a fight: nothing changed in it; the key comes off when it ends, and nothing
+					-- changes after that under the gamepad UI.
+					k.combat = true
+					local calls = k.calls
+					WithGamepadUI(true, function()
+						w.event("INPUT_DEVICE_INTERFACE_TRANSITION", 1, 0)
+						eq(k.calls, calls, "nothing changed in combat"); eq(k.Bound(), "ENTER")
+						w.printed = {}
+						k.Press("ENTER", f.input)
+						w.CW.Render()
+						eq(Focused(f.input), false, "nothing typed in"); eq(k.calls, calls, "nor a binding changed")
+						assert(Said(w, L.CHATWIN_KEY_LATER), "told the key comes back when the fight ends")
+						k.combat = false
+						w.event("PLAYER_REGEN_ENABLED")
+						eq(k.Bound(), "", "taken off when the fight ends")
+						calls = k.calls
+						w.CW.Render()
+						w.CW.Close()
+						w.CW.Open()
+						w.event("PLAYER_REGEN_ENABLED")
+						eq(k.calls, calls, "and nothing after it")
+					end)
+					-- Back to mouse and keyboard in a fight: bound when it ends, the tab open.
+					k.combat = true
+					w.event("INPUT_DEVICE_INTERFACE_TRANSITION", 0, 1)
+					eq(k.calls, calls); eq(k.Bound(), "")
+					k.combat = false
+					w.event("PLAYER_REGEN_ENABLED")
+					eq(k.Bound(), "ENTER", "bound when the fight ends")
+					-- The style the event names is the one switched to, whatever the game's current style still
+					-- reads at that moment (the event's newMode, as Borders.lua takes it).
+					WithGamepadUI(false, function()
+						w.event("INPUT_DEVICE_INTERFACE_TRANSITION", 1, 0)
+						eq(k.Bound(), "", "to the gamepad UI, as the event says")
+					end)
+					WithGamepadUI(true, function()
+						w.event("INPUT_DEVICE_INTERFACE_TRANSITION", 0, 1)
+						eq(k.Bound(), "ENTER", "back to mouse and keyboard, as the event says")
+					end)
+					-- A switch while the tab is closed: nothing to bind or take off.
+					w.CW.Close()
+					eq(k.Bound(), "")
+					calls = k.calls
+					WithGamepadUI(true, function() w.event("INPUT_DEVICE_INTERFACE_TRANSITION", 1, 0) end)
+					w.event("INPUT_DEVICE_INTERFACE_TRANSITION", 0, 1)
+					eq(k.calls, calls, "nothing to change")
+					eq(#k.blocked, 0, table.concat(k.blocked, ", "))
+				end)
+			end)
+		end)
+
+		-- (The review of the key, its second points: the fight's message said "/" opens the game's chat,
+		-- and that key can be another or none (the game's "Open chat with /", OPENCHATSLASH, in the
+		-- player's Key Bindings); and the "/" line's message gave no way to the game's box now that the
+		-- open-chat key comes back to this one. Both name the key the player bound, read from the game
+		-- (GetBindingText), and leave it out when none is bound.)
+		test("1.1.1 Chat tab key review: the fight's message and the / line's name the player's own key for the game's chat with / (Escape first, from the box), and leave it out when none is bound; with the gamepad UI the / line's is as before", function()
+			WithWindow(function(w)
+				WithKeys(function(k)
+					AsCaptain()
+					ns.db.addonChat = true
+					assert(not L.CHATWIN_KEY_LATER:find("/", 1, true), "no \"/\" written in the fight's message: " .. L.CHATWIN_KEY_LATER)
+					local function Fight()
+						local f = w.CW.Open("A")
+						k.combat = true
+						w.CW.Close()
+						w.printed = {}
+						k.Press("ENTER", f.input)
+						k.combat = false
+						w.event("PLAYER_REGEN_ENABLED")
+						eq(#w.printed, 1, table.concat(w.printed, " / "))
+						return w.printed[1]
+					end
+					eq(Fight(), L.CHATWIN_KEY_LATER .. " " .. L.CHATWIN_KEY_LATER_SLASH:format("/"), "the / key, read from the game")
+					k.slash, k.names.BUTTON4 = { "BUTTON4" }, "Mouse Button 4"
+					eq(Fight(), L.CHATWIN_KEY_LATER .. " " .. L.CHATWIN_KEY_LATER_SLASH:format("Mouse Button 4"), "another key, as the game names it")
+					k.slash = {}
+					eq(Fight(), L.CHATWIN_KEY_LATER, "none bound: nothing said of it")
+					-- The "/" line, the cursor kept in the box: Escape, then the key.
+					local f = w.CW.Open("A")
+					local eb = f.input
+					k.Press("ENTER", eb)
+					eq(Focused(eb), true)
+					k.slash = { "/" }
+					eb:SetText("/cast Fireball")
+					w.printed = {}
+					k.Press("ENTER", eb)
+					eq(w.printed[#w.printed], L.CHATWIN_NO_SLASH:format(L.CHAN_ALL) .. " " .. L.CHATWIN_SLASH_WAY:format("/"))
+					eq(eb:GetText(), "/cast Fireball"); eq(Focused(eb), true)
+					k.slash = { "BUTTON4" }
+					k.Press("ENTER", eb)
+					eq(w.printed[#w.printed], L.CHATWIN_NO_SLASH:format(L.CHAN_ALL) .. " " .. L.CHATWIN_SLASH_WAY:format("Mouse Button 4"))
+					k.slash = {}
+					k.Press("ENTER", eb)
+					eq(w.printed[#w.printed], L.CHATWIN_NO_SLASH:format(L.CHAN_ALL), "none bound: nothing said of it")
+					-- The gamepad UI: the box lets go at every Enter, as before, and the message is as before.
+					k.slash = { "/" }
+					WithGamepadUI(true, function()
+						eb.focused = true
+						k.Press("ENTER", eb)
+						eq(w.printed[#w.printed], L.CHATWIN_NO_SLASH:format(L.CHAN_ALL)); eq(Focused(eb), false)
+					end)
+					-- English and pt-BR: the key's place in each (one %s), and no "/" written in the fight's.
+					local pns = {}
+					local savedLocale = GetLocale
+					GetLocale = function() return "ptBR" end
+					local okPt, errPt = pcall(function() assert(loadfile(ADDON_DIR .. "Locales.lua"))("Olympus", pns) end)
+					GetLocale = savedLocale
+					if not okPt then error(errPt, 0) end
+					local pt = pns.L
+					for _, key in ipairs({ "CHATWIN_KEY_LATER", "CHATWIN_KEY_LATER_SLASH", "CHATWIN_SLASH_WAY" }) do
+						assert(type(pt[key]) == "string" and pt[key] ~= L[key], "pt-BR " .. key)
+						local n = key == "CHATWIN_KEY_LATER" and 0 or 1
+						eq(select(2, L[key]:gsub("%%s", "")), n, "English " .. key); eq(select(2, pt[key]:gsub("%%s", "")), n, "pt-BR " .. key)
+					end
+					assert(not pt.CHATWIN_KEY_LATER:find("/", 1, true), pt.CHATWIN_KEY_LATER)
+					eq(#k.blocked, 0)
+				end)
+			end)
+		end)
+
+		-- (The review of the key, a point of coverage: the interface hidden with Alt-Z (UIParent hidden,
+		-- the tab still shown in its window but not in sight) was done but never run by a test, the toolkit
+		-- passing no parent's OnHide down; the tab's is fired here as the client does. And the channels'
+		-- list open when the key is pressed.)
+		test("1.1.1 Chat tab key review: the interface hidden (Alt-Z) gives the key back to the game, shown again takes it; in a fight each waits for its end; the key closes the channels' list", function()
+			WithWindow(function(w)
+				WithKeys(function(k)
+					local ok, err = pcall(function()
+						AsCaptain()
+						ns.db.addonChat = true
+						local f = w.CW.Open("A")
+						eq(k.Bound(), "ENTER")
+						UIParent:Hide()
+						f:Fire("OnHide") -- (the client: a parent hidden hides what it holds)
+						eq(f:IsShown(), true, "(the tab still shown in its window)"); eq(f:IsVisible(), false, "(not in sight)")
+						eq(k.Bound(), "", "the key back to the game")
+						w.CW.Render()
+						eq(k.Bound(), "", "a redraw meanwhile binds nothing")
+						UIParent:Show()
+						f:Fire("OnShow")
+						eq(k.Bound(), "ENTER", "the interface back: the key again")
+						-- In a fight: nothing changed in it, each change made when it ends.
+						k.combat = true
+						local calls = k.calls
+						UIParent:Hide()
+						f:Fire("OnHide")
+						eq(k.calls, calls, "nothing changed in combat"); eq(k.Bound(), "ENTER")
+						k.combat = false
+						w.event("PLAYER_REGEN_ENABLED")
+						eq(k.Bound(), "", "given back when the fight ends")
+						k.combat = true
+						calls = k.calls
+						UIParent:Show()
+						f:Fire("OnShow")
+						eq(k.calls, calls, "nothing changed in combat"); eq(k.Bound(), "")
+						k.combat = false
+						w.event("PLAYER_REGEN_ENABLED")
+						eq(k.Bound(), "ENTER", "taken when the fight ends")
+						-- The channels' list open: the key closes it and types in the box.
+						f.switch:Click()
+						eq(f.menu:IsShown(), true, "(the channels' list)")
+						k.Press("ENTER", f.input)
+						eq(f.menu:IsShown(), false, "the key closes the list"); eq(Focused(f.input), true, "and types in the box")
+						eq(#k.blocked, 0)
+					end)
+					UIParent:Show()
+					if not ok then error(err, 0) end
+				end)
+			end)
+		end)
+
+		test("1.1.1 Chat tab key: the game's chat box is never opened, focused or written, and no binding of the game's changed for good: only Olympus's own button's override", function()
+			WithWindow(function(w)
+				WithKeys(function(k)
+					local traps = { "ChatFrame_OpenChat", "ChatEdit_ActivateChat", "ChatFrame_ActivateChat", "ChatEdit_FocusActiveWindow",
+						"ChatEdit_DeactivateChat", "SetBinding", "SetBindingClick", "SaveBindings", "SetOverrideBinding",
+						"SetOverrideBindingSpell", "SetOverrideBindingMacro", "SetOverrideBindingItem", "ChatFrameUtil", "ChatFrame1EditBox" }
+					local calls, saved = {}, {}
+					for _, name in ipairs(traps) do saved[name] = rawget(_G, name) end
+					local boxes = { last = rawget(_G, "LAST_ACTIVE_CHAT_EDIT_BOX"), active = rawget(_G, "ACTIVE_CHAT_EDIT_BOX"),
+						override = rawget(_G, "CHAT_FOCUS_OVERRIDE") }
+					local theirs = {}
+					local ok, err = pcall(function()
+						for _, name in ipairs(traps) do _G[name] = function() calls[#calls + 1] = name end end
+						ChatFrameUtil = setmetatable({}, { __index = function(_, key) return function() calls[#calls + 1] = "ChatFrameUtil." .. key end end })
+						ChatFrame1EditBox = setmetatable({}, {
+							__index = function(_, key) return function() calls[#calls + 1] = "ChatFrame1EditBox:" .. key end end,
+							__newindex = function(_, key) calls[#calls + 1] = "ChatFrame1EditBox." .. key .. " written" end })
+						LAST_ACTIVE_CHAT_EDIT_BOX, ACTIVE_CHAT_EDIT_BOX, CHAT_FOCUS_OVERRIDE = theirs, nil, nil
+						AsCaptain()
+						ns.db.addonChat = true
+						ns.Channels.Send = function() return true, "ok" end
+						local f = w.CW.Open("A")
+						local eb = f.input
+						k.Press("ENTER", eb)
+						eb:SetText("one")
+						k.Press("ENTER", eb)
+						eb:SetText("/tar Boss")
+						k.Press("ENTER", eb)
+						eb:SetText("")
+						k.Press("ENTER", eb)
+						k.Press("/", eb)
+						k.Press("ENTER", eb)
+						k.Press("ESCAPE", eb)
+						f.gear:Click()
+						k.Press("ENTER", eb)
+						eb:Fire("OnEscapePressed")
+						k.combat = true
+						w.CW.Close()
+						k.Press("ENTER", eb)
+						k.combat = false
+						w.event("PLAYER_REGEN_ENABLED")
+						eq(#calls, 0, "the game's chat and its bindings untouched: " .. table.concat(calls, " "))
+						eq(rawget(_G, "LAST_ACTIVE_CHAT_EDIT_BOX"), theirs, "its last active box untouched")
+						eq(rawget(_G, "ACTIVE_CHAT_EDIT_BOX"), nil); eq(rawget(_G, "CHAT_FOCUS_OVERRIDE"), nil)
+						eq(k.binds["/"], nil, "/ stays the game's")
+						assert(#k.cleared > 0, "(taken off)")
+						for _, owner in ipairs(k.cleared) do
+							assert(owner == rawget(_G, "OlympusChatKey") and owner ~= UIParent, "only our own button's overrides cleared (never UIParent's: the gamepad UI's)")
+						end
+						assert(#w.focus > 0, "(typed in)")
+						for _, name in ipairs(w.focus) do eq(name, "OlympusFrameChatInput", "only our own box focused") end
+						eq(#k.blocked, 0)
+					end)
+					for _, name in ipairs(traps) do _G[name] = saved[name] end
+					LAST_ACTIVE_CHAT_EDIT_BOX, ACTIVE_CHAT_EDIT_BOX, CHAT_FOCUS_OVERRIDE = boxes.last, boxes.active, boxes.override
+					if not ok then error(err, 0) end
+				end)
+			end)
+		end)
+
+		test("1.1.1 Chat tab key: the README and the CurseForge page say the key starts typing in the tab and the cursor stays", function()
+			for _, path in ipairs({ "README.md", "docs/CURSEFORGE.md" }) do
+				local doc = assert(ReadFile(ROOT .. path)):gsub("%s+", " ")
+				assert(doc:find("or press your open-chat key (Enter, unless you changed it) while the tab shows", 1, true), path .. ": the key")
+				assert(doc:find("the cursor stays for the next line", 1, true), path .. ": the cursor")
+				assert(not doc:find("Enter sends to the channel shown and lets the keyboard go", 1, true), path .. ": no longer lets go")
+				-- (The review of the key: the client clears a box's focus on a plain left-click alone,
+				-- Blizzard_Game/Mainline/EventImplementation.lua's ClearCurrentKeyboardFocus.)
+				assert(doc:find("Enter on an empty box, Escape or a left-click elsewhere gives the keyboard back", 1, true), path .. ": a left-click")
+			end
+		end)
+	end
+end
+
 -- 1.1: the review of the net-off fixes, its last point (the Agenda's event).
 ;(function()
 	local M = ns.Moderation
@@ -42173,6 +45375,733 @@ end
 			end)
 		end)
 	end)
+end)()
+
+-- 1.1.1: GitHub #34 (a queued chat line never follows a channel change), the Olympus tab (a chat
+-- tab of the game's named Olympus, its lines without the channel's name) and /ol alone. The #34
+-- tests load Comm.lua and Channels.lua fresh into one namespace (FreshComm), on channels whose
+-- numbers the test sets; the tab's use the addon's Channels on stand-ins of the game's chat
+-- windows. (A function of its own: the main chunk is near LuaJIT's 200 locals.)
+;(function()
+	local SEND_OK, SEND_REFUSED = 0, 9 -- (Enum.SendAddonMessageResult: 0 is success)
+	-- fn(w, C, Chan) as a Lord of Olympus II, every channel warned, on the channel of realm key "key
+	-- one" as #6. w.sent: what reached SendAddonMessageLogged ({ msg, dist, target }); w.printed:
+	-- ns.Print; w.fired: ns.Fire ({ name, ... }); w.dialogs: ns.ShowDialog; w.ids: channel name ->
+	-- number (GetChannelName); w.clock: GetTime; w.refuse: the game refuses the sends; w.main: the
+	-- main chat window's lines; w.ns: the namespace.
+	local function WithChat(fn)
+		local saved = { name = GetChannelName, leave = LeaveChannelByName, join = JoinChannelByName, guild = GetGuildInfo,
+			time = GetTime, info = C_ChatInfo, default = DEFAULT_CHAT_FRAME,
+			slash = { SlashCmdList.OLYMPUSALL, SlashCmdList.OLYMPUSCAPTAINS, SlashCmdList.OLYMPUSLORDS },
+			dialogs = { StaticPopupDialogs.OLYMPUS_CHAT_PRIVACY, StaticPopupDialogs.OLYMPUS_PIN, StaticPopupDialogs.OLYMPUS_PIN_DOWN } }
+		local ok, err = pcall(function()
+			local cns = FreshComm()
+			local w = { sent = {}, printed = {}, fired = {}, dialogs = {}, ids = {}, clock = 100000, main = {}, ns = cns }
+			cns.db = { addonChat = true, chatWarned = { A = true, C = true, L = true }, blocked = {} }
+			cns.rdb = { guilds = {}, realmKey = "key one" }
+			cns.IsMember = function() return true end
+			cns.Print = function(msg) w.printed[#w.printed + 1] = tostring(msg) end
+			cns.Fire = function(name, ...) w.fired[#w.fired + 1] = { name, ... } end
+			cns.ShowDialog = function(which, a, b, data) w.dialogs[#w.dialogs + 1] = { which = which, a = a, b = b, data = data } end
+			cns.Data = setmetatable({ ForgetVotes = function() end }, { __index = ns.Data }) -- (the shared census stays as it is)
+			GetGuildInfo = function() return MY_GUILD, "Lord", 0 end
+			GetTime = function() return w.clock end
+			GetChannelName = function(name) return w.ids[name] or 0 end
+			LeaveChannelByName = function(name) w.ids[name] = nil end
+			JoinChannelByName = function() end
+			C_ChatInfo = {
+				RegisterAddonMessagePrefix = function() end,
+				SendAddonMessage = function() return SEND_OK end,
+				SendAddonMessageLogged = function(_, msg, dist, target)
+					w.sent[#w.sent + 1] = { msg = msg, dist = dist, target = target }
+					return w.refuse and SEND_REFUSED or SEND_OK
+				end,
+			}
+			DEFAULT_CHAT_FRAME = { AddMessage = function(_, text) w.main[#w.main + 1] = text end }
+			assert(loadfile(ADDON_DIR .. "Channels.lua"))("Olympus", cns)
+			local C = cns.Comm
+			w.ids[C.ChannelSpec()] = 6
+			C.JoinChannel()
+			eq(C.ChannelReady(), true, "on the channel")
+			fn(w, C, cns.Channels)
+		end)
+		GetChannelName, LeaveChannelByName, JoinChannelByName, GetGuildInfo = saved.name, saved.leave, saved.join, saved.guild
+		GetTime, C_ChatInfo, DEFAULT_CHAT_FRAME = saved.time, saved.info, saved.default
+		SlashCmdList.OLYMPUSALL, SlashCmdList.OLYMPUSCAPTAINS, SlashCmdList.OLYMPUSLORDS = saved.slash[1], saved.slash[2], saved.slash[3]
+		StaticPopupDialogs.OLYMPUS_CHAT_PRIVACY, StaticPopupDialogs.OLYMPUS_PIN = saved.dialogs[1], saved.dialogs[2]
+		StaticPopupDialogs.OLYMPUS_PIN_DOWN = saved.dialogs[3]
+		if not ok then error(err, 0) end
+	end
+	-- The realm key changes to `key` (an officer's /oly key, or the King's rotation): its channel is
+	-- #id, and the addon joins it.
+	local function NewKey(w, C, key, id)
+		w.ns.rdb.realmKey = key
+		w.ids[C.ChannelSpec()] = id
+		C.JoinChannel()
+	end
+	local function Pumps(C, n) for _ = 1, n or 10 do C.Pump() end end
+	-- The chat lines (M1) that reached the game's send, to channel #target (any when nil).
+	local function Lines(w, target)
+		local out = {}
+		for _, s in ipairs(w.sent) do
+			if s.msg:sub(1, 3) == "M1~" and (target == nil or s.target == target) then out[#out + 1] = s end
+		end
+		return out
+	end
+	local function Fired(w, name)
+		local out = {}
+		for _, f in ipairs(w.fired) do if f[1] == name then out[#out + 1] = f end end
+		return out
+	end
+	-- How many of `list` are exactly `text`.
+	local function Said(list, text)
+		local n = 0
+		for _, l in ipairs(list) do if tostring(l) == text then n = n + 1 end end
+		return n
+	end
+
+	-- GitHub #34, the reporter's regression adapted to 1.1.0's code (FreshComm, Channels.Send,
+	-- Comm.JoinChannel, Comm.Pump): on b05f15f the line went to #7 and was echoed as sent.
+	test("1.1.1 #34: a chat line queued for one Olympus channel is never sent on another after a realm-key change: dropped, and the player told once", function()
+		WithChat(function(w, C, Chan)
+			local text = "message composed for the first channel"
+			eq((Chan.Send("A", text)), true, "taken")
+			eq(#Lines(w), 0, "queued, not sent yet")
+			local first = C.ChannelName()
+			NewKey(w, C, "key two", 7)
+			assert(C.ChannelName() ~= first, "another channel")
+			Pumps(C)
+			eq(#Lines(w, 7), 0, "queued chat was sent to the replacement channel (#7):")
+			eq(#Lines(w), 0, "nor anywhere else:")
+			eq(Chan.Stats().sent, 0, "not counted as sent:")
+			eq(#Chan.History("A"), 0, "no echo:")
+			eq(#w.main, 0, "nothing in the chat:")
+			eq(Said(w.printed, ns.L.CHAN_MOVED:format("Olympus")), 1, "told once:")
+			eq(Said(w.printed, ns.L.CHAN_SEND_FAILED:format("Olympus")), 0, "not the plain failure:")
+			local f = Fired(w, "CHAT_SEND_FAILED")
+			eq(#f, 1, "one event:"); eq(f[1][2], "A"); eq(f[1][3], "moved"); eq(f[1][4], text); eq(f[1][5], 0, "no part had left:")
+			eq(C.Stats().chatMoved, 1); eq(Chan.Stats().moved, 1)
+			-- A line written now goes to the new channel, and shows.
+			w.clock = w.clock + 5
+			eq((Chan.Send("A", "for the new channel")), true)
+			Pumps(C)
+			eq(#Lines(w, 7), 1); assert(Lines(w, 7)[1].msg:find("~for the new channel$"), Lines(w, 7)[1].msg)
+			eq(#Chan.History("A"), 1); eq(Chan.Stats().sent, 1); eq(#Fired(w, "CHAT_SEND_FAILED"), 1)
+		end)
+	end)
+
+	test("1.1.1 #34: the same channel under a new number is no move: the queued line goes out there, and a later one too", function()
+		WithChat(function(w, C, Chan)
+			eq((Chan.Send("C", "same channel, new number")), true)
+			w.ids[C.ChannelName()] = 9 -- (the game numbered it anew: a channel before it was left)
+			Pumps(C)
+			eq(#Lines(w, 6), 0); eq(#Lines(w, 9), 1, "sent on its own channel, now #9")
+			eq(Chan.Stats().sent, 1); eq(#Chan.History("C"), 1, "echoed")
+			eq(#Fired(w, "CHAT_SEND_FAILED"), 0); eq(C.Stats().chatMoved, 0); eq(#w.printed, 0)
+			w.clock = w.clock + 5
+			eq((Chan.Send("C", "after the new number")), true)
+			Pumps(C)
+			eq(#Lines(w, 9), 2)
+		end)
+	end)
+
+	test("1.1.1 #34: a three-part line whose first part left before the key change: that part shows, the rest is dropped, one notice", function()
+		WithChat(function(w, C, Chan)
+			local text = ("words that keep going "):rep(30)
+			eq((Chan.Send("L", text)), true)
+			eq(C.Stats().chatQueue, 3, "three parts waiting")
+			C.Pump()
+			eq(#Lines(w, 6), 1, "the first part left")
+			NewKey(w, C, "key two", 7)
+			Pumps(C)
+			eq(#Lines(w, 7), 0, "nothing on the new channel"); eq(#Lines(w), 1)
+			eq(#Chan.History("L"), 1, "the part that left is echoed")
+			eq(Said(w.printed, ns.L.CHAN_MOVED_PART:format("Lords", 1, 3)), 1, "one notice, of the part that left")
+			local f = Fired(w, "CHAT_SEND_FAILED")
+			eq(#f, 1, "once per line"); eq(f[1][3], "moved"); eq(f[1][4], Codec.SanitizeChat(text)); eq(f[1][5], 1, "one part had left")
+			eq(C.Stats().chatMoved, 2, "two parts dropped"); eq(Chan.Stats().moved, 1, "one line")
+		end)
+	end)
+
+	test("1.1.1 #34: a line the privacy warning holds is not sent if the channel changed before the OK, and that channel is not counted as warned", function()
+		WithChat(function(w, C, Chan)
+			w.ns.db.chatWarned = {}
+			eq(select(2, Chan.Send("A", "for the channel the warning named")), "confirm")
+			local d = w.dialogs[1]
+			eq(d.which, "OLYMPUS_CHAT_PRIVACY"); eq(d.data.channel, C.ChannelName(), "the warning holds its channel")
+			NewKey(w, C, "key two", 7)
+			Chan.Confirm(d.data, true)
+			Pumps(C)
+			eq(#Lines(w), 0, "sent nowhere")
+			eq(w.ns.db.chatWarned.A, nil, "the new channel's audience was not the one shown")
+			eq(Said(w.printed, ns.L.CHAN_MOVED:format("Olympus")), 1)
+			local f = Fired(w, "CHAT_SEND_FAILED")
+			eq(#f, 1); eq(f[1][2], "A"); eq(f[1][3], "moved"); eq(f[1][4], "for the channel the warning named"); eq(f[1][5], 0)
+			eq(Chan.Stats().moved, 1)
+			-- Asked again on the new channel: its OK sends there, as before.
+			w.clock = w.clock + 5
+			eq(select(2, Chan.Send("A", "asked again")), "confirm")
+			eq(w.dialogs[2].data.channel, C.ChannelName())
+			Chan.Confirm(w.dialogs[2].data, true)
+			Pumps(C)
+			eq(#Lines(w, 7), 1); eq(w.ns.db.chatWarned.A, true)
+		end)
+	end)
+
+	test("1.1.1 #34: too late, refused by the game or out of Olympus: still the plain notice, and the event says why", function()
+		WithChat(function(w, C, Chan)
+			eq((Chan.Send("A", "waits too long")), true)
+			w.clock = w.clock + 31
+			C.Pump()
+			eq(#Lines(w), 0)
+			eq(Said(w.printed, ns.L.CHAN_SEND_FAILED:format("Olympus")), 1)
+			eq(Fired(w, "CHAT_SEND_FAILED")[1][3], "late")
+			w.refuse = true
+			eq((Chan.Send("C", "refused")), true)
+			C.Pump()
+			eq(#Lines(w), 1, "tried"); eq(Fired(w, "CHAT_SEND_FAILED")[2][3], "failed")
+			eq(Said(w.printed, ns.L.CHAN_SEND_FAILED:format("Captains")), 1)
+			w.refuse = nil
+			w.clock = w.clock + 5
+			eq((Chan.Send("L", "left behind")), true)
+			w.ns.IsMember = function() return false end
+			C.CheckMembership()
+			eq(Fired(w, "CHAT_SEND_FAILED")[3][3], "left")
+			eq(Said(w.printed, ns.L.CHAN_SEND_FAILED:format("Lords")), 1)
+			eq(#Fired(w, "CHAT_SEND_FAILED"), 3)
+			eq(C.Stats().chatMoved, 0); eq(Chan.Stats().moved, 0); eq(Chan.Stats().sent, 0)
+		end)
+	end)
+
+	test("1.1.1 #34: /oly status counts the lines a channel change kept from leaving (moved=)", function()
+		assert(ns.StatusText():find("lane=%d+ moved=%d+ muted="), "moved= in /oly status")
+	end)
+
+	-- The game's chat windows, as the 0.9.1 chat tests build them: 1 "General" the main one, 2 the
+	-- combat log (docked), 5 "Officers" floating, the others unused; GetChatWindowMessages and
+	-- GetChatWindowChannels answer what w[i].messages and w[i].channels hold. Every function of the
+	-- game's that makes, names, docks or sets up a chat window, opens the chat box or shows a popup,
+	-- and every method of a chat window but AddMessage, is a spy: w.unsafe lists what was called
+	-- (asked empty at the end). fn(w, printed) as a Lord of Olympus II, ns.me "Tester-Realm", the
+	-- chats on and every channel warned, nothing chosen.
+	local UNSAFE = { "FCF_OpenNewWindow", "FCF_NewChatWindow", "FCF_SetWindowName", "FCF_DockFrame", "FCF_SetWindowColor",
+		"FCF_SetWindowAlpha", "FCF_StartAlertFlash", "StaticPopup_Show", "ChatFrame_OpenChat", "ChatEdit_ActivateChat",
+		"ChatFrame_AddMessageEventFilter", "SetChatWindowName", "SetChatWindowShown", "AddChatWindowMessages",
+		"RemoveChatWindowMessages", "AddChatWindowChannel", "RemoveChatWindowChannel" }
+	local function WithTabs(fn)
+		local saved = { info = GetChatWindowInfo, fcf = FCF_GetChatWindowInfo, combat = IsCombatLog, num = NUM_CHAT_WINDOWS,
+			msgs = GetChatWindowMessages, chans = GetChatWindowChannels, util = ChatFrameUtil, new = NEW_CHAT_WINDOW,
+			config = CHAT_CONFIGURATION, default = DEFAULT_CHAT_FRAME, frames = {}, spies = {}, me = ns.me,
+			db = { chatWindows = ns.db.chatWindows, chatTabIntro = ns.db.chatTabIntro, chatMute = ns.db.chatMute,
+				chatWarned = ns.db.chatWarned, addonChat = ns.db.addonChat }, chat = ns.rdb.chat }
+		local w = { unsafe = {} }
+		local function Spy(name) return function() w.unsafe[#w.unsafe + 1] = name end end
+		for i = 1, 10 do
+			saved.frames[i] = _G["ChatFrame" .. i]
+			local f = { name = "", shown = false, lines = {}, colors = {} }
+			f.AddMessage = function(self, text, r, g, b)
+				self.lines[#self.lines + 1] = text
+				self.colors[#self.colors + 1] = { r, g, b }
+			end
+			w[i] = setmetatable(f, { __index = function(_, k)
+				if type(k) == "string" and k:match("^%u") then return Spy("ChatFrame" .. i .. ":" .. k) end
+			end })
+			_G["ChatFrame" .. i] = w[i]
+		end
+		w[1].name, w[1].shown = "General", true
+		w[2].name, w[2].isDocked = "Combat Log", true
+		w[5].name, w[5].shown = "Officers", true
+		NUM_CHAT_WINDOWS = 10
+		GetChatWindowInfo = function(i)
+			local f = w[i]
+			return f.name, 14, 0, 0, 0, 1, f.shown, false, f.isDocked and 1 or nil, false
+		end
+		FCF_GetChatWindowInfo = nil
+		IsCombatLog = function(f) return f == w[2] end
+		GetChatWindowMessages = function(i) if w[i].messages then return unpack(w[i].messages) end end
+		GetChatWindowChannels = function(i) if w[i].channels then return unpack(w[i].channels) end end
+		NEW_CHAT_WINDOW, CHAT_CONFIGURATION = "Create New Window", "Settings"
+		for _, name in ipairs(UNSAFE) do
+			saved.spies[name] = _G[name]
+			_G[name] = Spy(name)
+		end
+		ChatFrameUtil = { SetLastActiveWindow = Spy("ChatFrameUtil.SetLastActiveWindow"), OpenChat = Spy("ChatFrameUtil.OpenChat"),
+			ActivateChat = Spy("ChatFrameUtil.ActivateChat"), SetChatFocusOverride = Spy("ChatFrameUtil.SetChatFocusOverride") }
+		DEFAULT_CHAT_FRAME = w[1]
+		ns.db.chatWindows, ns.db.chatTabIntro, ns.db.chatMute, ns.rdb.chat, ns.me = nil, nil, nil, nil, "Tester-Realm"
+		ns.db.addonChat, ns.db.chatWarned = true, { A = true, C = true, L = true }
+		local ok, err = pcall(AsRank, 0, function(printed)
+			fn(w, printed)
+			eq(#w.unsafe, 0, "never called: " .. table.concat(w.unsafe, ", "))
+		end)
+		GetChatWindowInfo, FCF_GetChatWindowInfo, IsCombatLog, NUM_CHAT_WINDOWS = saved.info, saved.fcf, saved.combat, saved.num
+		GetChatWindowMessages, GetChatWindowChannels, ChatFrameUtil = saved.msgs, saved.chans, saved.util
+		NEW_CHAT_WINDOW, CHAT_CONFIGURATION, DEFAULT_CHAT_FRAME = saved.new, saved.config, saved.default
+		for _, name in ipairs(UNSAFE) do _G[name] = saved.spies[name] end
+		for i = 1, 10 do _G["ChatFrame" .. i] = saved.frames[i] end
+		for k, v in pairs(saved.db) do ns.db[k] = v end
+		ns.rdb.chat, ns.me = saved.chat, saved.me
+		if not ok then error(err, 0) end
+	end
+	-- A line heard on the channel, a new id and a new time each (no dedupe, rate or flood guard).
+	local recvId, recvAt = 7000, 8000000
+	local function Recv(tier, sender, text)
+		recvId, recvAt = recvId + 1, recvAt + 100
+		return (Chan.Receive("CHANNEL", sender, Msg(tier, MY_GUILD, recvId, text), recvAt))
+	end
+	-- The tab's legend: each channel's name in its colour (TIERS: gold, teal, purple).
+	local LEGEND = "|cffe6c45c[Olympus]|r, |cff59d9d9[Captains]|r, |cffbf80ff[Lords]|r"
+	local function Our(text) return "|c" .. ns.COLOR .. "Olympus:|r " .. text end
+	local function Has(list, text)
+		local n = 0
+		for _, l in ipairs(list) do if tostring(l):find(text, 1, true) then n = n + 1 end end
+		return n
+	end
+
+	test("1.1.1 Olympus tab: FormatLine bare leaves out the channel's name and nothing else", function()
+		local full = Chan.FormatLine("C", "Bob-Other", "Olympus II", "PA", "hi |Tx|t " .. ITEM)
+		local bare = Chan.FormatLine("C", "Bob-Other", "Olympus II", "PA", "hi |Tx|t " .. ITEM, true)
+		assert(full:find("^%[Captains%] |Hplayer:Bob%-Other|h%["), full)
+		eq(full, "[Captains] " .. bare, "the rest byte for byte")
+		assert(bare:find("^|Hplayer:Bob%-Other|h%["), bare)
+		assert(bare:find(" <Olympus II>: hi ||Tx||t " .. ITEM, 1, true), "guild and sanitized text: " .. bare)
+		eq(Chan.FormatLine("L", "Bob-Other", "Olympus II", nil, "x", false), Chan.FormatLine("L", "Bob-Other", "Olympus II", nil, "x"))
+	end)
+
+	test("1.1.1 Olympus tab: lines in a chat window named Olympus come without the channel's name, in its colour; another window and the main one keep it", function()
+		WithTabs(function(w, printed)
+			w[4].name, w[4].isDocked = "Olympus", true
+			ns.db.chatWindows = { ["Tester-Realm"] = { A = "Olympus", C = "Officers" } }
+			ns.db.chatTabIntro = { ["Tester-Realm"] = true } -- (told already)
+			eq(Recv("A", "Member500", "army line"), true)
+			eq(Recv("C", "Member2", "captains line"), true)
+			eq(Recv("L", "Member1", "lords line"), true)
+			eq(#w[4].lines, 1); assert(w[4].lines[1]:find("^|Hplayer:Member500|h%["), w[4].lines[1])
+			assert(w[4].lines[1]:find(": army line$"), w[4].lines[1])
+			eq(w[4].colors[1][1], 0.90); eq(w[4].colors[1][2], 0.77); eq(w[4].colors[1][3], 0.36)
+			eq(#w[5].lines, 1); assert(w[5].lines[1]:find("^%[Captains%] |Hplayer:"), w[5].lines[1])
+			eq(#w[1].lines, 1); assert(w[1].lines[1]:find("^%[Lords%] |Hplayer:"), w[1].lines[1])
+			eq(w[1].colors[1][1], 0.75); eq(w[1].colors[1][3], 1.00)
+			-- Our own echo too.
+			WithLane(function() local ok, why = Chan.Send("A", "my own line", 5e12); eq(ok, true, tostring(why)) end)
+			eq(#w[4].lines, 2); assert(w[4].lines[2]:find("^|Hplayer:"), w[4].lines[2]); assert(w[4].lines[2]:find("my own line", 1, true))
+			-- Any case, spaces around it: still the Olympus tab.
+			w[4].name = " OLYMPUS "
+			eq(Recv("A", "Member501", "spaced name"), true)
+			eq(#w[4].lines, 3); assert(w[4].lines[3]:find("^|Hplayer:"), w[4].lines[3])
+			-- The main window renamed Olympus is still the main window: the name stays, as anywhere else.
+			w[4].isDocked, w[1].name = nil, "Olympus"
+			eq(Recv("A", "Member502", "main named olympus"), true)
+			eq(#w[4].lines, 3); assert(w[1].lines[#w[1].lines]:find("^%[Olympus%] |Hplayer:"), w[1].lines[#w[1].lines])
+			eq(#printed, 0, "no notice: the main window has it by name")
+		end)
+	end)
+
+	test("1.1.1 Olympus tab: the one click without the tab says how to make it; the lines wait in the main window, said once, and land in the tab, bare, after one intro, the moment it exists", function()
+		WithTabs(function(w, printed)
+			ns.db.chatTabIntro = { ["Tester-Realm"] = true } -- (told of an earlier tab: the new one says it again)
+			local ok, state = Chan.SetupTab()
+			eq(ok, true); eq(state, "waiting")
+			local mine = ns.db.chatWindows["Tester-Realm"]
+			eq(mine.A, "Olympus"); eq(mine.C, "Olympus"); eq(mine.L, "Olympus")
+			eq(printed[#printed], ns.L.CHATTAB_STEPS:format("General", "Create New Window", "Settings"), "the game's own words")
+			eq(ns.db.chatTabIntro, nil)
+			eq(Chan.TabState(), "waiting")
+			local n = #printed
+			eq(Recv("A", "Member500", "before the tab"), true)
+			eq(Has(w[1].lines, "before the tab"), 1); assert(w[1].lines[#w[1].lines]:find("^%[Olympus%] "), "the main window keeps the name")
+			eq(#printed, n + 1); eq(printed[#printed], ns.L.CHATTAB_WAITING, "not gone: it was never there")
+			eq(Recv("C", "Member2", "still no tab"), true)
+			eq(#printed, n + 1, "said once")
+			-- The player makes it (the game's menu): window 6, docked.
+			w[6].name, w[6].isDocked = "Olympus", true
+			eq(Recv("L", "Member1", "now in the tab"), true)
+			eq(#w[6].lines, 2)
+			eq(w[6].lines[1], Our(ns.L.CHATTAB_HERE:format(LEGEND)), "the intro first")
+			assert(w[6].lines[2]:find("^|Hplayer:Member1|h%["), w[6].lines[2])
+			eq(ns.db.chatTabIntro["Tester-Realm"], true)
+			eq(Chan.TabState(), "open"); eq(#printed, n + 1)
+			eq(Recv("A", "Member503", "no second intro"), true)
+			eq(#w[6].lines, 3); assert(w[6].lines[3]:find("^|Hplayer:"), w[6].lines[3])
+			-- Closed after it was there: the usual notice, once.
+			w[6].isDocked = nil
+			eq(Recv("A", "Member504", "tab closed"), true)
+			eq(printed[#printed], ns.L.CHATWIN_GONE:format('"Olympus"')); eq(Chan.TabState(), "waiting")
+			-- The game's words missing (another client): ours.
+			NEW_CHAT_WINDOW, CHAT_CONFIGURATION, w[1].name = nil, "", ""
+			eq(select(2, Chan.SetupTab()), "waiting")
+			eq(printed[#printed], ns.L.CHATTAB_STEPS:format(ns.L.CHATTAB_MAIN_TAB, ns.L.CHATWIN_NEW, ns.L.CHATTAB_SETTINGS))
+		end)
+	end)
+
+	test("1.1.1 Olympus tab: the one click with the tab open says so in the main window and in the tab, and how to keep other chat out while the tab shows some", function()
+		WithTabs(function(w, printed)
+			w[4].name, w[4].isDocked = "Olympus", true
+			w[4].messages = { "SAY", "GUILD", "WHISPER" }
+			local ok, state = Chan.SetupTab()
+			eq(ok, true); eq(state, "open")
+			eq(printed[#printed], ns.L.CHATTAB_SET:format("[Olympus], [Captains], [Lords]"))
+			eq(#w[4].lines, 2)
+			eq(w[4].lines[1], Our(ns.L.CHATTAB_HERE:format(LEGEND)))
+			eq(w[4].lines[2], Our(ns.L.CHATTAB_MIXED:format("Settings")))
+			eq(ns.db.chatTabIntro["Tester-Realm"], true); eq(Chan.TabState(), "open")
+			eq(Recv("A", "Member500", "first line"), true)
+			eq(#w[4].lines, 3, "no second intro"); assert(w[4].lines[3]:find("^|Hplayer:"), w[4].lines[3])
+			-- Channels alone (Trade, General): other chat too.
+			w[4].lines, w[4].messages, w[4].channels = {}, nil, { "Trade - City", 2 }
+			Chan.SetupTab()
+			eq(#w[4].lines, 2); eq(w[4].lines[2], Our(ns.L.CHATTAB_MIXED:format("Settings")))
+			-- Nothing else registered: no hint.
+			w[4].lines, w[4].channels = {}, nil
+			Chan.SetupTab()
+			eq(#w[4].lines, 1)
+			-- The game without those functions, or failing: unknown, so no hint.
+			w[4].lines, w[4].messages = {}, { "SAY" }
+			GetChatWindowMessages, GetChatWindowChannels = nil, nil
+			Chan.SetupTab(); eq(#w[4].lines, 1)
+			w[4].lines = {}
+			GetChatWindowMessages = function() error("no such window") end
+			Chan.SetupTab(); eq(#w[4].lines, 1)
+			-- Its Settings word missing: ours.
+			w[4].lines = {}
+			GetChatWindowMessages, CHAT_CONFIGURATION = function() return "SAY" end, nil
+			Chan.SetupTab(); eq(w[4].lines[2], Our(ns.L.CHATTAB_MIXED:format(ns.L.CHATTAB_SETTINGS)))
+		end)
+	end)
+
+	test("1.1.1 Olympus tab: /oly chatwindow tab (or aba) is the one click, /oly chatwindow main undoes it, and TabState follows", function()
+		WithTabs(function(w, printed)
+			eq(Chan.TabState(), "none")
+			SlashCmdList.OLYMPUS("chatwindow tab")
+			eq(printed[#printed], ns.L.CHATTAB_STEPS:format("General", "Create New Window", "Settings")); eq(Chan.TabState(), "waiting")
+			w[7].name, w[7].isDocked = "olympus", true
+			eq(Chan.TabState(), "open")
+			SlashCmdList.OLYMPUS("chatwindow main")
+			eq(ns.db.chatWindows, nil); eq(Chan.TabState(), "none")
+			eq(printed[#printed], ns.L.CHATWIN_MAIN:format("[Olympus], [Captains], [Lords]"))
+			eq(Chan.ChooseWindow("ABA"), true); eq(Chan.TabState(), "open")
+			eq(printed[#printed - 0], ns.L.CHATTAB_SET:format("[Olympus], [Captains], [Lords]"))
+			-- Another window by name: not the tab. One channel to the tab by name: the tab again.
+			eq(Chan.ChooseWindow("main"), true)
+			eq(Chan.ChooseWindow("5"), true); eq(Chan.TabState(), "none")
+			w[7].lines = {}
+			eq(Chan.ChooseWindow("Olympus lords"), true); eq(Chan.TabState(), "open")
+			eq(ns.db.chatWindows["Tester-Realm"].L, "olympus", "as the game names it")
+			eq(printed[#printed], ns.L.CHATWIN_SET:format("[Lords]", '"olympus"'), "the main window: where they go")
+			eq(w[7].lines[1], Our(ns.L.CHATTAB_HERE:format(LEGEND)), "the tab: what it holds")
+			eq(Has(w[7].lines, ns.L.CHATWIN_SET:format("[Lords]", '"olympus"')), 0)
+			assert(Chan.WindowStatus():find('[Lords] "olympus"', 1, true), Chan.WindowStatus())
+		end)
+	end)
+
+	test("1.1.1 Olympus tab: at login the saved list of characters told what their tab holds keeps [name] = true alone", function()
+		local init
+		local saved = { slash = { SlashCmdList.OLYMPUSALL, SlashCmdList.OLYMPUSCAPTAINS, SlashCmdList.OLYMPUSLORDS },
+			dialogs = { StaticPopupDialogs.OLYMPUS_CHAT_PRIVACY, StaticPopupDialogs.OLYMPUS_PIN, StaticPopupDialogs.OLYMPUS_PIN_DOWN } }
+		local ins = setmetatable({ On = function(name, fn) if name == "INIT" then init = fn end end,
+			Comm = setmetatable({ Handle = function() end }, { __index = ns.Comm }) }, { __index = ns })
+		local ok, err = pcall(function()
+			assert(loadfile(ADDON_DIR .. "Channels.lua"))("Olympus", ins)
+			ins.db, ins.rdb = { chatTabIntro = { ["Tester-Realm"] = true, ["Other-Realm"] = "yes", [3] = true } }, {}
+			init()
+			eq(ins.db.chatTabIntro["Tester-Realm"], true); eq(ins.db.chatTabIntro["Other-Realm"], nil); eq(ins.db.chatTabIntro[3], nil)
+			ins.db.chatTabIntro = { x = false }
+			init()
+			eq(ins.db.chatTabIntro, nil, "nothing left")
+			ins.db.chatTabIntro = "broken"
+			init()
+			eq(ins.db.chatTabIntro, nil)
+		end)
+		SlashCmdList.OLYMPUSALL, SlashCmdList.OLYMPUSCAPTAINS, SlashCmdList.OLYMPUSLORDS = saved.slash[1], saved.slash[2], saved.slash[3]
+		StaticPopupDialogs.OLYMPUS_CHAT_PRIVACY, StaticPopupDialogs.OLYMPUS_PIN = saved.dialogs[1], saved.dialogs[2]
+		StaticPopupDialogs.OLYMPUS_PIN_DOWN = saved.dialogs[3]
+		if not ok then error(err, 0) end
+	end)
+
+	test("1.1.1 Olympus tab: the spies catch what they stand for (so an empty list means never called)", function()
+		local ok, err = pcall(WithTabs, function()
+			FCF_OpenNewWindow("Olympus")
+			ChatFrameUtil.SetLastActiveWindow()
+			ChatFrame4:RemoveAllMessageGroups()
+		end)
+		assert(not ok and tostring(err):find("FCF_OpenNewWindow, ChatFrameUtil.SetLastActiveWindow, ChatFrame4:RemoveAllMessageGroups", 1, true), tostring(err))
+	end)
+
+	test("1.1.1 /ol, /olc, /oll alone open the Olympus window's Chat tab on that channel; without one, the usage line; with text, a line as before", function()
+		WithTabs(function(w, printed)
+			local savedWindow, savedSend = ns.ChatWindow, Chan.Send
+			local ok, err = pcall(function()
+				local toggled, sent = {}, {}
+				ns.ChatWindow = { Toggle = function(tier) toggled[#toggled + 1] = tostring(tier) end }
+				SlashCmdList.OLYMPUSALL("")
+				SlashCmdList.OLYMPUSCAPTAINS("   ")
+				SlashCmdList.OLYMPUSLORDS(nil)
+				eq(table.concat(toggled, ","), "A,C,L")
+				eq(#printed, 0, "nothing printed")
+				-- With text: the line, as before (the window is not touched).
+				Chan.Send = function(tier, text) sent[#sent + 1] = tier .. ":" .. tostring(text) end
+				SlashCmdList.OLYMPUSALL("hi")
+				SlashCmdList.OLYMPUSLORDS(" raid at eight ")
+				eq(table.concat(sent, ","), "A:hi,L: raid at eight "); eq(#toggled, 3)
+				Chan.Send = savedSend
+				-- No chat window on this client (or not a function): the usage line, as in 1.1.
+				ns.ChatWindow = nil
+				SlashCmdList.OLYMPUSALL("")
+				eq(printed[#printed], ns.L.CHAN_USAGE:format("/ol", "Olympus"))
+				ns.ChatWindow = { Toggle = true }
+				SlashCmdList.OLYMPUSCAPTAINS(" ")
+				eq(printed[#printed], ns.L.CHAN_USAGE:format("/olc", "Captains"))
+				eq(#toggled, 3)
+			end)
+			ns.ChatWindow, Chan.Send = savedWindow, savedSend
+			if not ok then error(err, 0) end
+		end)
+	end)
+
+	-- Locales.lua as the game in `code` loads it.
+	local function LoadedL(code)
+		local lns, savedLocale = {}, GetLocale
+		GetLocale = function() return code end
+		local ok, err = pcall(function() assert(loadfile(ADDON_DIR .. "Locales.lua"))("Olympus", lns) end)
+		GetLocale = savedLocale
+		if not ok then error(err, 0) end
+		return lns.L
+	end
+	-- The strings of this part: their own in English and pt-BR, with the same format codes.
+	local KEYS = { "CHAN_MOVED", "CHAN_MOVED_PART", "CHATTAB_STEPS", "CHATTAB_SET", "CHATTAB_HERE", "CHATTAB_MIXED", "CHATTAB_WAITING",
+		"CHATTAB_SETTINGS", "CHATTAB_MAIN_TAB", "HELP_CHATWIN", "CHATWIN_USAGE", "HELP_CHAN_ALL", "HELP_CHAN_CAPTAINS", "HELP_CHAN_LORDS" }
+	test("1.1.1: the strings of the Olympus tab and of #34 in English and pt-BR, with the same format codes", function()
+		local en, pt = LoadedL("enUS"), LoadedL("ptBR")
+		for _, k in ipairs(KEYS) do
+			assert(type(en[k]) == "string" and en[k] ~= "", k .. ": English")
+			assert(type(pt[k]) == "string" and pt[k] ~= "" and pt[k] ~= en[k], k .. ": pt-BR")
+			local function Codes(s) local out = {} for c in s:gmatch("%%%a") do out[#out + 1] = c end return table.concat(out) end
+			eq(Codes(pt[k]), Codes(en[k]), k .. ": format codes")
+		end
+		assert(en.CHAN_MOVED:find("It was not sent to either channel", 1, true), en.CHAN_MOVED)
+		assert(pt.CHAN_MOVED:find("não foi enviada a nenhum dos dois canais", 1, true), pt.CHAN_MOVED)
+		eq(select(2, en.CHATTAB_STEPS:gsub("%%s", "")), 3, "the main tab, Create New Window, Settings")
+		for _, l in ipairs({ en, pt }) do
+			assert(l.HELP_CHATWIN:find("/oly chatwindow tab", 1, true) and l.CHATWIN_USAGE:find("/oly chatwindow tab", 1, true), "tab first")
+			assert(l.CHATWIN_USAGE:find("/oly chatwindow tab", 1, true) < l.CHATWIN_USAGE:find("<", 1, true), l.CHATWIN_USAGE)
+		end
+		-- (1.1.1, the chats inside the Olympus window: alone, they open its Chat tab, no window of their own.)
+		for _, k in ipairs({ "HELP_CHAN_ALL", "HELP_CHAN_CAPTAINS", "HELP_CHAN_LORDS" }) do
+			assert(en[k]:find("; alone, opens the Chat tab$"), en[k])
+			assert(pt[k]:find("; sozinho, abre a aba Chat$"), pt[k])
+		end
+	end)
+
+	test("1.1.1: the README and the CurseForge page tell of the Olympus tab and of #34, in the same words", function()
+		local PHRASES = {
+			-- (Changed on purpose, 1.1.1: the Realm tab's chats page, gone, had the one click; the Chat
+			-- tab's settings have it now.)
+			"**The Olympus tab (1.1.1).** One click in the Chat tab's settings (the gear), or `/oly chatwindow tab`",
+			"right-click the General tab, Create New Window, and name it Olympus",
+			"Olympus cannot make it for you",
+			"right-click it, Settings, and untick everything",
+			"In a window named anything but Olympus the lines keep the channel's name",
+			"A line still waiting to leave when the Olympus channel changes (a new realm key",
+			"is not sent, to either channel, and you are told",
+			"| `/oly chatwindow tab` · `/oly chatwindow <number or name>",
+			"alone (`/ol`, `/olc`, `/oll`): open the Chat tab on that channel (1.1.1) |",
+		}
+		local pages = {}
+		for _, path in ipairs({ "README.md", "docs/CURSEFORGE.md" }) do
+			local doc = assert(ReadFile(ROOT .. path)):gsub("%s+", " ")
+			for _, phrase in ipairs(PHRASES) do assert(doc:find(phrase, 1, true), path .. ": " .. phrase) end
+			assert(not doc:find("`/oly chatwindow Olympus` shows the three channels", 1, true), path .. ": the old bullet")
+			pages[#pages + 1] = doc:match("### Channels(.-)%*%*Not encrypted")
+		end
+		eq(pages[1], pages[2], "the Channels section is the same on both pages")
+	end)
+
+	---------------------------------------------------------------------------
+	-- 1.1.1, the review of the #34 and Olympus tab commits: a part the game refuses keeps the rest
+	-- of its line off the channel; after a move, the notice says which parts left; a privacy
+	-- warning answered out of Olympus gets the usual refusal; each #34 guard alone; the Treasury's
+	-- donation line in the Olympus tab. Each test fails on the code before its fix. A block of its
+	-- own, inside this function for its helpers (WithChat, WithTabs).
+	---------------------------------------------------------------------------
+	;(function()
+		-- Pumps until the lane's next chat part reached the game's send (the regular queue takes
+		-- every other slot while it has messages).
+		local function PumpChat(w, C)
+			local n = #Lines(w)
+			for _ = 1, 10 do
+				C.Pump()
+				if #Lines(w) > n then return end
+			end
+		end
+		local LONG = ("words that keep going "):rep(30) -- (three parts)
+
+		test("1.1.1 review: a part the game refuses keeps the rest of its line off the channel, and the event counts the parts that left", function()
+			WithChat(function(w, C, Chan)
+				-- The first part refused: nothing of the line leaves.
+				eq((Chan.Send("L", LONG)), true)
+				eq(C.Stats().chatQueue, 3)
+				w.refuse = true
+				PumpChat(w, C)
+				w.refuse = nil
+				Pumps(C)
+				eq(#Lines(w), 1, "parts sent after the refused one:")
+				eq(C.Stats().chatQueue, 0, "the rest left the lane:")
+				eq(#Chan.History("L"), 0, "echoed:"); eq(Chan.Stats().sent, 0)
+				local f = Fired(w, "CHAT_SEND_FAILED")
+				eq(#f, 1); eq(f[1][2], "L"); eq(f[1][3], "failed"); eq(f[1][4], Codec.SanitizeChat(LONG)); eq(f[1][5], 0, "no part left:")
+				eq(Said(w.printed, ns.L.CHAN_SEND_FAILED:format("Lords")), 1, "told once")
+				-- The second part refused: the first stays sent, the third does not leave.
+				w.clock = w.clock + 5
+				eq((Chan.Send("L", LONG)), true)
+				PumpChat(w, C)
+				eq(#Lines(w), 2, "the first part left")
+				w.refuse = true
+				PumpChat(w, C)
+				w.refuse = nil
+				Pumps(C)
+				eq(#Lines(w), 3, "the third part was sent:")
+				eq(C.Stats().chatQueue, 0)
+				eq(#Chan.History("L"), 1, "the part that left is echoed"); eq(Chan.Stats().sent, 1)
+				f = Fired(w, "CHAT_SEND_FAILED")
+				eq(#f, 2); eq(f[2][3], "failed"); eq(f[2][5], 1, "one part had left")
+				-- The next line goes out whole.
+				w.clock = w.clock + 5
+				eq((Chan.Send("L", "short and whole")), true)
+				Pumps(C)
+				eq(#Lines(w), 4); eq(#Chan.History("L"), 2); eq(#Fired(w, "CHAT_SEND_FAILED"), 2)
+			end)
+		end)
+
+		test("1.1.1 review: a line whose second part the lane does not take sends none of it", function()
+			WithChat(function(w, C, Chan)
+				local real, offered = C.SendChat, 0
+				C.SendChat = function(...)
+					offered = offered + 1
+					if offered == 2 then return false end
+					return real(...)
+				end
+				eq((Chan.Send("A", LONG)), true)
+				C.SendChat = real
+				eq(offered, 2, "the third part is not offered after a refusal")
+				Pumps(C)
+				eq(#Lines(w), 0, "the first part was sent:"); eq(C.Stats().chatQueue, 0); eq(#Chan.History("A"), 0)
+				local f = Fired(w, "CHAT_SEND_FAILED")
+				eq(#f, 1); eq(f[1][3], "failed"); eq(f[1][5], 0)
+			end)
+		end)
+
+		test("1.1.1 review (#34): after a move, the notice for a line whose first part had left says so, and not that nothing was sent", function()
+			WithChat(function(w, C, Chan)
+				eq((Chan.Send("L", LONG)), true)
+				PumpChat(w, C)
+				eq(#Lines(w, 6), 1, "the first part left")
+				NewKey(w, C, "key two", 7)
+				Pumps(C)
+				eq(#Lines(w), 1); eq(#Chan.History("L"), 1)
+				eq(Said(w.printed, ns.L.CHAN_MOVED_PART:format("Lords", 1, 3)), 1, "what left, on which channel")
+				eq(Said(w.printed, ns.L.CHAN_MOVED:format("Lords")), 0, "\"it was not sent to either channel\":")
+				eq(Fired(w, "CHAT_SEND_FAILED")[1][5], 1)
+				-- A line of which nothing had left: the plain notice, as before.
+				w.clock = w.clock + 5
+				eq((Chan.Send("L", "nothing of it left")), true)
+				NewKey(w, C, "key three", 8)
+				Pumps(C)
+				eq(Said(w.printed, ns.L.CHAN_MOVED:format("Lords")), 1)
+			end)
+		end)
+
+		test("1.1.1 review (#34): the privacy warning answered after leaving Olympus gets the usual refusal, not a channel change", function()
+			WithChat(function(w, C, Chan)
+				w.ns.db.chatWarned = {}
+				eq(select(2, Chan.Send("A", "held line")), "confirm")
+				local d = w.dialogs[1]
+				w.ns.IsMember = function() return false end
+				C.CheckMembership()
+				eq(C.ChannelName(), nil, "off the channel")
+				local ok, why = Chan.Confirm(d.data, true)
+				eq(ok, false); eq(why, "member")
+				eq(Said(w.printed, ns.L.MEMBERS_ONLY), 1, "the usual refusal")
+				eq(Said(w.printed, ns.L.CHAN_MOVED:format("Olympus")), 0, "a channel change was said:")
+				eq(#Fired(w, "CHAT_SEND_FAILED"), 0, "a channel change was fired:"); eq(Chan.Stats().moved, 0)
+				eq(w.ns.db.chatWarned.A, nil, "not counted as warned: nothing left")
+				Pumps(C)
+				eq(#Lines(w), 0)
+			end)
+		end)
+
+		test("1.1.1 review (#34): Pump alone drops a part written for another channel than the one joined, whatever changed it", function()
+			WithChat(function(w, C, Chan)
+				eq((Chan.Send("C", "written for the first channel")), true)
+				w.ids.other = 7
+				C.SetJoinedForTest("other") -- (the joined channel changed, by no JoinChannel)
+				Pumps(C)
+				eq(#Lines(w, 7), 0, "sent on the other channel (#7):"); eq(#Lines(w), 0)
+				eq(C.Stats().chatQueue, 0)
+				local f = Fired(w, "CHAT_SEND_FAILED")
+				eq(#f, 1); eq(f[1][3], "moved"); eq(C.Stats().chatMoved, 1)
+			end)
+		end)
+
+		test("1.1.1 review (#34): JoinChannel alone drops the lane when the channel changes, before any Pump", function()
+			WithChat(function(w, C, Chan)
+				eq((Chan.Send("A", "for the first channel")), true)
+				eq(C.Stats().chatQueue, 1)
+				NewKey(w, C, "key two", 7)
+				eq(C.Stats().chatQueue, 0, "still in the lane after the change:")
+				local f = Fired(w, "CHAT_SEND_FAILED")
+				eq(#f, 1, "its writer told at the change:"); eq(f[1][3], "moved"); eq(C.Stats().chatMoved, 1)
+				eq(#Lines(w), 0)
+			end)
+		end)
+
+		test("1.1.1 review: the Treasury's donation line in the Olympus tab comes without [Olympus]; with the chats off, nowhere, and the tab says nothing", function()
+			WithTabs(function(w, printed)
+				local T = ns.Treasury
+				local savedKeeper = T.IsKeeperName
+				local keepers = { "Keeper One-Realm", "Keeper Two-Realm", "Keeper Three-Realm" }
+				local ok, err = pcall(function()
+					T.IsKeeperName = function() return true end
+					local function On(name) T.HandleDonations("CHANNEL", name, ("TD~Olympus II~1~%d~"):format(ns.Now())) end
+					w[4].name, w[4].isDocked = "Olympus", true
+					ns.db.chatWindows = { ["Tester-Realm"] = { A = "Olympus", C = "Olympus", L = "Olympus" } }
+					-- The chats off: nothing in the tab, not even its intro, nor in the main window.
+					ns.db.addonChat = false
+					On(keepers[1])
+					eq(#w[4].lines, 0, "in the tab:"); eq(#w[1].lines, 0, "in the main window:")
+					eq(ns.db.chatTabIntro, nil, "the intro is kept for when the chats show there")
+					-- On: the intro, then the line without the channel's name, in [Olympus]'s colour.
+					ns.db.addonChat = true
+					On(keepers[2])
+					eq(#w[4].lines, 2)
+					eq(w[4].lines[1], Our(ns.L.CHATTAB_HERE:format(LEGEND)))
+					eq(w[4].lines[2], T.DonationText(keepers[2], nil), "no [Olympus] in the tab:")
+					eq(w[4].colors[2][1], 0.90); eq(w[4].colors[2][2], 0.77); eq(w[4].colors[2][3], 0.36)
+					-- Another window keeps the name, as the chat lines do.
+					ns.db.chatWindows["Tester-Realm"].A = "Officers"
+					On(keepers[3])
+					eq(w[5].lines[#w[5].lines], "[" .. ns.L.CHAN_ALL .. "] " .. T.DonationText(keepers[3], nil))
+					eq(#w[4].lines, 2); eq(#w[1].lines, 0)
+				end)
+				for _, name in ipairs(keepers) do T.HandleDonations("CHANNEL", name, "TD~Olympus II~0~0~") end
+				T.IsKeeperName = savedKeeper
+				if not ok then error(err, 0) end
+			end)
+		end)
+
+		test("1.1.1 review: the README and the CurseForge page tell of the refused part, the parts that left before a move, the tab's hint said once, and the donation line", function()
+			local PHRASES = {
+				"if the game refuses one of them, the rest of that line is not sent either, and you are told (1.1.1)",
+				"Of a long line whose first parts had already left, the notice says how many went out, on the old channel.",
+				"the tab's first line says so, after the legend, when the tab shows other chat; `/oly chatwindow tab` says it again",
+				"not with that chat muted or the Olympus chats off, nor for a late login; in the Olympus tab without \"[Olympus]\"",
+			}
+			for _, path in ipairs({ "README.md", "docs/CURSEFORGE.md" }) do
+				local doc = assert(ReadFile(ROOT .. path)):gsub("%s+", " ")
+				for _, phrase in ipairs(PHRASES) do assert(doc:find(phrase, 1, true), path .. ": " .. phrase) end
+				assert(not doc:find("the addon says so when it sees the tab shows other chat", 1, true), path .. ": the hint as if said on and on")
+			end
+		end)
+	end)()
 end)()
 
 print(("\n%d passed, %d failed"):format(passed, failed))

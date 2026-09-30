@@ -2804,7 +2804,7 @@ function Treasury.DonationsLogout()
 end
 
 -- A keeper's word (from a keeper alone, his name, which the server sets): kept while repeated,
--- one line in the [Olympus] chat for a fresh "on", unless that chat is muted.
+-- one line in the [Olympus] chat for a fresh "on", unless that chat is muted (or the chats off).
 function Treasury.HandleDonations(dist, sender, text)
 	if dist ~= "CHANNEL" or type(text) ~= "string" then return end
 	local guild, on, since, zone = text:match("^TD~([^~]*)~([01])~(%d+)~(%d*)$")
@@ -2825,11 +2825,16 @@ function Treasury.HandleDonations(dist, sender, text)
 	donors[sender] = { since = since, mapID = mapID, t = now }
 	if pinged[sender] ~= since and now - since <= Treasury.DONATIONS_PING then
 		pinged[sender] = since
+		-- (1.1.1: not while the Olympus chats are off on this client, as their own lines; in the
+		-- Olympus tab without "[Olympus] ", as they come there, Channels.Show.)
+		local chat = ns.Channels
 		local muted = ns.db and type(ns.db.chatMute) == "table" and ns.db.chatMute.A
-		local f = not muted and ns.Channels and ns.Channels.Frame and ns.Channels.Frame("A")
+		local f, wname
+		if not muted and chat and chat.Frame and chat.ChatOn and chat.ChatOn() then f, wname = chat.Frame("A") end
 		if f and f.AddMessage then
-			local c = ns.Channels.TIERS and ns.Channels.TIERS.A and ns.Channels.TIERS.A.color or { 1, 0.82, 0 }
-			f:AddMessage("[" .. L.CHAN_ALL .. "] " .. Treasury.DonationText(sender, donors[sender]), c[1], c[2], c[3])
+			local c = chat.TIERS and chat.TIERS.A and chat.TIERS.A.color or { 1, 0.82, 0 }
+			local bare = f ~= DEFAULT_CHAT_FRAME and chat.IsTabName and chat.IsTabName(wname)
+			f:AddMessage((bare and "" or "[" .. L.CHAN_ALL .. "] ") .. Treasury.DonationText(sender, donors[sender]), c[1], c[2], c[3])
 		end
 	end
 	ns.Fire("TREASURY_CHANGED")

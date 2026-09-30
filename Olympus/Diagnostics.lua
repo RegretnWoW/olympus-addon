@@ -341,8 +341,9 @@ function ns.StatusText()
 		for _, line in ipairs(TopologyLines(c)) do add("%s", line) end
 		local ch = ns.Channels and ns.Channels.Stats()
 		if ch then
-			add("chat: sent=%d shown=%d hidden=%d lane=%d muted=%s drops bad=%d dup=%d rate=%d flood=%d forged=%d unverified=%d rank=%d",
-				ch.sent, ch.shown, ch.hidden, c.chatQueue or 0, #ch.muted > 0 and table.concat(ch.muted, ",") or "none",
+			-- (moved, 1.1.1: lines not sent because the channel changed before they left, GitHub #34.)
+			add("chat: sent=%d shown=%d hidden=%d lane=%d moved=%d muted=%s drops bad=%d dup=%d rate=%d flood=%d forged=%d unverified=%d rank=%d",
+				ch.sent, ch.shown, ch.hidden, c.chatQueue or 0, ch.moved or 0, #ch.muted > 0 and table.concat(ch.muted, ",") or "none",
 				ch.bad, ch.dup, ch.rate, ch.flood, ch.forged, ch.unverified, ch.rank)
 			if ns.Channels.WindowStatus then add("chat windows: %s", ns.Channels.WindowStatus()) end
 			-- (1.1) The pinned line this client holds: whose, of what rank, and how long it has left.

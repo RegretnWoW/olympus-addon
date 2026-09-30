@@ -41,7 +41,7 @@ local LOCKED_RETRY = { 60, 120, 300, 600 } -- a channel locked against us is tri
 
 local peers = {}
 local queue = {}
-local chatQueue = {}  -- chat lines (Channels.lua): { msg, done, t }
+local chatQueue = {}  -- chat lines (Channels.lua): { msg, done, t, channel } (channel: the one it was written for, GitHub #34)
 local lastWasChat = false
 local asm = Codec.NewAssembler()
 local guildAsm = Codec.NewAssembler() -- pieces over GUILD (1.0.0)...
@@ -51,7 +51,8 @@ local lastBroadcast = 0
 local early -- { every, due }: the report due then went out early, as a census answer (see Q1)
 local channelIndex = 0
 local stats = { sent = 0, recv = 0, reports = 0, fails = 0, bad = 0, partial = 0, echo = 0, byType = {},
-	raw = { ch = {}, g = {} }, rawSample = {}, reportRealms = {}, otherChannel = 0, asked = 0, answered = 0, askSkipped = 0 }
+	raw = { ch = {}, g = {} }, rawSample = {}, reportRealms = {}, otherChannel = 0, asked = 0, answered = 0, askSkipped = 0,
+	chatMoved = 0 }
 local deliveredLogged = false -- true while a CHAT_MSG_ADDON_LOGGED message is being handled
 local lastAnswer = -math.huge
 local askTries = 0 -- census requests tried while the channel was not joined (Comm.AskCensus)
@@ -142,7 +143,7 @@ function Comm.Stats()
 		channelName = joinedName, sealed = ns.rdb and ns.rdb.realmKey ~= nil,
 		channel = channelIndex, peers = Comm.PeerCount(), reporter = Comm.reporterName,
 		isReporter = Comm.isReporter, sent = stats.sent, recv = stats.recv, reports = stats.reports,
-		fails = stats.fails, bad = stats.bad, queue = #queue, chatQueue = #chatQueue, lastFail = stats.lastFail,
+		fails = stats.fails, bad = stats.bad, queue = #queue, chatQueue = #chatQueue, chatMoved = stats.chatMoved, lastFail = stats.lastFail,
 		partial = stats.partial, echo = stats.echo, byType = stats.byType, otherChannel = stats.otherChannel,
 		chanArgs = stats.chanArgs, asked = stats.asked, answered = stats.answered, runnerUp = Comm.isRunnerUp, pending = (function() local n = 0 for _ in pairs(asm.buf) do n = n + 1 end return n end)(),
 		raw = stats.raw, rawSample = stats.rawSample, reportRealms = stats.reportRealms, shared = ns.rdb and ns.rdb.shared,
@@ -256,15 +257,37 @@ function Comm.QueueRoom()
 end
 
 -- Chat lines wait in a short lane of their own: they never go through Enqueue, so they can
--- never push report chunks out of MAX_QUEUE. done(sent) is called once the part went out
--- (or was dropped). Returns false when the lane is full.
-function Comm.SendChat(msg, done)
-	if #chatQueue >= CHAT_QUEUE or Held(msg) then return false end
-	chatQueue[#chatQueue + 1] = { msg = msg, done = done, t = GetTime() }
+-- never push report chunks out of MAX_QUEUE. done(sent, why) is called once the part went out
+-- (true) or was dropped (false, why): "moved" the channel changed before it left (a new realm
+-- key), "late" it waited CHAT_TTL, "failed" the game refused it, "left" we are out of an Olympus
+-- guild. Each part carries the channel it was written for, and never goes out on another one
+-- (GitHub #34: a line typed for one channel's audience is not sent to the next). line (1.1.1):
+-- any value the parts of one line share, for Comm.DropLine. Returns false when the lane is full,
+-- or while we are on no channel.
+function Comm.SendChat(msg, done, line)
+	if not joinedName or #chatQueue >= CHAT_QUEUE or Held(msg) then return false end
+	chatQueue[#chatQueue + 1] = { msg = msg, done = done, t = GetTime(), channel = joinedName, line = line }
 	return true
 end
 function Comm.ChatRoom()
 	return CHAT_QUEUE - #chatQueue
+end
+-- The parts of chat line `line` still in the lane leave it unsent, each done(false, why) (1.1.1:
+-- once one part of a line did not go out, Channels.Send drops the rest, so no one reads a line
+-- without its start). Returns how many.
+function Comm.DropLine(line, why)
+	if line == nil then return 0 end
+	local kept, dropped = {}, {}
+	for _, item in ipairs(chatQueue) do
+		if item.line == line then dropped[#dropped + 1] = item else kept[#kept + 1] = item end
+	end
+	if #dropped == 0 then return 0 end
+	wipe(chatQueue)
+	for i, item in ipairs(kept) do chatQueue[i] = item end
+	for _, item in ipairs(dropped) do
+		if item.done then ns.SafeCall("chat drop", item.done, false, why) end
+	end
+	return #dropped
 end
 
 local function IsSuccess(res)
@@ -305,13 +328,32 @@ end
 local outsideHandler
 function Comm.HandleOutside(fn) outsideHandler = fn end
 
--- Every chat part still waiting is dropped, and its sender is told.
-local function DropChat()
+-- Every chat part still waiting is dropped, and its sender is told why (Comm.SendChat).
+local function DropChat(why)
 	local items = {}
 	for i, item in ipairs(chatQueue) do items[i] = item end
 	wipe(chatQueue)
+	if why == "moved" then stats.chatMoved = stats.chatMoved + #items end
 	for _, item in ipairs(items) do
-		if item.done then ns.SafeCall("chat drop", item.done, false) end
+		if item.done then ns.SafeCall("chat drop", item.done, false, why) end
+	end
+end
+
+-- GitHub #34: the chat parts written for another channel than the one we are on now are dropped
+-- ("moved"), the others keep their place. Comm.JoinChannel drops the lane when the channel
+-- changes; this second guard holds whatever path changed joinedName. The same channel given
+-- another number by the game is no move (Pump follows its number).
+local function DropMoved()
+	local kept, moved = {}, {}
+	for _, item in ipairs(chatQueue) do
+		if item.channel == joinedName then kept[#kept + 1] = item else moved[#moved + 1] = item end
+	end
+	if #moved == 0 then return end
+	wipe(chatQueue)
+	for i, item in ipairs(kept) do chatQueue[i] = item end
+	stats.chatMoved = stats.chatMoved + #moved
+	for _, item in ipairs(moved) do
+		if item.done then ns.SafeCall("chat drop", item.done, false, "moved") end
 	end
 end
 
@@ -323,7 +365,7 @@ local function Pump()
 		for i, item in ipairs(queue) do dropped[i] = item end
 		wipe(queue)
 		for _, item in ipairs(dropped) do Done(item, false) end
-		DropChat()
+		DropChat("left")
 		return
 	end
 	-- The channel may have been left (the Chat Channels panel) and its number given to another
@@ -335,18 +377,22 @@ local function Pump()
 			channelIndex = id
 		end
 	end
+	if chatQueue[1] then DropMoved() end
 	local now = GetTime()
 	while chatQueue[1] and now - chatQueue[1].t > CHAT_TTL do
 		local item = table.remove(chatQueue, 1)
-		if item.done then ns.SafeCall("chat drop", item.done, false) end
+		if item.done then ns.SafeCall("chat drop", item.done, false, "late") end
 	end
 	-- Chat goes first, but while reports wait it takes at most every other slot: an idle lane
 	-- sends a line within 1.2 s, and the total rate stays one message per SEND_INTERVAL.
+	-- (The regular queue is not stamped with a channel: the census, hellos, decrees, pins and
+	-- Board notes address the army's channel, whichever it is when they leave, and a pin repeats
+	-- itself anyway. Only a player's chat line is written for one channel's audience.)
 	if chatQueue[1] and channelIndex > 0 and not (lastWasChat and queue[1]) then
 		lastWasChat = true
 		local item = table.remove(chatQueue, 1)
 		local sent = SendNow("CHANNEL", item.msg, true)
-		if item.done then ns.SafeCall("chat sent", item.done, sent) end
+		if item.done then ns.SafeCall("chat sent", item.done, sent, (not sent) and "failed" or nil) end
 		return
 	end
 	lastWasChat = false
@@ -719,8 +765,11 @@ function Comm.JoinChannel()
 	if not ns.IsMember() then return end
 	local name, password = Comm.ChannelSpec()
 	if joinedName and joinedName ~= name then
-		-- Another channel (the realm key arrived): votes heard on the old one don't count here,
-		-- and its reporters have not heard our census request.
+		-- Another channel (the realm key arrived or changed). The chat lines still waiting were
+		-- written for the old one's audience: dropped, never sent on this one, and their writer is
+		-- told (GitHub #34). Votes heard on the old one don't count here, and its reporters have
+		-- not heard our census request.
+		DropChat("moved")
 		if ns.Data and ns.Data.ForgetVotes then ns.Data.ForgetVotes() end
 		askTries = 0
 		heardAsk = -math.huge -- (the answers to an ask heard there went there)
@@ -1406,7 +1455,7 @@ function Comm.CheckMembership()
 		ns.Log("left channel %s: not in an Olympus guild", joinedName)
 		joinedName, channelIndex = nil, 0
 		wipe(queue)
-		DropChat()
+		DropChat("left")
 	end
 end
 

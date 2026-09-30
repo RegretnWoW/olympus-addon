@@ -50,7 +50,7 @@ end
 
 -- Chat lines for a companion: fn(tier, sender, text) for each line from someone else that this
 -- client accepted, after its checks (rank, blocked and ignored players, repeats, rate) and
--- Codec.SanitizeChat: the lines the history keeps and the Realm tab shows, our own left out. A
+-- Codec.SanitizeChat: the lines the history keeps and the Chat tab shows, our own left out. A
 -- muted channel and a line the flood guard holds back pass on the same way, as those only decide
 -- what this player's chat frame shows. Plain strings only, and an observer that errors is
 -- skipped: it can never stop a line or the others.
