@@ -92,7 +92,10 @@ local BUTTONS = {
 		{ "REFRESH", function()
 			ns.Roster.RequestScan(true)
 			ns.Print(L.REFRESHING)
-			ns.Who.Search()
+			-- This is the explicit /who action: first serve a guild/player check that had to
+			-- wait, otherwise continue the census round. Nothing restricted runs from a
+			-- generic row, tab, header or window-opening click (UI.Clicked below).
+			if not ns.Who.Auto() then ns.Who.Search() end
 		end },
 		{ "REPORT_BUG", function() UI.ShowBugReport() end },
 	},
@@ -1385,15 +1388,16 @@ local function ShowTab(key, focus)
 	UI.Refresh()
 end
 
--- Every click in the window (and the ones that open it) also runs the next /who of the
--- round (Who.Auto): the census and the Join screen fill without Refresh. Only from clicks
--- and slash commands, never from a timer: the game takes /who from a hardware event only.
+-- Generic UI clicks must not run restricted actions. In particular, SendWho is restricted
+-- on Forever: spending a row, tab, header or window-opening click on a hidden Who.Auto can
+-- raise ADDON_ACTION_BLOCKED. Keep this compatibility hook for those callers; /who starts
+-- only from explicit Census Refresh, Join search, Realm guild expansion, person Who and
+-- King confirmation actions.
 function UI.Clicked()
-	ns.SafeCall("auto who", ns.Who.Auto)
 end
 
 -- Opening the window picks its look again, from the guild window in use (UI.Style).
--- Called from clicks and slash commands only (UI.Clicked). `focus`: see ShowTab.
+-- Called from clicks and slash commands. `focus`: see ShowTab.
 function UI.SelectTab(key, focus)
 	if not (main and main:IsShown()) then UseStyle(UI.Style()) end
 	ShowTab(key, focus)
@@ -1601,7 +1605,7 @@ function UI.OpenDocked(host, tab, heightOnly, style)
 	DockTo(host)
 	main.docked = true
 	ShowTab(tab or main.tab or "census")
-	UI.Clicked() -- the guild window's button was clicked
+	UI.Clicked()
 end
 
 -- The host was resized while we are docked to it (the Communities window can be

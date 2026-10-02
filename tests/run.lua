@@ -2736,6 +2736,39 @@ local function Players(from, to)
 	return rows
 end
 
+test("generic row clicks never spend a restricted /who", function()
+	WithWho(function(server)
+		WithUI(function()
+			LoadUI()
+			local content = NewWidget("Frame", nil, UIParent)
+			content.w, content.style = 300, "old"
+			local actions = 0
+			ns.Views.Render(content, {
+				{ text = "Static" },
+				{ text = "Action", onClick = function() actions = actions + 1 end },
+			})
+			content.rows[1]:Click()
+			content.rows[2]:Click()
+			eq(actions, 1, "the visible row action still runs")
+			eq(#server.sent, 0, "ordinary rows never start a hidden /who")
+		end)
+	end)
+end)
+
+test("Census Refresh explicitly serves a deferred player /who", function()
+	WithWho(function(server)
+		WithUI(function()
+			local UI = LoadUI()
+			UI.SelectTab("census")
+			eq(#server.sent, 0, "opening the tab is not a /who action")
+			eq(ns.Who.WantName("Some Player-Realm"), true)
+			OlympusFrame.buttons[2]:Click()
+			eq(table.concat(server.sent, "|"), 'n-"Some Player"')
+			eq(#ns.Who.WantedNames(), 0, "the deferred check was consumed")
+		end)
+	end)
+end)
+
 test("who on Forever: only the frames that listen are silenced, and get the event back with the answer", function()
 	WithWho(function(server)
 		-- Forever's Social window does not listen, the group finder's who list does, and so
@@ -2773,7 +2806,7 @@ test("who on Forever: only the frames that listen are silenced, and get the even
 	end)
 end)
 
-test("who on its own: a click in the window searches quietly, range by range, not again for a while", function()
+test("who Auto: Refresh's quiet sequence searches range by range, not again for a while", function()
 	WithWho(function(server)
 		LFGWhoListFrame = ListenerFrame("LFGWhoListFrame", true)
 		eq(ns.Who.Auto(), true, "the first click searches")
@@ -3230,6 +3263,7 @@ test("census Refresh: the roster, and one /who per click for the grey guilds", f
 			local savedKey = ns.rdb.realmKey
 			ns.rdb.realmKey = "shared secret"
 			UI.SelectTab("census")
+			eq(#server.sent, 0, "opening a tab never starts a hidden /who")
 			local refresh = OlympusFrame.buttons[2]
 			eq(refresh:GetText(), ns.L.REFRESH)
 			refresh:Click()
@@ -10406,7 +10440,7 @@ do
 				local asked, isRegistered = 0, LFGWhoListFrame.IsEventRegistered
 				function LFGWhoListFrame:IsEventRegistered(event) asked = asked + 1 return isRegistered(self, event) end
 				local sendWho = C_FriendList.SendWho
-				eq(ns.Who.Auto(), false, "a click in our window searches nothing")
+				eq(ns.Who.Auto(), false, "the quiet Auto sequence searches nothing")
 				eq(ns.Who.SearchGuild("OLYMPUS VII"), false, "nor does opening a guild's row")
 				eq(ns.Who.Search(true), false, "no quiet search at all")
 				eq(#server.sent, 0)
@@ -15032,7 +15066,7 @@ test("Olympus Link: a /who of the requester in their guild makes a \"w\"; a coun
 			end
 			eq(Ask("Some Player-Realm"), "c", "nothing known: claimed")
 			eq(table.concat(ns.Who.WantedNames(), ","), "Some Player-Realm", "a /who asked for")
-			-- The next click in the Olympus window searches that player, quietly.
+			-- The next Census Refresh searches that player, quietly.
 			eq(ns.Who.Auto(), true)
 			eq(server.sent[#server.sent], 'n-"Some Player"')
 			eq(Listening(LFGWhoListFrame), false, "quiet, as Auto always is")
@@ -15357,7 +15391,7 @@ test("Olympus Link: a councillor's proof with the guild only claimed keeps the r
 				w.printed = {}
 				Link.Slash("status")
 				assert(Said(w, ns.L.LINK_STATUS_CLAIMED:format(ns.DisplayName("Some Player-Realm"), Link.CLAIMED_WAIT / 60)), table.concat(w.printed, "\n"))
-				-- The councillor queued a /who of the player; its next click in the Olympus window runs it.
+				-- The councillor queued a /who of the player; its next Census Refresh runs it.
 				eq(table.concat(ns.Who.WantedNames(), ","), "Some Player-Realm")
 				eq(ns.Who.Auto(), true)
 				server.Answer({ { "Some Player", "Olympus II", 30, "MAGE" } })
@@ -48379,10 +48413,10 @@ end)()
 		assert(#pt.VERSION_INVITE_TEXT:format("https://www.curseforge.com/wow/addons/olympus-guild") <= 255)
 	end)
 
-	test("1.1.2: the version, the TOC's files in order, the new message types in Comm.lua's list", function()
-		eq(ns.VERSION, "1.1.2")
+	test("1.1.3: the version, the TOC's files in order, the new message types in Comm.lua's list", function()
+		eq(ns.VERSION, "1.1.3")
 		local toc = assert(ReadFile(ADDON_DIR .. "Olympus.toc"))
-		assert(toc:find("## Version: 1.1.2", 1, true))
+		assert(toc:find("## Version: 1.1.3", 1, true))
 		local at = {}
 		local n = 0
 		for line in toc:gmatch("[^\n]+") do n = n + 1; at[line:gsub("%s+$", "")] = n end

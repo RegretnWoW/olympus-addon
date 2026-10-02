@@ -1280,7 +1280,7 @@ what you know says otherwise (they claim your guild and your roster doesn't list
 `/who` saw them in another guild in the last 15 minutes). A High Councillor taken off the signed
 list stops at once in game (their addon confirms nothing, and nobody's asks them); at the bot,
 their keys count until its keeper revokes their character. A High Councillor who could only take someone's word for their guild gets
-their `/who` quietly with the next click in the Olympus window (mouse and keyboard only). High
+their `/who` quietly with the next Census **Refresh** (mouse and keyboard only). High
 Councillors can turn on `/oly discord watcher on`: the proofs players hand you are kept in your
 SavedVariables once your addon has checked them (every signature against the certificate the
 link carries, and enough for the bot), so made-up links never take a place. It keeps one link per

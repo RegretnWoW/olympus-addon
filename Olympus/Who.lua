@@ -5,8 +5,8 @@ local L = ns.L
 -- Refresh button (Olympus guilds nobody reports, seen online). One search per click: the
 -- game only takes /who from a hardware event, so never from a timer, and at most one every
 -- COOLDOWN seconds whichever button sent it. The Who button of our person panel keeps the
--- same distance from these (SendPlain). Any other click in our window (opening it, a tab, a
--- row, a button) searches on its own too, quietly (Auto): nobody has to press Refresh.
+-- same distance from these (SendPlain). Refresh uses Auto to give a queued guild/player
+-- check priority, then continues the census round; generic UI clicks never search.
 --
 -- Searching quietly. The answer (WHO_LIST_UPDATE) opens Blizzard's own who list: the Who tab
 -- of the Social window on the old UI (FriendsFrame), the group finder's list on Forever's new
@@ -45,7 +45,7 @@ Who.SETTLE = 1     -- the answer announced again within this is still ours (see 
 Who.LATE = 30      -- a search given up may still be answered until then (see Release)
 Who.ROUND_TTL = 15 * 60 -- a round older than this starts over (like a report, Data.FRESH)
 Who.AUTO_AGAIN = 5 * 60 -- a complete round older than this is searched again by Auto
-Who.AUTO_GAP = 60      -- the quiet search on a click in our window: once a minute at most (0.9.2)
+Who.AUTO_GAP = 60      -- the quiet Auto sequence advances at most once a minute
 Who.lastAuto = -math.huge
 Who.MAX = 50       -- players per answer, MAX_WHOS_FROM_SERVER
 Who.BRACKETS = 5   -- level ranges searched after a capped answer
@@ -307,17 +307,17 @@ function Who.Search(quiet, guild, name)
 	return true
 end
 
--- The search nobody has to ask for, from any click in our window: the next search of the
--- round once COOLDOWN allows, so the census (and the Join screen) fill on their own, one
--- level range per click past the cap. Quiet, and nothing is sent while a search waits for
--- its answer, while a who window is open, or while the last complete round is younger than
--- AUTO_AGAIN. Must be called from a click, like Search. Returns true if a search was sent.
+-- The quiet search sequence used by the explicit Census Refresh: a deferred guild/player
+-- check first, otherwise the next search of the round once COOLDOWN allows. Nothing is sent
+-- while a search waits for its answer, while a who window is open, or while the last complete
+-- round is younger than AUTO_AGAIN. Must be called from that click, like Search. Returns true
+-- if a search was sent; Refresh falls back to Search when a completed/paused Auto has none.
 -- One guild's players online, when its row is opened in the Realm tab (Views.lua): a click,
 -- quiet, at most once a minute per guild. Up to 50 of them, whatever the round's cap. Kept
 -- ROUND_TTL, like a round.
 Who.GUILD_AGAIN = 60
 local guildSearched = {}
-local wantedGuild -- a guild opened while a search could not go: the next click sends it
+local wantedGuild -- a guild opened while a search could not go: the next Refresh sends it
 guildSeen = {} -- [guild] = { t, list = { players }, capped }
 
 -- The players of `guild` its own search found, while fresh: list, capped (nil when none).
@@ -353,9 +353,9 @@ function Who.SearchGuild(guild, own)
 end
 
 -- Olympus Link (0.9.10, Link.lua): a High Councillor's addon that could only sign a player's
--- guild as claimed asks here for that player's /who. It goes quietly with a later click in our
--- window, like the rest of Auto, one name per click (never with the gamepad UI: no quiet search
--- goes there); its answer tells the confirmer the guild the next time that player asks.
+-- guild as claimed asks here for that player's /who. It goes quietly with a later Census
+-- Refresh, one name per click (never with the gamepad UI: no quiet search goes there); its
+-- answer tells the confirmer the guild the next time that player asks.
 Who.WANT_MAX = 5
 local wantedNames = {}
 function Who.WantName(name)

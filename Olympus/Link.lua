@@ -1399,7 +1399,7 @@ end
 -- certificate for our key and this character (without one no requester asks us; a councillor's
 -- only while the signed list names us). Anything else is ignored without a word. A High
 -- Councillor who could only sign the guild as claimed asks for the player's /who (sent quietly
--- with a later click in the Olympus window, never with the gamepad UI, Who.lua): the player's
+-- with a later Census Refresh, never with the gamepad UI, Who.lua): the player's
 -- addon asks again while it waits for a proof that knows the guild, and then the proof says "w".
 function Link.HandleRequest(dist, sender, text)
 	if dist ~= "WHISPER" or type(text) ~= "string" or not Link.BotReady() then return end
