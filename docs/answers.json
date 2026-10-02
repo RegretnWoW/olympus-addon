@@ -778,7 +778,7 @@
     {
       "id": "feat-crafters",
       "topic": "features",
-      "status": "current (1.1.1)",
+      "status": "current (1.1.4)",
       "questions": [
         "How do I find a crafter?",
         "How do I list my professions?"
@@ -786,7 +786,7 @@
       "answer": "Type /oly craft and shift-click an item (or type its name): crafters who know it answer, and a click whispers one. Open a profession and say yes to be listed; /oly crafter off takes you off.",
       "in_game": "Type /oly craft then shift-click an item: crafters who know it answer. Open a profession and say yes to get listed.",
       "sources": [
-        "README.md:1089-1110"
+        "README.md:1162-1184"
       ]
     },
     {
@@ -799,7 +799,7 @@
       ],
       "answer": "Open the Olympus window's Chat tab, or type /ol, /olc or /oll with nothing after it (Shift-click on the minimap button works too). Every line shows whole, with search, and a box at the bottom: Enter sends, Tab changes channel.",
       "in_game": "Type /ol alone (or Shift-click the minimap button) for the Chat tab. Enter sends, Tab changes channel.",
-      "notes": "Also covers the Realm tab's link to the chats (inventory #29).",
+      "notes": "The Chat tab is a direct top-level destination; the duplicate Realm shortcut was removed in 1.1.4.",
       "sources": [
         "README.md:384-460"
       ]

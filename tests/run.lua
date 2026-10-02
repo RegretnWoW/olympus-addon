@@ -1774,9 +1774,9 @@ test("tabs of the old window: four or five of Classic's wide tabs shrink to fit 
 				return n, total - 15 * (n - 1)
 			end
 			local n, span = Span()
-			-- (1.1.1: seven with the Chat tab, which every member has.)
-			eq(n, 7, "the Chat tab, the Throne and Vox Populi too")
-			assert(span <= main:GetWidth() - 10, ("seven tabs inside the window: %d of %d"):format(span, main:GetWidth()))
+			-- 1.1.4: eight with the standalone Crafters tab too.
+			eq(n, 8, "Chat, Crafters, Throne and Vox Populi too")
+			assert(span <= main:GetWidth() - 10, ("eight tabs inside the window: %d of %d"):format(span, main:GetWidth()))
 			for _, tab in ipairs(main.tabs) do assert(tab:GetWidth() >= 44, "still a tab") end
 			-- Room enough: Blizzard's own size.
 			main:SetWidth(900)
@@ -1833,7 +1833,7 @@ test("tabs on the real window: side by side on Forever, unchanged on Classic", f
 				for i = 2, #tabs do
 					local gap = tabs[i]:GetLeft() - tabs[i - 1]:GetRight()
 					eq(gap, 3, "gap before tab " .. i)
-					assert(tabs[i].Text:GetStringWidth() + 20 <= tabs[i]:GetWidth(), "text fits tab " .. i)
+					assert(tabs[i]:GetWidth() >= 44, "tab remains clickable " .. i)
 				end
 				local last
 				for _, tab in ipairs(tabs) do if tab:IsShown() then last = tab end end
@@ -2288,11 +2288,21 @@ test("HD Join screen: no tabs or column titles, next to a Communities window wit
 	end)
 end)
 
--- 1.1.1: with the Chat tab (every member's) the King's view is eight side tabs, one past the seven
--- the right column holds: his Treasury, the last of his, goes to the left edge; the author's
--- preview adds the Workshop, which goes first. (This test had the Workshop alone go left, at eight
--- with the author's Workshop; the order and the second tab are the author's ask for 1.1.1.)
-test("HD window: side tabs past the seven the right column holds go to the left edge, the Workshop first, then the Treasury; nothing moves while they fit", function()
+test("top-level order keeps Treasury immediately before Throne", function()
+	WithUI(function()
+		local UI = LoadUI()
+		local function Index(key)
+			for i, tab in ipairs(UI.TABS) do if tab.key == key then return i end end
+		end
+		local treasury, throne = Index("treasury"), Index("throne")
+		eq(treasury + 1, throne, "Treasury is immediately before Throne")
+		eq(Index("crafters"), Index("heraldry") + 1, "Crafters follows Heraldry")
+	end)
+end)
+
+-- 1.1.4: side-tab overflow never changes the declared tab order. The right fills top-to-bottom;
+-- its canonical tail continues from the bottom of the left edge upwards.
+test("HD window: side tabs preserve canonical order from the right column into the left", function()
 	local K, V, T, W = ns.King, ns.Vox, ns.Treasury, ns.Workshop
 	local saved = { K.Visible, V.Visible, T.Visible, W.Visible }
 	local function Yes() return true end
@@ -2307,59 +2317,67 @@ test("HD window: side tabs past the seven the right column holds go to the left 
 			for _, tab in ipairs(main.tabs) do if tab:IsShown() and not tab.onLeft then out[#out + 1] = tab end end
 			return out
 		end
+		local function Left()
+			local out = {}
+			for _, tab in ipairs(main.tabs) do if tab:IsShown() and tab.onLeft then out[#out + 1] = tab end end
+			return out
+		end
 		local function Keys(list) local out = {} for _, tab in ipairs(list) do out[#out + 1] = tab.key end return table.concat(out, " ") end
-		local ws, tr, chat = Tab("workshop"), Tab("treasury"), Tab("chat")
+		local ws, tr, throne, vox, chat = Tab("workshop"), Tab("treasury"), Tab("throne"), Tab("vox"), Tab("chat")
 		eq(UI.SideTabsFit(7, 32, 426), true); eq(UI.SideTabsFit(8, 32, 426), false)
-		-- Every member: five down the right, the Chat tab third; nothing on the left.
+		-- Every member: the six public tabs, including Crafters; nothing on the left.
 		eq(chat:IsShown(), true, "the Chat tab, every member's")
-		eq(Keys(Right()), "census realm chat decrees heraldry")
+		eq(Keys(Right()), "census realm chat decrees heraldry crafters")
 		for _, tab in ipairs(main.tabs) do eq(tab.onLeft or false, false, tab.key) end
 		eq(main.clampInsets[1], 0)
-		-- The author alone: his Workshop under the five everyone has, down the right (six fit).
+		-- The author alone: Workshop is seventh and still fits.
 		W.Visible = Yes
 		UI.Refresh()
-		eq(ws:IsShown(), true); eq(ws.points[1][2], Tab("heraldry")); eq(Anchor(ws), "TOPLEFT nil BOTTOMLEFT 0 -20")
+		eq(ws:IsShown(), true); eq(ws.points[1][2], Tab("crafters")); eq(Anchor(ws), "TOPLEFT nil BOTTOMLEFT 0 -20")
 		eq(ws.onLeft or false, false); eq(main.clampInsets[1], 0)
 		W.Visible = saved[4]
-		-- Asmon's view: the Throne, Vox Populi and the Treasury make eight: the Treasury goes left.
+		-- The King's view has nine. The first seven stay right; Throne then Vox continue bottom-up
+		-- on the left, exactly where they occur in the canonical list.
 		K.Visible, V.Visible, T.Visible = Yes, Yes, Yes
 		UI.Refresh()
 		eq(ws:IsShown(), false, "(not the author)")
-		eq(tr:IsShown(), true); eq(tr.onLeft, true)
-		eq(Anchor(tr), "BOTTOMRIGHT OlympusFrameHD BOTTOMLEFT 0 46"); eq(tr:GetNumPoints(), 1)
-		eq(Anchor(tr.Art), "TOPRIGHT nil TOPRIGHT 3 11"); eq(tr.Art.texCoord, "1 0 0 1", "its art turned round")
+		eq(vox:IsShown(), true); eq(throne.onLeft, true); eq(vox.onLeft, true); eq(tr.onLeft or false, false)
+		eq(Anchor(throne), "BOTTOMRIGHT OlympusFrameHD BOTTOMLEFT 0 46"); eq(throne:GetNumPoints(), 1)
+		eq(vox.points[1][2], throne); eq(Anchor(vox), "BOTTOMRIGHT nil TOPRIGHT 0 20")
+		eq(Anchor(vox.Art), "TOPRIGHT nil TOPRIGHT 3 11"); eq(vox.Art.texCoord, "1 0 0 1", "its art turned round")
 		eq(main.clampInsets[1], -40, "on the screen too"); eq(main.clampInsets[2], 40)
 		local right = Right()
-		eq(Keys(right), "census realm chat decrees heraldry throne vox", "the other seven still down the right")
+		eq(Keys(right), "census realm chat decrees heraldry crafters treasury", "Treasury immediately precedes the tail")
+		eq(Keys(Left()), "throne vox", "the canonical tail, read bottom-to-top")
 		eq(Anchor(right[1]), "TOPLEFT OlympusFrameHD TOPRIGHT 0 -36"); eq(right[7].points[1][2], right[6])
-		-- The author's preview (his Workshop and the King's view): nine; the Workshop goes left first,
-		-- then the Treasury; stacked up from the bottom anchor, in the tabs' order down (the Workshop,
-		-- the last, lowest; the Treasury over it, SIDE_GAP apart).
+		-- The author's full preview adds Workshop after Vox, so it sits above it.
 		W.Visible = Yes
 		UI.Refresh()
-		eq(ws.onLeft, true); eq(tr.onLeft, true)
-		eq(Anchor(ws), "BOTTOMRIGHT OlympusFrameHD BOTTOMLEFT 0 46"); eq(ws:GetNumPoints(), 1)
-		eq(tr.points[1][2], ws); eq(Anchor(tr), "BOTTOMRIGHT nil TOPRIGHT 0 20"); eq(tr:GetNumPoints(), 1)
-		eq(Keys(Right()), "census realm chat decrees heraldry throne vox")
+		eq(throne.onLeft, true); eq(vox.onLeft, true); eq(tr.onLeft or false, false); eq(ws.onLeft, true)
+		eq(Anchor(throne), "BOTTOMRIGHT OlympusFrameHD BOTTOMLEFT 0 46")
+		eq(vox.points[1][2], throne); eq(ws.points[1][2], vox)
+		eq(Keys(Right()), "census realm chat decrees heraldry crafters treasury")
+		eq(Keys(Left()), "throne vox workshop")
 		eq(Anchor(ws.Art), "TOPRIGHT nil TOPRIGHT 3 11"); eq(main.clampInsets[1], -40)
 		-- Their tooltips to the left, clear of the window; the others' to the right.
 		ws:Fire("OnEnter"); eq(GameTooltip.owner, ws); eq(GameTooltip.ownerAnchor, "ANCHOR_LEFT")
-		tr:Fire("OnEnter"); eq(GameTooltip.ownerAnchor, "ANCHOR_LEFT")
+		tr:Fire("OnEnter"); eq(GameTooltip.ownerAnchor, "ANCHOR_RIGHT")
 		Right()[1]:Fire("OnEnter"); eq(GameTooltip.ownerAnchor, "ANCHOR_RIGHT")
 		ws:Click(); eq(main.tab, "workshop"); eq(ws:GetChecked(), true)
 		tr:Click(); eq(main.tab, "treasury"); eq(tr:GetChecked(), true); eq(ws:GetChecked(), false)
-		-- A taller window (docked to a taller guild window): all nine fit down the right, nothing left.
+		-- A taller window: all ten fit down the right, nothing left.
 		main:SetHeight(700)
 		UI.Refresh()
-		eq(ws.onLeft, false); eq(tr.onLeft, false); eq(main.clampInsets[1], 0)
-		eq(Keys(Right()), "census realm chat decrees heraldry throne vox treasury workshop")
+		eq(ws.onLeft, false); eq(tr.onLeft or false, false); eq(main.clampInsets[1], 0)
+		eq(Keys(Right()), "census realm chat decrees heraldry crafters treasury throne vox workshop")
 		main:SetHeight(426)
 		-- Asmon's view off: back under the others, their art as it was.
 		K.Visible, V.Visible, T.Visible = saved[1], saved[2], saved[3]
 		UI.Refresh()
-		eq(ws.onLeft, false); eq(Anchor(ws), "TOPLEFT nil BOTTOMLEFT 0 -20"); eq(ws.points[1][2], Tab("heraldry"))
+		eq(ws.onLeft, false); eq(Anchor(ws), "TOPLEFT nil BOTTOMLEFT 0 -20"); eq(ws.points[1][2], Tab("crafters"))
 		eq(Anchor(ws.Art), "TOPLEFT nil TOPLEFT -3 11"); eq(ws.Art.texCoord, "0 1 0 1")
-		eq(tr.onLeft, false); eq(Anchor(tr.Art), "TOPLEFT nil TOPLEFT -3 11"); eq(tr.Art.texCoord, "0 1 0 1")
+		eq(tr.onLeft or false, false, "Treasury stayed on the right throughout")
+		eq(throne.onLeft, false); eq(Anchor(throne.Art), "TOPLEFT nil TOPLEFT -3 11"); eq(throne.Art.texCoord, "0 1 0 1")
 		eq(main.clampInsets[1], 0)
 	end)
 	K.Visible, V.Visible, T.Visible, W.Visible = saved[1], saved[2], saved[3], saved[4]
@@ -7453,11 +7471,8 @@ test("Round 2 fixes: shares add up to 100, the King is never shut out, a trade i
 	end)
 end)
 
--- (Changed on purpose, 1.1.1, the author's call: the Chat tab replaced the Realm tab's page of the
--- chats. The Realm's link now opens the Olympus window on its Chat tab, where the lines show (the
--- channels a rank reads, their order and the sanitized text: the Chat tab's tests); the Realm tab
--- stays on its tree and shows no chat line. The real window from the link: the Chat tab's ways in.)
-test("The Realm links the Olympus chats: a click opens the Olympus window on its Chat tab; no chat line on the Realm", function()
+-- 1.1.4: Chat is already a first-class tab, so the duplicate Realm shortcut/status row is gone.
+test("The Realm has no Olympus-chat shortcut or lines; Chat remains a first-class tab", function()
 	WithThrone(function(w)
 		ns.rdb.chat = {
 			A = { { t = w.clock - 120, sender = "Aa-Realm", guild = "Olympus II", text = "first of the chats" },
@@ -7465,34 +7480,16 @@ test("The Realm links the Olympus chats: a click opens the Olympus window on its
 			C = { { t = w.clock - 30, sender = "Cc-Realm", guild = "Olympus II", text = "captains only chat" } },
 		}
 		AsSoldier()
-		local lines = ns.Views.RealmLines()
-		local link
-		for _, l in ipairs(lines) do if l.text and l.text:find(ns.L.CHATS_LINK, 1, true) then link = l end end
-		assert(link and link.onClick, Texts(lines))
-		local tip = {}
-		link.tooltip({ AddLine = function(_, s) tip[#tip + 1] = s end })
-		eq(tip[1], ns.L.CHATS_LINK); eq(tip[2], ns.L.CHATS_TIP); eq(tip[3], ns.L.CHATS_OPEN_WINDOW_TIP, "where they open")
-		local savedCW, opened = ns.ChatWindow, {}
-		local ok, err = pcall(function()
-			ns.ChatWindow = { Open = function(...) opened[#opened + 1] = select("#", ...) end }
-			link.onClick()
-		end)
-		ns.ChatWindow = savedCW
-		if not ok then error(err, 0) end
-		eq(#opened, 1, "the Olympus window on its Chat tab"); eq(opened[1], 0, "on the channel it last showed (none named)")
 		local after = Texts(ns.Views.RealmLines())
+		assert(not after:find(ns.L.CHATS_LINK, 1, true), "no duplicate chat shortcut")
+		assert(not after:find(ns.L.CHATS_OFF_LINK, 1, true), "no duplicate chat status")
 		for _, said in ipairs({ "first of the chats", "second of the chats", "captains only chat" }) do
 			assert(not after:find(said, 1, true), "no chat line on the Realm tab: " .. said)
 		end
 		eq(ns.Views.ShowChat, nil, "no page of the chats"); eq(ns.Views.ChatShown, nil); eq(ns.Views.ChatTier, nil)
-		-- A Captain: the same link, the same tab (the channels he reads are the Chat tab's).
+		-- A Captain also gets no duplicate row. The UI tests cover the top-level Chat tab itself.
 		AsCaptain()
-		assert(Texts(ns.Views.RealmLines()):find(ns.L.CHATS_LINK, 1, true))
-		-- A client updated without a restart (no ChatWindow.lua yet): Core.lua's stand-in says so.
-		eq(ns.ChatWindow.missing, true)
-		w.printed = {}
-		link.onClick()
-		eq(w.printed[1], ns.L.RESTART_NEEDED)
+		assert(not Texts(ns.Views.RealmLines()):find(ns.L.CHATS_LINK, 1, true))
 	end)
 end)
 
@@ -17738,9 +17735,9 @@ do
 
 	-- (Changed on purpose, 1.1.1, the author's call: the Realm tab's chats page is gone, and with it
 	-- the Realm's search over the chats' lines. The Chat tab searches them with its own box (a writer,
-	-- a guild or words, any case: its test with the Chat tab's). Here: the Realm's box keeps the
-	-- chats' link and finds no chat line, with the tree's tip.)
-	test("1.0.0 search: the Realm's box finds no line of the Olympus chats (the Chat tab's own box does); the chats' link stays", function()
+	-- a guild or words, any case: its test with the Chat tab's). Here: the Realm's box has neither
+	-- chat lines nor the removed duplicate shortcut, and keeps the tree's tip.)
+	test("1.1.4 search: the Realm's box finds no Olympus-chat line or shortcut", function()
 		WithThrone(function(w)
 			local savedUI = ns.UI
 			local ok, err = pcall(Quiet, function()
@@ -17757,7 +17754,7 @@ do
 				local tip = {}
 				box.tooltip({ AddLine = function(_, s) tip[#tip + 1] = s end })
 				eq(tip[2], L.SEARCH_TIP_REALM, "the tree's tip")
-				assert(At(lines, L.CHATS_LINK), "the chats' link stays")
+				eq(At(lines, L.CHATS_LINK), nil, "no duplicate chat shortcut")
 				eq(At(lines, "second"), nil, "no chat line")
 				eq(lines[#lines].text, NO_MATCH)
 				V.SetFilter("realm", "ÉLISE")
@@ -28539,7 +28536,7 @@ do
 					UI.SelectTab("realm")
 					local realm = Texts(ns.Views.Build("realm"))
 					assert(realm:find("Olympus II", 1, true), "the Realm lists our guild")
-					assert(realm:find(ns.L.CHATS_OFF_LINK, 1, true), "the chats say they are off")
+					assert(not realm:find(ns.L.CHATS_OFF_LINK, 1, true), "Realm has no duplicate chat status row")
 					-- A Yes turns its own switch on (and says so), nothing else.
 					SlashCmdList.OLYMPUS("privacy")
 					RowOf(page, "inspection").yes:Click()
@@ -35414,7 +35411,7 @@ local function WithCraft(fn)
 		after = Cr.after, random = Cr.random, ui = ns.UI, pad = ns.GamepadUI, choice = ns.db.crafterChoice, data = ns.db.crafterData, me = ns.me,
 		queue = ns.Comm.QueueSize }
 	for _, k in ipairs(CRAFT_GLOBALS) do saved[k] = _G[k] end
-	local w = { sent = {}, whispers = {}, printed = {}, dialogs = {}, later = {}, delays = {}, clock = 5000000, calls = {}, chat = {}, tells = {}, windows = {},
+	local w = { sent = {}, whispers = {}, printed = {}, dialogs = {}, later = {}, delays = {}, clock = 5000000, calls = {}, chat = {}, tells = {}, windows = {}, tabs = {},
 		prof = { id = 197, name = "Tailoring", skill = 245, max = 300 }, linked = false,
 		recipes = { { id = 3915, name = "Linen Bag", item = 4238, learned = true }, { id = 18560, name = "Mooncloth", item = 14342, learned = true },
 			{ id = 12088, name = "Cindercloth Boots", item = 10044, learned = false }, { id = 3914, name = "Brown Linen Pants", item = 4343, learned = true } } }
@@ -35430,7 +35427,8 @@ local function WithCraft(fn)
 	Cr.random = function() return 0 end
 	-- (1.1 review: our send queue's length, for the recipe lists' pace.)
 	ns.Comm.QueueSize = function() return w.queue or 0 end
-	ns.UI = { WhisperWindow = function(name) w.windows[#w.windows + 1] = name end, SelectTab = function() end }
+	ns.UI = { WhisperWindow = function(name) w.windows[#w.windows + 1] = name end,
+		SelectTab = function(tab) w.tabs[#w.tabs + 1] = tab end }
 	ns.GamepadUI = function() return w.gamepad == true end
 	GetGuildInfo = function(unit) if unit == nil or unit == "player" then return MY_GUILD, "Member", 3 end return nil end
 	GetItemInfo = function(id) id = tonumber(type(id) == "string" and id:match("item:(%d+)") or id) if id == 14342 then return "Mooncloth", MOONCLOTH, 2 end end
@@ -35635,7 +35633,8 @@ test("1.1 crafters (#24): who can make it: the ask (an item or words) on the cha
 		w.sent = {}
 		local a = Cr.Ask(MOONCLOTH)
 		eq(w.sent[1], "CHANNEL WQ~1~i~14342 (urgent)"); eq(a.label, "Mooncloth")
-		eq(ns.Views.PageShown(), "crafters", "the board shows the answers")
+		eq(w.tabs[#w.tabs], "crafters", "the standalone tab shows the answers")
+		eq(ns.Views.PageShown(), nil, "Crafters is no longer a Realm page")
 		Cr.Ask("Linen Bag")
 		eq(w.printed[#w.printed], ns.L.CRAFTER_ASK_WAIT:format(15)); eq(#w.sent, 1)
 		w.clock = w.clock + 15
@@ -35689,16 +35688,17 @@ test("1.1 crafters (#24): a crafter's recipes on a click, by whisper, in parts; 
 	end)
 end)
 
-test("1.1 crafters (#24): the Realm tab links the board; a crafter's row opens a whisper and his recipes; the answers whisper with a click (gamepad: Olympus's window)", function()
+test("1.1.4 crafters: the standalone tab lists the board; a row opens a whisper and recipes; answers whisper with a click", function()
 	WithCraft(function(w, Cr)
 		Cr.HandleListing("CHANNEL", "Smith-Realm", "W1~Olympus Zeus~164:Blacksmithing:150:300:12,197:Tailoring:280:300:40")
 		Cr.HandleListing("CHANNEL", "Anvil-Realm", "W1~Olympus Hera~164:Blacksmithing:220:300:30")
-		local link
-		for _, l in ipairs(ns.Views.RealmLines()) do if l.text and l.text:find(ns.L.CRAFTER_LINK, 1, true) then link = l end end
-		assert(link, "linked from the Realm"); eq(link.right, "|cff9d9d9d2|r", "two crafters")
+		assert(not Texts(ns.Views.RealmLines()):find(ns.L.CRAFTER_LINK, 1, true), "no old Realm-page link")
+		local link = Cr.Link()
+		eq(link.right, "|cff9d9d9d2|r", "two crafters")
 		link.onClick()
-		eq(ns.Views.PageShown(), "crafters")
-		local lines = ns.Views.Build("realm")
+		eq(w.tabs[#w.tabs], "crafters", "compatibility links open the top-level tab")
+		eq(ns.Views.PageShown(), nil)
+		local lines = ns.Views.Build("crafters")
 		local text, row = {}, nil
 		for _, l in ipairs(lines) do
 			text[#text + 1] = l.text or ""
@@ -35745,8 +35745,8 @@ test("1.1 crafters (#24): the Realm tab links the board; a crafter's row opens a
 		answer.onClick()
 		eq(w.tells[#w.tells], "Tailor")
 		-- The search: a profession, a crafter or a guild.
-		ns.Views.SetFilter("realm", "hera")
-		lines = ns.Views.Build("realm")
+		ns.Views.SetFilter("crafters", "hera")
+		lines = ns.Views.Build("crafters")
 		text = {}
 		for _, l in ipairs(lines) do text[#text + 1] = l.text or "" end
 		all = table.concat(text, "\n")
@@ -35758,6 +35758,9 @@ test("1.1 crafters (#24): /oly craft and /oly crafter; the strings in both langu
 	WithCraft(function(w, Cr)
 		SlashCmdList.OLYMPUS("craft " .. MOONCLOTH)
 		eq(w.sent[1], "CHANNEL WQ~1~i~14342 (urgent)")
+		eq(w.tabs[#w.tabs], "crafters", "an ask opens the standalone Crafters tab")
+		SlashCmdList.OLYMPUS("craft")
+		eq(w.tabs[#w.tabs], "crafters", "/oly craft opens the standalone Crafters tab")
 		SlashCmdList.OLYMPUS("crafter")
 		eq(w.printed[#w.printed], ns.L.CRAFTER_HOW_LIST)
 	end)
@@ -39250,7 +39253,7 @@ end -- (the pinned line's review)
 		local Cr = ns.Crafters
 		local saved = { send = ns.Comm.Send, whisper = ns.Comm.Whisper, print = ns.Print, dialog = ns.ShowDialog, now = ns.Now,
 			after = Cr.after, random = Cr.random, choice = ns.db.crafterChoice, data = ns.db.crafterData, me = ns.me, guild = GetGuildInfo,
-			queue = ns.Comm.QueueSize, show = ns.Views.ShowPage }
+			queue = ns.Comm.QueueSize, show = ns.Views.ShowPage, ui = ns.UI }
 		local w = { sent = {}, whispers = {}, printed = {}, later = {}, clock = 5000000 }
 		local ok, err = pcall(function()
 			Cr.Reset()
@@ -39262,6 +39265,7 @@ end -- (the pinned line's review)
 			ns.Print = function(m) w.printed[#w.printed + 1] = tostring(m) end
 			ns.ShowDialog = function() end
 			ns.Views.ShowPage = function() end
+			ns.UI = { SelectTab = function(tab) w.tab = tab end }
 			Cr.after = function(_, _, f) w.later[#w.later + 1] = f end
 			Cr.random = function() return 0 end
 			GetGuildInfo = function(unit) if unit == nil or unit == "player" then return "Olympus II", "Member", 3 end return nil end
@@ -39273,7 +39277,7 @@ end -- (the pinned line's review)
 		end)
 		ns.Comm.Send, ns.Comm.Whisper, ns.Print, ns.ShowDialog, ns.Now = saved.send, saved.whisper, saved.print, saved.dialog, saved.now
 		Cr.after, Cr.random, ns.db.crafterChoice, ns.db.crafterData, ns.me = saved.after, saved.random, saved.choice, saved.data, saved.me
-		GetGuildInfo, ns.Comm.QueueSize, ns.Views.ShowPage = saved.guild, saved.queue, saved.show
+		GetGuildInfo, ns.Comm.QueueSize, ns.Views.ShowPage, ns.UI = saved.guild, saved.queue, saved.show, saved.ui
 		Cr.Reset()
 		if not ok then error(err, 0) end
 	end
@@ -43514,7 +43518,7 @@ do
 	-- the author's call, the Realm tab's chats page is gone: the Realm's link to the chats is the way
 	-- in from there, where the page's "Open the Chat tab" and "Write in" lines were; the page's
 	-- Olympus tab line is in the Chat tab's settings, their own test.)
-	test("1.1.1 Chat tab's ways in: /oly talk (and falar), the minimap button's Shift-click, the Realm tab's link to the chats (both input modes, never the game's chat box) open the Olympus window on its Chat tab, on that channel", function()
+	test("1.1.4 Chat tab's ways in: /oly talk, Shift-click and the top-level tab open it; Realm has no duplicate shortcut", function()
 		WithWindow(function(w)
 			local saved = { open = rawget(_G, "ChatFrame_OpenChat"), map = ns.Map.SetEnabled,
 				setup = ns.Channels.SetupTab, state = ns.Channels.TabState }
@@ -43572,8 +43576,8 @@ do
 					if l == L.MINIMAP_SHIFT then shift = i end
 				end
 				assert(left and shift == left + 1, "the Shift-click line after the click's: " .. table.concat(lines, " / "))
-				-- The Realm tab's link to the chats: the Olympus window turns from its Realm tab to its Chat
-				-- tab, on the channel last shown; never the game's chat box, nor a game popup.
+				-- Chat remains directly selectable in either input mode, but the Realm has no redundant
+				-- shortcut row. Selecting it never opens the game's chat box or a game popup.
 				local opened = 0
 				ChatFrame_OpenChat = function() opened = opened + 1 end
 				local function At(ls, text)
@@ -43583,10 +43587,9 @@ do
 					WithGamepadUI(pad, function(game)
 						w.UI.SelectTab("realm")
 						eq(OlympusFrame.tab, "realm")
-						local link = At(ns.Views.RealmLines(), L.CHATS_LINK)
-						assert(link and link.onClick, "the Realm's link to the chats")
-						link.onClick()
-						OnTab("A", "the Realm's link")
+						eq(At(ns.Views.RealmLines(), L.CHATS_LINK), nil, "no Realm chat shortcut")
+						w.UI.SelectTab("chat")
+						OnTab("A", "the top-level Chat tab")
 						eq(opened, 0, "never the game's chat box"); eq(#game.shown, 0, "no game popup"); eq(#w.focus, 0, "no keyboard taken")
 						w.CW.Close()
 					end)
@@ -43595,7 +43598,8 @@ do
 				AsCaptain()
 				w.CW.Open("C"); w.CW.Close()
 				w.UI.SelectTab("realm")
-				At(ns.Views.RealmLines(), L.CHATS_LINK).onClick()
+				eq(At(ns.Views.RealmLines(), L.CHATS_LINK), nil)
+				w.UI.SelectTab("chat")
 				OnTab("C", "the channel last shown")
 				-- The page and its ways are gone: nothing on the Realm tab to open or write from.
 				eq(ns.Views.ShowChat, nil); eq(ns.Views.ChatShown, nil); eq(ns.UI.ChatWindow, nil)
@@ -43794,15 +43798,12 @@ do
 				assert(lang.HELP_TAB_CHAT:find("[" .. lang[chan] .. "]", 1, true), code .. ": the channel's name as the language has it, " .. lang[chan])
 			end
 		end
-		-- (The review of the page's removal: the help's line for the Realm tab still listed the Olympus
-		-- chats among the Realm's own, the Chat tab's line right under it.) It says the Realm links
-		-- them, on the Chat tab, by the tab's name in each language.
-		for code, where in pairs({ enUS = "the Chat tab", ptBR = "aba Chat", deDE = "Reiter Chat", esES = "pestaña Chat",
-			esMX = "pestaña Chat", frFR = "onglet Discussion" }) do
+		-- Chat and Crafters are first-class tabs: Realm help does not advertise either as a link.
+		for _, code in ipairs({ "enUS", "ptBR", "deDE", "esES", "esMX", "frFR" }) do
 			local file = ({ deDE = "deDE", esES = "esES", esMX = "esES", frFR = "frFR" })[code]
 			local lang = Lang(code, file)
-			assert(lang.HELP_TAB_REALM:find(where, 1, true) and lang.HELP_TAB_REALM:find(lang.TAB_CHAT, 1, true),
-				code .. ": the Realm's help line names the Chat tab: " .. lang.HELP_TAB_REALM)
+			assert(not lang.HELP_TAB_REALM:find(lang.TAB_CHAT, 1, true), code .. ": no Chat link in Realm help")
+			assert(type(lang.TAB_CRAFTERS) == "string" and type(lang.HELP_TAB_CRAFTERS) == "string", code .. ": Crafters help")
 		end
 		eq(select(2, ns.L.CHATS_TAB_STEPS:gsub("%%s", "")), 2, "the main tab, Create New Window")
 		eq(select(2, ns.L.CHATTAB_POINTER:gsub("%%s", "")), 1, "Create New Window")
@@ -43835,6 +43836,7 @@ do
 			local flat = doc:gsub("%s+", " ")
 			for _, phrase in ipairs({ "The Olympus chats in a tab of the Olympus window, **Chat**, right after the Realm",
 				"each opens the Olympus window on its Chat tab, on that channel", "the same command again closes the window",
+				"The Realm does not repeat a chat shortcut or status row", "the top-level **Crafters** tab",
 				"On top, where the other tabs show the army's counts, the search box",
 				-- (Changed on purpose, the author's ask: the pills' row where the other tabs have their
 				-- column titles is gone; the switch and the gear on the search's row, the settings, the
@@ -43842,7 +43844,6 @@ do
 				"On the same row, right of it: for a rank that reads more than one channel, a small switch with the channel shown, in its colour, and **+N**",
 				"There is no row of channels: most players read [Olympus] alone, and the lines take that room",
 				"The pinned line shows over the lines, as on the Realm tab, and takes no room while nothing is pinned",
-				"or click **the Olympus chats** on the Realm tab: each opens the Olympus window on its Chat tab",
 				-- (Changed on purpose, the review of the page's removal: the pages no longer mention the
 				-- Realm tab's page of the chats, not even as gone (the brief: they do not mention it); the
 				-- count of the hidden lines is a strip over the lines, taking no room without one.)
@@ -43858,10 +43859,8 @@ do
 				-- (The review of the Chat tab: the line's x and the window of one's own; the Realm page's click.)
 				"The line stays away while you send a channel to a chat window of your own (`/oly chatwindow`), and its **x** puts it away for good, on every character",
 				"The click shows you where on the Chat tab, as its **Add an Olympus tab to the game chat** line does",
-				-- (The review of the Chat tab: the order UI.lua's SIDE_LEFT_ORDER moves them in, the
-				-- Workshop first; the pages said the Treasury first.)
-				"his Treasury moves to the window's left edge (for the author, his Workshop goes there first)",
-				"the Workshop and then the Treasury move to the window's left edge, low, until the rest fit: the King's view with the Chat tab moves the Treasury alone, the author's preview both",
+				"its canonical tail continues from the bottom of the window's left edge upward",
+				"Reading the right top-to-bottom and then the left bottom-to-top always gives the same tab order",
 				"| `/oly talk [olympus\\|captains\\|lords]` | open or close the Olympus window on its Chat tab, on that channel" }) do
 				assert(flat:find(phrase, 1, true), path .. ": " .. phrase)
 			end
@@ -43869,7 +43868,9 @@ do
 				"where the other tabs have their column titles", "Realm tab's chats page", "**Open the Chat tab**", "**Write in [Olympus]**",
 				"a line under the channels", "Realm tab's Olympus chats", "Realm tab's chats say", "on the chats page",
 				"members seen online, the Olympus chats' lines", "newest first, even what was said",
-				"page of the chats", "Realm tab's page", "gone since 1.1.1", "offers everything it did" }) do
+				"page of the chats", "Realm tab's page", "gone since 1.1.1", "offers everything it did",
+				"click **the Olympus chats** on the Realm tab", "his Treasury moves to the window's left edge",
+				"the crafters' board on the Realm tab" }) do
 				assert(not flat:find(gone, 1, true), path .. ": no more " .. gone)
 			end
 		end
@@ -47344,13 +47345,13 @@ end)()
 	test("1.1.2 Ask to update: only for a player behind; one ask per player a day, five an hour; the author's is his usual update window (V3)", function()
 		WithVersions("Tester-Realm", function(w, W)
 			-- (Changed on purpose, 1.1.2's review: a player's ask, V9, goes to 1.1.2 and newer alone,
-			-- the first that show it: here the author's presence named 1.1.3 as out.)
-			W.HeardVersion("1.1.3")
-			w.hellos = { Ann = "1.1.3", Bob = "1.1.2", P1 = "1.1.2", P2 = "1.1.2", P3 = "1.1.2", P4 = "1.1.2", P5 = "1.1.2" }
+			-- the first that show it: here the author's presence named 1.1.4 as out.)
+			W.HeardVersion("1.1.4")
+			w.hellos = { Ann = "1.1.4", Bob = "1.1.3", P1 = "1.1.3", P2 = "1.1.3", P3 = "1.1.3", P4 = "1.1.3", P5 = "1.1.3" }
 			eq(V.AskUpdate("Ann-Realm"), false, "up to date"); eq(#w.whispered, 0)
 			eq(V.AskUpdate("Eve-Realm"), false, "nothing known"); eq(#w.whispered, 0)
 			eq(V.AskUpdate("Bob-Realm"), true)
-			eq(w.whispered[1].to, "Bob-Realm"); eq(w.whispered[1].msg, "V9~1.1.3"); eq(w.whispered[1].key, "vask:bob")
+			eq(w.whispered[1].to, "Bob-Realm"); eq(w.whispered[1].msg, "V9~1.1.4"); eq(w.whispered[1].key, "vask:bob")
 			eq(w.printed[#w.printed], L.VERSION_ASKED:format("Bob"))
 			eq(V.AskUpdate("Bob"), false, "once a day"); eq(w.printed[#w.printed], L.VERSION_ASK_WAIT_ONE:format("Bob"))
 			for i = 1, 5 do V.AskUpdate("P" .. i .. "-Realm") end
@@ -47364,7 +47365,7 @@ end)()
 			-- The menu offers it for Bob, not for Ann.
 			local root = MenuRoot()
 			V.MenuLines({ name = "Ann-Realm" }, { Line = function(t) root:CreateTitle(t) end, Button = function(t) root:CreateButton(t) end })
-			eq(root.Texts(), "title:" .. L.VERSION_LINE_CURRENT:format("1.1.3") .. " | title:|cff9d9d9d" .. L.VERSION_DETAIL_HELLO:format(ns.Ago(w.clock)) .. "|r")
+			eq(root.Texts(), "title:" .. L.VERSION_LINE_CURRENT:format("1.1.4") .. " | title:|cff9d9d9d" .. L.VERSION_DETAIL_HELLO:format(ns.Ago(w.clock)) .. "|r")
 		end)
 		WithVersions(AUTHOR_FULL, function(w, W)
 			w.hellos = { Bob = "1.0.0" }
@@ -47959,11 +47960,11 @@ end)()
 			eq((V.Status("Bob")), "unknown"); eq(w.printed[#w.printed], L.VERSION_NOT_SENT:format("Bob"))
 			eq(V.Check("Bob-Realm"), true, "checked again at once")
 			-- An ask to update dropped: the day's and the hour's slots come back.
-			W.HeardVersion("1.1.3")
-			w.hellos = { Cid = "1.1.2" }
+			W.HeardVersion("1.1.4")
+			w.hellos = { Cid = "1.1.3" }
 			eq(V.AskUpdate("Cid-Realm"), true)
 			local e = w.whispered[#w.whispered]
-			eq(e.msg, "V9~1.1.3")
+			eq(e.msg, "V9~1.1.4")
 			e.done(false)
 			eq(ns.db.updateAsked.cid, nil); eq(#ns.db.updateAskTimes, 0); eq(w.printed[#w.printed], L.VERSION_NOT_SENT:format("Cid"))
 			w.holdSends = false
@@ -48275,7 +48276,7 @@ end)()
 	end)
 
 	test("1.1.2 explanations: every tab and page has its '?', from the answer bank; where it counts, why its numbers can differ; the window's '?' opens the page shown", function()
-		local pages = { "join", "census/", "realm/tree", "realm/board", "realm/loot", "realm/crafters", "realm/members:7", "realm/members:30",
+		local pages = { "join", "census/", "realm/tree", "realm/board", "realm/loot", "realm/members:7", "realm/members:30",
 			"realm/members:recruits", "chat/", "decrees/", "heraldry/", "throne/home", "throne/hands", "vox/", "treasury/summary",
 			"treasury/book", "treasury/keepers", "treasury/dues", "workshop/" }
 		for _, t in ipairs(ns.UI and ns.UI.TABS or {}) do pages[#pages + 1] = t.key .. "/" end
@@ -48413,10 +48414,10 @@ end)()
 		assert(#pt.VERSION_INVITE_TEXT:format("https://www.curseforge.com/wow/addons/olympus-guild") <= 255)
 	end)
 
-	test("1.1.3: the version, the TOC's files in order, the new message types in Comm.lua's list", function()
-		eq(ns.VERSION, "1.1.3")
+	test("1.1.4: the version, the TOC's files in order, the new message types in Comm.lua's list", function()
+		eq(ns.VERSION, "1.1.4")
 		local toc = assert(ReadFile(ADDON_DIR .. "Olympus.toc"))
-		assert(toc:find("## Version: 1.1.3", 1, true))
+		assert(toc:find("## Version: 1.1.4", 1, true))
 		local at = {}
 		local n = 0
 		for line in toc:gmatch("[^\n]+") do n = n + 1; at[line:gsub("%s+$", "")] = n end

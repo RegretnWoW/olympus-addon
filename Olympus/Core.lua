@@ -2,7 +2,7 @@ local ADDON, ns = ...
 local L = ns.L
 
 ns.NAME = "Olympus"
-ns.VERSION = "1.1.3"
+ns.VERSION = "1.1.4"
 ns.PREFIX = "OLYMPUS"        -- addon message prefix (max 16 chars)
 ns.CHANNEL = "OlympusNet"    -- hidden chat channel shared by every Olympus guild (Alliance)
 ns.CHANNEL_HORDE = "OlympusNetH" -- the Horde's: the two factions never see each other's guilds
@@ -1821,11 +1821,8 @@ SlashCmdList.OLYMPUS = function(input)
 		elseif cmd == "craft" then
 			-- 1.1 (Fern's #24): who can make this item (a shift-clicked link) or these words.
 			if rest == "" then
-				ns.UI.SelectTab("realm")
-				ns.Views.ShowPage("crafters")
-			elseif ns.Crafters.Ask(rest) then
-				ns.UI.SelectTab("realm")
-			end
+				ns.UI.SelectTab("crafters")
+			else ns.Crafters.Ask(rest) end
 		elseif cmd == "crafter" then
 			ns.Crafters.Slash(rest)
 		elseif cmd == "approved" then

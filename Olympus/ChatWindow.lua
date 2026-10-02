@@ -16,8 +16,8 @@ local L = ns.L
 -- The first 1.1.1 build had it in a window of its own; the author wanted it inside the Olympus
 -- window. UI.lua hands this file the window in use and where each part goes in its look
 -- (ChatWindow.Attach), and the old window's calls stay as the ways to the tab: Open, Toggle and
--- Close (/ol, /olc or /oll alone, /oly talk, the minimap button's Shift-click, the Realm tab's
--- link) open the Olympus window on its Chat tab, on the channel asked for, and close it. The
+-- Close (/ol, /olc or /oll alone, /oly talk and the minimap button's Shift-click) open the
+-- Olympus window on its Chat tab, on the channel asked for, and close it. The
 -- Realm tab's "Olympus chats" page it replaces is gone (the author's call): what that page offered
 -- and the tab did not (the Olympus tab's state, the chats on or off with what that means, the
 -- public channel's line, the pin for whoever may pin, the count of the lines the block terms hide)
@@ -1581,7 +1581,7 @@ local function Draw()
 	frame.box:SetPoint("TOPLEFT", frame, "TOPLEFT", box.left, y)
 	ShowParts(on and "lines" or "off")
 	if not on then
-		-- As the Realm tab says it (its chats' line, CONSENT_CHAT_TEXT), with the choice a click away.
+		-- The consent page's explanation, with the choice a click away.
 		frame.off.text:SetText(L.CHATWIN_OFF .. "\n\n" .. L.CONSENT_CHAT_TEXT)
 		return
 	end

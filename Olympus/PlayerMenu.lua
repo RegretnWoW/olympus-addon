@@ -5,8 +5,8 @@ local L = ns.L
 -- and raid frames, a name in chat, the Who list, the friends list, the guild roster and the chat
 -- channel roster. One place for every feature that adds a line there: Versions.lua (the player's
 -- Olympus version, Ask to update, Check version, Tell them about Olympus) and Workshop.lua (the
--- author's Ask for a bug report) today; 1.2's arena and Farkle lines later (SPEC addendum D), each
--- with PlayerMenu.Add, none hooking a menu of its own.
+-- author's Ask for a bug report). Any later addition uses PlayerMenu.Add too, with no feature
+-- hooking a menu of its own.
 --
 -- How, and what it never does:
 -- - Blizzard's own way for addons (Blizzard_Menu, 11.0's menus: Forever and the Classic clients
@@ -45,7 +45,7 @@ local hooked = false -- Menu.ModifyMenu called for every menu above
 -- A feature's lines: build(target, menu) adds them to `menu` (below) for `target` = { name (the
 -- whole "Name-Realm" as the server writes it), which (the menu), unit (when it came from a unit
 -- frame), locked (the game holds addon messages now: a line that sends is shown greyed) }.
--- `order`: lower first (Versions.lua 10, the author's lines 50, 1.2's later). The same key again
+-- `order`: lower first (Versions.lua 10, the author's lines 50, later additions after them). The same key again
 -- replaces its entry (a file loaded twice); no build takes it off.
 function PlayerMenu.Add(key, build, order)
 	if type(key) ~= "string" then return false end

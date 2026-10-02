@@ -89,7 +89,7 @@ until you turn it on.
   vote; the King can't take back a Steward's Hand: that Steward does, or the author by
   removing him). The README's
   [What colluding characters can reach](README.md#what-colluding-characters-can-reach) has
-  each outcome. The structural fix is **signed leadership, planned for 1.1**: ranks that come
+  each outcome. A full structural fix would require **signed leadership**: ranks that come
   with a signature every client checks, instead of a count of votes. Meanwhile seal your
   channel with `/oly key`, so that only members of Olympus guilds can take part.
 - **Nothing on the channel is encrypted.** Everyone on it receives [Olympus], [Captains] and

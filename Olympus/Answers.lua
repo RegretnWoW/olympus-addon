@@ -269,7 +269,7 @@ Answers.PAGES = {
 		counts = { "count-realm-online-now", "count-other-guild-seen-online", "count-own-guild-live", "count-layer-sample" } },
 	["realm/board"] = { "feat-board", "feat-signups" },
 	["realm/loot"] = { "feat-loot-notes" },
-	["realm/crafters"] = { "feat-crafters" },
+	crafters = { "feat-crafters" },
 	["realm/members"] = { "feat-inactive", counts = { "count-realm-online-now" } },
 	["realm/members:recruits"] = { "feat-mentors" },
 	chat = { "feat-chat-tab", "feat-chat-settings", "feat-channels", "feat-olympus-tab", "feat-chat-off", "feat-block-terms" },

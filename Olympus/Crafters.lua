@@ -399,7 +399,7 @@ function Crafters.Ask(what)
 	myAsk = { id = askId, t = now, item = id, label = id and ItemName(id) or words, answers = {}, count = 0 }
 	ns.Comm.Send("CHANNEL", id and ("WQ~%s~i~%d"):format(askId, id) or ("WQ~%s~t~%s"):format(askId, ns.Fold(words)), "crafterask", true)
 	ns.Print(L.CRAFTER_ASKED:format(myAsk.label))
-	ns.Views.ShowPage("crafters")
+	ns.UI.SelectTab("crafters")
 	Changed()
 	return myAsk
 end
@@ -593,7 +593,7 @@ function Crafters.ListOf(crafter, key)
 end
 
 ---------------------------------------------------------------------------
--- The page (the Realm tab)
+-- The standalone Crafters tab
 ---------------------------------------------------------------------------
 
 -- A whisper to a crafter, the player's own (the game's box; Olympus's with the gamepad UI).
@@ -617,7 +617,7 @@ function Crafters.Link()
 	return {
 		text = "|TInterface\\Icons\\Trade_BlackSmithing:14:14|t " .. Gold(L.CRAFTER_LINK),
 		right = n > 0 and Grey(tostring(n)) or nil,
-		onClick = function() ns.Views.ShowPage("crafters") end,
+		onClick = function() ns.UI.SelectTab("crafters") end,
 		tooltip = function(tt)
 			tt:AddLine(L.CRAFTER_LINK, 1, 0.82, 0)
 			tt:AddLine(L.CRAFTER_LINK_TIP, 1, 1, 1, true)
@@ -633,11 +633,10 @@ local function RecipeItems(recipes)
 	return items, others
 end
 
--- The page's lines; `q`, the Realm's search: crafters whose name, guild or profession holds it.
+-- The tab's lines; `q`, its search: crafters whose name, guild or profession holds it.
 function Crafters.Lines(q)
-	local lines = { { text = Gold(L.CHATS_BACK), onClick = function() ns.Views.ShowPage(nil) end, gapAfter = true } }
-	lines[#lines + 1] = { header = true, text = L.CRAFTER_TITLE,
-		tooltip = function(tt) tt:AddLine(L.CRAFTER_TITLE, 1, 0.82, 0); tt:AddLine(L.CRAFTER_ABOUT, 1, 1, 1, true) end }
+	local lines = { { header = true, text = L.CRAFTER_TITLE,
+		tooltip = function(tt) tt:AddLine(L.CRAFTER_TITLE, 1, 0.82, 0); tt:AddLine(L.CRAFTER_ABOUT, 1, 1, 1, true) end } }
 	if not q then
 		lines[#lines + 1] = { text = Green(L.CRAFTER_ASK), onClick = function() Crafters.AskPrompt() end,
 			tooltip = function(tt) tt:AddLine(L.CRAFTER_ASK, 1, 0.82, 0); tt:AddLine(L.CRAFTER_ASK_TIP, 1, 1, 1, true) end }
@@ -806,9 +805,6 @@ function Crafters.Slash(word)
 	for _, p in ipairs(Crafters.Listed()) do names[#names + 1] = ("%s %d"):format(p.name, p.rank or 0) end
 	ns.Print(#names > 0 and L.CRAFTER_YOU:format(table.concat(names, ", ")) or L.CRAFTER_HOW_LIST)
 end
-
-ns.RealmPages = ns.RealmPages or {}
-table.insert(ns.RealmPages, { key = "crafters", Link = function() return Crafters.Link() end, Lines = function(q) return Crafters.Lines(q) end, tip = "CRAFTER" })
 
 -- Each minute: our listing again every LIST_EVERY, or a change that waited its time; the board
 -- forgets who went quiet. (Not before our login's own listing: one listing at a login.)

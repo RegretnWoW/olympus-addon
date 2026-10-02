@@ -394,11 +394,8 @@ WoW channel number to join). Each channel is exclusive to a rank:
   (another editor's repeat of it does not: it is not his act). Clients before 1.1 ignore the list.
 - **Your choice (1.1).** The chats are off until you say yes on the first-open page (or
   `/oly chat on`). Off, `/ol`, `/olc`, `/oll` and `/oly pin` say so and send nothing, and no line
-  from anyone shows or is kept on this client, nor any pinned line; the Realm tab and the Chat
-  tab say the chats are off, a click to choose.
-- The Realm tab links **the Olympus chats**: a click opens the Olympus window on its Chat tab
-  (1.1.1, below), with the last lines of each channel your rank reads, even what was said while
-  the window was closed.
+  from anyone shows or is kept on this client, nor any pinned line; the Chat tab says the chats
+  are off, with a click to choose. The Realm does not repeat a chat shortcut or status row.
 - Ranks follow the rule of the decrees: whoever founds a guild with "Olympus" in its name is
   its Lord and gets [Lords], and its officers get [Captains].
 - **One pinned line** (1.1): the King, his Stewards and Hands can pin one short line (100
@@ -450,12 +447,13 @@ says public or sealed. It only tells: nothing is sent and nothing changes.
 
 ### The Chat tab (1.1.1)
 The Olympus chats in a tab of the Olympus window, **Chat**, right after the Realm, like the chat
-pane of the Guild & Communities window. Click the tab, or type `/oly talk` (or `/ol`, `/olc` or
-`/oll` with nothing after it), Shift-click the minimap button, or click **the Olympus chats** on
-the Realm tab: each opens the Olympus window on its Chat tab, on that channel. `/oly talk lords`
+pane of the Guild & Communities window. Click the tab, type `/oly talk` (or `/ol`, `/olc` or
+`/oll` with nothing after it), or Shift-click the minimap button: each opens the Olympus window
+on its Chat tab, on that channel. `/oly talk lords`
 opens it on [Lords]; the same command again closes the window.
-With the King's tabs the side column of the new look runs out of room: his Treasury moves to the
-window's left edge (for the author, his Workshop goes there first).
+When the side column of the new look runs out of room, its canonical tail continues from the
+bottom of the window's left edge upward. Reading the right top-to-bottom and then the left
+bottom-to-top always gives the same tab order; changing role or debug view never rearranges it.
 
 - On top, where the other tabs show the army's counts, the search box: a name, a guild or words
   of a line, and only the lines that hold it show (a line your block terms hide is found by its
@@ -529,8 +527,8 @@ window's left edge (for the author, his Workshop goes there first).
 - The tab has no place or size of its own: it is the Olympus window's, docked by your guild
   window or wherever you put it. Escape or the window's X closes it; it never opens by itself.
   With the chats off on this client it says so, what the choice means, and offers it.
-- **Blizzard's gamepad mode**: the same tab, opened with `/oly talk`, `/ol` or the Realm tab's
-  link; click into the box with the gamepad cursor to write. The Olympus window stays off the
+- **Blizzard's gamepad mode**: the same tab, opened directly or with `/oly talk` or `/ol`; click
+  into the box with the gamepad cursor to write. The Olympus window stays off the
   Escape list there (its X closes it), and the tab opens no game popup: the whisper, a pinned
   line's takedown and the settings' pin use Olympus's own windows.
 
@@ -1161,8 +1159,8 @@ your guild keep it (on the Realm tab, or `/oly loot`).
   a change in his name only as he made it. Kept per guild in your saved variables (on the Forever
   beta, which forgets them at every login, the book comes back from the officers online).
 
-### Crafters' board (1.1)
-"Who can make this?" is a chat scroll: the **Crafters** page of the Realm tab turns it into one
+### Crafters tab (1.1.4)
+"Who can make this?" is a chat scroll: the top-level **Crafters** tab turns it into one
 whisper to a named crafter (`/oly craft`).
 - When you open one of your professions, Olympus reads it (its skill, and the recipes you know:
   their recipe and item ids, never a specialization tree) and asks once, in a window of its own,
@@ -1331,7 +1329,7 @@ the game is removed at login, with one line saying so.
   and warns when it is one your guild replaced. The players it would block are named one by one
   in the confirm (30 at most) and added only on your yes.
 - **Search**: a box on top of the Census (guilds, Lords, Captains, players, zones, recruiting),
-  the Realm (guilds, Lords, Captains, members seen online), the
+  the Realm (guilds, Lords, Captains, members seen online), Crafters (crafter, guild or profession), the
   Tabards (inspected and untabarded players, by name or guild), the Treasury (donors in the
   ranking and the book, and since 1.1 the bank's items), the Decrees (since 1.1: the log of what this client saw) and the Chat tab (since 1.1.1: a name, a guild or words of a line). Any case, accents too; only what matches shows, under the headers it belongs to (a Captain under his guild, opened
   for you, a page of guilds at a time), with an **x** to empty it. Each tab keeps its text until
@@ -1342,9 +1340,8 @@ the game is removed at login, with one line saying so.
   Shift-click the minimap button for the Chat tab (1.1.1, above).
 - Next to Forever's Guild & Communities window it takes that window's look: icon tabs down
   the right side, its rows, column headers, buttons and member card. When the tabs do not all fit
-  down that side, the Workshop and then the Treasury move to the window's left edge, low, until
-  the rest fit: the King's view with the Chat tab moves the Treasury alone, the author's preview
-  both (1.1.1).
+  down that side, the canonical tail continues from the bottom of the left edge upward. Reading
+  the right top-to-bottom and then the left bottom-to-top always gives the same tab order.
 - **Blizzard's gamepad mode** (Forever's controller interface): Olympus asks its questions in
   windows of its own instead of the game's popups, which Blizzard's gamepad code blocks (and
   freezes) when an addon opens one. With mouse and keyboard, the game's popups as always.
@@ -1785,9 +1782,9 @@ names (the King can't take back a Steward's Hand: that Steward does, or the auth
 him).
 
 On the public channel anyone can try all of the above; **seal it with `/oly key`** and only
-members of Olympus guilds can (any of them still can). The structural fix is **signed
-leadership, planned for 1.1**: ranks that come with a signature every client checks, instead
-of a count of votes.
+members of Olympus guilds can (any of them still can). A full structural fix would require
+**signed leadership**: ranks that come with a signature every client checks, instead of a
+count of votes.
 
 Other limits:
 - **The Forever beta forgets addon data at every login**: its client saves it but never loads
@@ -1851,7 +1848,7 @@ Other limits:
 | `/oly gear` (or **Inspect gear** on the Tabards tab) | officers: inspect the player you target (in range) once and keep what he wears, under **Gear seen** on the Tabards tab; nothing is scored or sent |
 | `/oly patrolshare on\|off` | officers: pass what your inspections find to your guild's officers and take theirs (off until you say yes, here or on the first-open page), or not |
 | `/oly loot` | your guild's loot notes and points on the Realm tab (its officers write them; not a bid window) |
-| `/oly craft [item or name]` · `/oly crafter on\|off` | who can make it (the crafters' board on the Realm tab: shift-click an item after `/oly craft`); list your professions read so far, or take them off |
+| `/oly craft [item or name]` · `/oly crafter on\|off` | who can make it (the top-level Crafters tab: shift-click an item after `/oly craft`); list your professions read so far, or take them off |
 | `/oly approved` · `/oly approved paste` | the guilds of Asmon's Olympus the author's signed list makes Olympus guilds (their names don't say Olympus), and whether yours is one; paste that signed list (the first member of such a guild: his addon then passes it to the guild) |
 | `/oly arms [text]` · `/oly muster [text]` | send a decree (`test` = local preview) |
 | `/ol <text>` · `/olc <text>` · `/oll <text>` | write in [Olympus], [Captains] or [Lords]; alone (`/ol`, `/olc`, `/oll`): open the Chat tab on that channel (1.1.1) |

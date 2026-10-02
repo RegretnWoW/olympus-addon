@@ -1117,16 +1117,14 @@ function Views.MembersOf(guild, g, swept)
 end
 
 ---------------------------------------------------------------------------
--- The Realm tab's pages: in place of its tree, the Board and the pages modules list. (The Olympus
--- chats had a page here too until 1.1.1: the Chat tab replaced it, ChatWindow.lua, and the tree's
--- link to the chats opens that tab.)
+-- The Realm tab's pages: in place of its tree, the Board and the pages modules list.
 ---------------------------------------------------------------------------
 
 local boardShown = false -- the Board (Board.lua, 1.1) shown instead of the Realm tree
--- Pages of the Realm tab (1.1): a module lists one in ns.RealmPages (Loot.lua's loot notes,
--- Crafters.lua's board): { key, Link = function() return its link line, or nil end,
+-- Pages of the Realm tab (1.1): a module lists one in ns.RealmPages (Loot.lua's loot notes):
+-- { key, Link = function() return its link line, or nil end,
 -- Lines = function(q) return its lines end, tip = what its search finds (L.SEARCH_TIP_...) }.
--- A link line under the chats' link opens it in place of the tree.
+-- A link line opens it in place of the tree.
 local pageShown -- the page shown instead of the Realm tree, or nil
 
 -- Another tab opened: the Realm opens on its tree again next time (our guild's members page, the
@@ -1163,15 +1161,6 @@ function Views.ShowBoard(on, quiet)
 		if ns.Board and ns.Board.Ask then ns.SafeCall("board ask", ns.Board.Ask) end
 	end
 	if not quiet and ns.UI and ns.UI.Refresh then ns.UI.Refresh() end
-end
-
--- The channels our rank reads (the tree links the chats for them).
-local function ChatTiers()
-	local out = {}
-	for _, tier in ipairs(ns.Channels.ORDER or {}) do
-		if ns.Channels.CanUse(tier) then out[#out + 1] = tier end
-	end
-	return out
 end
 
 ---------------------------------------------------------------------------
@@ -1467,35 +1456,8 @@ local function RealmLines(s, q)
 		rebuilding = RebuildLines(lines)
 		if #lines > before and lines[before] then lines[before].gapAfter = true end
 	end
-	-- The Olympus chats, one click away (the channels our rank reads), above the guilds: the
-	-- Olympus window on its Chat tab (1.1.1, ChatWindow.lua; the page the Realm tab had for them is
-	-- gone, the author's call). Off on this client (1.1): a line that says so, and a click to choose
-	-- (the first-open page).
-	if #ChatTiers() > 0 and not ns.Channels.ChatOn() then
-		if lines[#lines] then lines[#lines].gapAfter = true end
-		lines[#lines + 1] = {
-			text = "|TInterface\\ChatFrame\\UI-ChatIcon-Chat-Up:14:14|t " .. Grey(L.CHATS_OFF_LINK), gapAfter = true, pageLink = true,
-			onClick = function() ns.Consent.Show() end,
-			tooltip = function(tt)
-				tt:AddLine(L.CONSENT_CHAT, 1, 0.82, 0)
-				tt:AddLine(L.CONSENT_CHAT_TEXT, 1, 1, 1, true)
-			end,
-		}
-	elseif #ChatTiers() > 0 then
-		if lines[#lines] then lines[#lines].gapAfter = true end
-		lines[#lines + 1] = {
-			text = "|TInterface\\ChatFrame\\UI-ChatIcon-Chat-Up:14:14|t " .. Gold(L.CHATS_LINK), gapAfter = true, pageLink = true,
-			onClick = function() ns.ChatWindow.Open() end,
-			tooltip = function(tt)
-				tt:AddLine(L.CHATS_LINK, 1, 0.82, 0)
-				tt:AddLine(L.CHATS_TIP, 1, 1, 1, true)
-				tt:AddLine(L.CHATS_OPEN_WINDOW_TIP, 0.75, 0.75, 0.75, true)
-			end,
-		}
-	end
-	-- The Board (1.1, Board.lua) and the Realm's other pages (1.1, ns.RealmPages), one link each:
-	-- close together under the chats' link, one gap after the last, so the guilds stay in sight
-	-- on the guild window's short list.
+	-- The Board (1.1, Board.lua) and the Realm's other pages (1.1, ns.RealmPages), one link each,
+	-- close together with one gap after the last so the guilds stay in sight on the short list.
 	local links = {}
 	local board = not q and ns.Board and ns.Board.LinkLine and ns.Board.LinkLine()
 	if board then links[#links + 1] = board end
@@ -2246,6 +2208,10 @@ local BUILD = {
 	heraldry = function()
 		local title, text = HeraldryDetail()
 		return Searched(HeraldryLines(Views.Query("heraldry")), "heraldry", "HERALDRY"), title, text
+	end,
+	crafters = function()
+		local lines = ns.Crafters and ns.Crafters.Lines and ns.Crafters.Lines(Views.Query("crafters")) or {}
+		return Searched(lines, "crafters", "CRAFTER"), L.CRAFTER_TITLE, L.CRAFTER_ABOUT
 	end,
 	throne = function(s)
 		if not (ns.King and ns.King.Build) then return {}, nil, nil end

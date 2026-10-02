@@ -27,9 +27,6 @@ local HD_TABS_REACH = 40            -- a side tab and its art, past the window's
 local SIDE_TOP, SIDE_GAP = 36, 20   -- CommunitiesFrame.xml: the first side tab 36 down, then 20 apart
 local SIDE_ART_BELOW = 21           -- RightSideTab.xml: a side tab's art, below its button
 local SIDE_LEFT_UP = 46             -- the one on the left edge: its art as far from the bottom as theirs from the top
--- The side tabs that go to the left edge when the right one runs out of room, first to last
--- (1.1.1, the author's ask: the Chat tab makes the King's column one too many).
-local SIDE_LEFT_ORDER = { "workshop", "treasury" }
 local HD_DEFAULT_H = 426            -- CommunitiesFrame.xml
 local main                          -- the window in use: frames.old or frames.hd
 local frames = {}                   -- style -> window, each created on first use
@@ -49,12 +46,14 @@ local TABS = {
 	{ key = "chat", label = "TAB_CHAT", icon = function() return UI.FirstTexture(UI.CHAT_ICONS) end },
 	{ key = "decrees", label = "TAB_DECREES", icon = "Interface\\Icons\\INV_Scroll_04" },
 	{ key = "heraldry", label = "TAB_HERALDRY", icon = "Interface\\Icons\\INV_Shirt_GuildTabard_01" },
+	-- The crafters' board (1.1.4): its own destination, no longer a page inside the Realm.
+	{ key = "crafters", label = "TAB_CRAFTERS", icon = "Interface\\Icons\\Trade_BlackSmithing" },
+	-- The Treasury precedes the King's remaining tabs in the canonical visual order.
+	{ key = "treasury", label = "TAB_TREASURY", icon = "Interface\\Icons\\INV_Misc_Coin_02" },
 	-- The King's alone (King.lua): hidden for everyone else, see UI.Refresh.
 	{ key = "throne", label = "TAB_THRONE", icon = function() return UI.FirstTexture(UI.CROWNS) end },
 	-- The King's and his Hands' questions to the army (Vox.lua), the same way.
 	{ key = "vox", label = "TAB_VOX", icon = function() return UI.FirstTexture(UI.HORNS) end },
-	-- The treasury: its keepers' books together (Treasury.lua), the same way.
-	{ key = "treasury", label = "TAB_TREASURY", icon = "Interface\\Icons\\INV_Misc_Coin_02" },
 	-- The addon author's alone (Workshop.lua), the same way.
 	{ key = "workshop", label = "TAB_WORKSHOP", icon = "Interface\\Icons\\Trade_Engineering" },
 }
@@ -567,7 +566,7 @@ local GEOMETRY = {
 -- in where the buttons are, with no Send button (Enter sends).
 ---------------------------------------------------------------------------
 
--- The tab shows for whoever reads an Olympus chat (every member, as the Realm tab's chats' line),
+-- The tab shows for whoever reads an Olympus chat (every member),
 -- with ChatWindow.lua loaded or not (a client updated without a restart: the tab says so).
 local function ChatTabVisible()
 	local C = ns.Channels
@@ -1126,12 +1125,9 @@ end
 -- wide each on the Classic clients), wider together than our window once there are four or
 -- five (the King's Throne): past it they shrink evenly, their text cut by the tab itself.
 -- The shown tabs follow one another, a hidden one (the Throne, the Workshop) leaving no gap,
--- in the HD window's side column too. That column holds seven: past them, the tabs of
--- SIDE_LEFT_ORDER move to the left edge, one by one until the rest fit (1.1.1: with the Chat tab
--- the King's view makes eight, and his Treasury, the last of his, goes left; the author's
--- preview adds the Workshop, which goes first). The left ones stack up from low on that edge, in
--- their order down (the last one lowest), clear of the Communities window's own side tabs when
--- ours is docked beside it.
+-- in the HD window's side column too. That column holds seven: past them, the canonical tail
+-- continues on the left edge. Reading the right top-to-bottom and then the left bottom-to-top
+-- therefore gives exactly the TABS order, regardless of which role-only tabs are visible.
 function UI.LayoutTabs()
 	if not main or not main.tabs then return end
 	local shown = {}
@@ -1143,19 +1139,15 @@ function UI.LayoutTabs()
 	if main.tabStyle == "side" then
 		local height, tabHeight = main:GetHeight() or 0, shown[1]:GetHeight() or 0
 		if height > 0 and tabHeight > 0 then
-			for _, key in ipairs(SIDE_LEFT_ORDER) do
-				if UI.SideTabsFit(#shown, tabHeight, height) then break end
-				for i, tab in ipairs(shown) do
-					if tab.key == key then
-						onLeft[table.remove(shown, i)] = true
-						break
-					end
-				end
+			while not UI.SideTabsFit(#shown, tabHeight, height) do
+				local tab = table.remove(shown)
+				if not tab then break end
+				table.insert(left, 1, tab)
+				onLeft[tab] = true
 			end
 		end
 		for _, tab in ipairs(main.tabs) do
 			SideTabOnLeft(tab, onLeft[tab])
-			if onLeft[tab] then left[#left + 1] = tab end -- (in the tabs' order)
 		end
 		-- Those tabs stay on the screen too.
 		if main.SetClampRectInsets then main:SetClampRectInsets(#left > 0 and -HD_TABS_REACH or 0, HD_TABS_REACH, 0, 0) end
@@ -1164,13 +1156,12 @@ function UI.LayoutTabs()
 		tab:ClearAllPoints()
 		tab:SetPoint(UI.TabAnchor(main.tabStyle, i, main, shown[i - 1]))
 	end
-	for i = #left, 1, -1 do
-		local tab = left[i]
+	for i, tab in ipairs(left) do
 		tab:ClearAllPoints()
-		if i == #left then
+		if i == 1 then
 			tab:SetPoint("BOTTOMRIGHT", main, "BOTTOMLEFT", 0, SIDE_LEFT_UP)
 		else
-			tab:SetPoint("BOTTOMRIGHT", left[i + 1], "TOPRIGHT", 0, SIDE_GAP)
+			tab:SetPoint("BOTTOMRIGHT", left[i - 1], "TOPRIGHT", 0, SIDE_GAP)
 		end
 	end
 	if main.tabStyle == "side" then return end
@@ -1416,7 +1407,7 @@ end
 -- coming in) leaves the list where it was: the row clicked stays where it was on screen, and
 -- when it opened, its first rows below come into sight if they fell under the list's bottom
 -- edge (the row itself never leaves the top). Only another tab, or another page of one (the
--- Realm's chats, the Throne's pages, the Treasury's book), starts at the top; a tab opened on
+-- Realm's Board or loot notes, the Throne's pages, the Treasury's book), starts at the top; a tab opened on
 -- a row (a guild clicked in the Census opens in the Realm) starts at that row.
 ---------------------------------------------------------------------------
 
@@ -2070,9 +2061,11 @@ ns.On("TREASURY_CHANGED", function()
 end)
 -- The court's line tops the Census and the Realm for the players in its zone.
 ns.On("COURT_CHANGED", function() if main and (main.tab == "census" or main.tab == "realm") then UI.RefreshSoon() end end)
--- A page of the Realm tab changed (1.1: the loot notes, the crafters' board): redrawn while it shows.
+-- A page of the Realm tab changed (1.1: the loot notes), or the standalone Crafters board changed.
 ns.On("REALM_PAGE_CHANGED", function(key)
-	if main and main.tab == "realm" and ns.Views.PageShown and ns.Views.PageShown() == key then UI.RefreshSoon() end
+	if not main then return end
+	if main.tab == "crafters" and key == "crafters" then UI.RefreshSoon()
+	elseif main.tab == "realm" and ns.Views.PageShown and ns.Views.PageShown() == key then UI.RefreshSoon() end
 end)
 ns.On("WORKSHOP_CHANGED", function() if main and main.tab == "workshop" then UI.RefreshSoon() end end)
 ns.On("RECRUIT_CHANGED", function() UI.RefreshSoon() end)
@@ -2117,6 +2110,7 @@ function UI.ShowHelp()
 		"  " .. L.TAB_CHAT .. ": " .. L.HELP_TAB_CHAT,
 		"  " .. L.TAB_DECREES .. ": " .. L.HELP_TAB_DECREES,
 		"  " .. L.TAB_HERALDRY .. ": " .. L.HELP_TAB_HERALDRY,
+		"  " .. L.TAB_CRAFTERS .. ": " .. L.HELP_TAB_CRAFTERS,
 		"  " .. L.HELP_TAB_OTHERS,
 		"",
 		L.HELP_ALL_COMMANDS,
