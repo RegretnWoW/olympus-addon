@@ -101,6 +101,8 @@ local lastEarlySent, earlySending = -math.huge, nil
 local earlyPending           -- a list of early supporters coming in pieces: { at, pieces, got, count, from }
 local earlyAsks, lastEarlyAsk, earlyArmed, heardEarlyAsk = 0, -math.huge, false, -math.huge
 local earlyShown = Treasury.EARLY_SHOWN
+local earlyOpen = false
+local guildShown -- an authorized Bank.Sisters() guild opened from the summary; never its snapshot
 local pending = {}           -- mail gold asked for, until it arrives: { key, sender, money, returned, t, book }
 local itemPending = {}       -- mail items asked for, until the bags hold them: { key, sender, id, n, have, returned, cod, t, book }
 local lastMoney              -- the character's gold as last seen while takes wait
@@ -783,7 +785,7 @@ end
 local SYSTEM_SUBJECTS = { "AUCTION_OUTBID_MAIL_SUBJECT", "AUCTION_SOLD_MAIL_SUBJECT", "AUCTION_WON_MAIL_SUBJECT",
 	"AUCTION_REMOVED_MAIL_SUBJECT", "AUCTION_EXPIRED_MAIL_SUBJECT", "COD_PAYMENT" }
 local systemPatterns
-local function SystemMail(subject)
+local function SystemMail(subject) -- gp:lookups
 	if type(subject) ~= "string" then return false end
 	if not systemPatterns or #systemPatterns == 0 then
 		systemPatterns = {}
@@ -2073,8 +2075,14 @@ ns.Comm.Handle("TA", function(...) Treasury.HandleAsk(...) end)
 -- The server says a player we whisper is not online: what waits for him is dropped (one line of
 -- the game's in the chat, not one a piece), and he is no longer counted online.
 local notFound
+local function SecretValue(value)
+	return type(issecretvalue) == "function" and issecretvalue(value) == true
+end
 function Treasury.NotFound(text)
-	if type(text) ~= "string" then return end
+	-- Instance and restricted UI events can hand addons a secret string. Its Lua type is still
+	-- "string", but even :match raises while our execution is tainted. It cannot identify a queued
+	-- recipient safely, so ignore it before the first string operation.
+	if type(text) ~= "string" or SecretValue(text) then return end
 	if not notFound then
 		local f = type(ERR_CHAT_PLAYER_NOT_FOUND_S) == "string" and ERR_CHAT_PLAYER_NOT_FOUND_S or nil
 		if not f then return end
@@ -2682,12 +2690,12 @@ ns.On("LOGIN", function()
 		local closing = trade
 		ns.After(2, "treasury trade", function() if trade == closing then trade = nil end end)
 	end)
-	if hooksecurefunc then
-		if SendMail then hooksecurefunc("SendMail", function(to) ns.SafeCall("treasury mail", Treasury.MailSending, to) end) end
-		if TakeInboxMoney then hooksecurefunc("TakeInboxMoney", function(i) ns.SafeCall("treasury mail", Treasury.MailTaking, i) end) end
-		if TakeInboxItem then hooksecurefunc("TakeInboxItem", function(i, a) ns.SafeCall("treasury mail", Treasury.MailItemTaking, i, a) end) end
-		if AutoLootMailItem then
-			hooksecurefunc("AutoLootMailItem", function(i)
+	if hooksecurefunc then -- gp:mail-hooks
+		if SendMail then hooksecurefunc("SendMail", function(to) ns.SafeCall("treasury mail", Treasury.MailSending, to) end) end -- gp:mail-hooks
+		if TakeInboxMoney then hooksecurefunc("TakeInboxMoney", function(i) ns.SafeCall("treasury mail", Treasury.MailTaking, i) end) end -- gp:mail-hooks
+		if TakeInboxItem then hooksecurefunc("TakeInboxItem", function(i, a) ns.SafeCall("treasury mail", Treasury.MailItemTaking, i, a) end) end -- gp:mail-hooks
+		if AutoLootMailItem then -- gp:mail-hooks
+			hooksecurefunc("AutoLootMailItem", function(i) -- gp:mail-hooks
 				ns.SafeCall("treasury mail", Treasury.MailTaking, i)
 				ns.SafeCall("treasury mail", Treasury.MailItemTaking, i)
 			end)
@@ -2834,7 +2842,7 @@ function Treasury.HandleDonations(dist, sender, text)
 		if f and f.AddMessage then
 			local c = chat.TIERS and chat.TIERS.A and chat.TIERS.A.color or { 1, 0.82, 0 }
 			local bare = f ~= DEFAULT_CHAT_FRAME and chat.IsTabName and chat.IsTabName(wname)
-			f:AddMessage((bare and "" or "[" .. L.CHAN_ALL .. "] ") .. Treasury.DonationText(sender, donors[sender]), c[1], c[2], c[3])
+			f:AddMessage((bare and "" or "[" .. L.CHAN_ALL .. "] ") .. Treasury.DonationText(sender, donors[sender]), c[1], c[2], c[3]) -- gp:chat-output
 		end
 	end
 	ns.Fire("TREASURY_CHANGED")
@@ -2913,6 +2921,8 @@ end
 
 function Treasury.Show(mode)
 	Treasury.mode = mode
+	if Treasury.mode ~= "guild" then guildShown = nil end
+	if Treasury.mode == "summary" then earlyOpen = false end
 	bookShown, rankShown, earlyShown = Treasury.BOOK_SHOWN, Treasury.RANK_PAGE, Treasury.EARLY_SHOWN
 	ns.Fire("TREASURY_CHANGED")
 end
@@ -2979,7 +2989,18 @@ local function EarlyLines(lines)
 	local list = Treasury.EarlySupporters()
 	if not list then return false end
 	local names = list.names
-	lines[#lines + 1] = { header = true, text = L.TREASURY_EARLY, tooltip = function(tt) tt:AddLine(L.TREASURY_EARLY_TIP, 1, 1, 1, true) end }
+	lines[#lines + 1] = { header = true, text = (earlyOpen and "[-] " or "[+] ") .. L.TREASURY_EARLY,
+		right = Grey(tostring(#names)), key = "early-supporters", onClick = function()
+			earlyOpen = not earlyOpen
+			earlyShown = Treasury.EARLY_SHOWN
+			ns.Fire("TREASURY_CHANGED")
+		end,
+		tooltip = function(tt)
+			tt:AddLine(L.TREASURY_EARLY, 1, 0.82, 0)
+			tt:AddLine(L.TREASURY_EARLY_TIP, 1, 1, 1, true)
+			tt:AddLine(L.TREASURY_EARLY_COLLAPSE_TIP, 0.6, 1, 0.6, true)
+		end }
+	if not earlyOpen then return true end
 	Para(lines, L.TREASURY_EARLY_HINT:format(#names))
 	local shown = math.min(#names, earlyShown)
 	local row = ""
@@ -3068,11 +3089,10 @@ local function BookLines(role, q)
 		lines[#lines + 1] = { text = Grey(L.SEARCH_NO_MATCH) }
 		return lines
 	end
-	lines[#lines + 1] = { header = true, text = L.TREASURY_BOOK }
-	if Treasury.IsKeeper() and not q then
-		Para(lines, L.TREASURY_BOOK_HOW)
-		lines[#lines].gapAfter = true
-	end
+	lines[#lines + 1] = { header = true, text = L.TREASURY_BOOK, tooltip = Treasury.IsKeeper() and function(tt)
+		tt:AddLine(L.TREASURY_BOOK, 1, 0.82, 0)
+		tt:AddLine(L.TREASURY_BOOK_HOW, 1, 1, 1, true)
+	end or nil }
 	if #book == 0 then lines[#lines + 1] = { text = Grey(L.TREASURY_NONE) } end
 	for i = 1, math.min(#book, bookShown) do lines[#lines + 1] = BookRow(book[i], book[i].own and Treasury.IsKeeper()) end
 	if #book > bookShown then
@@ -3140,22 +3160,62 @@ end
 -- Who sees the guild bank: the keepers and the King always, the army with the King's "book".
 local function BankVisible(role) return role ~= "member" or Treasury.Shows("book") end
 
-local function BankLines(lines, role)
-	if role == "member" and not Treasury.Shows("book") then return end
-	local b = ns.Bank and ns.Bank.Current and ns.Bank.Current()
-	lines[#lines + 1] = { header = true, text = L.TREASURY_BANK, tooltip = function(tt) tt:AddLine(L.TREASURY_BANK_TIP, 1, 1, 1, true) end }
-	if not b then
-		-- A client without the guild bank's functions can't take a snapshot: said, not left blank.
-		Para(lines, (ns.Bank and ns.Bank.HasAPI and not ns.Bank.HasAPI()) and L.TREASURY_BANK_NO_API or L.TREASURY_BANK_NONE)
-		return
+-- Counts are taken only from the snapshot already held: item units and occupied stacks. There is
+-- deliberately no item-to-gold estimate; no verified valuation exists in the addon.
+local function BankSnapshotTotals(snap)
+	local units, stacks = 0, 0
+	for _, tab in ipairs(type(snap) == "table" and type(snap.tabs) == "table" and snap.tabs or {}) do
+		for _, it in ipairs(type(tab.items) == "table" and tab.items or {}) do
+			local n = math.floor(tonumber(it.n) or 0)
+			if n > 0 then units, stacks = units + n, stacks + 1 end
+		end
 	end
-	lines[#lines + 1] = { text = Grey(L.TREASURY_BANK_AS_OF:format(ns.DisplayName(b.by) or "?", ns.Ago(b.t))) }
+	return units, stacks
+end
+
+-- The common bank portrait used by Olympus's treasury and an authorized guild treasury page.
+-- opts: byLine, gone, open, setOpen, request, valueTip.
+local function SnapshotLines(lines, b, opts)
+	opts = opts or {}
+	if opts.byLine then lines[#lines + 1] = { text = Grey(opts.byLine) } end
 	lines[#lines + 1] = { text = L.TREASURY_BANK_GOLD, right = Treasury.Coins(b.money or 0) }
+	local units, stacks = BankSnapshotTotals(b)
+	lines[#lines + 1] = { text = L.TREASURY_GUILD_ITEMS:format(units, stacks), tooltip = opts.valueTip and function(tt)
+		tt:AddLine(L.TREASURY_GUILD_VALUE_UNAVAILABLE, 1, 1, 1, true)
+	end or nil }
 	-- 1.1: what left the bank since the snapshot before (counts only, never who: the bank's log is
 	-- never read), and in the grid the slots those stacks sat in, faded.
-	local prev = ns.Bank.Previous and ns.Bank.Previous(b)
+	local prev = opts.gone and ns.Bank.Previous and ns.Bank.Previous(b)
 	local gone, ghosts = {}, {}
 	if prev then gone, ghosts = ns.Bank.Gone(b, prev) end
+	-- One tab open at a time, as the bank shows them: its slots, every one, items where they sit.
+	local tabs = type(b.tabs) == "table" and b.tabs or {}
+	local open = opts.open
+	if not (open and tabs[open]) then
+		open = 1
+		for i, tab in ipairs(tabs) do if #(type(tab.items) == "table" and tab.items or {}) > 0 then open = i break end end
+	end
+	for i, tab in ipairs(tabs) do
+		local idx, items = i, type(tab.items) == "table" and tab.items or {}
+		local count = #items > 0 and L.TREASURY_BANK_ITEMS:format(#items) or L.TREASURY_BANK_EMPTY
+		lines[#lines + 1] = { text = (i == open and Gold or tostring)((i == open and "[-] " or "[+] ") .. (tab.name or "?")), right = Grey(count),
+			key = (opts.key or "banktab") .. i, onClick = function()
+				if opts.setOpen then opts.setOpen(idx) end
+				ns.Fire("TREASURY_CHANGED")
+			end }
+		if i == open then
+			if ghosts[i] then
+				local shown = {}
+				for _, it in ipairs(items) do shown[#shown + 1] = it end
+				for _, it in ipairs(ghosts[i]) do shown[#shown + 1] = it end
+				items = shown
+			end
+			local ask = opts.request and ns.Bank.MayRequest and ns.Bank.MayRequest()
+			lines[#lines + 1] = { items = items, slots = ns.Bank.SLOTS, columns = 7,
+				onItem = ask and function(it) ns.Bank.RequestPrompt(it.id) end or nil, itemHint = ask and L.BANK_REQUEST_CLICK or nil }
+		end
+	end
+	-- The bank's gold, totals and item tabs stay together. The audit of stacks gone follows them.
 	if #gone > 0 then
 		lines[#lines + 1] = { text = Red(L.BANK_GONE:format(ns.Ago(prev.t))), tooltip = function(tt)
 			tt:AddLine(L.BANK_GONE_TITLE, 1, 0.82, 0)
@@ -3171,28 +3231,21 @@ local function BankLines(lines, role)
 		end
 		if #gone > Treasury.BANK_LISTED then lines[#lines + 1] = { indent = 1, text = Grey(L.TREASURY_ITEMS_MORE:format(#gone - Treasury.BANK_LISTED)) } end
 	end
-	-- One tab open at a time, as the bank shows them: its slots, every one, items where they sit.
-	local open = Treasury.bankTab
-	if not (open and b.tabs[open]) then
-		open = 1
-		for i, tab in ipairs(b.tabs or {}) do if #tab.items > 0 then open = i break end end
+end
+
+local function BankLines(lines, role)
+	if role == "member" and not Treasury.Shows("book") then return end
+	local b = ns.Bank and ns.Bank.Current and ns.Bank.Current()
+	lines[#lines + 1] = { header = true, text = L.TREASURY_BANK, tooltip = function(tt) tt:AddLine(L.TREASURY_BANK_TIP, 1, 1, 1, true) end }
+	if not b then
+		-- A client without the guild bank's functions can't take a snapshot: said, not left blank.
+		Para(lines, (ns.Bank and ns.Bank.HasAPI and not ns.Bank.HasAPI()) and L.TREASURY_BANK_NO_API or L.TREASURY_BANK_NONE)
+		-- (The week's rows or the dues follow it now, not a header: a gap keeps them apart.)
+		lines[#lines].gapAfter = true
+		return
 	end
-	for i, tab in ipairs(b.tabs or {}) do
-		local count = #tab.items > 0 and L.TREASURY_BANK_ITEMS:format(#tab.items) or L.TREASURY_BANK_EMPTY
-		lines[#lines + 1] = { text = (i == open and Gold or tostring)((i == open and "[-] " or "[+] ") .. (tab.name or "?")), right = Grey(count),
-			key = "banktab" .. i, onClick = function() Treasury.bankTab = i; ns.Fire("TREASURY_CHANGED") end }
-		if i == open then
-			local items = tab.items
-			if ghosts[i] then
-				items = {}
-				for _, it in ipairs(tab.items) do items[#items + 1] = it end
-				for _, it in ipairs(ghosts[i]) do items[#items + 1] = it end
-			end
-			local ask = ns.Bank.MayRequest and ns.Bank.MayRequest()
-			lines[#lines + 1] = { items = items, slots = ns.Bank.SLOTS, columns = 7,
-				onItem = ask and function(it) ns.Bank.RequestPrompt(it.id) end or nil, itemHint = ask and L.BANK_REQUEST_CLICK or nil }
-		end
-	end
+	SnapshotLines(lines, b, { byLine = L.TREASURY_BANK_AS_OF:format(ns.DisplayName(b.by) or "?", ns.Ago(b.t)),
+		gone = true, open = Treasury.bankTab, setOpen = function(i) Treasury.bankTab = i end, request = true })
 	lines[#lines].gapAfter = true
 end
 
@@ -3247,36 +3300,91 @@ local function RequestLines(lines, role)
 	end
 end
 
--- 1.1: the sister guilds' banks (Bank.lua), for the King, his Steward and his Hands: each guild
--- a click to open, then its tabs ("Tab 1": their names are left out), one open at a time.
+-- Resolve on every build from Bank.Sisters(), which rechecks the viewer and current authority.
+-- The selected name is only navigation state: retaining it never retains or reveals a snapshot.
+local function GuildSnapshot(name)
+	local B = ns.Bank
+	if type(name) ~= "string" or not (B and B.SeesSisters and B.SeesSisters() and B.Sisters) then return nil end
+	for _, s in ipairs(B.Sisters()) do
+		if type(s) == "table" and type(s.guild) == "string" and s.guild:lower() == name:lower() then return s end
+	end
+end
+
+-- Open only a snapshot authorized now. Callers cannot navigate to or retain an unavailable guild.
+function Treasury.ShowGuild(name)
+	local s = GuildSnapshot(name)
+	if not s then return false end
+	guildShown, Treasury.mode, Treasury.sisterTab = s.guild, "guild", nil
+	ns.Fire("TREASURY_CHANGED")
+	return true
+end
+
+-- The authorized snapshot list is a navigator, not another disclosure surface. It uses only the
+-- in-memory snapshots Bank.lua already makes visible to this character; no request is sent here.
 local function SisterLines(lines)
-	if not (ns.Bank and ns.Bank.SeesSisters and ns.Bank.SeesSisters()) then return end
-	local list = ns.Bank.Sisters()
-	if #list == 0 then return end
-	lines[#lines + 1] = { header = true, text = L.BANK_SISTERS, tooltip = function(tt) tt:AddLine(L.BANK_SISTERS_TIP, 1, 1, 1, true) end }
-	for _, s in ipairs(list) do
-		local opened = Treasury.sisterOpen == s.guild
-		lines[#lines + 1] = { text = (opened and Gold or tostring)((opened and "[-] " or "[+] ") .. "<" .. s.guild .. ">"), right = Treasury.Coins(s.money or 0),
-			key = "sister:" .. s.guild, onClick = function()
-				Treasury.sisterOpen, Treasury.sisterTab = (not opened) and s.guild or nil, nil
-				ns.Fire("TREASURY_CHANGED")
-			end }
-		if opened then
-			lines[#lines + 1] = { indent = 1, text = Grey(L.TREASURY_BANK_AS_OF:format(ns.DisplayName(s.by) or "?", ns.Ago(s.t))) }
-			local open = Treasury.sisterTab
-			if not (open and s.tabs[open]) then
-				open = 1
-				for i, tab in ipairs(s.tabs) do if #tab.items > 0 then open = i break end end
-			end
-			for i, tab in ipairs(s.tabs) do
-				local count = #tab.items > 0 and L.TREASURY_BANK_ITEMS:format(#tab.items) or L.TREASURY_BANK_EMPTY
-				lines[#lines + 1] = { indent = 1, text = (i == open and Gold or tostring)((i == open and "[-] " or "[+] ") .. tab.name), right = Grey(count),
-					key = "sistertab" .. i, onClick = function() Treasury.sisterTab = i; ns.Fire("TREASURY_CHANGED") end }
-				if i == open then lines[#lines + 1] = { items = tab.items, slots = ns.Bank.SLOTS, columns = 7 } end
-			end
+	local B = ns.Bank
+	local allowed = B and B.SeesSisters and B.SeesSisters() and B.Sisters
+	if not allowed then
+		-- The designated Treasurer can see why the global list is absent, without learning a guild:
+		-- whose screens another guild's bank goes to (1.1.5 has no other rule to wait for).
+		if Treasury.IsTreasurer() then
+			lines[#lines + 1] = { header = true, text = L.TREASURY_GUILDS }
+			Para(lines, L.TREASURY_GUILDS_APPROVAL)
+			lines[#lines].gapAfter = true
 		end
+		return false
+	end
+	local list = B.Sisters()
+	lines[#lines + 1] = { header = true, text = L.TREASURY_GUILDS, tooltip = function(tt)
+		tt:AddLine(L.TREASURY_GUILDS, 1, 0.82, 0)
+		tt:AddLine(L.TREASURY_GUILDS_TIP, 1, 1, 1, true)
+		-- (Konig's review, as 1.1.4's "Sister guilds' banks" said: who chose to show it, to whom,
+		-- and that a snapshot is its sender's word.)
+		tt:AddLine(L.BANK_SISTERS_TIP, 1, 1, 1, true)
+	end }
+	if #list == 0 then
+		Para(lines, L.TREASURY_GUILDS_NONE)
+		lines[#lines].gapAfter = true
+		return true
+	end
+	for _, snap in ipairs(list) do
+		local s = snap
+		local units, stacks = BankSnapshotTotals(s)
+		lines[#lines + 1] = { text = Gold("> <" .. s.guild .. ">"), right = Treasury.Coins(s.money or 0),
+			key = "sister:" .. s.guild, onClick = function() Treasury.ShowGuild(s.guild) end,
+			tooltip = function(tt)
+				tt:AddLine(L.TREASURY_GUILD_TITLE:format(s.guild), 1, 0.82, 0)
+				tt:AddLine(L.TREASURY_GUILD_SHARED_BY:format(ns.DisplayName(s.by) or "?", ns.Ago(s.t)), 1, 1, 1, true)
+				tt:AddLine(L.TREASURY_GUILD_VALUE_UNAVAILABLE, 0.8, 0.8, 0.8, true)
+			end }
+		lines[#lines + 1] = { indent = 1, text = Grey(L.TREASURY_GUILD_ITEMS:format(units, stacks)),
+			right = Grey(L.TREASURY_GUILD_SHARED_SHORT:format(ns.DisplayName(s.by) or "?")) }
 	end
 	lines[#lines].gapAfter = true
+	return true
+end
+
+-- The page and its title (the tab's detail): the guild's name only while its snapshot resolves.
+local function GuildLines()
+	local lines = { { text = Gold("< " .. L.TREASURY_TITLE), onClick = function() Treasury.Show("summary") end, gapAfter = true } }
+	local s = GuildSnapshot(guildShown)
+	if not s then
+		lines[#lines + 1] = { header = true, text = L.TREASURY_GUILDS }
+		Para(lines, L.TREASURY_GUILD_SNAPSHOT_GONE)
+		return lines, L.TREASURY_GUILDS
+	end
+	lines[#lines + 1] = { header = true, text = L.TREASURY_GUILD_TITLE:format(s.guild), tooltip = function(tt)
+		tt:AddLine(L.TREASURY_GUILD_TITLE:format(s.guild), 1, 0.82, 0)
+		tt:AddLine(L.TREASURY_GUILDS_TIP, 1, 1, 1, true)
+		tt:AddLine(L.BANK_SISTERS_TIP, 1, 1, 1, true)
+	end }
+	SnapshotLines(lines, s, { byLine = L.TREASURY_GUILD_SHARED_BY:format(ns.DisplayName(s.by) or "?", ns.Ago(s.t)),
+		open = Treasury.sisterTab, setOpen = function(i) Treasury.sisterTab = i end,
+		key = "sistertab", valueTip = true })
+	lines[#lines].gapAfter = true
+	lines[#lines + 1] = { header = true, text = L.TREASURY_BOOK }
+	Para(lines, L.TREASURY_GUILD_BOOK_UNAVAILABLE)
+	return lines, L.TREASURY_GUILD_TITLE:format(s.guild)
 end
 
 -- 1.1: the stacks of a bank whose item holds the search `q` (Bank.Find): each item once, how many
@@ -3333,20 +3441,68 @@ local function SummarySearch(role, q)
 	return lines
 end
 
+local function TreasuryTitle(role)
+	-- How a book is kept speaks to a keeper ("your book", "your own lines"): the King's Steward and
+	-- the author's Asmon's view keep none, so they read who sees it alone (as the book's header).
+	local keeper = Treasury.IsKeeper()
+	return { header = true, text = L.TREASURY_TITLE, tooltip = function(tt)
+		tt:AddLine(L.TREASURY_TITLE, 1, 0.82, 0)
+		if role ~= "member" then tt:AddLine(Treasury.WhoSees(), 1, 1, 1, true) end
+		if keeper then
+			tt:AddLine(L.TREASURY_HOW, 1, 1, 1, true)
+			tt:AddLine(L.TREASURY_BOOK_HOW, 1, 1, 1, true)
+		end
+	end }
+end
+
+local function BalanceLines(lines, r)
+	if not (r and Treasury.MaySee("balance")) then return end
+	lines[#lines + 1] = { text = Gold(L.TREASURY_BALANCE), right = Treasury.Coins(r.balance) }
+	lines[#lines + 1] = { text = L.TREASURY_IN_OUT, right = Green("+" .. Treasury.Coins(r.allIn)) .. "  " .. Red("-" .. Treasury.Coins(r.allOut)) }
+	return true
+end
+
+local function BalanceDetailLines(lines, r, keeper)
+	if not (r and Treasury.MaySee("balance")) then return end
+	lines[#lines + 1] = { text = L.TREASURY_WEEK:format(r.donors), right = Green("+" .. Treasury.Coins(r.week)),
+		-- (1.1.2: counted per keeper, the answer bank says why that can differ.)
+		tooltip = function(tt)
+			tt:AddLine(L.TREASURY_WEEK:format(r.donors), 1, 0.82, 0)
+			if ns.Answers and ns.Answers.WhyTip then ns.Answers.WhyTip(tt, "count-treasury-donors") end
+		end }
+	if keeper then
+		lines[#lines + 1] = { text = Grey(L.TREASURY_OPENING:format(Treasury.Coins(Treasury.Opening()))),
+			onClick = function() ns.ShowDialog("OLYMPUS_TREASURY_OPENING") end,
+			tooltip = function(tt) tt:AddLine(L.TREASURY_OPENING_TIP, 1, 1, 1, true) end }
+	end
+	-- Whose books make it, each one's balance and when it came.
+	for _, k in ipairs(r.keepers) do
+		lines[#lines + 1] = { indent = 1, text = Grey(L.TREASURY_KEPT_BY:format(KeeperLabel(k.name), k.own and L.TREASURY_KEPT_NOW or ns.Ago(k.t))),
+			right = Grey(Treasury.GoldText(k.balance)) }
+	end
+	lines[#lines].gapAfter = true
+end
+
 local function SummaryLines(role, q)
 	if q then return SummarySearch(role, q) end
-	local lines = { { header = true, text = L.TREASURY_TITLE } }
-	-- 1.1: the week's dues first (Dues.lua): the way to them, for whoever may see them, and the
-	-- button that fills in a member's own payment. A member the King shows nothing sees that alone.
-	ns.Dues.SummaryLines(lines, role)
-	if role == "member" and not Treasury.AnyShown() then return lines end
-	local keeper = Treasury.IsKeeper()
-	if keeper then
-		Para(lines, Treasury.WhoSees(), tostring)
-		lines[#lines].gapAfter = true
-		Para(lines, L.TREASURY_HOW)
-		lines[#lines].gapAfter = true
+	local lines = { TreasuryTitle(role) }
+	-- A member the King shows nothing sees the title and his dues, and what else gives him the tab
+	-- (Visible): his own open requests to the treasury, a Hand's guild treasuries; in this order.
+	if role == "member" and not Treasury.AnyShown() then
+		ns.Dues.SummaryLines(lines, role)
+		if ns.Bank and ns.Bank.MyRequests and #ns.Bank.MyRequests() > 0 then RequestLines(lines, role) end
+		SisterLines(lines)
+		return lines
 	end
+	local keeper = Treasury.IsKeeper()
+	local r = Treasury.Report()
+	-- The ledger total and the bank portrait are the page's first data, before controls and long
+	-- lists. The ledger explanation and privacy note moved to the title's tooltip above.
+	BalanceLines(lines, r)
+	BankLines(lines, role)
+	BalanceDetailLines(lines, r, keeper)
+	-- 1.1: the week's dues (Dues.lua): the way to them and the member's payment action.
+	ns.Dues.SummaryLines(lines, role)
 	-- 1.1: who is taking donations now, and a keeper's own switch for it.
 	local taking = Treasury.DonationLines()
 	for _, l in ipairs(taking) do lines[#lines + 1] = l end
@@ -3375,21 +3531,23 @@ local function SummaryLines(role, q)
 			lines[#lines].gapAfter = true
 		end
 	end
-	local r = Treasury.Report()
 	if not r then
-		-- Nothing from the keepers yet: the King sees the sections waiting (the ranking empty),
-		-- and the bank if anyone has seen it.
+		-- Nothing from the keepers yet: the bank above can still have a snapshot.
 		Para(lines, L.TREASURY_WAIT)
 		lines[#lines].gapAfter = true
 		if role ~= "member" then
 			RankLines(lines, {})
 			lines[#lines].gapAfter = true
-			if EarlyLines(lines) then lines[#lines].gapAfter = true end
 			lines[#lines + 1] = { text = Gold("> " .. L.TREASURY_KEEPERS_LINK:format(KeeperCount())), onClick = function() Treasury.Show("keepers") end, gapAfter = true }
 		end
-		BankLines(lines, role)
 		RequestLines(lines, role)
+		if role == "king" then
+			local shown = ShownParts()
+			lines[#lines + 1] = { text = Grey(#shown > 0 and L.TREASURY_ARMY_SEES:format(table.concat(shown, ", ")) or L.TREASURY_ARMY_SEES_NOTHING), gapAfter = true }
+		end
 		SisterLines(lines)
+		-- Always the final section, collapsed until explicitly opened.
+		if Treasury.MaySee("ranking") then EarlyLines(lines) end
 		return lines
 	end
 	-- 1.1: a keeper's book this client holds only as the army sees it (the channel's copy): its
@@ -3402,32 +3560,9 @@ local function SummaryLines(role, q)
 			lines[#lines].gapAfter = true
 		end
 	end
-	if Treasury.MaySee("balance") then
-		lines[#lines + 1] = { text = Gold(L.TREASURY_BALANCE), right = Treasury.Coins(r.balance) }
-		lines[#lines + 1] = { text = L.TREASURY_IN_OUT, right = Green("+" .. Treasury.Coins(r.allIn)) .. "  " .. Red("-" .. Treasury.Coins(r.allOut)) }
-		lines[#lines + 1] = { text = L.TREASURY_WEEK:format(r.donors), right = Green("+" .. Treasury.Coins(r.week)),
-			-- (1.1.2: counted per keeper, the answer bank says why that can differ.)
-			tooltip = function(tt)
-				tt:AddLine(L.TREASURY_WEEK:format(r.donors), 1, 0.82, 0)
-				if ns.Answers and ns.Answers.WhyTip then ns.Answers.WhyTip(tt, "count-treasury-donors") end
-			end }
-		if keeper then
-			lines[#lines + 1] = { text = Grey(L.TREASURY_OPENING:format(Treasury.Coins(Treasury.Opening()))),
-				onClick = function() ns.ShowDialog("OLYMPUS_TREASURY_OPENING") end,
-				tooltip = function(tt) tt:AddLine(L.TREASURY_OPENING_TIP, 1, 1, 1, true) end }
-		end
-		-- Whose books make it, each one's balance and when it came.
-		for _, k in ipairs(r.keepers) do
-			lines[#lines + 1] = { indent = 1, text = Grey(L.TREASURY_KEPT_BY:format(KeeperLabel(k.name), k.own and L.TREASURY_KEPT_NOW or ns.Ago(k.t))),
-				right = Grey(Treasury.GoldText(k.balance)) }
-		end
-		lines[#lines].gapAfter = true
-	end
 	if Treasury.MaySee("ranking") then
 		RankLines(lines, r.rank)
 		lines[#lines].gapAfter = true
-		-- Who gave before 1.0: with the ranking, for whoever may see it.
-		if EarlyLines(lines) then lines[#lines].gapAfter = true end
 	end
 	if Treasury.MaySee("book") then
 		ItemLines(lines, r.items)
@@ -3438,20 +3573,27 @@ local function SummaryLines(role, q)
 	if role ~= "member" then
 		lines[#lines + 1] = { text = Gold("> " .. L.TREASURY_KEEPERS_LINK:format(KeeperCount())), onClick = function() Treasury.Show("keepers") end, gapAfter = true }
 	end
-	BankLines(lines, role)
 	RequestLines(lines, role)
-	SisterLines(lines)
 	-- The King: what the army sees now (the switches are the buttons in the box).
 	if role == "king" then
 		local shown = ShownParts()
-		lines[#lines + 1] = { text = Grey(#shown > 0 and L.TREASURY_ARMY_SEES:format(table.concat(shown, ", ")) or L.TREASURY_ARMY_SEES_NOTHING) }
+		lines[#lines + 1] = { text = Grey(#shown > 0 and L.TREASURY_ARMY_SEES:format(table.concat(shown, ", ")) or L.TREASURY_ARMY_SEES_NOTHING), gapAfter = true }
 	end
+	-- A global viewer's authorized guild snapshots are the last operational section. Early
+	-- supporters are deliberately the final, collapsed section on every summary.
+	SisterLines(lines)
+	if Treasury.MaySee("ranking") then EarlyLines(lines) end
 	return lines
 end
 
 -- `q`: the tab's search (Views.Query), for the ranking and the book; nil for none.
 function Treasury.Build(q)
 	local role = Treasury.Role()
+	-- An authorized guild's treasury, opened from the summary (ShowGuild): a page of its own.
+	if Treasury.mode == "guild" then
+		local lines, title = GuildLines()
+		return lines, L.TAB_TREASURY, title
+	end
 	if Treasury.mode == "book" and not Treasury.MaySee("book") then Treasury.mode = "summary" end
 	if Treasury.mode == "keepers" and role == "member" then Treasury.mode = "summary" end
 	-- 1.1: the week's dues (Dues.lua), for whoever may see them.
@@ -3468,6 +3610,7 @@ end
 
 -- A list of donors shows on the tab (the book, or the ranking): its search box too (Views.lua).
 function Treasury.Searchable()
+	if Treasury.mode == "guild" then return false end
 	if Treasury.mode == "keepers" then return false end
 	if Treasury.mode == "dues" then return ns.Dues.Sees() == true end
 	if Treasury.mode == "book" and Treasury.MaySee("book") then return true end
@@ -3494,27 +3637,7 @@ function Treasury.DiscordText()
 	return table.concat(out, "\n")
 end
 
--- The King's Throne Room: the treasury as its keepers last sent it, a click from its tab.
-function Treasury.ThroneLines()
-	local Line, INK, TITLE = ns.King.Line, ns.King.INK, ns.King.TITLE
-	local lines = { Line(L.TREASURY_TITLE, TITLE) }
-	local open = function() if ns.UI and ns.UI.SelectTab then ns.UI.SelectTab("treasury") end end
-	local r = Treasury.Report()
-	if r then
-		lines[#lines + 1] = Line(L.TREASURY_BALANCE .. ": " .. Treasury.Coins(r.balance), INK)
-		lines[#lines + 1] = Line(L.TREASURY_WEEK:format(r.donors) .. ": +" .. Treasury.Coins(r.week), INK)
-		for _, k in ipairs(r.keepers) do
-			lines[#lines + 1] = Line(L.TREASURY_KEPT_BY:format(KeeperLabel(k.name), k.own and L.TREASURY_KEPT_NOW or ns.Ago(k.t)), INK)
-		end
-	else
-		ns.King.Para(lines, L.TREASURY_WAIT, INK)
-	end
-	lines[#lines].gapAfter = true
-	lines[#lines + 1] = Line("> " .. L.TREASURY_OPEN, INK, { onClick = open })
-	return lines
-end
-
--- Next to the soldiers on top of the window (the Throne and the Treasury tabs): the treasury's
+-- Next to the soldiers on top of the window (the Treasury tab; 1.1.5: no longer the Throne's): the treasury's
 -- balance, for the keepers, the King, and the army when the King shows it.
 function Treasury.HeaderText()
 	if not (Treasury.IsKeeper() or IsKingView() or Treasury.Shows("balance")) then return nil end
@@ -3661,6 +3784,7 @@ function Treasury.Reset()
 	wipe(donors); wipe(pinged)
 	earlyAsks, lastEarlyAsk, earlyArmed, heardEarlyAsk = 0, -math.huge, false, -math.huge
 	bookShown, rankShown, earlyShown = Treasury.BOOK_SHOWN, Treasury.RANK_PAGE, Treasury.EARLY_SHOWN
+	earlyOpen, guildShown, Treasury.sisterTab = false, nil, nil
 	Treasury.mode = "summary"
 	if ns.rdb then
 		ns.rdb.treasuryReports, ns.rdb.treasuryBooks, ns.rdb.treasuryKeepers, ns.rdb.treasuryArchive = nil, nil, nil, nil

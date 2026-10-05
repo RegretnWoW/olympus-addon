@@ -522,7 +522,9 @@ end
 
 function Backup.ShowRestore()
 	if not pasteFrame then
-		local f = CreateFrame("Frame", "OlympusPasteFrame", UIParent, "BasicFrameTemplateWithInset")
+		-- (1.1.5) In the Olympus window's metal without its portrait (ns.Window, Dialog.lua); its X
+		-- hides it itself, in combat too.
+		local f = ns.Window("OlympusPasteFrame", UIParent, { title = L.BACKUP_RESTORE_TITLE })
 		f:SetSize(520, 240)
 		f:SetPoint("CENTER")
 		f:SetFrameStrata("DIALOG")
@@ -531,8 +533,6 @@ function Backup.ShowRestore()
 		f:RegisterForDrag("LeftButton")
 		f:SetScript("OnDragStart", f.StartMoving)
 		f:SetScript("OnDragStop", f.StopMovingOrSizing)
-		ns.EscapeCloses("OlympusPasteFrame")
-		if f.TitleText then f.TitleText:SetText(L.BACKUP_RESTORE_TITLE) end
 		local hint = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 		hint:SetPoint("TOPLEFT", 14, -30)
 		hint:SetPoint("RIGHT", -14, 0)

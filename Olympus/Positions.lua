@@ -69,7 +69,7 @@ end
 local function RefreshNow()
 	if not Pins then return end
 	-- The world map's dots only with mouse and keyboard (ns.WorldMapIcons); the minimap's always.
-	local world = ns.WorldMapIcons(Pins, Positions)
+	local world = ns.WorldMapIcons(Pins, Positions) -- gp:worldmap-icons
 	local now = ns.Now()
 	for name, p in pairs(pins) do
 		local m = mates[name]
@@ -91,7 +91,7 @@ local function RefreshNow()
 		Color(p.world, name, m.class)
 		Color(p.mini, name, m.class)
 		if world then Pins:AddWorldMapIconMap(Positions, p.world, m.mapID, m.x, m.y, SHOW_FLAG) end
-		Pins:AddMinimapIconMap(Positions, p.mini, m.mapID, m.x, m.y, true, false)
+		Pins:AddMinimapIconMap(Positions, p.mini, m.mapID, m.x, m.y, true, false) -- gp:minimap
 	end
 end
 

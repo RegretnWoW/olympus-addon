@@ -105,7 +105,7 @@ end
 -- (Not on the world map with the gamepad UI: ns.WorldMapIcons.)
 local function RefreshPinsNow()
 	if not Pins then return end
-	local world = ns.WorldMapIcons(Pins, Decree)
+	local world = ns.WorldMapIcons(Pins, Decree) -- gp:worldmap-icons
 	for _, d in ipairs(active) do
 		if d.pin then
 			if ns.db.showDecrees then

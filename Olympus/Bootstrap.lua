@@ -40,7 +40,7 @@ end
 -- Every error still goes on to the handler that was there before, as it came, whatever this
 -- one makes of it (a tail call: that handler reads the same stack as without us).
 local previous = not GamepadUI() and geterrorhandler()
-if previous then seterrorhandler(function(err, ...)
+local ours = previous and function(err, ...)
 	local ok = pcall(function()
 		local msg = tostring(err)
 		local key = msg:sub(1, 240)
@@ -71,9 +71,23 @@ if previous then seterrorhandler(function(err, ...)
 		end
 	end)
 	return previous(err, ...)
-end) end
+end
+if ours then seterrorhandler(ours) end -- gp:error-handler
+
+-- 1.1.5, the gamepad gate ("error-handler", registered in Diagnostics.lua, this file loading before
+-- any gate): at a switch to the gamepad UI the game's handler goes back, if ours is still the one in
+-- place (another addon's, set after ours, is left alone), and ours is never set again that session:
+-- with the gamepad UI each error would open the game's error window from Olympus's handler. True
+-- when it went back.
+function ns.ParkErrorHandler()
+	if not (ours and previous) or geterrorhandler() ~= ours then return false end
+	seterrorhandler(previous) -- gp:error-handler!hook
+	ours = nil
+	return true
+end
+function ns.ErrorHandlerOurs() return ours ~= nil and geterrorhandler() == ours end -- (tests, status)
 
 if not WorldMapFrame then
-	local load = (C_AddOns and C_AddOns.LoadAddOn) or LoadAddOn
-	if load then pcall(load, "Blizzard_WorldMap") end
+	local load = (C_AddOns and C_AddOns.LoadAddOn) or LoadAddOn -- gp:load-worldmap
+	if load then pcall(load, "Blizzard_WorldMap") end -- gp:load-worldmap
 end

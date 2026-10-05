@@ -54,8 +54,10 @@ function Acts.WritFor(to)
 	return ns.Roster.MyRank() <= ns.CAPTAIN_RANK
 end
 
+-- (1.1.5) The Olympus window's metal without its portrait (ns.Window, Dialog.lua), "Olympus" in its
+-- title bar, the parchment over its inside (the writ's own ground: no inset box); its X hides it.
 local function MakeWritFrame()
-	local f = CreateFrame("Frame", "OlympusWritFrame", UIParent)
+	local f = ns.Window("OlympusWritFrame", UIParent, { title = L.TITLE, inset = false })
 	f:SetFrameStrata("DIALOG")
 	f:SetToplevel(true)
 	f:SetSize(360, 300)
@@ -65,11 +67,10 @@ local function MakeWritFrame()
 	f:RegisterForDrag("LeftButton")
 	f:SetScript("OnDragStart", f.StartMoving)
 	f:SetScript("OnDragStop", f.StopMovingOrSizing)
-	local okBorder, border = pcall(CreateFrame, "Frame", nil, f, "DialogBorderTemplate")
-	if okBorder and border then border:SetAllPoints() end
 	local bg = f:CreateTexture(nil, "BACKGROUND")
-	bg:SetPoint("TOPLEFT", 10, -10)
-	bg:SetPoint("BOTTOMRIGHT", -10, 10)
+	bg:SetPoint("TOPLEFT", f.inner[1], f.inner[2])
+	bg:SetPoint("BOTTOMRIGHT", f.inner[3], f.inner[4])
+	f.paper = bg
 	local file = ns.UI.FirstTexture(ns.UI.PARCHMENTS)
 	if GetFileIDFromPath and not GetFileIDFromPath(file) then
 		bg:SetColorTexture(0.87, 0.80, 0.64, 0.97)
@@ -78,11 +79,11 @@ local function MakeWritFrame()
 		if file:find("QuestBG", 1, true) then bg:SetTexCoord(0, 296 / 512, 0, 331 / 512) end
 	end
 	f.title = f:CreateFontString(nil, "ARTWORK", _G.QuestTitleFont and "QuestTitleFont" or "GameFontNormalLarge")
-	f.title:SetPoint("TOP", 0, -26)
+	f.title:SetPoint("TOP", 0, -36) -- (on the parchment, under the title bar)
 	f.to = f:CreateFontString(nil, "ARTWORK", _G.QuestFont and "QuestFont" or "GameFontHighlight")
 	f.to:SetPoint("TOP", f.title, "BOTTOM", 0, -6)
 	f.body = f:CreateFontString(nil, "ARTWORK", _G.QuestFont and "QuestFont" or "GameFontHighlight")
-	f.body:SetPoint("TOPLEFT", 30, -80)
+	f.body:SetPoint("TOPLEFT", 30, -90)
 	f.body:SetPoint("RIGHT", -30, 0)
 	f.body:SetJustifyH("LEFT")
 	f.body:SetJustifyV("TOP")
@@ -91,10 +92,7 @@ local function MakeWritFrame()
 	f.ack = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
 	f.ack:SetSize(140, 24)
 	f.ack:SetPoint("BOTTOM", 0, 22)
-	f.close = CreateFrame("Button", nil, f, "UIPanelCloseButton")
-	f.close:SetPoint("TOPRIGHT", -4, -4)
-	f.close:SetScript("OnClick", function() f:Hide() end)
-	ns.EscapeCloses("OlympusWritFrame")
+	f.close = f.CloseButton
 	return f
 end
 

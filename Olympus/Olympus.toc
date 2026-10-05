@@ -2,7 +2,7 @@
 ## Title: |cffe6c35cOlympus|r
 ## Notes: Live census of every Olympus guild: army size, leaders and where everyone is on the map.
 ## Author: Olympus addon contributors
-## Version: 1.1.4
+## Version: 1.1.5
 ## SavedVariables: OlympusDB
 ## IconTexture: Interface\AddOns\Olympus\media\logo64
 ## X-License: MIT
@@ -20,6 +20,8 @@ Locales\deDE.lua
 Locales\esES.lua
 Locales\frFR.lua
 Core.lua
+GamepadRegistry.lua
+Gamepad.lua
 Diagnostics.lua
 Dialog.lua
 PlayerMenu.lua
@@ -64,8 +66,11 @@ AnswerBank.lua
 Answers.lua
 Views.lua
 Members.lua
+Nominees.lua
+ViewAs.lua
 UI.lua
 Consent.lua
+Letters.lua
 GuildFrame.lua
 Borders.lua
 Nameplates.lua

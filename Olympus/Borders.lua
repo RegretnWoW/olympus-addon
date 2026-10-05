@@ -5,6 +5,15 @@ local L = ns.L
 -- art, and Max's bronze frames drawn over it, around the portrait of an Olympus player on your
 -- target and focus frames, and around your own portrait for your own rank, like Elite Player
 -- Frame (Enhanced) but for other players too. `/oly borders on|off`, on by default.
+-- 1.1.5 (the author's call): three tiers, all winged: the King gold, the High Council silver and a
+-- guild master of an Olympus guild Max's bronze. The rank tiers of 1.0.1 (Lords gold, Captains
+-- silver, Raiders bronze wings, Veterans bronze) are gone: new borders are to come, and one that
+-- nearly everybody has is worth nothing. Any other member: the nameplate star alone, no border.
+-- Then two without wings (1.1.5, the author's asks after the High Council's yes): Max's plain
+-- bronze for the people a guild master names (Nominees.lua: up to 10 centurions and a
+-- correspondent per council department, while they are of his guild), with a guild master's bronze
+-- mark on nameplates and in the game's chat; and the game's plain silver for the dev's own
+-- character (ns.AUTHOR on his realm group), on the unit frames alone: no mark of its own.
 --
 -- How, on Forever's unit frames (Blizzard_UnitFrame, the "Camelot" family: TargetFrameTemplate
 -- and PlayerFrame): the game draws an elite or rare creature's border with BossPortraitFrameTexture,
@@ -21,24 +30,64 @@ local L = ns.L
 -- themselves: the mixin's functions were copied into them when they were made) Olympus shows the
 -- border of the unit again, so it follows every update the game makes.
 --
+-- The party's frames (1.1.5, the author's ask: in a group the portraits under your own had none):
+-- Forever's PartyFrame (Blizzard_UnitFrame's Shared/PartyFrame.lua and Mainline/
+-- PartyFrameTemplates.xml; Camelot overrides neither) takes its four PartyMemberFrameTemplate
+-- buttons from a frame pool. Each has a 37 x 37 portrait (BACKGROUND) 7 px from its left and 6 px
+-- from its top, and no container: Olympus's textures go on the member frame itself. Not over its
+-- own art as on the target: the member's name is on that same frame, in the layer and sublevel of
+-- its ring (both ARTWORK 0, its Name from 46 px in), where the target's is on a frame of its own
+-- far from the art, and the art's top tip (the dragon's head) reaches some 5 px into the name. So
+-- at ARTWORK sublevel -1: over the portrait, under the frame's ring, its name and the rest of its
+-- art (the game's ring then over the border's inner edge). A border is the
+-- target's art and offsets scaled by 37/58 (the target's portrait is 58 x 58, 26 px from its
+-- container's right and 19 px from its top, Mainline/TargetFrame.xml) about the portrait's top
+-- corner, and turned round as on your own frame (the portrait on the left): an atlas at the
+-- client's own size of it (C_Texture.GetAtlasInfo) times 37/58, Max's file at its tier's size
+-- times 37/58. The unit of PartyFrame.MemberFrame<i> (the key Blizzard gives the frame of
+-- layoutIndex i) is party<i>. A member's border is worked out on GROUP_ROSTER_UPDATE when he is
+-- new to his place (joining, leaving, places swapped: by GUID, so one who stays is not worked out
+-- again), on his name or guild reaching the client, and on the census changes below; an empty
+-- place is not worked out. One hook, hooksecurefunc on PartyFrame's InitializePartyMemberFrames as
+-- on the target frame's CheckClassification, because no event says it: each time PartyFrame is
+-- shown (the interface hidden and shown again: Alt+Z, a cinematic) it releases its four frames to
+-- the pool and takes them back in no fixed order (CreateFramePool is the secure pool,
+-- Blizzard_SharedXMLBase/Pools.lua:857: its ReleaseAll walks its frames in next()'s order, :235,
+-- onto a stack its Acquire pops last in first out, :219), so a frame may then show another
+-- member; after it each border goes to the frame now showing its member. While the borders are
+-- off it forgets which frame shows whom, and works it out again when they are back. A frame's
+-- textures are made once, out of combat (in combat: once it ends). The raid's frames have no
+-- portrait: none there. Only with Forever's unit frames (a target, focus or player container
+-- found): a client without them (Classic Era, Anniversary) may load the same pooled PartyFrame
+-- (the shared Blizzard_UnitFrame TOC lists it for every game) with its own family's party art,
+-- at other sizes; no border there.
+--
 -- The gamepad UI (Forever's controller mode): off there. Olympus leaves the game's frames alone with
 -- the gamepad UI (0.9.8), and nothing offline can show that a hook in the target frame's update is
 -- harmless to it (0.9.9: the world map looked harmless too). Logged in with the gamepad UI, Olympus
--- neither hooks nor makes textures; switched to it later, its textures hide at once and the hook
--- returns without a call; back to mouse and keyboard, the borders come back.
+-- neither hooks nor makes textures; switched to it later, its textures hide at once and the hooks
+-- (the target's and focus's, the party's) return without a call; back to mouse and keyboard, the
+-- borders come back.
 --
--- Cheap: a unit's border is worked out only when the target or focus changes, when its name or
--- guild reaches the client (UNIT_NAME_UPDATE, PLAYER_GUILD_UPDATE), or when the census report of
--- its guild (or the High Council's list, or for a councillor the council's names shown or hidden
--- on the King's screen, or whether a net-off word hides him: 1.1) changes, and only from lookups:
--- its guild's report by name, never a walk over every guild.
+-- Cheap: a unit's border is worked out only when the target or focus changes (or who is in a
+-- party member's place, GROUP_ROSTER_UPDATE), when its name or guild reaches the client
+-- (UNIT_NAME_UPDATE, PLAYER_GUILD_UPDATE), or when the census report of its guild (or the High
+-- Council's list, or for a councillor the council's names shown or hidden on the King's screen, or
+-- whether a net-off word hides him: 1.1) changes, and only from lookups: its guild's report by
+-- name, never a walk over every guild.
 -- A character or a guild the moderators took off (net-off, Moderation.lua; 1.1, Konig's review)
 -- gets no border and no nameplate mark: an Olympus player to nobody's eye.
 --
 -- The author's preview (1.0.0): his character holds no Olympus rank, so his own portrait shows
 -- none of the borders he ships. `/oly borders test <tier>` (a tier's name, as /oly status prints
 -- it) shows that border round his own portrait, turned round as a holder sees his own, and on his
--- target or focus frame while that is himself; `/oly borders test off` ends it. His alone
+-- target or focus frame while that is himself; never on a real party member's frame (they show
+-- their own borders). Edit Mode's party frames (Esc > Edit Mode > Party Frames, shown with nobody
+-- in their place: Mainline/PartyMemberFrame.lua, UpdateMember) are the one way he can see the party
+-- borders without a party (1.1.5, the author's ask): while Edit Mode forces them shown, each empty
+-- place shows the previewed border. Edit Mode is only read (its own getter, when the preview or the
+-- party is worked out: the command, PartyFrame shown again), never hooked. `/oly borders test off`
+-- ends it. His alone
 -- (Workshop.Visible: his character, or his test build, as Asmon's and the Treasurer's views):
 -- anyone else's command gets what /oly borders prints, and changes nothing. His screen alone:
 -- nothing is sent, nothing is saved (a /reload forgets it), nobody else's border changes. It goes
@@ -47,22 +96,17 @@ local L = ns.L
 --
 -- The nameplate marks (1.0.0, Nameplates.lua) come from the same facts and tiers (Borders.MarkOf),
 -- and `/oly borders off` hides them with the borders. The author's preview shows its tier's mark
--- too, and has one tier of the marks alone: "member", the star (no border has it).
+-- too, and has one tier of the marks alone: "member", the star (no border has it). So do the marks
+-- in the game's own chat (1.1.5, Borders.ChatName below), from a sender's name.
 
 local Borders = {}
 ns.Borders = Borders
 
--- Max's second option: the High Council gold, like the King. Off: the High Council is silver
--- (both winged).
-ns.BORDERS_COUNCIL_GOLD = false
-
--- Who gets which border, checked from the top: the first that holds is the border (Max's list,
--- highest first). The game's art is as Blizzard_UnitFrame/Camelot/TargetFrameUtils.lua
+-- Who gets which border, checked from the top: the first that holds is the border (highest
+-- first). The game's art is as Blizzard_UnitFrame/Camelot/TargetFrameUtils.lua
 -- (GetBossPortraitFrameData) gives it for a boss, a rare and an elite creature, at the offsets the
 -- game anchors each at (x, y: from the top right of the target frame's container; mirrored on your
--- own frame). The plain silver is the game's too, by the name Forever's client knows it (its
--- Mainline TargetFrameUtils.lua gives it to a rare elite): the plain gold's size and shape, so at
--- the plain gold's offsets. Each is drawn as the game draws it: no tint, no desaturation.
+-- own frame). Each is drawn as the game draws it: no tint, no desaturation.
 -- A tier may name a file instead of an atlas: file (the texture's path), coords (the art's area
 -- on it: left, right, top, bottom), width and height (its size on screen, the game's 1x size of
 -- the frame it was drawn over) and fallback (that frame's atlas, drawn without colour when the
@@ -70,44 +114,69 @@ ns.BORDERS_COUNCIL_GOLD = false
 -- Who:
 --   king     the King of our faction: his character (ns.IsKingCharacter) in his guild
 --            (ns.IsKingGuild); where no character is pinned, that guild's guild master
---   council  the High Council (the signed list, ns.IsHighCouncillor): true, or the name of the
---            ns flag that must be on for it (except on the King's screen while he streams)
+--   council  the High Council (the signed list, ns.IsHighCouncillor), except on the King's screen
+--            while he streams
+--   dev      the dev's own character (Workshop.IsAuthorName: ns.AUTHOR on his realm group)
 --   leader   the guild master of an Olympus guild, as its census names him (Data.KnownRank, as
 --            the Crown asks it: two senders naming him, one of them someone else; our own
---            guild's: our roster)
---   officer  its officers: the census's (the same way, two senders), or our own guild's officer
---            ranks (Roster.lua)
---   ranks    a member of an Olympus guild whose rank name holds one of these words (any case, a
---            whole word): rank names are what each guild master wrote, as the game shows them
+--            guild's: the rank the server gives, or our roster's)
+--   nominee  a centurion or correspondent his guild master named (Nominees.RoleOf: the list his
+--            master's client sends, taken only from that guild's master as Facts proves a guild
+--            master, and dropped when he stops being it), while the server gives the unit that
+--            very guild (GetGuildInfo): nobody outside it can borrow it; in the King's guild (1.1.5),
+--            a centurion the King or a High Councillor named (the list taken from them alone)
+-- In that order when several hold: the King, the High Council, the dev, a guild master, a nominee
+-- (then, on nameplates and in the game's chat, the star).
+-- (1.0.1's Max's second option, ns.BORDERS_COUNCIL_GOLD, the High Council in the King's gold
+-- wings, is gone with 1.1.5: the gold is the King's alone, on the borders, the nameplates and in
+-- the game's chat, and the council's tier is the silver.)
 local WINGED = "UI-HUD-UnitFrame-Target-PortraitOn-Boss-Gold-Winged"
 local PLAIN = "UI-HUD-UnitFrame-Target-PortraitOn-Boss-Gold"
 -- Max's bronze frames, drawn over the winged and the plain gold at twice their size: 256 x 256
 -- TGAs, the art at the top left (scripts/make-borders.py makes them from media/borders/src).
 local MEDIA = "Interface\\AddOns\\Olympus\\media\\borders\\"
+-- The plain silver is the game's, by the name Forever's client knows it (its Mainline
+-- TargetFrameUtils.lua gives it to a rare elite): the plain gold's size and shape, so at its
+-- offsets (1.0.0's Captains had it). Max's plain bronze (media/borders/bronze-plain), drawn over the
+-- plain gold, at its size and offsets (1.0.0's Veterans had it).
 Borders.TIERS = {
-	{ name = "gold-elite", atlas = WINGED, x = 11, y = -4, king = true, council = "BORDERS_COUNCIL_GOLD" },
+	{ name = "gold-elite", atlas = WINGED, x = 11, y = -4, king = true },
 	{ name = "silver-elite", atlas = "UI-HUD-UnitFrame-Target-PortraitOn-Boss-Rare-Silver-Winged", x = 8, y = -7,
 		council = true },
-	{ name = "gold", atlas = PLAIN, x = 0, y = 1, leader = true },
-	{ name = "silver", atlas = "ui-hud-unitframe-target-portraiton-boss-rare-silver", x = 0, y = 1, officer = true },
+	{ name = "silver", atlas = "ui-hud-unitframe-target-portraiton-boss-rare-silver", x = 0, y = 1, dev = true },
 	{ name = "bronze-elite", file = MEDIA .. "bronze-winged", coords = { 0, 220 / 256, 0, 180 / 256 }, width = 110, height = 90,
-		x = 11, y = -4, fallback = WINGED, ranks = { "raider" } },
+		x = 11, y = -4, fallback = WINGED, leader = true },
 	{ name = "bronze", file = MEDIA .. "bronze-plain", coords = { 0, 200 / 256, 0, 200 / 256 }, width = 100, height = 100,
-		x = 0, y = 1, fallback = PLAIN, ranks = { "veteran", "veterano", "veterana" } },
+		x = 0, y = 1, fallback = PLAIN, nominee = true },
+}
+-- Kept for borders to come, given to nobody (1.1.5): no texture is made for it, no unit matches it
+-- and the preview leaves it out. The plain gold.
+Borders.RESERVED = {
+	{ name = "gold", atlas = PLAIN, x = 0, y = 1 },
 }
 
 -- Where they go: the frame (a global of the game's), its container, and the hook that follows the
--- game's updates. Your own portrait sits on the left, so there the art is mirrored.
+-- game's updates. Your own portrait sits on the left, so there the art is mirrored. (The party's
+-- frames come from a pool, not globals: MapParty and PartyRig below.)
 local RIGS = {
 	{ unit = "target", frame = "TargetFrame", container = "TargetFrameContainer", hook = "CheckClassification" },
 	{ unit = "focus", frame = "FocusFrame", container = "TargetFrameContainer", hook = "CheckClassification" },
 	{ unit = "player", frame = "PlayerFrame", container = "PlayerFrameContainer", mirror = true },
 }
-local TRACKED = { target = true, focus = true, player = true }
+-- The party's places (see the top of the file), and where its portraits sit against the target's.
+local PARTY = { "party1", "party2", "party3", "party4" }
+local IN_PARTY = { party1 = true, party2 = true, party3 = true, party4 = true }
+local TARGET_PORTRAIT, TARGET_RIGHT, TARGET_TOP = 58, 26, 19 -- (from its container's top right)
+local PARTY_PORTRAIT, PARTY_LEFT, PARTY_TOP = 37, 7, 6       -- (from its frame's top left)
+local PARTY_SCALE = PARTY_PORTRAIT / TARGET_PORTRAIT
+local PARTY_SUBLEVEL = -1 -- (ARTWORK: under the member frame's ring and name, ARTWORK 0)
+local TRACKED = { target = true, focus = true, player = true, party1 = true, party2 = true, party3 = true, party4 = true }
 
 local rigs = {}  -- [unit] = { tex = { [tier name] = texture }, shown = tier name or nil }
+local partyRigs = {} -- [a party member frame of the game's] = its rig, made once (rigs[party<i>]: the one showing party<i>)
 local known = {} -- [unit] = { guid, tier, guild, report, rt, council }: the last worked out
 local installed, waiting = false, false
+local forever = false -- Forever's unit frames found at Install (the party's borders only then)
 local preview    -- the author's preview: a tier's name while on (this session only, never saved)
 Borders.stats = { computed = 0 } -- (tests, /oly status)
 
@@ -120,23 +189,27 @@ local function Secret(...)
 	return false
 end
 
-local function RankHolds(ranks, rankName)
-	if type(rankName) ~= "string" or rankName == "" then return false end
-	for word in ns.Fold(rankName):gmatch("[^%s%p%d]+") do
-		for _, want in ipairs(ranks) do
-			if word == ns.Fold(want) then return true end
-		end
-	end
-	return false
-end
-
 -- 1.1 (Konig's review): a character the moderators took off (net-off, Moderation.lua), or one of a
 -- guild they took off the network, shows as no Olympus player on this client: no border, no
 -- nameplate mark (never the King: nobody takes him off). Our own portrait keeps ours.
-local function NetOff(who, guild)
+-- look (1.1.5): the guild is one we try for him, not one the server or his own message gave
+-- (Borders.MarkOfName): Moderation notes nothing from it.
+local function NetOff(who, guild, look)
 	local M = ns.Moderation
 	if type(M) ~= "table" or type(M.Hides) ~= "function" or who == ns.me then return false end
-	return M.Hides(who, guild) ~= nil
+	return M.Hides(who, guild, look) ~= nil
+end
+
+-- The dev's own character (1.1.5): ns.AUTHOR on his realm group (Workshop.IsAuthorName).
+local function IsDev(who)
+	local W = ns.Workshop
+	return type(W) == "table" and type(W.IsAuthorName) == "function" and W.IsAuthorName(who) == true
+end
+
+-- Named by that guild's master (1.1.5, Nominees.lua): a centurion or a correspondent.
+local function Nominee(who, guild)
+	local N = ns.Nominees
+	return type(N) == "table" and type(N.RoleOf) == "function" and N.RoleOf(who, guild) ~= nil
 end
 
 -- What decides a unit's border, or nil for anyone no border is for: not a player, of the other
@@ -154,8 +227,11 @@ local function Facts(unit)
 	f.off = NetOff(who, f.guild)
 	f.councillor = ns.IsHighCouncillor(who) == true
 	f.council = f.councillor and not ns.CouncilMasked()
+	f.dev = IsDev(who)
 	if not f.guild or not ns.IsFederation(f.guild) then return f end
-	f.olympus, f.rankName = true, rankName
+	f.olympus = true
+	-- A nominee: named by the master of the guild the server gives him (Nominees.RoleOf).
+	f.nominee = Nominee(who, f.guild)
 	f.king = ns.IsKingGuild(f.guild) and (ns.IsKingCharacter(who) or (ns.KingCharacter() == nil and rankIndex == 0))
 	local guilds = ns.rdb and ns.rdb.guilds
 	local report = type(guilds) == "table" and guilds[f.guild] or nil
@@ -166,36 +242,34 @@ local function Facts(unit)
 		local rank = type(rankIndex) == "number" and rankIndex or (ns.Roster and ns.Roster.RankOf(who))
 		f.fromRoster = type(rankIndex) ~= "number"
 		f.leader = rank == 0
-		f.officer = type(rank) == "number" and rank > 0 and rank <= ns.CAPTAIN_RANK
 	elseif type(report) == "table" then
 		-- Another guild: the rank its census gives him, as the Crown's checks trust it (Data.KnownRank,
 		-- not soft): the picture most senders give, and two senders naming him in it, one of them
-		-- someone else. One report never makes its own sender a Lord or a Captain: alone, against
-		-- the guild's other senders, or once their row is old. Nor does one report of anyone else's
-		-- (1.0.0, Konig's review of 1.0.0: a single character's report naming him gave a Lord's gold
-		-- or a Captain's silver on every screen); the Crown asks two for a guild master, and a
-		-- border asks two for a Captain as well.
+		-- someone else. One report never makes its own sender a guild master: alone, against the
+		-- guild's other senders, or once their row is old. Nor does one report of anyone else's
+		-- (1.0.0, Konig's review of 1.0.0: a single character's report naming him gave a border on
+		-- every screen); the Crown asks two for a guild master.
 		local rank, named = ns.Data.KnownRank(who, f.guild)
 		if (named or 0) < 2 then rank = nil end
 		f.leader = rank == 0
-		f.officer = type(rank) == "number" and rank > 0 and rank <= ns.CAPTAIN_RANK
 	end
 	return f
 end
 
-local function Match(f)
+-- marked: the tiers with a mark of their own alone (Borders.MARK_OF: the dev's silver has none,
+-- so his nameplate and his lines show what they would without it).
+local function Match(f, marked)
 	if not f or f.off then return nil end
 	for _, t in ipairs(Borders.TIERS) do
-		local council = t.council == true or (type(t.council) == "string" and ns[t.council] == true)
-		if (t.king and f.king) or (council and f.council) or (t.leader and f.leader) or (t.officer and f.officer)
-			or (t.ranks and f.olympus and RankHolds(t.ranks, f.rankName)) then
+		if ((t.king and f.king) or (t.council and f.council) or (t.dev and f.dev) or (t.leader and f.leader)
+			or (t.nominee and f.nominee)) and not (marked and not Borders.MARK_OF[t.name]) then
 			return t
 		end
 	end
 	return nil
 end
 
--- The border a unit gets now (a tier's name: "gold-elite", "silver-elite", "gold", "silver",
+-- The border a unit gets now (a tier's name: "gold-elite", "silver-elite", "silver",
 -- "bronze-elite", "bronze"; nil for none), worked out afresh.
 function Borders.TierOf(unit)
 	local t = Match(Facts(unit))
@@ -208,7 +282,12 @@ end
 -- the High Council's list, our roster when his rank came from it (our own guild's, the server
 -- giving none; Roster.lua makes a new table at each scan), and for a High Councillor whether the
 -- council's names were hidden (the King's screen while he streams, ns.CouncilMasked: the eye in
--- the Realm, Asmon's view, becoming the King); and (1.1) his name, and whether a net-off word hid him.
+-- the Realm, Asmon's view, becoming the King); and (1.1) his name, and whether a net-off word hid him;
+-- and (1.1.5) the guild masters' lists of nominees as they stood (Nominees.Version).
+local function NomineesVersion()
+	local N = ns.Nominees
+	return type(N) == "table" and type(N.Version) == "function" and N.Version() or nil
+end
 local function Inputs(f)
 	local report = f and f.report
 	local row = type(report) == "table"
@@ -216,7 +295,7 @@ local function Inputs(f)
 	if f and f.councillor then masked = ns.CouncilMasked() == true end
 	return { guild = f and f.guild, report = report, rt = row and report.t or nil, vouch = row and report.vouch or nil,
 		council = ns.rdb and ns.rdb.council, roster = f and f.fromRoster and (ns.Roster and ns.Roster.byName or false) or nil,
-		masked = masked, who = f and f.who, off = f and f.off }
+		masked = masked, who = f and f.who, off = f and f.off, nominees = NomineesVersion() }
 end
 
 -- Has anything a unit's border or mark was worked out from (Inputs) changed since? Lookups only:
@@ -229,6 +308,7 @@ function Borders.Changed(k)
 		or (rdb and rdb.council) ~= k.council or (k.roster ~= nil and k.roster ~= (ns.Roster and ns.Roster.byName or false))
 		or (k.masked ~= nil and k.masked ~= (ns.CouncilMasked() == true))
 		or (k.who ~= nil and NetOff(k.who, k.guild) ~= k.off)
+		or k.nominees ~= NomineesVersion()
 end
 
 local function Compute(unit, guid)
@@ -241,24 +321,21 @@ local function Compute(unit, guid)
 	return k
 end
 
--- The nameplate mark (Nameplates.lua) of each border, for anyone but the King: the High Council
--- (gold wings too behind ns.BORDERS_COUNCIL_GOLD), Lords and Captains the game's silver elite
--- mark, Raiders and Veterans the bronze. The King's mark, the game's gold, is his alone.
-Borders.MARK_OF = { ["gold-elite"] = "silver", ["silver-elite"] = "silver", gold = "silver", silver = "silver",
-	["bronze-elite"] = "bronze", bronze = "bronze" }
+-- The nameplate mark (Nameplates.lua), and the mark in the game's chat, of each border: the
+-- King's the game's gold elite mark (his alone), the High Council's its silver, a guild master's
+-- the bronze, and the people a guild master names the same bronze (1.1.5). The dev's silver has
+-- none: his plate and his lines show what they would without it.
+Borders.MARK_OF = { ["gold-elite"] = "gold", ["silver-elite"] = "silver", ["bronze-elite"] = "bronze", bronze = "bronze" }
 
 -- The mark a unit gets next to its name on a nameplate, from the same facts and trust rules as
--- its border: "gold" (the King), "silver", "bronze", "member" (any other member of an Olympus
--- guild of our faction: the star), nil for anyone else; and what it was worked out from (Inputs).
+-- its border: "gold" (the King), "silver" (the High Council), "bronze" (a guild master, or one he
+-- named), "member" (any other member of an Olympus guild of our faction: the star), nil for anyone
+-- else; and what it was worked out from (Inputs).
 function Borders.MarkOf(unit)
 	local f = Facts(unit)
 	local mark
-	if f and f.off then
-		mark = nil -- (1.1: net-off)
-	elseif f and f.king then
-		mark = "gold"
-	elseif f then
-		local t = Match(f)
+	if f and not f.off then -- (1.1: none for net-off)
+		local t = Match(f, true)
 		mark = t and Borders.MARK_OF[t.name] or (f.olympus and "member" or nil)
 	end
 	return mark, Inputs(f)
@@ -269,23 +346,25 @@ end
 -- names, and nothing the server stamps (a unit's GetGuildInfo, which MarkOf reads) backs it:
 -- Channels keeps an [Olympus] line from a sender it could not verify (VerifiedLevel's 1, false),
 -- so any name on the channel can claim a made-up "Olympus X" guild. A mark here needs the claim
--- proven. Our own guild: his rank from our roster, its name from the game's list of our ranks
--- (Raiders and Veterans bronze); not in the roster, or our guild's name spelled another way
--- (names ignore case, as Channels reads it), no mark. Another guild: a rank its census
--- gives him (the star; silver when two senders name him, as Facts asks; no rank name, so no
--- bronze from other guilds), or the King, his Stewards and Hands by the names Channels verifies
--- them by; a guildmate of ours speaking for another guild, no mark; anyone else, none (a plain
--- member of another guild is in no census). Not Channels.VerifiedLevel itself: its
--- Data.ClaimGuild records the claim, and a redraw must not. The King, a High Councillor and
--- net-off as MarkOf. Not tied to /oly borders or /oly nameplates, nor to the gamepad UI: the
--- chat's marks are the chat's, in Olympus's own window. Returns the mark ("gold", "silver",
+-- proven. Our own guild: his rank from our roster; not in the roster, or our guild's name spelled
+-- another way (names ignore case, as Channels reads it), no mark. Another guild: a rank its census
+-- gives him (the star; the bronze for its guild master when two senders name him, as Facts asks),
+-- or the King, his Stewards and Hands by the names Channels verifies them by; a guildmate of ours
+-- speaking for another guild, no mark; anyone else, none (a plain member of another guild is in no
+-- census). Not Channels.VerifiedLevel itself: its Data.ClaimGuild records the claim, and a redraw
+-- must not. The King, a High Councillor and net-off as MarkOf. Not tied to /oly borders or /oly
+-- nameplates: the chat's marks have their own switch (/oly chatmarks). Since 1.1.5 the marks of the
+-- game's own chat (Borders.ChatName below) ask it, and Olympus's own lines carry none. A lookup: its
+-- net-off check notes no guild for him (Moderation.Hides' look), since the guild it is asked with
+-- may be one we only try for him (the King's for a Hand by his name). 1.1.5: one a guild master
+-- names (Nominees.lua) the bronze, in that guild alone. Returns the mark ("gold", "silver",
 -- "bronze", "member" or nil) and the facts (f.proven: the claim backed).
 function Borders.MarkOfName(who, guild)
 	if type(who) ~= "string" or who == "" then return nil end
 	who = ns.FullName(who)
 	guild = type(guild) == "string" and guild ~= "" and guild or nil
 	local f = { guild = guild, who = who }
-	f.off = NetOff(who, guild)
+	f.off = NetOff(who, guild, true)
 	f.councillor = ns.IsHighCouncillor(who) == true
 	f.council = f.councillor and not ns.CouncilMasked()
 	if f.off then return nil, f end
@@ -296,24 +375,21 @@ function Borders.MarkOfName(who, guild)
 		if mine and guild == mine then
 			rank = ns.Roster and ns.Roster.RankOf(who)
 			f.proven = type(rank) == "number"
-			if f.proven and type(GuildControlGetRankName) == "function" then
-				local ok, name = pcall(GuildControlGetRankName, rank + 1)
-				if ok and type(name) == "string" and not Secret(name) then f.rankName = name end
-			end
+			f.nominee = f.proven and Nominee(who, guild) -- (1.1.5: in our roster, and our master's list names him)
 		elseif not (mine and guild:lower() == mine:lower()) and not (ns.Roster and ns.Roster.RankOf(who)) then
 			local known, named = ns.Data.KnownRank(who, guild)
 			if (named or 0) >= 2 then rank = known end
 			local K = ns.King
-			f.proven = known ~= nil or (ns.IsKingGuild(guild) and (ns.IsKingCharacter(who) or (type(K) == "table"
+			-- (1.1.5: or that guild's master names him, in the list only he sends: Nominees.lua.)
+			f.nominee = Nominee(who, guild)
+			f.proven = known ~= nil or f.nominee or (ns.IsKingGuild(guild) and (ns.IsKingCharacter(who) or (type(K) == "table"
 				and ((type(K.IsStewardName) == "function" and K.IsStewardName(who)) or (type(K.IsHandName) == "function" and K.IsHandName(who))))))
 				and true or false
 		end
 		f.king = ns.IsKingGuild(guild) and (ns.IsKingCharacter(who) or (ns.KingCharacter() == nil and rank == 0))
 		f.leader = rank == 0
-		f.officer = type(rank) == "number" and rank > 0 and rank <= ns.CAPTAIN_RANK
 	end
-	if f.king then return "gold", f end
-	local t = Match(f)
+	local t = Match(f, true)
 	return t and Borders.MARK_OF[t.name] or (f.olympus and f.proven and "member" or nil), f
 end
 
@@ -332,29 +408,13 @@ local function AtlasExists(atlas)
 	return ok and v ~= nil
 end
 
--- The mark before a name on an Olympus line, the same in the Chat tab and in the game's own chat
--- windows (1.1.2: the game's windows showed the High Council's alone): the King's crown, a High
--- Councillor's mark and icon, silver, bronze (the gold atlas in Nameplates.BRONZE), the star; ""
--- for none. 14 px, as the Chat tab has shown them; an atlas the client lacks: the star.
-Borders.CHAT_STAR = "|TInterface\\AddOns\\Olympus\\media\\borders\\star:14:14|t"
-local CHAT_SILVER = "nameplates-icon-elite-silver"
-local CHAT_BRONZE, CHAT_BRONZE_TINT = "nameplates-icon-elite-gold", ":0:0:158:118:86" -- (Nameplates.BRONZE x 255)
-
-local function ChatAtlas(atlas, tint)
-	if not AtlasExists(atlas) then return Borders.CHAT_STAR end
-	return "|A:" .. atlas .. ":14:14" .. (tint or "") .. "|a"
-end
-
-function Borders.ChatMark(who, guild)
-	if type(who) ~= "string" or who == "" then return "" end
-	who = ns.FullName(who)
-	local mark = Borders.MarkOfName(who, guild)
-	if mark == "gold" then return "|T" .. ns.CROWN_ICON .. ":14:14|t" end -- (the King's mark in chat is his crown)
-	if ns.IsHighCouncillor(who) and not ns.CouncilMasked() then return ns.CouncilMark(who) end
-	if mark == "silver" then return ChatAtlas(CHAT_SILVER) end
-	if mark == "bronze" then return ChatAtlas(CHAT_BRONZE, CHAT_BRONZE_TINT) end
-	if mark == "member" then return Borders.CHAT_STAR end
-	return ""
+-- An atlas's size as the client gives it (its AtlasInfo's width and height), or nil.
+local function AtlasSize(atlas)
+	local info = C_Texture and C_Texture.GetAtlasInfo
+	if type(info) ~= "function" then return nil end
+	local ok, v = pcall(info, atlas)
+	if ok and type(v) == "table" and type(v.width) == "number" and type(v.height) == "number" then return v.width, v.height end
+	return nil
 end
 
 -- A tier's art on a new texture (mirror: turned round, for your own portrait), or false when the
@@ -362,30 +422,113 @@ end
 -- A file SetTexture fails or says false for: the game's frame it was drawn over, without colour.
 -- The game's way to turn art round is its texture coordinates the other way, right before left
 -- (Blizzard_OrderHallTalents.lua, for an atlas).
-local function Dress(tex, t, mirror)
+-- scale (a party member's frame, PARTY_SCALE: 37/58): each at that share of that size, an atlas's
+-- from the client's own size of it (none known: false, rather than the target's size there).
+local function Dress(tex, t, mirror, scale)
 	local left, right, top, bottom = 0, 1, 0, 1
 	local ok, loaded = false, false
 	if t.file then ok, loaded = pcall(tex.SetTexture, tex, t.file) end
 	if ok and loaded ~= false then
-		tex:SetSize(t.width, t.height)
+		tex:SetSize(t.width * (scale or 1), t.height * (scale or 1))
 		left, right, top, bottom = unpack(t.coords)
 		if not mirror then tex:SetTexCoord(left, right, top, bottom) end
-	elseif t.file then
-		if not (t.fallback and AtlasExists(t.fallback)) then return false end
-		ns.Log("borders: %s not loaded, the game's %s without colour instead", t.file, t.fallback)
-		tex:SetAtlas(t.fallback, true, nil, true)
-		tex:SetDesaturated(true)
 	else
-		tex:SetAtlas(t.atlas, true, nil, true)
+		local atlas = t.file and t.fallback or t.atlas
+		if t.file and not (atlas and AtlasExists(atlas)) then return false end
+		local width, height
+		if scale then
+			width, height = AtlasSize(atlas)
+			if not width then return false end
+		end
+		if t.file then ns.Log("borders: %s not loaded, the game's %s without colour instead", t.file, t.fallback) end
+		tex:SetAtlas(atlas, not scale, nil, true)
+		if scale then tex:SetSize(width * scale, height * scale) end
+		if t.file then tex:SetDesaturated(true) end
 	end
 	if mirror then tex:SetTexCoord(right, left, top, bottom) end
 	return true
 end
 
+-- A rig shows one border (a tier's name) or none (nil): Show and Hide alone, fine in combat.
+local function Show(rig, name)
+	if rig.shown == name then return end
+	if rig.shown and rig.tex[rig.shown] then rig.tex[rig.shown]:Hide() end
+	rig.shown = nil
+	if name and rig.tex[name] then
+		rig.tex[name]:Show()
+		rig.shown = name
+	end
+end
+
+-- A frame's textures, one per tier the client has the art of, each hidden and placed by Place:
+-- ARTWORK, at sublevel 3 (one over the game's elite art, ARTWORK 2) unless one is given.
+local function MakeRig(owner, mirror, scale, Place, sublevel)
+	local rig = { tex = {} }
+	for _, t in ipairs(Borders.TIERS) do
+		-- (A missing atlas: no texture. A file's is made to try it: one the client can't
+		-- load, with no atlas to fall back to, stays hidden and unused.)
+		if t.file or AtlasExists(t.atlas) then
+			local tex = owner:CreateTexture(nil, "ARTWORK", nil, sublevel or 3)
+			tex:Hide()
+			if Dress(tex, t, mirror, scale) then
+				Place(tex, t)
+				rig.tex[t.name] = tex
+			end
+		end
+	end
+	return rig
+end
+
+-- A party member frame's textures: the target's art and offsets scaled to its portrait about the
+-- portrait's top corner, turned round (from the frame's top left); under its ring and name.
+local function PartyRig(frame)
+	local s = PARTY_SCALE
+	return MakeRig(frame, true, s, function(tex, t)
+		tex:SetPoint("TOPLEFT", frame, "TOPLEFT", PARTY_LEFT - (t.x + TARGET_RIGHT) * s, (t.y + TARGET_TOP) * s - PARTY_TOP)
+	end, PARTY_SUBLEVEL)
+end
+
+-- Forever's PartyFrame (its member frames from a pool) beside Forever's unit frames, or nil.
+local function PartyFrameOf()
+	if not forever then return nil end
+	local party = _G.PartyFrame
+	if type(party) == "table" and type(party.PartyMemberFramePool) == "table" then return party end -- gp:borders
+	return nil
+end
+
+-- Which frame shows which party member now (PartyFrame.MemberFrame<i>, of layoutIndex i: party<i>),
+-- a frame's textures made the first time it is seen out of combat (in combat: once it ends); a
+-- frame not showing a place now shows no border. Field reads alone on the game's frames.
+local function MapParty()
+	local party = PartyFrameOf()
+	if not party then return end
+	local combat = InCombatLockdown and InCombatLockdown()
+	if not combat then waiting = false end
+	local mapped = {}
+	for i, unit in ipairs(PARTY) do
+		local frame = party["MemberFrame" .. i]
+		local rig
+		if type(frame) == "table" and frame.layoutIndex == i and type(frame.CreateTexture) == "function" then
+			rig = partyRigs[frame]
+			if not rig and combat then
+				waiting = true
+			elseif not rig then
+				rig = PartyRig(frame)
+				partyRigs[frame] = rig
+			end
+		end
+		rigs[unit] = rig
+		if rig then mapped[rig] = true end
+	end
+	for _, rig in pairs(partyRigs) do
+		if not mapped[rig] then Show(rig, nil) end
+	end
+end
+
 -- Once, with mouse and keyboard and out of combat (a texture of the game's frames may count as
 -- theirs, whose points and size are not ours to set in combat): the textures, then the hooks.
 -- A client without Forever's unit frames (Classic Era, Anniversary) gets none.
-function Borders.Install()
+function Borders.Install() -- gp:borders
 	if installed then return true end
 	if ns.GamepadUI() then return false end
 	if InCombatLockdown and InCombatLockdown() then
@@ -397,47 +540,34 @@ function Borders.Install()
 		local frame = _G[spec.frame]
 		local container = type(frame) == "table" and frame[spec.container] or nil
 		if type(container) == "table" and type(container.CreateTexture) == "function" then
-			local rig = { tex = {} }
-			for _, t in ipairs(Borders.TIERS) do
-				-- (A missing atlas: no texture. A file's is made to try it: one the client can't
-				-- load, with no atlas to fall back to, stays hidden and unused.)
-				if t.file or AtlasExists(t.atlas) then
-					local tex = container:CreateTexture(nil, "ARTWORK", nil, 3)
-					tex:Hide()
-					if Dress(tex, t, spec.mirror) then
-						if spec.mirror then
-							-- The target's portrait sits 26 px from its frame's right edge, yours 24 px from its left.
-							tex:SetPoint("TOPLEFT", container, "TOPLEFT", -(t.x + 2), t.y)
-						else
-							tex:SetPoint("TOPRIGHT", container, "TOPRIGHT", t.x, t.y)
-						end
-						rig.tex[t.name] = tex
-					end
+			rigs[spec.unit] = MakeRig(container, spec.mirror, nil, function(tex, t)
+				if spec.mirror then
+					-- The target's portrait sits 26 px from its frame's right edge, yours 24 px from its left.
+					tex:SetPoint("TOPLEFT", container, "TOPLEFT", -(t.x + 2), t.y)
+				else
+					tex:SetPoint("TOPRIGHT", container, "TOPRIGHT", t.x, t.y)
 				end
-			end
-			rigs[spec.unit] = rig
+			end)
 			if spec.hook and type(frame[spec.hook]) == "function" and type(hooksecurefunc) == "function" then
 				local unit, where = spec.unit, "borders " .. spec.unit
 				hooksecurefunc(frame, spec.hook, function() ns.SafeCall(where, Borders.Refresh, unit) end)
 			end
+			forever = true
 		end
+	end
+	-- The party's frames there now, and the hook that follows PartyFrame handing them out anew
+	-- (none without Forever's unit frames: PartyFrameOf).
+	MapParty()
+	local party = PartyFrameOf()
+	if party and type(party.InitializePartyMemberFrames) == "function" and type(hooksecurefunc) == "function" then
+		hooksecurefunc(party, "InitializePartyMemberFrames", function() ns.SafeCall("borders party", Borders.RefreshParty) end)
 	end
 	ns.Log("borders: set up on %s", Borders.Frames())
 	return true
 end
 
-local function Show(rig, name)
-	if rig.shown == name then return end
-	if rig.shown and rig.tex[rig.shown] then rig.tex[rig.shown]:Hide() end
-	rig.shown = nil
-	if name and rig.tex[name] then
-		rig.tex[name]:Show()
-		rig.shown = name
-	end
-end
-
 local function HideAll()
-	for _, rig in pairs(rigs) do Show(rig, nil) end
+	for _, rig in pairs(rigs) do Show(rig, nil) end -- (a party frame showing nobody is hidden already: MapParty)
 end
 
 -- The unit is us: our own frame, or the target or focus while it is us (by GUID; by UnitIsUnit
@@ -461,6 +591,11 @@ function Borders.Refresh(unit, fresh)
 	end
 	if not installed and not Borders.Install() then return end
 	local rig = rigs[unit]
+	-- (A party place's frame forgotten while the borders were off: which frame shows it now.)
+	if not rig and IN_PARTY[unit] then
+		MapParty()
+		rig = rigs[unit]
+	end
 	if not rig then return end
 	local guid = UnitGUID and UnitGUID(unit)
 	if Secret(guid) then guid = nil end
@@ -469,8 +604,43 @@ function Borders.Refresh(unit, fresh)
 	Show(rig, preview and UnitExists(unit) and IsMe(unit, guid) and preview or k.tier)
 end
 
+-- The author's preview on Edit Mode's party stand-ins (see the top of the file): the previewed tier
+-- while Edit Mode forces the party frames shown, else nil. Read only, Edit Mode's own getter.
+function Borders.EditModeStandIn()
+	if not ns.Gate.Allowed("borders") then return nil end
+	if not preview or preview == Borders.MEMBER then return nil end
+	local em = rawget(_G, "EditModeManagerFrame") -- gp:borders
+	if type(em) ~= "table" or type(em.ArePartyFramesForcedShown) ~= "function" then return nil end
+	local ok, on = pcall(em.ArePartyFramesForcedShown, em) -- gp:borders
+	return ok and on == true and preview or nil
+end
+
+-- The party's frames again: which shows whom (MapParty), and each member's border, worked out
+-- afresh (fresh) or when he is new to his place (by GUID). An empty place: nothing worked out.
+-- While the borders are off, none shown and which frame shows whom forgotten (PartyFrame may hand
+-- its frames out anew meanwhile): Refresh works it out again for a member when they are back.
+function Borders.RefreshParty(fresh)
+	if not Active() then
+		for _, rig in pairs(partyRigs) do Show(rig, nil) end
+		for _, unit in ipairs(PARTY) do rigs[unit] = nil end
+		return
+	end
+	if not installed and not Borders.Install() then return end
+	MapParty()
+	local standIn = Borders.EditModeStandIn()
+	for _, unit in ipairs(PARTY) do
+		if UnitExists(unit) then
+			Borders.Refresh(unit, fresh)
+		else
+			known[unit] = nil
+			if rigs[unit] then Show(rigs[unit], standIn) end
+		end
+	end
+end
+
 function Borders.RefreshAll(fresh)
 	for _, spec in ipairs(RIGS) do Borders.Refresh(spec.unit, fresh) end
+	Borders.RefreshParty(fresh)
 end
 
 -- The census, the High Council's list, our roster or the council's names hidden or shown on the
@@ -485,7 +655,7 @@ end
 
 function Borders.Report()
 	if not Borders.Enabled() then return ns.Print(L.BORDERS_OFF) end
-	ns.Print(ns.BORDERS_COUNCIL_GOLD == true and L.BORDERS_ON_COUNCIL_GOLD or L.BORDERS_ON)
+	ns.Print(L.BORDERS_ON)
 	if ns.GamepadUI() then ns.Print(L.BORDERS_GAMEPAD) end
 end
 
@@ -598,6 +768,9 @@ function Borders.Frames()
 	for _, spec in ipairs(RIGS) do
 		if rigs[spec.unit] then out[#out + 1] = spec.unit end
 	end
+	for _, unit in ipairs(PARTY) do
+		if rigs[unit] then out[#out + 1] = unit end
+	end
 	return #out > 0 and table.concat(out, ", ") or "none (not Forever's unit frames)"
 end
 
@@ -611,36 +784,303 @@ function Borders.StatusLine()
 			local rig = rigs[spec.unit]
 			if rig then shown[#shown + 1] = spec.unit .. " " .. (rig.shown or "-") end
 		end
+		for _, unit in ipairs(PARTY) do
+			local rig = rigs[unit]
+			if rig then shown[#shown + 1] = unit .. " " .. (rig.shown or "-") end
+		end
 		where = #shown > 0 and table.concat(shown, ", ") or Borders.Frames()
 	else
 		where = waiting and "set up after combat" or "not set up yet"
 	end
-	return ("%s  |  %s  |  worked out %d times  |  council gold: %s%s"):format(state, where, Borders.stats.computed,
-		tostring(ns.BORDERS_COUNCIL_GOLD == true), preview and ("  |  preview " .. preview) or "")
+	return ("%s  |  %s  |  worked out %d times%s"):format(state, where, Borders.stats.computed,
+		preview and ("  |  preview " .. preview) or "")
+end
+
+---------------------------------------------------------------------------
+-- The game's own chat (1.1.5: the High Council's ask, then the author's call)
+---------------------------------------------------------------------------
+-- A mark before a sender's name in the game's chat, where players outside Olympus can be: the
+-- channels (General, Trade, LocalDefense, LookingForGroup and any other CHAT_MSG_CHANNEL), say,
+-- yell, emote, party, raid, instance and whispers both ways. The mark follows the sender's border
+-- tier (Borders.MARK_OF, by Borders.MarkOfName's facts and trust rules): the King the game's gold
+-- elite dragon (nameplates-icon-elite-gold), a High Councillor its silver one
+-- (nameplates-icon-elite-silver) then the icon he picked (ns.CouncilIcon), a guild master of an
+-- Olympus guild and the people he names (1.1.5) the bronze (the gold tinted as Nameplates.BRONZE),
+-- any other member of an Olympus guild we can prove the star; nothing for anyone else. 14 px, as
+-- the Chat tab showed them; an atlas the client lacks: the star.
+-- Guild and officer chat (CHAT_GUILD_EVENTS, the author's call): the dragons alone, never the star.
+-- Everyone there is of our guild, so a star would tell a guildmate nothing he does not know; the
+-- King's gold, a councillor's silver and the guild master's bronze still tell who is who. (A
+-- dragon the client has no atlas for, drawn as the star elsewhere: none there either.) The same
+-- hook and the same arguments as every other line (Blizzard_ChatFrameBase/Mainline's
+-- MessageEventHandler: GetDecoratedSenderName for every CHAT_MSG_ event, the sender the second
+-- argument; for guild chat the name it decorates is Ambiguate's "guild" one).
+-- (It began with the councillors' marks alone, in guild chat too, while Olympus's own lines carried
+-- every mark. Olympus's own lines, Channels.FormatLine and the Chat tab, carry none since: the
+-- name in its colour.)
+-- No line of the game names its sender's guild, so his is a guild MarkOfName's rules can prove
+-- (ChatGuilds): ours when our roster has him; the King's for the King, his Stewards and Hands by
+-- their names; the one his own Olympus messages speak for (Data.ClaimedGuild: his lines on the
+-- Olympus channel, his census reports, his board posts...), as the 1.1.1 Chat tab took the guild
+-- his line named, and only when that guild's census names him (its guild master or an officer: a
+-- plain member of another guild is in no census, so he gets no star here). Never a guild only
+-- someone else's report names him in: any character can send a census report for any guild
+-- named Olympus, so two of them could otherwise put the bronze on anybody's name in Trade (a
+-- border or a nameplate mark needs the guild the server gives the unit). A High Councillor's
+-- silver needs no guild: the signed list.
+-- The game's hook for it, ChatFrameUtil.AddSenderNameFilter (Forever 1.60.1,
+-- Blizzard_ChatFrameBase/Shared/ChatFrameFilters.lua): Blizzard calls it through securecallfunction
+-- with the line's event, the name it decorated (class colour and all) and the line's arguments, and
+-- shows what it returns inside the player link only; the link's data, the click, the right-click
+-- menu, /r and the whisper window keep the real name. Nothing of Blizzard's is replaced, and a
+-- client without it has no marks.
+-- Off with the gamepad UI, as the borders: logged in with it, nothing is registered until a switch
+-- to mouse and keyboard; switched to it later, the callback returns at once. Also none: outside an
+-- Olympus guild (ns.IsMember, as the borders: a list kept from before says nothing there; asked
+-- again on every marked line), a High Councillor's on the King's screen while the council's names
+-- are hidden (ns.CouncilMasked: asked again on every line with a council mark, so a first login
+-- whose guild was not known yet, or any other flip, never leaves one on his stream; his guild
+-- master's bronze or the star there instead, if any), a character or a guild the moderators took
+-- off (net-off), a secret name or sender, and `/oly chatmarks off` (ns.db.chatMarks false).
+-- Blizzard runs the callback for every line on every chat window: it reads a boolean, the event
+-- list and one table entry; a sender not seen yet is worked out once (ChatName: lookups only, at
+-- most two guilds' census rows, never a walk over every guild), and the table is emptied every
+-- CHAT_FORGET seconds and whenever the census, the council's lists, our guild or the council's
+-- names hidden or shown change, so a new list or icon shows within a minute.
+
+Borders.CHAT_EVENTS = {
+	CHAT_MSG_SAY = true, CHAT_MSG_YELL = true, CHAT_MSG_EMOTE = true,
+	CHAT_MSG_PARTY = true, CHAT_MSG_PARTY_LEADER = true,
+	CHAT_MSG_RAID = true, CHAT_MSG_RAID_LEADER = true, CHAT_MSG_RAID_WARNING = true,
+	CHAT_MSG_INSTANCE_CHAT = true, CHAT_MSG_INSTANCE_CHAT_LEADER = true,
+	CHAT_MSG_CHANNEL = true, -- (General, Trade, LocalDefense, LookingForGroup, any other channel)
+	CHAT_MSG_WHISPER = true, CHAT_MSG_WHISPER_INFORM = true, -- (INFORM's sender is whom we wrote to)
+	CHAT_MSG_GUILD = true, CHAT_MSG_OFFICER = true, -- (the dragons alone: CHAT_GUILD_EVENTS)
+}
+local CHAT_EVENTS = Borders.CHAT_EVENTS
+Borders.CHAT_GUILD_EVENTS = { CHAT_MSG_GUILD = true, CHAT_MSG_OFFICER = true }
+local CHAT_GUILD_EVENTS = Borders.CHAT_GUILD_EVENTS
+Borders.CHAT_FORGET = 60
+Borders.CHAT_MAX = 500 -- senders kept between two emptyings (then it starts again)
+local chatMarks, chatKept = {}, 0 -- sender, as the line gives him -> { text, council, dragon } or false for none
+local chatOn, chatHooked, chatPreview = false, false, false -- chatPreview: the author's mark ("gold"...) or false
+
+local CHAT_STAR_FILE = "Interface\\AddOns\\Olympus\\media\\borders\\star"
+Borders.CHAT_SIZE = 14
+Borders.CHAT_STAR = "|T" .. CHAT_STAR_FILE .. ":14:14|t"
+local CHAT_ATLAS = { gold = "nameplates-icon-elite-gold", silver = "nameplates-icon-elite-silver", bronze = "nameplates-icon-elite-gold" }
+local CHAT_BRONZE_TINT = ":0:0:158:118:86" -- (Nameplates.BRONZE x 255)
+local CHAT_RANK = { gold = 4, silver = 3, bronze = 2, member = 1 }
+Borders.CHAT_PREVIEWS = { gold = true, silver = true, bronze = true, member = true }
+
+-- A mark's own art at `size` px ("gold", "silver", "bronze", "member"), or nil for another word or
+-- a dragon whose atlas this client lacks (never the star in its place).
+local function ChatArt(mark, size)
+	size = math.floor(tonumber(size) or Borders.CHAT_SIZE)
+	if mark == "member" then return ("|T%s:%d:%d|t"):format(CHAT_STAR_FILE, size, size) end
+	local atlas = CHAT_ATLAS[mark]
+	if not atlas or not AtlasExists(atlas) then return nil end
+	return ("|A:%s:%d:%d%s|a"):format(atlas, size, size, mark == "bronze" and CHAT_BRONZE_TINT or "")
+end
+
+-- A mark's text before a name: "gold", "silver" (then his own icon, when `who` is given), "bronze",
+-- "member"; nil else. Also the mark it draws: a dragon the client has no atlas for is the star.
+-- (Workshop.lua's council icon picker shows the silver with the icon it picks.)
+local function ChatText(mark, who)
+	if mark == "member" then return Borders.CHAT_STAR, "member" end
+	if not CHAT_ATLAS[mark] then return nil end
+	local text = ChatArt(mark)
+	if not text then return Borders.CHAT_STAR, "member" end
+	if mark == "silver" and who then text = text .. ns.CouncilIcon(who) end
+	return text, mark
+end
+
+-- A mark as it may go before a name: |T...|t textures and |A...|a atlases and nothing else (no
+-- "%": two of Blizzard's lines use the name as a gsub replacement; no bracket or link), else nil.
+function Borders.ChatMarkText(mark) return (ChatText(mark, nil)) end
+
+-- A mark's art as the 1.1.5 letter's legend of these marks draws it (Letters.lua): the chat's own
+-- textures and atlases at `size` px (the chat's 14 when none), or nil when this client lacks that
+-- dragon's atlas (the letter then names it in words: a legend must not show the star for the King).
+function Borders.ChatLegendText(mark, size) return ChatArt(mark, size) end
+
+local function ChatClean(s)
+	if type(s) ~= "string" or s == "" or #s > 200 then return nil end
+	for _, bad in ipairs({ "%", "[", "]", "|H", "|h" }) do
+		if s:find(bad, 1, true) then return nil end
+	end
+	if s:gsub("|T[^|]*|t", ""):gsub("|A[^|]*|a", "") ~= "" then return nil end
+	return s
+end
+
+-- The guilds a sender of the game's chat may be proven in (see above): ours alone for a guildmate;
+-- the King's for his Crown by name; the one his own messages claim.
+local function ChatGuilds(who)
+	local mine = GetGuildInfo("player")
+	if Secret(mine) then mine = nil end
+	if mine and ns.Roster and ns.Roster.RankOf(who) then return { mine } end
+	local out = {}
+	local K = ns.King
+	if ns.IsKingCharacter(who) or (type(K) == "table" and ((type(K.IsStewardName) == "function" and K.IsStewardName(who))
+		or (type(K.IsHandName) == "function" and K.IsHandName(who)))) then
+		local king = ns.KING_GUILD[ns.faction or "Alliance"]
+		if king then out[#out + 1] = ns.Data.GuildKey(king) or king end
+	end
+	local claimed = type(ns.Data.ClaimedGuild) == "function" and ns.Data.ClaimedGuild(who) or nil
+	if claimed and claimed ~= out[1] then out[#out + 1] = claimed end
+	return out
+end
+
+-- The mark before a sender's name in the game's chat, or false for none; whether it is a High
+-- Councillor's (the King's stream hides those); and the mark it draws ("gold", "silver", "bronze",
+-- or "member" for the star, a dragon without its atlas too: guild chat shows the dragons alone).
+function Borders.ChatName(sender)
+	local who = ns.FullName(ns.Normal(sender))
+	if type(who) ~= "string" or who == "" then return false end
+	if chatPreview and who == ns.me then
+		local text, drawn = ChatText(chatPreview, who)
+		text = ChatClean(text)
+		if not text then return false end
+		return text, false, drawn
+	end
+	if ns.IsMember() ~= true then return false end
+	local best = Borders.MarkOfName(who, nil) -- (a High Councillor's: no guild needed)
+	for _, guild in ipairs(ChatGuilds(who)) do
+		local mark = Borders.MarkOfName(who, guild)
+		if mark and (not best or CHAT_RANK[mark] > CHAT_RANK[best]) then best = mark end
+	end
+	if not best then return false end
+	local text, drawn = ChatText(best, who)
+	text = ChatClean(text)
+	if not text then return false end
+	return text, best == "silver", drawn
+end
+
+local function IsMine(sender) return ns.FullName(ns.Normal(sender)) == ns.me end
+
+-- guild: a line of guild or officer chat (the dragons alone).
+local function ChatMarkOf(name, sender, guild)
+	if Secret(name, sender) or type(name) ~= "string" or type(sender) ~= "string" or sender == "" then return nil end
+	local e = chatMarks[sender]
+	if e == nil then
+		if chatKept >= Borders.CHAT_MAX then chatMarks, chatKept = {}, 0 end
+		local text, council, drawn = Borders.ChatName(sender)
+		e = text and { text = text, council = council, dragon = drawn ~= "member" } or false
+		chatMarks[sender], chatKept = e, chatKept + 1
+	end
+	if not e or (guild and not e.dragon) then return nil end
+	local text = e.text
+	-- A marked line asks again what may change between two emptyings (but the author's preview on
+	-- his own lines): that we are in an Olympus guild, and for a council mark whether the King's
+	-- screen hides the council now (worked out again as the mask says, never kept).
+	if not (chatPreview and IsMine(sender)) then
+		if ns.IsMember() ~= true then return nil end
+		if e.council and ns.CouncilMasked() then
+			local again, _, drawn = Borders.ChatName(sender)
+			if not again or (guild and drawn == "member") then return nil end
+			text = again
+		end
+	end
+	return text .. name
+end
+
+-- Blizzard's callback: the name to show, or nil for the name as it was (an error is nil too).
+function Borders.ChatFilter(event, name, text, sender)
+	if not chatOn or not CHAT_EVENTS[event] then return nil end
+	local ok, out = pcall(ChatMarkOf, name, sender, CHAT_GUILD_EVENTS[event] == true)
+	if ok then return out end
+	return nil
+end
+
+function Borders.ChatForget() chatMarks, chatKept = {}, 0 end
+
+function Borders.ChatEnabled() return not (ns.db and ns.db.chatMarks == false) end
+
+-- Whether the game's chat shows them now, and registering the callback the first time it may
+-- (once a session: it is never removed, turning them off clears chatOn).
+function Borders.ChatRefresh() -- gp:chat-marks
+	Borders.ChatForget()
+	local pad = not ns.Gate.Allowed("chat-marks")
+	local CFU = rawget(_G, "ChatFrameUtil")
+	local api = type(CFU) == "table" and type(CFU.AddSenderNameFilter) == "function"
+	if not chatHooked and api and Borders.ChatEnabled() and not pad then
+		chatHooked = pcall(CFU.AddSenderNameFilter, Borders.ChatFilter) == true
+	end
+	chatOn = chatHooked and Borders.ChatEnabled() and not pad
+	return chatOn
+end
+function Borders.ChatShown() return chatOn end
+
+function Borders.ChatReport()
+	local CFU = rawget(_G, "ChatFrameUtil") -- gp:lookups
+	if not (type(CFU) == "table" and type(CFU.AddSenderNameFilter) == "function") then return ns.Print(L.CHATMARKS_NO_API) end
+	ns.Print(Borders.ChatEnabled() and L.CHATMARKS_ON or L.CHATMARKS_OFF)
+	if Borders.ChatEnabled() and ns.GamepadUI() then ns.Print(L.CHATMARKS_GAMEPAD) end
+end
+
+-- `/oly chatmarks on|off|test [gold|silver|bronze|member|off]` (nothing: whether they show). test:
+-- the author's own lines get that mark for this session (his character holds none of them; test
+-- alone: the High Council's silver, or off again); anyone else gets the report.
+function Borders.ChatSlash(rest)
+	rest = type(rest) == "string" and rest:lower() or ""
+	local word, arg = rest:match("^%s*(%S*)%s*(%S*)")
+	if word == "on" or word == "off" then
+		ns.db.chatMarks = word == "on"
+		Borders.ChatRefresh()
+	elseif word == "test" and Borders.PreviewAllowed() then
+		if arg == "off" or (arg == "" and chatPreview) then
+			chatPreview = false
+		elseif Borders.CHAT_PREVIEWS[arg] then
+			chatPreview = arg
+		elseif arg == "" then
+			chatPreview = "silver"
+		else
+			return ns.Print(L.CHATMARKS_TEST_HELP)
+		end
+		Borders.ChatRefresh()
+		return ns.Print(chatPreview and L.CHATMARKS_TEST_ON:format(chatPreview) or L.CHATMARKS_TEST_OFF)
+	end
+	Borders.ChatReport()
+end
+
+function Borders.ChatStatusLine()
+	local CFU = rawget(_G, "ChatFrameUtil") -- gp:lookups
+	if not (type(CFU) == "table" and type(CFU.AddSenderNameFilter) == "function") then return "none (no ChatFrameUtil.AddSenderNameFilter)" end
+	local state = chatOn and "on" or (not Borders.ChatEnabled() and "off (/oly chatmarks on)" or (ns.GamepadUI() and "hidden with the gamepad UI" or "not registered yet"))
+	return ("%s  |  %d senders worked out%s"):format(state, chatKept, chatPreview and ("  |  preview " .. chatPreview) or "")
 end
 
 ---------------------------------------------------------------------------
 -- Events
 ---------------------------------------------------------------------------
 
+ns.On("LOGIN", function()
+	Borders.ChatRefresh()
+	ns.Every(Borders.CHAT_FORGET, "chat marks", Borders.ChatForget)
+end)
+ns.On("COUNCIL_MASK_CHANGED", function() Borders.ChatForget() end)
+-- The census, the council's lists or our guild changing: worked out again.
+ns.On("DATA_CHANGED", function() Borders.ChatForget() end)
 ns.On("LOGIN", function() Borders.RefreshAll(true) end)
 ns.On("DATA_CHANGED", function() Borders.CensusChanged() end)
 -- The King shows or hides the council's names (the eye in the Realm, ns.SetCouncilNamesShown).
 ns.On("COUNCIL_MASK_CHANGED", function() Borders.CensusChanged() end)
 ns.RegisterEvent("PLAYER_TARGET_CHANGED", function() Borders.Refresh("target") end)
+-- Joining, leaving, places swapped: a member new to his place worked out (the frames are the game's to update).
+ns.RegisterEvent("GROUP_ROSTER_UPDATE", function() Borders.RefreshParty() end)
 ns.RegisterEvent("UNIT_NAME_UPDATE", function(unit) if TRACKED[unit] then Borders.Refresh(unit, true) end end)
 -- A unit's guild reaching the client (or ours changing: every border again).
 ns.RegisterEvent("PLAYER_GUILD_UPDATE", function(unit)
+	if unit == nil or unit == "player" then Borders.ChatForget() end
 	if unit == nil or unit == "player" then Borders.RefreshAll(true)
 	elseif TRACKED[unit] then Borders.Refresh(unit, true) end
 end)
 ns.RegisterEvent("PLAYER_REGEN_ENABLED", function() if waiting then Borders.RefreshAll(true) end end)
 -- Not on every client: registered where the game has them.
 pcall(ns.RegisterEvent, "PLAYER_FOCUS_CHANGED", function() Borders.Refresh("focus") end)
--- A switch between mouse and keyboard and the gamepad UI (Blizzard_SharedXML/InputUtil.lua's):
--- to the gamepad UI, every border hides at once; either way they are looked at again just after.
-pcall(ns.RegisterEvent, "INPUT_DEVICE_INTERFACE_TRANSITION", function(newMode)
-	local gamepad = Enum and Enum.InputDeviceInterfaceType and Enum.InputDeviceInterfaceType.Gamepad
-	if gamepad ~= nil and newMode == gamepad then HideAll() end
-	ns.After(0.2, "borders style", function() Borders.RefreshAll(true) end)
-end)
+-- A switch between mouse and keyboard and the gamepad UI (1.1.5: the gamepad gate, Gamepad.lua, on
+-- the next frame): to the gamepad UI every border hides, and the game's chat marks stop; back, the
+-- borders are looked at again and the chat marks come back (registered on the first switch to mouse
+-- and keyboard after a gamepad login).
+ns.Gate.Hooks("borders", { park = function() HideAll() end, install = function() Borders.RefreshAll(true) end })
+ns.Gate.Hooks("chat-marks", { park = function() Borders.ChatRefresh() end, install = function() Borders.ChatRefresh() end })

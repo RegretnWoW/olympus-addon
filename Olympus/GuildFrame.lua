@@ -17,6 +17,14 @@ local L = ns.L
 -- Every one that exists gets its own button, so the button is in whichever window opens,
 -- keeps working when the player switches (with or without /reload), and docks to the
 -- window it was clicked in. Nothing reads the setting: the window on screen decides.
+--
+-- 1.1.5, the gamepad gate (GamepadRegistry.lua's "communities-button"): none of it with Blizzard's
+-- gamepad UI on. There the gamepad's Smart Navigation takes every visible Button inside these
+-- windows as a target (Blizzard_GamepadSmartNavigation/Utility.lua's FindButtons), and the cursor
+-- on ours writes its state in Olympus's taint (a player's taint report named the Communities
+-- window's hook). Logged in with it: no button, no hook. Switched to it: every button hides, the
+-- Olympus window docked to one of these goes to its own place (UI.Undock), and the hooks do nothing
+-- from their first line. Back to mouse and keyboard: the buttons again, each window hooked once.
 
 local GuildFrameHook = {}
 ns.GuildFrameHook = GuildFrameHook
@@ -34,6 +42,7 @@ local KINDS = {
 -- Blizzard addons that bring a guild window with them when they load.
 local WATCH = { Blizzard_Communities = true, Blizzard_GuildUI = true }
 
+local GATE = "communities-button"
 local hosts = {}   -- every guild window we added a button to, in the order found
 local byFrame = {} -- frame -> its entry in hosts
 local lastShown    -- the guild window the player opened last
@@ -65,7 +74,7 @@ end
 -- Every guild window that exists right now, as { frame, kind }. The name GuildFrame is
 -- used by the old tab and by the standalone window alike, so where it lives decides; the
 -- same goes for ClassicUI Forever's panel.
-function GuildFrameHook.Candidates()
+function GuildFrameHook.Candidates() -- gp:lookups
 	local out = {}
 	local social = _G.FriendsFrame
 	local guild = _G.GuildFrame
@@ -84,7 +93,7 @@ end
 
 -- Forever's Mainline UI: its only Blizzard guild window is the new one. Classic Era and
 -- Anniversary keep their old Guild tab (hidden or not): their Communities window stays "old".
-function GuildFrameHook.IsHDClient()
+function GuildFrameHook.IsHDClient() -- gp:lookups
 	local guild, social = _G.GuildFrame, _G.FriendsFrame
 	if guild and social and Inside(guild, social) then return false end
 	return _G.PanelTemplates_AnchorTabs ~= nil
@@ -105,6 +114,7 @@ end
 -- Clicking again closes the docked window; clicked in another guild window, it moves there
 -- (in the look of that window: the new one gets the HD window, the old tabs the old one).
 local function Toggle(host)
+	if not ns.Gate.Allowed(GATE) then return end
 	lastShown = host
 	local UI = ns.UI
 	if UI.IsShown() and UI.DockedTo() == host.dock then
@@ -125,7 +135,7 @@ local function Place(button, host)
 	-- calendar), so the button sits in the title bar, left of minimize and close.
 	local frame = host.frame
 	local name = frame.GetName and frame:GetName()
-	local anchor = frame.MaximizeMinimizeFrame or frame.CloseButton or (name and _G[name .. "CloseButton"])
+	local anchor = frame.MaximizeMinimizeFrame or frame.CloseButton or (name and _G[name .. "CloseButton"]) -- gp:lookups
 	if anchor then
 		button:SetPoint("RIGHT", anchor, "LEFT", 0, 0)
 	else
@@ -138,7 +148,8 @@ local function Place(button, host)
 	button:SetFrameLevel(level)
 end
 
-local function Attach(frame, kind)
+local function Attach(frame, kind) -- gp:communities-button
+	if not ns.Gate.Allowed(GATE) then return false end
 	local def = KINDS[kind]
 	local social = _G.FriendsFrame
 	local host = { frame = frame, kind = kind, social = def.social, heightOnly = not def.social }
@@ -160,38 +171,54 @@ local function Attach(frame, kind)
 
 	-- ClassicUI Forever opens the Communities window unseen (alpha 0, off the screen) to
 	-- reach the notes for its own roster: that is not the window the player uses.
+	-- (Each hook does nothing with the gamepad UI on, from its first line: see the top.)
 	frame:HookScript("OnShow", function()
+		if not ns.Gate.Allowed(GATE) then return end
 		if kind == "communities" and frame.GetAlpha and frame:GetAlpha() == 0 then return end
 		lastShown = host
 	end)
 	-- Closing the guild window closes our window if it is docked to that one (only then).
-	frame:HookScript("OnHide",function() ns.SafeCall("guild window hide", ns.UI.CloseIfDocked, host.dock) end)
+	frame:HookScript("OnHide", function()
+		if not ns.Gate.Allowed(GATE) then return end
+		ns.SafeCall("guild window hide", ns.UI.CloseIfDocked, host.dock)
+	end)
 	if def.social then
 		if not socialHooked then
 			socialHooked = true
-			social:HookScript("OnHide", function() ns.SafeCall("social window hide", ns.UI.CloseIfDocked, social) end)
+			social:HookScript("OnHide", function() -- gp:communities-button
+				if not ns.Gate.Allowed(GATE) then return end
+				ns.SafeCall("social window hide", ns.UI.CloseIfDocked, social)
+			end)
 		end
 	else
 		-- The Communities window can be minimized and maximized while we are docked to it.
-		frame:HookScript("OnSizeChanged", function() ns.SafeCall("guild window size", ns.UI.FollowHost, frame) end)
+		frame:HookScript("OnSizeChanged", function()
+			if not ns.Gate.Allowed(GATE) then return end
+			ns.SafeCall("guild window size", ns.UI.FollowHost, frame)
+		end)
 		-- Its side tabs come and go (minimized, no guild, Guild Finder): the HD window keeps
 		-- clear of them (see UI.DockOffset).
 		local tabs = kind == "communities" and frame.ChatTab
 		if tabs and tabs.HookScript then
-			local function Follow() ns.SafeCall("guild window tabs", ns.UI.FollowHost, frame) end
+			local function Follow()
+				if not ns.Gate.Allowed(GATE) then return end
+				ns.SafeCall("guild window tabs", ns.UI.FollowHost, frame)
+			end
 			tabs:HookScript("OnShow", Follow)
 			tabs:HookScript("OnHide", Follow)
 		end
 	end
 	ns.Log("guild window button added: %s (%s)", tostring(frame.GetName and frame:GetName()), kind)
+	return true
 end
 
 -- Adds a button to every guild window that has none yet and returns how many it added.
 -- Safe to call at any time and as often as needed: each window is hooked once.
 function GuildFrameHook.Scan()
+	if not ns.Gate.Allowed(GATE) then return 0 end
 	local added = 0
 	for _, c in ipairs(GuildFrameHook.Candidates()) do
-		if not byFrame[c.frame] and ns.SafeCall("guild window " .. c.kind, Attach, c.frame, c.kind) then added = added + 1 end
+		if not byFrame[c.frame] and ns.SafeCall("guild window " .. c.kind, Attach, c.frame, c.kind) and byFrame[c.frame] then added = added + 1 end
 	end
 	return added
 end
@@ -233,12 +260,30 @@ ns.RegisterEvent("ADDON_LOADED", function(name)
 	if WATCH[name] then GuildFrameHook.Scan() end
 end)
 
-ns.On("LOGIN", function()
+-- With mouse and keyboard (the gate): every guild window's button, shown, and the Social window
+-- watched (once a session); at a login or a switch back to it.
+local scanHooked = false
+local function Install()
 	GuildFrameHook.Scan()
+	for _, h in ipairs(hosts) do if h.button and h.button.Show then h.button:Show() end end
 	local social = _G.FriendsFrame
-	if social and social.HookScript then
+	if not scanHooked and social and social.HookScript then
+		scanHooked = true
 		-- ClassicUI Forever builds its Guild tab late: look again whenever the Social window opens.
-		social:HookScript("OnShow", function() ns.SafeCall("guild window scan", GuildFrameHook.Scan) end)
+		social:HookScript("OnShow", function() -- gp:communities-button
+			if not ns.Gate.Allowed(GATE) then return end
+			ns.SafeCall("guild window scan", GuildFrameHook.Scan)
+		end)
 	end
+end
+-- A switch to the gamepad UI: every button hidden, our window off the guild window it was docked to.
+local function Park()
+	for _, h in ipairs(hosts) do if h.button and h.button.Hide then h.button:Hide() end end
+	if ns.UI and type(ns.UI.Undock) == "function" then ns.UI.Undock() end
+end
+ns.Gate.Hooks(GATE, { install = Install, park = Park })
+
+ns.On("LOGIN", function()
+	ns.Gate.Install(GATE)
 	ns.Log("guild UI: %s", GuildFrameHook.StatusLine())
 end)

@@ -30,6 +30,17 @@ local L = ns.L
 --   who paid with no guild on it is never in a list: a guild's Captain asks about his own
 --   roster's members missing from it, by five letters of each name's hash, and hears back about
 --   those alone. Only the amount, which is the same for everyone, is public.
+-- - A payment made from a confirmed alt counts for its main (1.1.5, the one gap Fern's #21 had):
+--   on a guild's page the main's line adds what his alts paid that week with that guild on it,
+--   and the guild's table counts the player once. Never another guild's gold (an alt's with
+--   another guild on it, or with none, stays its own), only an alt of that guild now by the best
+--   word the viewer's addon has (a guild's own roster; the Treasurer's for his guild, else the
+--   guild its own payments of this week carry; none on the King's view of another guild's list),
+--   and only a link Alts.lua confirms now (both characters said it): an offer not answered, one
+--   character's claim alone or a link taken apart adds nothing. A guild's own page counts each
+--   player once among those at the amount, as the table does. Nothing of it is kept in the books
+--   (each character's weeks stay its own: Dues.WeekAdd), so a link taken apart stops counting at
+--   once.
 -- - Nothing here ever turns anyone off (Fern's rule, #33): no census report, chat line, decree,
 --   channel or feature of the addon waits on paying, for a guild or a player; a guild's Captains
 --   may only remove members one click at a time, as the game's Guild window does (#34). No
@@ -513,10 +524,60 @@ local function Better(p, wk, x)
 	if x.gv and not p.gv then return false end
 	return wk >= (x.gw or -math.huge)
 end
+-- The guild his payments of this week alone carry (1.1.5, an alt's gold for its main: never an
+-- earlier week's word): the server's over a note's, the latest of the Treasurer's books otherwise.
+local function BetterNow(p, x)
+	if not p.g then return false end
+	if not x.wg then return true end
+	if p.gv and not x.wgv then return true end
+	if x.wgv and not p.gv then return false end
+	return (tonumber(p.t) or 0) >= (x.wt or 0)
+end
+
+-- 1.1.5 (Fern's #21): a payment made from a confirmed alt counts for its main. The main of a
+-- character that is a confirmed alt (Alts.lua: both characters said it, as heard now), and its
+-- group; nil for a main, a character linked to nobody, or a link one of the two never confirmed.
+-- Each character's weeks stay its own in the books (Dues.WeekAdd): the link is looked up when a
+-- list is made, so one taken apart stops counting at once, and a line taken out of a book leaves
+-- the week of the character who gave it.
+local function MainOf(name)
+	local A = ns.Alts
+	local g = A and A.Group and type(name) == "string" and A.Group(name)
+	if not g or not Dues.Key(g.main) or Dues.Key(g.main) == Dues.Key(name) then return nil end
+	return g.main, g
+end
+-- The alt's gold joins its main's in a guild's count when both are of that guild now by the
+-- Treasurer's word (the review of 1.1.5: never by an earlier week's, nor by the guild an alt link's
+-- claim names, which goes out again only with a change of its links). The alt: `now` (his roster
+-- for his own guild, else the guild its payments of this week carry). The main: his roster, which
+-- alone says who is of his own guild; else the guild his own payments of this week carry; else as
+-- the ledger places his gold; else the guild his own addon says (its claim). Never a payment with no
+-- guild on it, and never into another guild. Returns the main's key, or nil.
+local function JoinsMain(players, x, key, own)
+	local main, g = MainOf(x.n)
+	local mk = main and Dues.Key(main)
+	if not mk or mk == key or type(x.g) ~= "string" or x.now ~= x.g:lower() then return nil end
+	local m, where = players[mk], nil
+	if own and ns.Roster.RankOf(ns.FullName(ns.Normal(main))) then
+		where = own
+	elseif own and x.now == own:lower() then
+		return nil
+	elseif m and m.now then
+		where = m.now
+	elseif m and m.g then
+		where = m.g
+	else
+		for _, member in ipairs(g.members or {}) do
+			if Dues.Key(member.name) == mk then where = member.guild end
+		end
+	end
+	return type(where) == "string" and where:lower() == x.now and mk or nil
+end
 
 -- The week's ledger, from the Treasurer's account's books: { week, amount, since, players =
--- { [key] = { n, c = copper this week, last = last payment, g = guild, gv } }, guilds = { [guild
--- lower, "" for none] = { name, paid, copper, payers } } }.
+-- { [key] = { n, c = copper this week, last = last payment, g = guild, gv, now = his guild now by
+-- the Treasurer's word (lower case: 1.1.5) } }, guilds = { [guild lower, "" for none] = { name,
+-- paid, copper, payers } } }.
 function Dues.Ledger(week)
 	week = week or Dues.Week()
 	local amount = Dues.AmountOf(week) -- (that week's own: Fern's one fixed amount)
@@ -536,29 +597,47 @@ function Dues.Ledger(week)
 					if wk == week then x.c = math.min(x.c + (tonumber(p.c) or 0), MAX_COPPER) end
 					if (tonumber(p.t) or 0) > x.last then x.last, x.n = tonumber(p.t), p.n or x.n end
 					if Better(p, wk, x) then x.g, x.gv, x.gw = p.g, p.gv, wk end
+					if wk == week and BetterNow(p, x) then x.wg, x.wgv, x.wt = p.g, p.gv, tonumber(p.t) or 0 end
 				end
 			end
 		end
 	end
 	-- The Treasurer's own guild's members, by his roster (the server's word).
 	local own = ns.IsMember() and GetGuildInfo("player")
-	if own then
-		for _, x in pairs(players) do
-			if ns.Roster.RankOf(ns.FullName(ns.Normal(x.n))) then x.g, x.gv = own, true end
-		end
-	end
-	local guilds = {}
 	for _, x in pairs(players) do
+		local mine = own and ns.Roster.RankOf(ns.FullName(ns.Normal(x.n)))
+		if mine then x.g, x.gv = own, true end
+		-- (1.1.5) Of which guild he is now by the Treasurer's word, for an alt's gold counted for its
+		-- main (JoinsMain, AltsGold), lower case: his own guild by his roster alone (never a note's
+		-- word that the roster contradicts), another by this week's payments alone.
+		local now = mine and own or x.wg
+		now = type(now) == "string" and now:lower() or nil
+		if now and own and not mine and now == own:lower() then now = nil end
+		x.now, x.wg, x.wgv, x.wt = now, nil, nil, nil
+	end
+	-- Each guild: the gold in once, and its payers. A player's characters in a guild are one payer
+	-- there (1.1.5, Fern's #21): a confirmed alt's gold with that guild on it joins its main's when
+	-- the main is in it too (JoinsMain), and he paid when their gold together reaches the amount.
+	local guilds, persons = {}, {}
+	for key, x in pairs(players) do
 		if x.c > 0 then
 			local gk = x.g and x.g:lower() or ""
 			local row = guilds[gk]
 			if not row then
 				row = { name = x.g, paid = 0, copper = 0, payers = 0 }
 				guilds[gk] = row
+				persons[gk] = {}
 			end
 			row.copper = math.min(row.copper + x.c, MAX_COPPER)
+			local who = gk ~= "" and JoinsMain(players, x, key, own) or key
+			persons[gk][who] = math.min((persons[gk][who] or 0) + x.c, MAX_COPPER)
+		end
+	end
+	for gk, per in pairs(persons) do
+		local row = guilds[gk]
+		for _, c in pairs(per) do
 			row.payers = row.payers + 1
-			if x.c >= amount then row.paid = row.paid + 1 end
+			if c >= amount then row.paid = row.paid + 1 end
 		end
 	end
 	return { week = week, amount = amount, since = since, players = players, guilds = guilds, t = ns.Now(), complete = true }
@@ -1020,7 +1099,8 @@ ns.Comm.Handle("FD", function(...) Dues.HandleCodes(...) end)
 -- A guild's list as this client has it, for this week: { rows = { [key] = { n, c, last } },
 -- codes (found by the Treasurer among our roster's others: [code] = { c, last }), coded (the
 -- codes he answered about; nil when none need asking), amount, listAmount, since, complete, cut,
--- count, n, t, mine, mailAt }, or nil. The Treasurer's own client from his books (every player,
+-- count, n, t, mine, mailAt, guild, roster (1.1.5: our roster's keys, on our own guild's list
+-- from the Treasurer) }, or nil. The Treasurer's own client from his books (every player,
 -- whatever the guild); anyone else as the Treasurer sent it. Its amount, what above and below go
 -- by, is the week's by the King's word as this client holds it (Dues.AmountOf), never the one the
 -- Treasurer's list came with (listAmount): his client, which receives the dues, sets none of it,
@@ -1034,7 +1114,8 @@ local function GuildData(guild)
 		for key, x in pairs(led.players) do
 			if want == own or (x.g and x.g:lower() == want) then rows[key] = x end
 		end
-		return { rows = rows, codes = {}, amount = led.amount, since = led.since, complete = true, t = led.t, mine = true, mailAt = Dues.MailKept() }
+		return { rows = rows, codes = {}, amount = led.amount, since = led.since, complete = true, t = led.t, mine = true, mailAt = Dues.MailKept(),
+			guild = guild }
 	end
 	Dues.Ask(guild)
 	local a = answers[guild:lower()]
@@ -1042,8 +1123,17 @@ local function GuildData(guild)
 	local cs, coded = a.cs, nil
 	local told = cs and cs.done and cs.u == a.u
 	if a.u ~= "0" then coded = told and cs.asked or {} end
+	-- (1.1.5) Our own guild's list: our roster's keys, the server's word on who is of it now, for an
+	-- alt's gold counted for its main (AltsGold). Another guild's list has none: no word here on
+	-- whether an alt on it is of that guild now.
+	local own, roster = GetGuildInfo("player"), nil
+	if type(own) == "string" and own:lower() == guild:lower() then
+		roster = {}
+		for _, m in ipairs(Dues.Roster()) do roster[m.key] = true end
+	end
 	return { rows = a.rows, codes = cs and cs.found or {}, coded = coded, codesPending = a.u ~= "0" and not told, amount = Dues.AmountOf(a.week),
-		listAmount = a.listAmount, since = a.since, complete = a.count >= a.n, cut = a.cut, count = a.count, n = a.n, t = a.t, mailAt = a.mailAt }
+		listAmount = a.listAmount, since = a.since, complete = a.count >= a.n, cut = a.cut, count = a.count, n = a.n, t = a.t, mailAt = a.mailAt,
+		guild = guild, roster = roster }
 end
 -- The Treasurer's list came counted by another amount than the week's here (the King's word as
 -- this client holds it): one of the two clients has not heard the King's latest, or his is not
@@ -1057,17 +1147,67 @@ local function Fresh(data)
 	return data ~= nil and (data.mine or (ns.Now() - (tonumber(data.t) or -math.huge) <= Dues.REMOVE_FRESH and not Differs(data)))
 end
 
+-- 1.1.5 (Fern's #21): what a main's confirmed alts paid this week on this guild's list, which
+-- counts for him too: their gold, their latest payment, their names (nil: none), and how many of
+-- them might have paid in the part a list cut left out. Only an alt of that guild now, by the best
+-- word this client has (the review of 1.1.5: never by an earlier week's payment, which may have
+-- put its gold on that guild's list, nor by its claim's guild, which goes out again only with a
+-- change of its links): on our own guild's list from the Treasurer, our roster (the server's
+-- word); in the Treasurer's own books, his word (the ledger's `now`: his roster for his guild,
+-- else the guild its payments of this week carry). On another guild's list from the Treasurer (the
+-- King's and his Steward's view) there is no such word here: none counts. Never a payment with no
+-- guild on it (found by its code). A character that is an alt takes nothing of its main's: its
+-- line is its own. `name`: the member's name (nil: nobody's alts).
+local function AltsGold(data, key, name)
+	local A = ns.Alts
+	local guild = type(data.guild) == "string" and data.guild:lower()
+	if not guild or type(name) ~= "string" or not (A and A.Person and A.Linked) or Dues.Key(A.Person(name)) ~= key then return 0, nil, nil, 0 end
+	if not data.mine and not data.roster then return 0, nil, nil, 0 end
+	-- (In his books: a main whose own payments of this week carry another guild is not of this one.)
+	local me = data.mine and data.rows[key]
+	if type(me) == "table" and me.now and me.now ~= guild then return 0, nil, nil, 0 end
+	local c, last, names, missing = 0, nil, nil, 0
+	for _, other in ipairs(A.Linked(name)) do
+		local k = Dues.Key(other)
+		local r = k and k ~= key and data.rows[k]
+		local here
+		if data.mine then
+			here = type(r) == "table" and r.now == guild and type(r.g) == "string" and r.g:lower() == guild
+		elseif k and k ~= key and data.roster[k] then
+			here = type(r) == "table"
+			-- (Of our roster, not on a list cut short: its gold may be in the part left out.)
+			if not here and data.cut then missing = missing + 1 end
+		end
+		if here and (tonumber(r.c) or 0) > 0 then
+			c = math.min(c + r.c, MAX_COPPER)
+			if r.last and (not last or r.last > last) then last = r.last end
+			names = names or {}
+			names[#names + 1] = ns.DisplayName(r.n or other) or other
+		end
+	end
+	if names then table.sort(names) end
+	return c, last, names, missing
+end
+
 -- A member's week: "above", "below" or "unknown" (the list not whole, or cut and he is not on
 -- it, or not on it while the Treasurer's addon has not yet said whether he paid with no guild on
--- it), his gold this week and his last payment.
-function Dues.Standing(data, key)
+-- it), his gold this week and his last payment; for a main (`name` given), with what his confirmed
+-- alts paid on this guild's list (1.1.5, Fern's #21), and their names. A main on a list cut short
+-- with an alt of our roster missing from it is "unknown" under the amount, never "below": that
+-- alt's gold may be in the part left out (the review of 1.1.5).
+function Dues.Standing(data, key, name)
 	local code = not data.rows[key] and Dues.Code(key)
 	local r = data.rows[key] or (code and data.codes and data.codes[code]) or nil
 	local c, last = r and r.c or 0, r and r.last or nil
-	if c >= data.amount then return "above", c, last end
-	if not data.complete or (data.cut and not r) then return "unknown", c, last end
-	if not r and data.coded and not data.coded[code] then return "unknown", c, last end
-	return "below", c, last
+	local more, at, alts, missing = AltsGold(data, key, name)
+	if more > 0 then
+		c = math.min(c + more, MAX_COPPER)
+		if at and (not last or at > last) then last = at end
+	end
+	if c >= data.amount then return "above", c, last, alts end
+	if not data.complete or (data.cut and (not r or missing > 0)) then return "unknown", c, last, alts end
+	if not r and data.coded and not data.coded[code] then return "unknown", c, last, alts end
+	return "below", c, last, alts
 end
 
 -- When a payment was: "3h ago", "12d ago" past two days.
@@ -1109,13 +1249,17 @@ local STANDING = { above = function() return Green(L.DUES_ABOVE) end, below = fu
 
 -- A player's row: name, gold this week and above or below ("not in the book yet" while the
 -- Treasurer's book has nothing of his this week: a mail he hasn't taken may be on its way); his
--- last payment in its tooltip.
-local function PlayerRow(name, state, c, last, amount, extra)
+-- last payment in its tooltip. `alts`: a main's confirmed alts whose gold on this list counts for
+-- him (1.1.5, Fern's #21), named on the row and in its tooltip.
+local function PlayerRow(name, state, c, last, amount, extra, alts)
 	local standing = (state == "below" and c <= 0) and Red(L.DUES_NOT_IN_BOOK) or STANDING[state]()
-	local row = { indent = 1, text = name .. (extra and ("  " .. Grey(extra)) or ""), right = (c > 0 and Coins(c) or Grey("0")) .. "  " .. standing,
+	local with = alts and #alts > 0 and table.concat(alts, ", ") or nil
+	local text = name .. (extra and ("  " .. Grey(extra)) or "") .. (with and ("  " .. Grey(L.DUES_WITH_ALTS:format(with))) or "")
+	local row = { indent = 1, text = text, right = (c > 0 and Coins(c) or Grey("0")) .. "  " .. standing,
 		tooltip = function(tt)
 			tt:AddLine(name, 1, 0.82, 0)
 			tt:AddLine(L.DUES_MEMBER_TIP:format(last and last > 0 and When(last) or L.DUES_LAST_NONE, Coins(c), Coins(amount)), 1, 1, 1, true)
+			if with then tt:AddLine(L.DUES_ALTS_TIP:format(with), 1, 1, 1, true) end
 		end }
 	-- The last payment on the row too (the Treasurer no longer scrolls his book for it).
 	if last and last > 0 then row.text = row.text .. "  " .. Grey("(" .. When(last) .. ")") end
@@ -1191,12 +1335,12 @@ function Dues.Remove(data)
 		end
 		return false
 	end
-	if Dues.Standing(list, m.key) ~= "below" then ns.Print(L.DUES_REMOVE_PAID:format(who)) return false end
+	if Dues.Standing(list, m.key, m.raw) ~= "below" then ns.Print(L.DUES_REMOVE_PAID:format(who)) return false end
 	local ok = false
-	if C_GuildInfo and type(C_GuildInfo.Uninvite) == "function" then
-		ok = pcall(C_GuildInfo.Uninvite, m.raw)
-	elseif type(GuildUninvite) == "function" then
-		ok = pcall(GuildUninvite, m.raw)
+	if C_GuildInfo and type(C_GuildInfo.Uninvite) == "function" then -- gp:roster-actions
+		ok = pcall(C_GuildInfo.Uninvite, m.raw) -- gp:roster-actions
+	elseif type(GuildUninvite) == "function" then -- gp:roster-actions
+		ok = pcall(GuildUninvite, m.raw) -- gp:roster-actions
 	end
 	ns.Log("dues: remove %s %s", tostring(m.raw), ok and "asked" or "failed")
 	ns.Print(ok and L.DUES_REMOVED:format(m.name) or L.DUES_REMOVE_FAILED:format(m.name))
@@ -1226,17 +1370,31 @@ local function OwnGuildLines(lines, q)
 	local data = GuildData(guild)
 	local roster, rows, above, below = Dues.Roster(), {}, 0, 0
 	local amount = data and data.amount or Dues.Amount()
+	-- (1.1.5) The count of those at the amount counts each player once, as the King's table does (a
+	-- payment never twice, the review of 1.1.5): a confirmed alt of a main on this roster goes with
+	-- him, and the player is at the amount when a line of his is (an alt that paid it alone keeps its
+	-- own line, and its main's is at the amount with its gold).
+	local keys, players, once = {}, {}, 0
+	for _, m in ipairs(roster) do if m.key then keys[m.key] = true end end
 	for _, m in ipairs(roster) do
-		local state, c, last = "unknown", 0, nil
-		if data and m.key then state, c, last = Dues.Standing(data, m.key) end
-		if state == "above" then above = above + 1 elseif state == "below" then below = below + 1 end
-		if ns.Holds(q, m.name) and (Dues.filter ~= "unpaid" or state == "below") then rows[#rows + 1] = { m = m, state = state, c = c, last = last } end
+		local state, c, last, alts = "unknown", 0, nil, nil
+		if data and m.key then state, c, last, alts = Dues.Standing(data, m.key, m.raw) end
+		local main = MainOf(m.raw)
+		local player = main and keys[Dues.Key(main)] and Dues.Key(main) or m.key or m.raw
+		if player ~= (m.key or m.raw) then once = once + 1 end
+		if state == "above" then
+			if not players[player] then players[player], above = true, above + 1 end
+		elseif state == "below" then
+			below = below + 1
+		end
+		if ns.Holds(q, m.name) and (Dues.filter ~= "unpaid" or state == "below") then rows[#rows + 1] = { m = m, state = state, c = c, last = last, alts = alts } end
 	end
 	table.sort(rows, function(a, b)
 		if a.state ~= b.state then return ORDER[a.state] < ORDER[b.state] end
 		return a.m.name < b.m.name
 	end)
-	lines[#lines + 1] = { header = true, text = "<" .. tostring(guild) .. ">", right = Grey(L.DUES_OWN_COUNT:format(above, #roster, Coins(amount))) }
+	lines[#lines + 1] = { header = true, text = "<" .. tostring(guild) .. ">", right = Grey(L.DUES_OWN_COUNT:format(above, #roster, Coins(amount))),
+		tooltip = once > 0 and function(tt) tt:AddLine(L.DUES_OWN_ONCE:format(once), 1, 1, 1, true) end or nil }
 	Waiting(lines, data, guild)
 	Source(lines, data)
 	-- (Our roster's others, while some paid this week with no guild on it: asked about, FC.)
@@ -1252,7 +1410,7 @@ local function OwnGuildLines(lines, q)
 	if #rows == 0 then lines[#lines + 1] = { text = Grey(q and L.SEARCH_NO_MATCH or L.DUES_NONE) } end
 	for i = 1, math.min(#rows, shownRows) do
 		local r = rows[i]
-		local row = PlayerRow(r.m.name, r.state, r.c, r.last, amount, r.m.rankName)
+		local row = PlayerRow(r.m.name, r.state, r.c, r.last, amount, r.m.rankName, r.alts)
 		local picked = Dues.picked ~= nil and Dues.picked == r.m.key
 		if picked then row.text = Gold("> ") .. row.text end
 		row.key = "dues member " .. tostring(r.m.key)
@@ -1299,7 +1457,10 @@ local function GuildLines(lines, guild, q)
 	if not data then return end
 	local rows = {}
 	for key, r in pairs(data.rows) do
-		if ns.Holds(q, r.n) then rows[#rows + 1] = { key = key, r = r, state = Dues.Standing(data, key) } end
+		if ns.Holds(q, r.n) then
+			local state, c, last, alts = Dues.Standing(data, key, r.n)
+			rows[#rows + 1] = { key = key, r = r, state = state, c = c, last = last, alts = alts }
+		end
 	end
 	table.sort(rows, function(a, b)
 		if a.state ~= b.state then return ORDER[a.state] < ORDER[b.state] end
@@ -1308,7 +1469,7 @@ local function GuildLines(lines, guild, q)
 	if #rows == 0 then lines[#lines + 1] = { text = Grey(q and L.SEARCH_NO_MATCH or L.DUES_NONE) } end
 	for i = 1, math.min(#rows, shownRows) do
 		local r = rows[i]
-		lines[#lines + 1] = PlayerRow(r.r.n, r.state, r.r.c, r.r.last, amount)
+		lines[#lines + 1] = PlayerRow(r.r.n, r.state, r.c, r.last, amount, nil, r.alts)
 	end
 	if #rows > shownRows then
 		lines[#lines + 1] = { indent = 1, text = Grey(L.SHOW_MORE:format(math.min(Dues.PAGE, #rows - shownRows), shownRows, #rows)),
@@ -1450,7 +1611,7 @@ local function Shown(frame) return type(frame) == "table" and frame.IsShown and 
 
 -- The mail being written: the recipient, the note and the gold, sent as money (never cash on
 -- delivery). Nothing is sent: the player presses Send.
-local function FillMail(to, amount, note)
+local function FillMail(to, amount, note) -- gp:mail-trade-fill
 	SendMailNameEditBox:SetText(ns.TellName(to))
 	if SendMailSubjectEditBox then SendMailSubjectEditBox:SetText(note) end
 	if SendMailRadioButton_OnClick then
@@ -1467,7 +1628,7 @@ end
 -- The trade with the Treasurer: its gold, the game's own call (the trade window follows it).
 -- Nothing is given: the player presses Trade. Where the game refuses the addon that call, it is
 -- said once (ADDON_ACTION_BLOCKED, below) and from then on the amount is only told.
-local function FillTrade(amount, name)
+local function FillTrade(amount, name) -- gp:mail-trade-fill
 	local set = C_TradeInfo and C_TradeInfo.SetTradeMoney or SetTradeMoney
 	if not set or (ns.db and ns.db.duesTradeBlocked) then
 		ns.Print(L.DUES_SEND_TRADE_TYPE:format(Coins(amount), ns.DisplayName(name)))
@@ -1488,7 +1649,7 @@ end
 -- mailbox's or the trade's opening fills nothing, and nothing is ever sent or given by the
 -- addon. With the gamepad UI nothing of the game's windows is touched (its code there is the
 -- game's own, see Dialog.lua): the line says what to send.
-function Dues.SendDues()
+function Dues.SendDues() -- gp:mail-trade-fill
 	if not Dues.Pays() then return false end
 	local amount, to = Dues.Amount(), Dues.MailTo()
 	local note = Dues.Note(Dues.Week(), GetGuildInfo("player"))

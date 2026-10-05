@@ -17,7 +17,7 @@
       {
         "id": "features",
         "title": "2. Features: what it is and how to use it",
-        "count": 74
+        "count": 75
       },
       {
         "id": "install-update-bugs",
@@ -30,7 +30,7 @@
         "count": 8
       }
     ],
-    "count": 114,
+    "count": 115,
     "regenerate": "luajit scripts/answers.lua writes Olympus/AnswerBank.lua from this file; --check only compares"
   },
   "answers": [
@@ -360,15 +360,15 @@
     {
       "id": "feat-who-can-use",
       "topic": "features",
-      "status": "current (1.1.1)",
+      "status": "current (1.1.5)",
       "questions": [
         "Who can use Olympus?",
         "Why does it say my guild isn't an Olympus guild?",
         "Does it work outside Olympus?"
       ],
-      "answer": "Guilds with Olympus in the name (misspellings count, anti-Olympus names don't), plus guilds on the author's approved list, like <OLYMPIAN> on the Alliance. /oly approved shows the list. Anyone else gets the Join Olympus screen.",
-      "in_game": "Guilds with Olympus in the name, plus approved ones like <OLYMPIAN> (/oly approved). Anyone else gets the Join Olympus screen.",
-      "notes": "Olympian, Olympia and Olympic are left out by the name rule on purpose; <OLYMPIAN> works from 1.1 only.",
+      "answer": "Guilds with Olympus in the name (misspellings count, anti-Olympus names don't), plus guilds on the author's approved list, like <OLYMPIAN> and <OLYMPIANS> on the Alliance. /oly approved shows the list. Anyone else gets the Join Olympus screen.",
+      "in_game": "Guilds with Olympus in the name, plus approved ones like <OLYMPIAN> and <OLYMPIANS> (/oly approved). Anyone else gets the Join Olympus screen.",
+      "notes": "Olympian, Olympia and Olympic are left out by the name rule on purpose; <OLYMPIAN> works from 1.1 only, <OLYMPIANS> from 1.1.5.",
       "sources": [
         "README.md:41-62"
       ]
@@ -644,6 +644,23 @@
       ]
     },
     {
+      "id": "feat-nominees",
+      "topic": "features",
+      "status": "current (1.1.5)",
+      "questions": [
+        "What are centurions and correspondents?",
+        "How do I name a centurion?",
+        "Why does someone have a bronze border without wings?"
+      ],
+      "answer": "Guild masters name up to 10 centurions and one correspondent per High Council department, members of their guild, in their Guild tab or with /oly nominees; the King and the High Council name the King's guild's 10 centurions on the Throne. They wear bronze without wings while in that guild.",
+      "in_game": "Guild masters: /oly nominees, or your Guild tab. Up to 10 centurions and one correspondent per council department, from your guild.",
+      "sources": [
+        "L.HELP_NOMINEES",
+        "L.NOMINEES_NOTE",
+        "README.md:168-180"
+      ]
+    },
+    {
       "id": "feat-recruiting-gates",
       "topic": "features",
       "status": "current (1.1.1)",
@@ -833,6 +850,24 @@
         "README.md:263-285,1713",
         "Channels.lua:236-240,357-378",
         "ChatWindow.lua:918-930"
+      ]
+    },
+    {
+      "id": "feat-chattynator",
+      "topic": "features",
+      "status": "current (1.1.2)",
+      "questions": [
+        "I use Chattynator, how do I get the Olympus chats in a tab?",
+        "My Chattynator tab doesn't show the Olympus chats",
+        "Does Olympus work with Chattynator?"
+      ],
+      "answer": "Type /oly chatwindow tab: it says how to make a Chattynator tab named Olympus (the + after its tabs, then Rename tab), and the channels go there once it exists. Tick Olympus under Addons in that tab's Tab Settings, or it stays empty. /oly chatwindow <name> picks another tab.",
+      "in_game": "With Chattynator: type /oly chatwindow tab, make a tab named Olympus (the + after its tabs), then tick Olympus under Addons in its Tab Settings.",
+      "notes": "Olympus only reads Chattynator's tab names and prints through its public API (GetWindowsAndTabs, AddMessageToWindowAndTab): it never makes, renames or sets up a tab, and it cannot see a tab's Addons filter, so the main window says how each time a Chattynator tab is chosen. Tabs are picked by name, not by number. Without Chattynator nothing changes.",
+      "sources": [
+        "Channels.lua:227-244",
+        "Locales.lua:4042-4046 (CHATTY_STEPS, CHATTY_FILTER)",
+        "README.md:353-369,521-525"
       ]
     },
     {
@@ -1241,18 +1276,19 @@
     {
       "id": "feat-borders-nameplates",
       "topic": "features",
-      "status": "current (1.1.1)",
+      "status": "current (1.1.5)",
       "questions": [
         "What are the gold wings on portraits?",
         "What's the star on nameplates?",
         "How do I turn them off?"
       ],
-      "answer": "Elite borders show Olympus rank on your target and focus portraits: gold wings for the King, silver for the High Council, gold for Lords, silver for Captains. Nameplates get small marks (a star for members). /oly borders off or /oly nameplates off hides them.",
-      "in_game": "Portrait borders and nameplate marks show Olympus ranks. /oly borders off or /oly nameplates off hides them.",
-      "notes": "No README feature section; only the Commands table (README.md:1810-1811).",
+      "answer": "Elite borders on your target, focus and portrait: gold wings for the King, silver for the High Council, bronze for guild masters, plain bronze for those they name. Nameplates and the game's chat show the same marks, a star for other members. /oly borders, nameplates or chatmarks off hides them.",
+      "in_game": "Borders and marks: the King gold, the High Council silver, guild masters and those they name bronze, other members a star (not in guild chat). /oly borders, nameplates or chatmarks off hides them.",
+      "notes": "The README's Commands table, and the Channels section's Marks in the game's own chat (1.1.5).",
       "sources": [
         "L.HELP_BORDERS",
-        "L.HELP_NAMEPLATES"
+        "L.HELP_NAMEPLATES",
+        "L.HELP_CHATMARKS"
       ]
     },
     {
@@ -1424,16 +1460,18 @@
     {
       "id": "feat-page-help",
       "topic": "features",
-      "status": "1.1.2",
+      "status": "current (1.1.5)",
       "questions": [
         "What does the ? on a page do?",
         "Where's the explanation of this page?"
       ],
-      "answer": "Each page has a ? in its bottom box (next to the gear on the Chat tab): it explains that page and, where it shows counts, why they can differ between players. The help button left of the X is the general help.",
-      "in_game": "The ? in each page's bottom box (by the gear on the Chat tab) explains that page and why its counts can differ.",
+      "answer": "Each page has a ? in its bottom box: it explains that page and, where it shows counts, why they can differ between players. The Chat tab has no bottom box, so no ? of its own. The help button left of the X is the general help.",
+      "in_game": "The ? in each page's bottom box explains that page and why its counts can differ. The Chat tab has none: the help button left of the X covers it.",
+      "notes": "1.1.5: the Chat tab's own ? by the gear is gone (it doubled the window's help button).",
       "sources": [
         "Answers.lua",
-        "UI.lua"
+        "UI.lua",
+        "ChatWindow.lua"
       ]
     },
     {

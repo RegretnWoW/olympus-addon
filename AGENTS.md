@@ -37,6 +37,37 @@ bash scripts/lint-globals.sh
 The lint script checks for globals that share a name with a local in the same file.
 See `README.md` for packaging and deployment commands when relevant to the task.
 
+## Registering a gamepad integration
+
+Players use Blizzard's gamepad UI and no release is tried with a controller first, so the checks
+stand in. Code that touches the game's own UI (its frames, popups, menus, tooltips, chat box,
+bindings, tables or globals, or its restricted calls) is an integration with the gamepad gate:
+
+1. Add an entry to `Olympus/GamepadRegistry.lua` (or extend one): what the game does with it, and
+   what it does at a login with the gamepad UI on and at each switch between the two modes.
+2. Tag every site with `-- gp:<id>` (end of the line, on the line above the statement, or on the
+   first line of a function to cover its own body). `<id>!hook` marks a site only that id's
+   `Gate.Hooks` runs; `<id>!undo`, one that gives back what the id took, in both modes.
+3. Ask the gate before the first touch: `if not ns.Gate.Allowed("<id>") then return end`, also as
+   the first line of every function handed to the game.
+4. When it leaves something on the game's side, give it `ns.Gate.Hooks("<id>", { install = ...,
+   park = ..., leftover = ... })`.
+5. Exercise it in the gamepad pass, `tests/gamepad.lua`, and name it there with
+   `GP.Covers("<id>")`: a gamepad login, a switch each way, and what it must leave.
+6. Run `bash scripts/check.sh`. `scripts/gamepad-audit.lua` fails on an untagged reach, a tag with
+   no entry, a write to a global that is not Olympus's, a gate entry's site with no gate check
+   before it, a stale entry, an entry no test covers, and GameTooltip or chat-window uses above
+   `scripts/gamepad-baseline.txt` (raise a line there only in the same change, so review sees it).
+
+The gamepad pass loads every addon file into a model of Forever's client, whose globals, members,
+events, widget methods and templates are only those in `tests/fixtures/forever-api.lua`. A model
+may not offer what the client lacks, and each model part cites the Blizzard file it follows. When
+the addon reads a name the fixture doesn't list, or the Forever build changes, regenerate it with
+`luajit scripts/forever-api.lua <Interface folder>` and check the registry's source pins with
+`luajit scripts/forever-pins.lua <Interface folder>`; the extracted UI source is not in the
+repository. Tests switch the gamepad UI through its input style (`WithGamepadUI`,
+`GamepadStyle`), never by replacing `ns.GamepadUI` or `ns.Gate`.
+
 ## Client compatibility and handoff
 
 - Follow existing client compatibility guards and verify any newly used WoW API

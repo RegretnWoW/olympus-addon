@@ -11,6 +11,8 @@ local L = ns.L
 --   gap between two removals. Nothing picks several at once: there is no kick-all.
 -- #19: the Lord attaches one of his Captains to a recruit as their mentor; each gets one whisper
 --   from him, naming the other, both sent by that one click of his (see Mentors, below).
+-- (1.1.5: the guild master's centurions and correspondents were a section here before 1.1.5 shipped;
+--   they are his Guild tab's now, the tab in the Throne's place: Nominees.lua.)
 -- Nothing goes on the channel, and nothing but the Lord's own mentor pairs is kept.
 
 local Members = {}
@@ -82,7 +84,7 @@ function Members.Remove(m)
 		ns.Print(L.MEMBERS_REMOVE_WAIT)
 		return false
 	end
-	local uninvite = (C_GuildInfo and C_GuildInfo.Uninvite) or GuildUninvite
+	local uninvite = (C_GuildInfo and C_GuildInfo.Uninvite) or GuildUninvite -- gp:roster-actions
 	if type(uninvite) ~= "function" then return false end
 	lastRemove = now
 	uninvite(m.raw)
@@ -208,8 +210,8 @@ function Members.AssignMentor(recruit, captain)
 	end
 	lastMentor = now
 	local guild = GetGuildInfo("player") or "?"
-	SendChatMessage(L.MENTOR_TO_CAPTAIN:format(Plain(recruit.name), guild), "WHISPER", nil, ns.TellName(captain.raw))
-	SendChatMessage(L.MENTOR_TO_RECRUIT:format(guild, Plain(captain.name)), "WHISPER", nil, ns.TellName(recruit.raw))
+	SendChatMessage(L.MENTOR_TO_CAPTAIN:format(Plain(recruit.name), guild), "WHISPER", nil, ns.TellName(captain.raw)) -- gp:roster-actions
+	SendChatMessage(L.MENTOR_TO_RECRUIT:format(guild, Plain(captain.name)), "WHISPER", nil, ns.TellName(recruit.raw)) -- gp:roster-actions
 	Mentors(guild)[recruit.raw] = { mentor = captain.raw, t = ns.Now() }
 	ns.Log("members: %s mentors %s", tostring(captain.raw), tostring(recruit.raw))
 	ns.Print(L.MENTOR_DONE:format(Plain(captain.name), Plain(recruit.name)))
@@ -358,6 +360,9 @@ function Members.Lines(q)
 	elseif page.filter == "recruits" then
 		page.filter = Members.FILTERS[1]
 	end
+	-- (1.1.5: the guild master's centurions and correspondents left this page for his Guild tab, the
+	-- tab in the Throne's place: Nominees.lua, King.lua.)
+	if type(page.filter) ~= "number" and page.filter ~= "recruits" then page.filter = Members.FILTERS[1] end
 	lines[#lines].gapAfter = true
 	if page.filter == "recruits" then return MentorLines(lines, q) end
 	local canRemove = Members.CanRemove()

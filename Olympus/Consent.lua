@@ -34,6 +34,7 @@ local Consent = {}
 ns.Consent = Consent
 
 Consent.WIDTH = 600
+Consent.TOP = -36 -- the first line, under the title bar (1.1.5: the page's title is in it)
 Consent.LOGIN_WAIT = 45 -- after login (the realm key and the channel settle first)
 
 local items, byKey = {}, {}
@@ -120,6 +121,17 @@ function Consent.Ask(reason)
 	return true
 end
 
+-- Whether the page still has a line it would ask this session by itself (Consent.Ask would show
+-- it, out of combat): the version letter waits for it (1.1.5, Letters.lua). Outside an Olympus
+-- guild it asks nothing.
+function Consent.Waiting()
+	if not ns.IsMember() then return false end
+	for _, item in ipairs(Consent.Pending()) do
+		if not asked[item.key] then return true end
+	end
+	return false
+end
+
 -- The player's answer: the item's own switch (which says so in chat), then the page again.
 function Consent.Choose(key, on)
 	local item = byKey[key]
@@ -172,8 +184,13 @@ local function Row(i)
 	return r
 end
 
+-- (1.1.5) The Olympus window's metal without its portrait (ns.Window, Dialog.lua), the page's title in
+-- its title bar. An opaque ground: the page is read line by line, and a dialog's lets the world
+-- show through; the metal's rock and its inset box hide it (the plain frame's too).
+-- Escape closes it with mouse and keyboard; with the gamepad UI its X and Done do (ns.EscapeCloses,
+-- checked each time it shows).
 local function Make()
-	local f = CreateFrame("Frame", "OlympusConsentFrame", UIParent)
+	local f = ns.Window("OlympusConsentFrame", UIParent, { title = L.CONSENT_TITLE })
 	f:SetFrameStrata("DIALOG")
 	f:SetToplevel(true)
 	f:EnableMouse(true)
@@ -183,24 +200,6 @@ local function Make()
 	f:SetScript("OnDragStart", f.StartMoving)
 	f:SetScript("OnDragStop", f.StopMovingOrSizing)
 	f:SetPoint("CENTER", UIParent, "CENTER", 0, 40)
-	-- An opaque ground: the page is read line by line, and the plain dialog's lets the world show
-	-- through. The client's opaque dialog (Forever's SharedXML has it), else its dark one, else a
-	-- near-black texture; a template the client lacks leaves no Bg.
-	local border
-	for _, template in ipairs({ "DialogBorderOpaqueTemplate", "DialogBorderDarkTemplate" }) do
-		local ok, b = pcall(CreateFrame, "Frame", nil, f, template)
-		if ok and b and b.Bg then border = b break end
-		if ok and b then b:Hide() end
-	end
-	if not border then
-		border = f:CreateTexture(nil, "BACKGROUND")
-		border:SetColorTexture(0.03, 0.03, 0.04, 0.97)
-	end
-	border:SetAllPoints()
-	f.border = border
-	f.title = f:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
-	f.title:SetPoint("TOP", 0, -18)
-	f.title:SetText(L.CONSENT_TITLE)
 	f.intro = f:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
 	f.intro:SetJustifyH("LEFT")
 	f.optional = f:CreateFontString(nil, "ARTWORK", "GameFontNormal")
@@ -208,9 +207,7 @@ local function Make()
 	f.footer = f:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
 	f.footer:SetJustifyH("LEFT")
 	f.rows = {}
-	f.close = CreateFrame("Button", nil, f, "UIPanelCloseButton")
-	f.close:SetPoint("TOPRIGHT", -4, -4)
-	f.close:SetScript("OnClick", function() f:Hide() end)
+	f.close = f.CloseButton
 	f.done = Button(f, L.CONSENT_DONE, 120)
 	f.done:SetScript("OnClick", function() f:Hide() end)
 	-- An answer given elsewhere meanwhile (a slash command): the page follows, once a second.
@@ -221,9 +218,6 @@ local function Make()
 		elapsed = 0
 		ns.SafeCall("privacy page", Consent.Refresh)
 	end)
-	-- Escape closes it with mouse and keyboard; with the gamepad UI its X and Done do (ns.EscapeCloses).
-	ns.EscapeCloses("OlympusConsentFrame")
-	f:HookScript("OnShow", function(self) ns.EscapeCloses(self:GetName()) end)
 	f:Hide()
 	return f
 end
@@ -241,7 +235,7 @@ function Consent.Refresh()
 	local W = Consent.WIDTH
 	local inner = W - 40
 	f:SetWidth(W)
-	local y = -44
+	local y = Consent.TOP
 	f.intro:ClearAllPoints()
 	f.intro:SetPoint("TOPLEFT", f, "TOPLEFT", 20, y)
 	f.intro:SetWidth(inner)

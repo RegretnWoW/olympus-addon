@@ -535,12 +535,12 @@ end
 function Week.OpenCalendar(e)
 	if not e then return false end
 	local when = Week.DayLabel(e.at) .. " " .. Week.TimeLabel(e.at)
-	if ns.GamepadUI() or (InCombatLockdown and InCombatLockdown()) or type(ToggleCalendar) ~= "function" then
+	if ns.GamepadUI() or (InCombatLockdown and InCombatLockdown()) or type(ToggleCalendar) ~= "function" then -- gp:calendar
 		ns.Print(L.WEEK_CAL_HINT:format(when, e.title))
 		return false
 	end
 	if not (CalendarFrame and CalendarFrame.IsShown and CalendarFrame:IsShown()) then
-		local ok = pcall(ToggleCalendar)
+		local ok = pcall(ToggleCalendar) -- gp:calendar
 		if not ok then
 			ns.Print(L.WEEK_CAL_HINT:format(when, e.title))
 			return false
@@ -550,9 +550,9 @@ function Week.OpenCalendar(e)
 	return true
 end
 
--- The week's lines on the Board: by day, each entry at its realm hour; the guild's events among
--- them (green); for officers, a click to take it to the game's calendar; for the King and his
--- Hands, a click to take it off. `q`: the Board's search.
+-- The week's lines on the Board and on top of the Decrees tab (1.1.5): by day, each entry at its
+-- realm hour; the guild's events among them (green); for officers, a click to take it to the
+-- game's calendar; for the King and his Hands, a click to take it off. `q`: that page's search.
 local open = {} -- [entry id] = its actions shown
 function Week.Section(lines, q)
 	local now = ns.Now()

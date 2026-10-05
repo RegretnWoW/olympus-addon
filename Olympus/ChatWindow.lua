@@ -308,22 +308,18 @@ local function BackInView(was)
 end
 
 ---------------------------------------------------------------------------
--- A name's header: one mark, the name, a tag, the guild (Borders.ChatMark over Borders.MarkOfName:
--- the elite borders' and nameplate marks' rules, and a mark only where the guild the line names is
--- proven).
+-- A name's header: the name, a tag, the guild. No mark before the name since 1.1.5 (the author's
+-- call: Olympus's marks are where players outside Olympus are, the game's own chat,
+-- Borders.ChatName); the High Council's colour and the Treasurer's coin stay.
 ---------------------------------------------------------------------------
 
 local function NameText(e)
 	local who = ns.FullName(e.sender)
 	local guild = e.guild
-	local B = ns.Borders
 	local council = ns.IsHighCouncillor(who) and not ns.CouncilMasked()
 	local name = ns.Codec.Plain(ns.DisplayName(e.sender) or "?")
-	-- (Borders.ChatMark, shared with the game's chat windows since 1.1.2; without Borders.lua, a
-	-- client updated without a restart, the High Council's mark alone.)
-	local lead = B and type(B.ChatMark) == "function" and B.ChatMark(who, guild) or (council and ns.CouncilMark(who)) or ""
-	if lead ~= "" then lead = lead .. " " end
-	if ns.IsTreasurer(who, guild) then lead = lead .. (ns.COIN:gsub(" $", "")) end
+	local lead = ""
+	if ns.IsTreasurer(who, guild) then lead = (ns.COIN:gsub(" $", "")) end
 	if council then
 		name = "|c" .. ns.HIGH_COUNCIL_COLOR .. name .. "|r"
 	else
@@ -773,13 +769,10 @@ local function DrawTop(tiers, on)
 	frame.gear:SetPoint("TOPRIGHT", frame, "TOPRIGHT", s.right, s.top)
 	PaintGear()
 	local right = s.right - GEAR_W - TOP_GAP
-	-- 1.1.2: the page's "?" left of the gear (Answers.lua: the tab's explanation, the detail box's
-	-- "?" of the other tabs being under this one). The Answers of the author, the High Council and
-	-- the Stewards: at the end of the box they fill, while the lines and that box show (PlaceInput).
-	frame.help:ClearAllPoints()
-	frame.help:SetPoint("TOPRIGHT", frame, "TOPRIGHT", right, s.top)
-	frame.help:Show()
-	right = right - GEAR_W - TOP_GAP
+	-- 1.1.5: no "?" of the tab's own on this row (1.1.2 had one left of the gear, the owner's ask: it
+	-- doubled the window's help "i" just above it, left of the X). The Answers of the author, the
+	-- High Council and the Stewards: at the end of the box they fill, while the lines and that box
+	-- show (PlaceInput).
 	local A = ns.Answers
 	frame.answers:SetShown(lines and A ~= nil and type(A.Allowed) == "function" and A.Allowed() == true)
 	PlaceInput(frame)
@@ -933,7 +926,7 @@ end
 
 -- The game's main chat tab (its frame's name and "Tab": ChatFrame1Tab, FloatingChatFrame.xml),
 -- when it shows. Read only.
-local function MainChatTab()
+local function MainChatTab() -- gp:lookups
 	local f = DEFAULT_CHAT_FRAME
 	local name = type(f) == "table" and type(f.GetName) == "function" and f:GetName() or nil
 	local tab = type(name) == "string" and _G[name .. "Tab"] or nil
@@ -1446,14 +1439,6 @@ local function WithSlashKey(said, line)
 	return said .. " " .. line:format(key)
 end
 
--- The gamepad UI on: at a switch, the style it switches to (the event's newMode, as Borders.lua
--- reads it); else the game's current one.
-local function GamepadStyle(newMode)
-	local gamepad = Enum and Enum.InputDeviceInterfaceType and Enum.InputDeviceInterfaceType.Gamepad
-	if newMode ~= nil and gamepad ~= nil then return newMode == gamepad end
-	return ns.GamepadUI()
-end
-
 -- The tab in sight (UIParent hidden with Alt-Z: not), the chats on, mouse and keyboard.
 local function KeysWanted(gamepad)
 	if gamepad == nil then gamepad = ns.GamepadUI() end
@@ -1515,9 +1500,9 @@ SyncKeys = function(due, gamepad)
 		keysLater = true
 		return
 	end
-	if type(SetOverrideBindingClick) ~= "function" or type(ClearOverrideBindings) ~= "function" then return end
+	if type(SetOverrideBindingClick) ~= "function" or type(ClearOverrideBindings) ~= "function" then return end -- gp:chat-key
 	syncing = true
-	local ok, err = pcall(function()
+	local ok, err = pcall(function() -- gp:chat-key
 		local b = KeyButton()
 		boundKeys = #keys > 0 and keys or nil
 		ClearOverrideBindings(b)
@@ -1868,28 +1853,11 @@ local function Button(parent, text, width)
 	return b
 end
 
--- 1.1.2: the tab's "?" (its explanation, Answers.lua), on the top row, and the Answers button (the
--- author, the High Council and the Stewards: a ready answer into this box, Answers.lua), at the
--- box's end (PlaceInput).
-local function MakeHelp(p)
-	local h = CreateFrame("Button", nil, p)
-	h:SetSize(GEAR_W, GEAR_W)
-	h.icon = h:CreateTexture(nil, "ARTWORK")
-	h.icon:SetSize(18, 18)
-	h.icon:SetPoint("CENTER", h, "CENTER", 0, 0)
-	h.icon:SetTexture("Interface\\Common\\help-i")
-	h:SetHighlightTexture("Interface\\Common\\help-i", "ADD")
-	h:SetScript("OnClick", function()
-		ns.SafeCall("chat help", function() if ns.Answers and ns.Answers.ExplainPage then ns.Answers.ExplainPage("chat/") end end)
-	end)
-	h:SetScript("OnEnter", function(self)
-		Tip(self, function(tt)
-			tt:AddLine(L.PAGE_HELP, 1, 0.82, 0)
-			tt:AddLine(L.PAGE_HELP_TIP, 1, 1, 1, true)
-		end)
-	end)
-	h:SetScript("OnLeave", function(self) Untip(self) end)
-	p.help = h
+-- 1.1.2: the Answers button (the author, the High Council and the Stewards: a ready answer into
+-- this box, Answers.lua), at the box's end (PlaceInput). (1.1.5: the tab's own "?" that went with
+-- it on the top row is gone, the owner's ask: the window's help button left of the X is the one
+-- "i" over the tab.)
+local function MakeAnswers(p)
 	local a = Button(p, L.ANSWERS_BTN, 70)
 	a:SetHeight(SEARCH_H)
 	a:SetScript("OnClick", function()
@@ -1983,7 +1951,7 @@ local function Build(h)
 	-- On the same row, right of the search: the channels' switch, and the gear at the row's end.
 	MakeSwitch(p)
 	MakeGear(p)
-	MakeHelp(p)
+	MakeAnswers(p)
 
 	-- The pinned line.
 	p.pin = StripButton(p, PIN_LINES)
@@ -2333,9 +2301,8 @@ end)
 -- The switch between mouse and keyboard and the gamepad UI (Blizzard_SharedXML/InputUtil.lua's
 -- event, as Borders.lua reads it; not on every client): to the gamepad UI the key goes back to the
 -- game at the switch, the one binding change made there; back, bound at once while the tab shows.
-pcall(ns.RegisterEvent, "INPUT_DEVICE_INTERFACE_TRANSITION", function(newMode)
-	SyncKeys(true, GamepadStyle(newMode))
-end)
+-- (1.1.5: through the gamepad gate, Gamepad.lua, the one step it takes in the switch's own event.)
+ns.Gate.Hooks("chat-key", { now = true, park = function() SyncKeys(true, true) end, install = function() SyncKeys(true, false) end })
 
 -- The channel last shown, kept only as a channel's letter, and the Olympus tab's line put away,
 -- only as true (the first 1.1.1 build's window place and size go).

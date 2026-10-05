@@ -191,10 +191,13 @@ local function ItemButton(r, k)
 		end
 		-- Shift-click: the link into the chat box, as in a bag (not with the gamepad UI: its
 		-- chat box would be blocked, see Dialog.lua).
-		if not it or not IsShiftKeyDown or not IsShiftKeyDown() or ns.GamepadUI() or not ChatEdit_InsertLink then return end
+		if not it or not IsShiftKeyDown or not IsShiftKeyDown() or not ns.Gate.Allowed("chat-box") or not ChatEdit_InsertLink then return end -- gp:chat-box
 		local link = it.link
 		if not link and GetItemInfo then local okInfo, _, l = pcall(GetItemInfo, it.id); if okInfo then link = l end end
-		if link then pcall(ChatEdit_InsertLink, link) end
+		if link then
+			ns.Gate.Used("chat-box") -- (the gate's: told at a switch to the gamepad UI)
+			pcall(ChatEdit_InsertLink, link) -- gp:chat-box
+		end
 	end)
 	b:SetScript("OnEnter", function(self)
 		local it = self.item
@@ -411,7 +414,7 @@ function Views.Render(content, lines, layout)
 			r.left:Show()
 			r.right:Show()
 			-- line.font: a font object by name (the Throne's dark ink on parchment), if the client has it.
-			local font = line.font and _G[line.font] and line.font or nil
+			local font = line.font and _G[line.font] and line.font or nil -- gp:lookups
 			r.left:SetFontObject(font or (line.header and "GameFontNormal" or (line.color or "GameFontHighlightSmall")))
 			r.right:SetFontObject(font or "GameFontHighlightSmall")
 			r.left:ClearAllPoints()
@@ -781,6 +784,9 @@ local function SortedGuilds(list)
 	local guilds = {}
 	for i, e in ipairs(list) do guilds[i] = e end
 	table.sort(guilds, function(a, b)
+		-- The default Census order is the Realm's order exactly. Explicit column choices keep
+		-- behaving as labelled by their header, including an ascending Members click.
+		if Views.sort.key == "members" and Views.sort.desc then return ns.Data.GuildDefaultLess(a, b) end
 		if a.fresh ~= b.fresh then return a.fresh end
 		local va, vb = get(a), get(b)
 		if va == vb then return a.name < b.name end
@@ -1777,10 +1783,14 @@ end
 -- Decrees (layers + decrees)
 ---------------------------------------------------------------------------
 
-local function DecreeLines()
-	-- What waits in an instance or on Busy, on top (1.1, ns.Alert); then the King's writs, for
-	-- whoever they are for (Acts.lua).
-	local lines = ns.HeldLines()
+local function DecreeLines(q)
+	-- The army's agenda on top (1.1.5): the King's week, the one the Board shows (Week.lua), with
+	-- its entries, the guild's own calendar events and the signup sheets; the tab's search finds
+	-- its entries. Then what waits in an instance or on Busy (1.1, ns.Alert); then the King's
+	-- writs, for whoever they are for (Acts.lua).
+	local lines = {}
+	if ns.Week and ns.Week.Section then ns.Week.Section(lines, q) end
+	for _, l in ipairs(ns.HeldLines()) do lines[#lines + 1] = l end
 	for _, l in ipairs(ns.Acts and ns.Acts.WritLines and ns.Acts.WritLines() or {}) do lines[#lines + 1] = l end
 	-- 1.1: who the moderators took off (net-off, Moderation.lua), and their buttons.
 	for _, l in ipairs(ns.Moderation.Lines and ns.Moderation.Lines() or {}) do lines[#lines + 1] = l end
@@ -2086,11 +2096,13 @@ local function ApprovedHint(lines)
 	local guild = IsInGuild() and GetGuildInfo("player")
 	if type(guild) ~= "string" or guild == "" then return lines end
 	if lines[#lines] then lines[#lines].gapAfter = true end
+	-- (1.1.5: a guild the High Council removed is told so, and how to appeal.)
+	local hint = ns.IsRemovedGuild(guild) and L.REMOVED_GUILD or L.APPROVED_JOIN_HINT
 	lines[#lines + 1] = {
-		text = Grey(L.APPROVED_JOIN_HINT:format(Plain(guild))),
+		text = Grey(hint:format(Plain(guild))),
 		onClick = function() ns.ShowDialog("OLYMPUS_APPROVED_PASTE") end,
 		tooltip = function(tt)
-			tt:AddLine(L.APPROVED_JOIN_HINT:format(Plain(guild)), 1, 0.82, 0, true)
+			tt:AddLine(hint:format(Plain(guild)), 1, 0.82, 0, true)
 			tt:AddLine(L.APPROVED_PASTE_PROMPT, 1, 1, 1, true)
 		end,
 	}
@@ -2198,9 +2210,10 @@ local BUILD = {
 	end,
 	decrees = function()
 		local title, text = DecreeDetail()
-		local lines = DecreeLines()
-		-- 1.1 (#12): this client's log of the acts it saw, its box searching it alone.
-		if ns.Chronicle and not ns.Chronicle.missing then ns.Chronicle.AddLines(lines, Views.Query("decrees")) end
+		local q = Views.Query("decrees")
+		local lines = DecreeLines(q)
+		-- 1.1 (#12): this client's log of the acts it saw; the box searches it and the week alone.
+		if ns.Chronicle and not ns.Chronicle.missing then ns.Chronicle.AddLines(lines, q) end
 		DecreeHelp(lines)
 		SoundLines(lines)
 		return Searched(lines, "decrees", "LOG"), title, text

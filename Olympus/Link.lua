@@ -1919,8 +1919,10 @@ local function Snap(f)
 	f:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", math.floor(left / px + 0.5) * px, math.floor(top / px + 0.5) * px)
 end
 
+-- (1.1.5) The Olympus window's metal without its portrait (ns.Window, Dialog.lua), the window's
+-- title in its title bar; its X hides it, in combat too.
 local function MakeWindow()
-	local f = CreateFrame("Frame", "OlympusLinkFrame", UIParent)
+	local f = ns.Window("OlympusLinkFrame", UIParent, { title = L.LINK_TITLE })
 	f:SetFrameStrata("DIALOG")
 	f:SetToplevel(true)
 	f:SetClampedToScreen(true)
@@ -1934,20 +1936,9 @@ local function MakeWindow()
 	end)
 	f:SetPoint("CENTER")
 	f:Hide()
-	local okBorder, border = pcall(CreateFrame, "Frame", nil, f, "DialogBorderTemplate")
-	if not okBorder or not border then
-		border = f:CreateTexture(nil, "BACKGROUND")
-		border:SetColorTexture(0, 0, 0, 0.9)
-	end
-	border:SetAllPoints()
-	f.title = f:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
-	f.title:SetPoint("TOP", 0, -18)
-	f.title:SetText(L.LINK_TITLE)
-	f.close = CreateFrame("Button", nil, f, "UIPanelCloseButton")
-	f.close:SetPoint("TOPRIGHT", -4, -4)
-	f.close:SetScript("OnClick", function() f:Hide() end)
+	f.close = f.CloseButton
 	f.name = f:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
-	f.name:SetPoint("TOP", 0, -42)
+	f.name:SetPoint("TOP", 0, -38) -- (under the title bar)
 	f.canvas = CreateFrame("Frame", nil, f)
 	f.canvas.bg = f.canvas:CreateTexture(nil, "BACKGROUND")
 	f.canvas.bg:SetColorTexture(1, 1, 1, 1)

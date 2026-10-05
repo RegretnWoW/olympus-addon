@@ -48,7 +48,7 @@ Workshop.BUG_GAP = 10 * 60      -- a player sends one bug report in this long
 Workshop.BUG_MAX = 4800         -- bytes of a bug report (MAX_PIECES pieces)
 Workshop.PIECE = 200
 Workshop.MAX_PIECES = 25
-Workshop.MAX_REPORTS = 30
+Workshop.MAX_REPORTS = 30      -- bug reports received, kept (1.1.5: in his saved variables, Workshop.LoadReports)
 Workshop.MAX_SHOWN = 30
 Workshop.MAX_ASK = 15           -- "please update" whispers per click (the send queue holds 60)
 Workshop.ROLL_PAGE = 25         -- answers listed, 25 more a click (the window stays light)
@@ -71,7 +71,7 @@ local shownAnswers = Workshop.ROLL_PAGE -- answers listed ("Show more", "Show al
 local menuFor         -- the answer whose actions are open under its row
 local askedOne = {}   -- [folded Name-Realm] = when the author asked them alone
 local lastAskOne = -math.huge
-local reports = {}    -- bug reports received: { from, t, text }, newest last
+local reports = {}    -- bug reports received: { from, t, text }, newest last (1.1.5: kept, Workshop.LoadReports)
 local pieces = {}     -- [sender#id] = { n, got, parts, t }
 local bugsFrom = {}   -- [sender] = times of their reports this hour
 local asked = {}      -- [sender] = when we last asked them to update
@@ -779,6 +779,64 @@ function Workshop.HandleAck(dist, sender, text)
 	end
 end
 
+-- 1.1.5: the reports he received survive a logout or a /reload wherever the game loads the saved
+-- variables back. His addon keeps the last MAX_REPORTS in them (OlympusDB.bugReports[his
+-- Name-Realm]); the Workshop's list and the copy window open them as before (a chat line can't be
+-- copied). Not on the Forever beta, his realm group today (ns.AUTHOR_REALM): its client writes
+-- them but never loads them back (README, "Other limits"), so there a logout or a /reload still
+-- loses them, as before 1.1.5. Only a client that shows the Workshop (his character; his test
+-- characters, Dev.lua, each its own list) takes any in (HandleBug), so only his keeps any: a list
+-- kept for any other character goes at its login.
+-- Read back once a session, the first time they are needed (the login, his tab, a new report),
+-- each checked again (the SavedVariables can be edited): a sender and a text, cut to what a
+-- report can carry, with no escape codes.
+local reportsFor -- the character whose saved reports `reports` holds (nil: not read yet)
+
+local function KeptReport(x)
+	if type(x) ~= "table" or type(x.from) ~= "string" or type(x.text) ~= "string" then return nil end
+	local t, from = tonumber(x.t), x.from:gsub("[|%c]", "")
+	if not t or t ~= math.floor(t) or t <= 0 or t >= 2 ^ 32 or from == "" or #from > 64 then return nil end
+	return { from = from, t = t, text = ns.Cut((x.text:gsub("|", "!")), Workshop.MAX_PIECES * Workshop.PIECE) }
+end
+
+-- (What LOGIN does.) The reports kept for this character, read back into the list once.
+function Workshop.LoadReports()
+	local me, db = ns.me, ns.db
+	if type(me) ~= "string" or type(db) ~= "table" then return reports end
+	if db.bugReports ~= nil and type(db.bugReports) ~= "table" then db.bugReports = nil end
+	local all = db.bugReports
+	if not Workshop.Visible() then
+		if all and all[me] ~= nil then
+			all[me] = nil
+			if next(all) == nil then db.bugReports = nil end
+		end
+		return reports
+	end
+	if reportsFor == me then return reports end
+	reportsFor = me
+	wipe(reports)
+	local saved = all and all[me]
+	if type(saved) == "table" then
+		for i = math.max(1, #saved - Workshop.MAX_REPORTS + 1), #saved do
+			local r = KeptReport(saved[i])
+			if r then reports[#reports + 1] = r end
+		end
+	end
+	return reports
+end
+
+local function SaveReports()
+	local db = ns.db
+	if type(db) ~= "table" or reportsFor ~= ns.me or not Workshop.Visible() then return end
+	local list = {}
+	for i = math.max(1, #reports - Workshop.MAX_REPORTS + 1), #reports do
+		local r = reports[i]
+		list[#list + 1] = { from = r.from, t = r.t, text = r.text }
+	end
+	if type(db.bugReports) ~= "table" then db.bugReports = {} end
+	db.bugReports[ns.me] = list
+end
+
 function Workshop.HandleBug(dist, sender, text)
 	if dist ~= "WHISPER" or not Workshop.Visible() then return end
 	local id, i, n, piece = text:match("^V5~(%d+)~(%d+)~(%d+)~(.*)$")
@@ -817,8 +875,10 @@ function Workshop.HandleBug(dist, sender, text)
 	pieces[sender] = nil
 	ns.Comm.Whisper(sender, ("V6~%s~2"):format(id), "bugack:" .. sender)
 	local r = { from = sender, t = now, text = (table.concat(e.parts):gsub("\\n", "\n")), asked = e.asked }
+	Workshop.LoadReports() -- (the ones kept from earlier sessions first: this one goes after them)
 	reports[#reports + 1] = r
 	while #reports > Workshop.MAX_REPORTS do table.remove(reports, 1) end
+	SaveReports()
 	-- Chat gets one short line either way.
 	ns.Print(L.WORKSHOP_BUG_IN:format(ns.DisplayName(sender)))
 	if r.asked then
@@ -836,11 +896,18 @@ function Workshop.HandleBug(dist, sender, text)
 	Changed()
 end
 
+-- When a report came: its time today, its date and time before (1.1.5: kept from earlier sessions).
+local function ReportWhen(t)
+	if not date then return "" end
+	if date("%Y-%m-%d", t) == date("%Y-%m-%d", ns.Now()) then return date("%H:%M", t) end
+	return date("%Y-%m-%d %H:%M", t)
+end
+
 -- The report window's report, shown now (auto: opened by itself, no keyboard taken).
 local function ShowReportNow(r, auto)
 	local n = 0
 	for i, x in ipairs(reports) do if x == r then n = i end end
-	local title = L.WORKSHOP_BUG_FROM_AT:format(ns.DisplayName(r.from), date and date("%H:%M", r.t) or "", n, #reports)
+	local title = L.WORKSHOP_BUG_FROM_AT:format(ns.DisplayName(r.from), ReportWhen(r.t), n, #reports)
 	local f = ns.UI.ShowCopy(title, r.text, nil, { key = "bug", big = true, auto = auto and true or nil })
 	if type(f) == "table" then
 		f.olympusReport = r
@@ -874,7 +941,10 @@ end
 -- itself, not by his click: no keyboard taken, after a fight, and never over a report he is
 -- reading (it waits, and shows once he closes that one). A click (the Workshop's row) shows it now.
 function Workshop.ShowReport(r, auto)
-	if type(r) ~= "table" then r = reports[tonumber(r) or #reports] end
+	if type(r) ~= "table" then
+		Workshop.LoadReports()
+		r = reports[tonumber(r) or #reports]
+	end
 	if not r then return false end
 	local UI = ns.UI
 	if not (UI and UI.ShowCopy) then return false end
@@ -1003,8 +1073,11 @@ local function BugAskExpand(f, on)
 	end
 end
 
+-- (1.1.5) In the Olympus window's metal without its portrait (ns.Window, Dialog.lua). Its X hides it
+-- itself (as the Olympus window's, 1.1.1): the template's would call HideUIPanel, which does
+-- nothing in combat for a call that is not secure.
 local function BuildBugAsk()
-	local f = CreateFrame("Frame", "OlympusBugAsk", UIParent, "BasicFrameTemplateWithInset")
+	local f = ns.Window("OlympusBugAsk", UIParent, { title = L.BUGASK_TITLE })
 	f:SetSize(BUGASK_W, BUGASK_H)
 	f:SetPoint("CENTER", 0, 120)
 	f:SetFrameStrata("DIALOG")
@@ -1016,13 +1089,6 @@ local function BuildBugAsk()
 	f:SetScript("OnDragStart", f.StartMoving)
 	f:SetScript("OnDragStop", f.StopMovingOrSizing)
 	f:Hide()
-	-- Its X hides it itself (as the Olympus window's, 1.1.1): the template's would call HideUIPanel,
-	-- which does nothing in combat for a call that is not secure.
-	f.onCloseCallback = function()
-		f:Hide()
-		return false
-	end
-	if f.TitleText then f.TitleText:SetText(L.BUGASK_TITLE) end
 	f.message = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
 	f.message:SetPoint("TOPLEFT", 16, -34)
 	f.message:SetPoint("TOPRIGHT", -16, -34)
@@ -1434,7 +1500,10 @@ StaticPopupDialogs["OLYMPUS_WORKSHOP_ASK"] = {
 	preferredIndex = 3,
 }
 
+-- The reports received. The copy for Discord (Workshop.ReportText) gets their count alone: who sent
+-- one, and its words, went to the author alone (1.1.5: up to 30 of them, from earlier sessions too).
 local function BugLines(lines)
+	Workshop.LoadReports() -- (1.1.5: the ones kept from earlier sessions too)
 	lines[#lines + 1] = { header = true, text = L.WORKSHOP_BUGS:format(#reports) }
 	if #reports == 0 then lines[#lines + 1] = { text = Grey(L.WORKSHOP_BUGS_NONE) } end
 	for i = #reports, math.max(1, #reports - Workshop.MAX_SHOWN + 1), -1 do
@@ -1442,7 +1511,7 @@ local function BugLines(lines)
 		local first = r.text:match("[^\n`]+") or ""
 		lines[#lines + 1] = {
 			indent = 1, text = ns.DisplayName(r.from) .. "  " .. Grey(first:sub(1, 60)),
-			right = Grey(ns.Ago(r.t)),
+			right = Grey(ns.Ago(r.t)), noReport = true,
 			onClick = function() Workshop.ShowReport(r) end,
 		}
 	end
@@ -1491,7 +1560,9 @@ function Workshop.State() return roll end
 -- Tests start from a clean state.
 function Workshop.Reset()
 	roll, authorAt, authorName, answeredRoll, sending, full, menuFor = nil, nil, nil, nil, nil, nil, nil
+	-- (A new session: the saved variables stay, OlympusDB.bugReports with them; the next read takes them back.)
 	wipe(reports); wipe(pieces); wipe(bugsFrom); wipe(asked); wipe(askedOne)
+	reportsFor = nil
 	lastRoll, lastRollAnswer, lastUpdateShown, lastBug, lastAsk = -math.huge, -math.huge, -math.huge, -math.huge, -math.huge
 	search, shownAnswers, lastAskOne = "", Workshop.ROLL_PAGE, -math.huge
 	changePending = false
@@ -1979,7 +2050,7 @@ function Workshop.Approved(word)
 	if type(guild) == "string" and ns.IsApprovedGuild(guild) then
 		ns.Print(L.APPROVED_MINE:format(guild))
 	elseif type(guild) == "string" and not ns.IsFederation(guild) then
-		ns.Print(L.APPROVED_NOT_MINE:format(guild))
+		ns.Print((ns.IsRemovedGuild(guild) and L.REMOVED_GUILD or L.APPROVED_NOT_MINE):format(guild))
 	end
 end
 
@@ -2341,7 +2412,8 @@ StaticPopupDialogs["OLYMPUS_COUNCIL_ASK"] = {
 
 ---------------------------------------------------------------------------
 -- The councillors' own icons (0.9.8, the High Council's wish): each councillor picks an icon
--- for their name in the Olympus chats from the game's icons, as the macro window does (in a
+-- for their name (in the Olympus chats until 1.1.5; since, the game's own chat after the council's
+-- silver dragon, Borders.lua, and their tooltip) from the game's icons, as the macro window does (in a
 -- window of ours: Blizzard's macro icon window, opened from addon code, would run tainted). Their
 -- client says which on the channel when it changes, then about every ICON_EVERY. Every client
 -- keeps it for councillors only (ns.IsHighCouncillor of the sender the server stamped), and only
@@ -2448,7 +2520,7 @@ ns.Comm.Handle("HI", function(...) Workshop.HandleIcon(...) end)
 -- Repeats, and anything ns.CouncilIconValue refuses, are left out. Also: whether any is a name
 -- (only names can be filtered; file numbers say nothing).
 local ICON_LISTS = { "GetLooseMacroIcons", "GetLooseMacroItemIcons", "GetMacroIcons", "GetMacroItemIcons" }
-function Workshop.GameIcons()
+function Workshop.GameIcons() -- gp:lookups
 	local out, seen, names = {}, {}, false
 	for _, api in ipairs(ICON_LISTS) do
 		local fill = _G[api]
@@ -2493,12 +2565,15 @@ function Workshop.RefreshIconPicker()
 	picker.prev:SetEnabled(iconPage > 1)
 	picker.next:SetEnabled(iconPage < pages)
 	picker.empty:SetShown(#list == 0)
-	-- The preview: the icon large (the mark when none is picked), and our name as the chats will
-	-- show it: the mark always, the icon after it (0.9.9).
+	-- The preview: the icon large (the mark when none is picked), and our name as the game's chat
+	-- will show it: the mark always, the icon after it (0.9.9). Since 1.1.5 the mark there is the
+	-- High Council's silver dragon (Borders.ChatMarkText), and Olympus's own lines carry none; a
+	-- client updated without a restart (Borders.lua's stand-in) shows the council's skull.
 	local texture = ns.CouncilIconTexture(iconChoice)
 	picker.preview:SetTexture(texture or ns.HIGH_COUNCIL_SKULL)
-	picker.sample:SetText("[" .. L.CHAN_ALL .. "] [" .. ns.HIGH_COUNCIL_MARK .. (texture and ("|T" .. texture .. ":0|t") or "")
-		.. "|c" .. ns.HIGH_COUNCIL_COLOR .. (ns.DisplayName(ns.me) or "?") .. "|r]")
+	local B = ns.Borders
+	local mark = type(B) == "table" and type(B.ChatMarkText) == "function" and B.ChatMarkText("silver") or ns.HIGH_COUNCIL_MARK
+	picker.sample:SetText("[" .. mark .. (texture and ("|T" .. texture .. ":0|t") or "") .. (ns.DisplayName(ns.me) or "?") .. "]")
 	picker.chosenName:SetText(iconChoice and IconLabel(iconChoice) or L.COUNCIL_ICON_MARK_ONLY)
 end
 
@@ -2537,13 +2612,14 @@ end
 
 -- Our own window on UIParent: movable, closed by its X (and by Escape with mouse and keyboard,
 -- ns.EscapeCloses), no Blizzard frame touched. Its filter box never takes the keyboard by
--- itself: the player clicks into it (the gamepad UI's rule, ns.Focus).
+-- itself: the player clicks into it (the gamepad UI's rule, ns.Focus). 1.1.5: in the Olympus
+-- window's metal without its portrait (ns.Window, Dialog.lua), its title in the title bar.
 local function MakePicker()
 	local cols, rows = Workshop.ICON_COLS, Workshop.ICON_ROWS
 	local gridW = cols * ICON_CELL + (cols - 1) * ICON_GAP
 	local gridTop = -150
 	local gridBottom = gridTop - (rows * ICON_CELL + (rows - 1) * ICON_GAP)
-	local f = CreateFrame("Frame", "OlympusCouncilIconFrame", UIParent)
+	local f = ns.Window("OlympusCouncilIconFrame", UIParent, { title = L.COUNCIL_ICON_TITLE })
 	f:SetSize(gridW + 56, -gridBottom + 96)
 	f:SetPoint("CENTER", 0, 40)
 	f:SetFrameStrata("DIALOG")
@@ -2555,18 +2631,7 @@ local function MakePicker()
 	f:SetScript("OnDragStart", f.StartMoving)
 	f:SetScript("OnDragStop", f.StopMovingOrSizing)
 	f:Hide()
-	local okBorder, border = pcall(CreateFrame, "Frame", nil, f, "DialogBorderTemplate")
-	if not okBorder or not border then
-		border = f:CreateTexture(nil, "BACKGROUND")
-		border:SetColorTexture(0, 0, 0, 0.85)
-	end
-	border:SetAllPoints()
-	f.title = f:CreateFontString(nil, "ARTWORK", "GameFontNormal")
-	f.title:SetPoint("TOP", 0, -18)
-	f.title:SetText(L.COUNCIL_ICON_TITLE)
-	f.close = CreateFrame("Button", nil, f, "UIPanelCloseButton")
-	f.close:SetPoint("TOPRIGHT", -4, -4)
-	f.close:SetScript("OnClick", function() f:Hide() end)
+	f.close = f.CloseButton
 	-- The preview, and the hint.
 	f.preview = f:CreateTexture(nil, "ARTWORK")
 	f.preview:SetSize(40, 40)
@@ -2737,6 +2802,8 @@ ns.Comm.Handle("V6", function(...) Workshop.HandleAck(...) end)
 ns.Comm.Handle("VR", function(...) Workshop.HandleBugAsk(...) end)
 
 ns.On("LOGIN", function()
+	-- 1.1.5: his reports kept from earlier sessions (any other character's: dropped).
+	Workshop.LoadReports()
 	-- The author says he is online once on the channel, then every PRESENCE_EVERY.
 	ns.After(40, "author presence", Workshop.SendPresence)
 	ns.Every(Workshop.PRESENCE_EVERY, "author presence", Workshop.SendPresence)

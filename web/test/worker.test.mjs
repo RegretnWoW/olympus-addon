@@ -559,7 +559,7 @@ describe('Worker', { skip: probe ? false : 'node:sqlite is not available in this
 		assert.equal((await keys({ character: CK.character })).reason, 'format', 'without "revoke": true it is not a revocation');
 	});
 
-	test('a registered key counts only with a certificate this Worker\'s backend key signed, while it and the latest one D1 recorded last (Konig\'s review, Codex on #39)', async () => {
+	test('a registered key counts only with a certificate this Worker\'s backend key signed, while it and the latest one D1 recorded last (Konig\'s review on #39)', async () => {
 		// Throwaway keys: someone with a registered key's seed forging its certificate, and the bot's
 		// key before a rotation.
 		const forger = crypto.createHash('sha256').update('olympus-link-test:forger').digest('hex');

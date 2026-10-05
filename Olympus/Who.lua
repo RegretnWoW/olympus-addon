@@ -60,8 +60,8 @@ Who.lastPlain = 0  -- GetTime() of the last SendPlain, 0 = none yet
 -- The frames that open a who list on WHO_LIST_UPDATE, looked up when we search (Blizzard's
 -- group finder loads on demand). ClassicUI Forever's is its list's `driver` frame.
 local LISTENERS = {
-	{ "FriendsFrame", function() return _G.FriendsFrame end },
-	{ "LFGWhoListFrame", function() return _G.LFGWhoListFrame end },
+	{ "FriendsFrame", function() return _G.FriendsFrame end }, -- gp:lookups
+	{ "LFGWhoListFrame", function() return _G.LFGWhoListFrame end }, -- gp:lookups
 	{ "ClassicUIForeverWhoPanel.driver", function()
 		local panel = _G.ClassicUIForeverWhoPanel
 		return type(panel) == "table" and panel.driver or nil
@@ -94,12 +94,12 @@ local listeners = {}
 -- ({ name, guild, level, class, zone }), missing = more may be online.
 function Who.Listen(fn) listeners[#listeners + 1] = fn end
 
-local function SetWhoToUi(on)
+local function SetWhoToUi(on) -- gp:who
 	if C_FriendList and C_FriendList.SetWhoToUi then C_FriendList.SetWhoToUi(on)
 	elseif SetWhoToUI then SetWhoToUI(on and 1 or 0) end
 end
 
-local function Send(query)
+local function Send(query) -- gp:who
 	if C_FriendList and C_FriendList.SendWho then C_FriendList.SendWho(query) else SendWho(query) end
 end
 
@@ -134,7 +134,7 @@ local function MaxLevel()
 	return (max and max >= 1) and math.floor(max) or 60
 end
 
-function Who.WindowOpen()
+function Who.WindowOpen() -- gp:lookups
 	for _, name in ipairs(WINDOWS) do
 		local f = _G[name]
 		if type(f) == "table" and f.IsVisible and f:IsVisible() then return true end
@@ -143,7 +143,7 @@ function Who.WindowOpen()
 end
 
 -- Every listener that is registered stops listening; the ones that did are returned.
-local function Quiet()
+local function Quiet() -- gp:who-quiet
 	local frames, names = {}, {}
 	for _, entry in ipairs(LISTENERS) do
 		local f = entry[2]()
@@ -167,7 +167,7 @@ end
 -- which may still come. Until it does (OnAnswer), or LATE seconds, results keep going to the
 -- UI: there the event only updates the lists of the Classic clients' Social window, where
 -- Blizzard's default for a long answer opens its Who tab (ShowWhoPanel).
-local function Release(why, late)
+local function Release(why, late) -- gp:who-quiet!undo
 	local p = pending
 	if not p then return end
 	pending = nil
@@ -187,11 +187,11 @@ end
 -- that comes may be theirs, so the who windows get their event back at once and ours is
 -- given up (the next click repeats it). Once ours was given up, theirs gets Blizzard's
 -- default: an answer of ours that late is not coming.
-local function HookSendWho()
+local function HookSendWho() -- gp:who-quiet
 	if hookedOn == C_FriendList or not (hooksecurefunc and C_FriendList and C_FriendList.SendWho) then return end
 	hookedOn = C_FriendList
 	hooksecurefunc(C_FriendList, "SendWho", function()
-		if sending then return end
+		if sending or not ns.Gate.Allowed("who-quiet") then return end
 		if pending then
 			ns.SafeCall("who: another search", Release, "another search sent", true)
 		elseif owed then
@@ -199,6 +199,17 @@ local function HookSendWho()
 		end
 	end)
 end
+
+-- 1.1.5, the gamepad gate ("who-quiet"): a switch to the gamepad UI gives the who lists their event
+-- back at once from a quiet search still waiting (or still owed its late answer), on the gate's next
+-- frame, instead of from its timer 6 to 30 seconds later, under the gamepad UI.
+ns.Gate.Hooks("who-quiet", { park = function()
+	if pending and #pending.frames > 0 then
+		Release("switched to the gamepad UI")
+	elseif owed then
+		ToChat()
+	end
+end })
 
 -- Level ranges covering 1 to maxLevel, cut where the levels seen in the capped answer split
 -- evenly (each range about the same share of the players), so a young realm (everyone
@@ -334,7 +345,7 @@ function Who.SearchGuild(guild, own)
 	if type(guild) ~= "string" or guild == "" or guild:find('"', 1, true) then return false end
 	local plain = ns.GamepadUI()
 	if plain and not own then return false end -- quiet: not with the gamepad UI (see the top)
-	if not ((C_FriendList and C_FriendList.SendWho) or SendWho) then return false end
+	if not ((C_FriendList and C_FriendList.SendWho) or SendWho) then return false end -- gp:who,who-quiet
 	local now = GetTime()
 	if now - (guildSearched[guild] or -math.huge) < Who.GUILD_AGAIN then return false end
 	if plain then
@@ -370,8 +381,8 @@ end
 function Who.WantedNames() return wantedNames end
 
 function Who.Auto()
-	if not ((C_FriendList and C_FriendList.SendWho) or SendWho) then return false end
 	if ns.GamepadUI() then return false end -- quiet: not with the gamepad UI (see the top)
+	if not ((C_FriendList and C_FriendList.SendWho) or SendWho) then return false end -- gp:who-quiet
 	local now = GetTime()
 	if pending or Wait(now, math.max(Who.lastSend, Who.lastPlain)) > 0 or Who.WindowOpen() then return false end
 	-- A guild opened in the Realm tab while a search could not go comes first.
@@ -569,8 +580,10 @@ ns.RegisterEvent(EVENT, OnAnswer)
 -- A /reload while our search waited leaves the client's who flag on (it outlives the UI):
 -- the player's own /who would then open the list instead of answering in chat. Reset it once
 -- at login, unless one of the player's who windows is open (it manages the flag itself).
+-- (1.1.5, the gamepad gate: not at a login with the gamepad UI, where Olympus searches nothing
+-- quietly and leaves the game's flag as it is.)
 ns.On("LOGIN", function()
-	if not Who.WindowOpen() then pcall(SetWhoToUi, false) end
+	if ns.Gate.Allowed("who-quiet") and not Who.WindowOpen() then pcall(SetWhoToUi, false) end -- gp:who-quiet
 end)
 
 function Who.Searched() return Who.lastSend > 0 end

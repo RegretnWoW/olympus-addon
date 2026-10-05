@@ -349,8 +349,11 @@ local function MakeRow(f, i)
 	return r
 end
 
+-- (1.1.5) The Olympus window's metal without its portrait (ns.Window, Dialog.lua): who asks in its
+-- title bar (f.title is the bar's text), the question under it; its X hides it, in combat too.
+Vox.QUESTION_TOP = -32
 local function MakeFrame()
-	local f = CreateFrame("Frame", "OlympusVoxFrame", UIParent)
+	local f = ns.Window("OlympusVoxFrame", UIParent, { title = L.VOX_TITLE })
 	f:SetFrameStrata("DIALOG")
 	f:SetToplevel(true)
 	f:EnableMouse(true)
@@ -360,16 +363,9 @@ local function MakeFrame()
 	f:SetScript("OnDragStop", f.StopMovingOrSizing)
 	f:SetPoint("TOP", UIParent, "TOP", 0, -150)
 	f:SetSize(WIDTH, 220)
-	local okBorder, border = pcall(CreateFrame, "Frame", nil, f, "DialogBorderTemplate")
-	if not okBorder or not border then
-		border = f:CreateTexture(nil, "BACKGROUND")
-		border:SetColorTexture(0, 0, 0, 0.85)
-	end
-	border:SetAllPoints()
-	f.title = f:CreateFontString(nil, "ARTWORK", "GameFontNormal")
-	f.title:SetPoint("TOP", 0, -18)
+	f.title = f.TitleText
 	f.question = f:CreateFontString(nil, "ARTWORK", "GameFontHighlightLarge")
-	f.question:SetPoint("TOP", f.title, "BOTTOM", 0, -8)
+	f.question:SetPoint("TOP", f, "TOP", 0, Vox.QUESTION_TOP)
 	f.question:SetWidth(WIDTH - 40)
 	f.question:SetJustifyH("CENTER")
 	f.kind = f:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
@@ -387,9 +383,7 @@ local function MakeFrame()
 	f.status = f:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
 	f.status:SetPoint("BOTTOM", 0, 16)
 	f.status:SetWidth(WIDTH - 40)
-	f.close = CreateFrame("Button", nil, f, "UIPanelCloseButton")
-	f.close:SetPoint("TOPRIGHT", -4, -4)
-	f.close:SetScript("OnClick", function() f:Hide() end)
+	f.close = f.CloseButton
 	local elapsed = 0
 	f:SetScript("OnUpdate", function(_, dt)
 		elapsed = elapsed + dt
@@ -397,7 +391,6 @@ local function MakeFrame()
 		elapsed = 0
 		ns.SafeCall("vox tick", Vox.Refresh)
 	end)
-	ns.EscapeCloses("OlympusVoxFrame")
 	return f
 end
 
@@ -714,9 +707,13 @@ local function TimeLabel(sec)
 	return ("%dm"):format(sec / 60)
 end
 
+-- (1.1.5, the author's asks) The Olympus window's bronze metal, not the plain silver frame, and
+-- without its portrait and logo (only the Olympus window has them): ns.Window (Dialog.lua), its
+-- inset box under the title bar as the plain frame's, the boxes where they always were. Its X hides
+-- it itself, in combat too. Escape closes it with mouse and keyboard; with the gamepad UI its X and
+-- Cancel do (checked each time it shows: a switch to the gamepad UI since takes it off the list).
 local function MakeComposer()
-	local ok, f = pcall(CreateFrame, "Frame", "OlympusVoxAskFrame", UIParent, "BasicFrameTemplateWithInset")
-	if not ok or not f then f = CreateFrame("Frame", "OlympusVoxAskFrame", UIParent) end
+	local f = ns.Window("OlympusVoxAskFrame", UIParent, { title = L.VOX_ASK_TITLE })
 	f:SetSize(420, 330)
 	f:SetPoint("CENTER", 0, 40)
 	f:SetFrameStrata("DIALOG")
@@ -726,12 +723,6 @@ local function MakeComposer()
 	f:RegisterForDrag("LeftButton")
 	f:SetScript("OnDragStart", f.StartMoving)
 	f:SetScript("OnDragStop", f.StopMovingOrSizing)
-	if f.TitleText then
-		f.TitleText:SetText(L.VOX_ASK_TITLE)
-	else
-		local t = Label(f, L.VOX_ASK_TITLE, "GameFontNormal")
-		t:SetPoint("TOP", 0, -6)
-	end
 	local q = Label(f, L.VOX_ASK_QUESTION)
 	q:SetPoint("TOPLEFT", 18, -34)
 	f.q = Box(f, 380, Vox.MAX_Q)
@@ -792,7 +783,6 @@ local function MakeComposer()
 	f.cancel:SetPoint("RIGHT", f.ask, "LEFT", -8, 0)
 	f.cancel:SetText(CANCEL or "Cancel")
 	f.cancel:SetScript("OnClick", function() f:Hide() end)
-	ns.EscapeCloses("OlympusVoxAskFrame")
 	return f
 end
 

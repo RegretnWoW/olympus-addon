@@ -220,7 +220,7 @@ local function Pump()
 			pending = { guid = item.guid, unit = unit, at = GetTime(), gear = item.gear }
 			lastRequest = GetTime()
 			Inspect.stats.requests = Inspect.stats.requests + 1
-			NotifyInspect(unit)
+			NotifyInspect(unit) -- gp:inspect-patrol
 			return
 		end
 	end
@@ -287,7 +287,7 @@ local function OnInspectReady(guid)
 	elseif gear then
 		ns.Print(L.GEAR_GONE)
 	end
-	if not (InspectFrame and InspectFrame:IsShown()) and ClearInspectPlayer then ClearInspectPlayer() end
+	if not (InspectFrame and InspectFrame:IsShown()) and ClearInspectPlayer then ClearInspectPlayer() end -- gp:inspect-patrol
 end
 Inspect.OnInspectReady = OnInspectReady -- (tests)
 
@@ -799,16 +799,76 @@ end
 -- Wiring
 ---------------------------------------------------------------------------
 
-local function OnTooltipUnit(tooltip)
-	if tooltip ~= GameTooltip then return end
-	local _, unit = tooltip:GetUnit()
-	if not unit or not UnitIsPlayer(unit) then return end
-	local name = ns.UnitFullName(unit)
+local function SecretTooltipValue(...)
+	if type(issecretvalue) ~= "function" then return false end
+	for i = 1, select("#", ...) do
+		if issecretvalue((select(i, ...))) then return true end
+	end
+	return false
+end
+
+-- The same name ns.UnitFullName would produce, but every value returned by the restricted tooltip
+-- path is checked before a comparison or string operation. On Forever, a world-cursor tooltip can
+-- expose a secret unit token even though GetUnit returned a Lua string.
+local function TooltipUnitName(unit)
+	if SecretTooltipValue(unit) or type(unit) ~= "string" or unit == "" then return nil end
+	local name, realm
+	if UnitFullName then name, realm = UnitFullName(unit) end
+	if SecretTooltipValue(name, realm) then return nil end
+	if not name or name == "" then
+		local raw = GetUnitName and GetUnitName(unit, true)
+		if SecretTooltipValue(raw) or type(raw) ~= "string" or raw == "" then return nil end
+		return ns.FullName(ns.Normal(raw))
+	end
+	if realm and realm ~= "" and ns.splitNames and not ns.IsRealmName(realm) then name, realm = name .. " " .. realm, nil end
+	return ns.FullName(name, (realm and realm ~= "") and realm or nil)
+end
+
+-- 1.1.5 (the High Council's ask): a High Councillor's tooltip says so, as their person card does
+-- (UI.lua): their mark and own icon after the name on the tooltip's first line, then High
+-- Councillor, the department and the title the signed titles list gives them. For an Olympus member
+-- who may see the council there (ns.CouncilVisible: the list made public, a councillor, the King,
+-- the author), never on the King's screen while the names are hidden, nor for a councillor the
+-- moderators took off (net-off), as their chat mark. The first line is the game's: left as it
+-- is when the client hides its text (a secret value) or with the gamepad UI, where Olympus writes
+-- nothing into the game's frames; the lines below are added as the Treasurer's is.
+function Inspect.CouncilTooltip(tooltip, name, guild) -- gp:tooltip-unit
+	if not (ns.IsMember() == true and ns.CouncilVisible() and not ns.CouncilMasked() and ns.IsHighCouncillor(name)) then return false end
+	local M = ns.Moderation
+	if name ~= ns.me and type(M) == "table" and type(M.Hides) == "function" and M.Hides(name, guild) ~= nil then return false end
+	local mark = ns.CouncilMark(name)
+	local left = not ns.GamepadUI() and type(tooltip.GetName) == "function" and _G[(tooltip:GetName() or "") .. "TextLeft1"] -- gp:tooltip-unit
+	local text = left and type(left.GetText) == "function" and left:GetText()
+	if type(text) == "string" and not SecretTooltipValue(text) and text ~= "" and not text:find(mark, 1, true) then
+		left:SetText(text .. " " .. mark)
+	end
+	local t = ns.CouncilTitle(name) or {}
+	tooltip:AddLine(L.COUNCIL_PERSON, 0.69, 0.28, 0.97) -- (ns.HIGH_COUNCIL_COLOR)
+	if t.dept then tooltip:AddLine(ns.Codec.Plain(t.dept), 1, 0.82, 0) end
+	if t.title then tooltip:AddLine(ns.Codec.Plain(t.title), 1, 1, 1) end
+	return true
+end
+
+-- 1.1.5, the gamepad gate (GamepadRegistry.lua's "tooltip-unit"): nothing with the gamepad UI on, from
+-- the first line (the game's soft target shows the tooltip again and again there, and Olympus writes
+-- nothing in the game's frames there): no line, no patrol. Not registered at a login with it.
+function Inspect.TooltipUnit(tooltip) -- gp:tooltip-unit
+	if not ns.Gate.Allowed("tooltip-unit") then return false end
+	if tooltip ~= GameTooltip or type(tooltip.GetUnit) ~= "function" then return false end
+	local label, unit = tooltip:GetUnit()
+	if SecretTooltipValue(label, unit) or type(unit) ~= "string" or unit == "" then return false end
+	local isPlayer = type(UnitIsPlayer) == "function" and UnitIsPlayer(unit)
+	if SecretTooltipValue(isPlayer) or not isPlayer then return false end
+	local name = TooltipUnitName(unit)
+	if not name then return false end
 	local line = Inspect.TooltipLine(name)
 	if line then tooltip:AddLine(line) end
 	-- The Treasurer of Olympus: his name and the game's own word on his guild.
-	if ns.IsTreasurer(name, GetGuildInfo(unit)) then tooltip:AddLine(ns.COIN .. L.TREASURER_TITLE, 1, 0.82, 0) end
+	local guild = GetGuildInfo and GetGuildInfo(unit)
+	if not SecretTooltipValue(guild) and ns.IsTreasurer(name, guild) then tooltip:AddLine(ns.COIN .. L.TREASURER_TITLE, 1, 0.82, 0) end
+	Inspect.CouncilTooltip(tooltip, name, not SecretTooltipValue(guild) and guild or nil)
 	if patrol then Enqueue(unit) end
+	return true
 end
 
 ns.On("INIT", function() Inspect.Prune(); Inspect.PruneGear() end) -- (Prune makes the store too)
@@ -819,17 +879,28 @@ ns.On("LOGIN", function()
 	-- 1.1: an officer's findings to his guild's officers, and the day's asked for once our roster is in.
 	ns.Every(15, "tabard share", Inspect.FlushShare)
 	ns.After(40 + Inspect.random() * 30, "tabard share ask", Inspect.AskShared)
+	ns.Gate.Install("tooltip-unit")
+end)
+
+-- The players' tooltips (the gate's "tooltip-unit"): registered at a login with mouse and keyboard,
+-- or at the first switch to it after a gamepad login; once a session (the game keeps a post-call).
+local tooltipHooked = false
+ns.Gate.Hooks("tooltip-unit", { install = function() -- gp:tooltip-unit
+	if tooltipHooked then return end
+	tooltipHooked = true
 	local hooked = false
 	if TooltipDataProcessor and TooltipDataProcessor.AddTooltipPostCall and Enum and Enum.TooltipDataType then
 		hooked = pcall(TooltipDataProcessor.AddTooltipPostCall, Enum.TooltipDataType.Unit, function(tt)
-			ns.SafeCall("tooltip", OnTooltipUnit, tt)
+			if not ns.Gate.Allowed("tooltip-unit") then return end
+			ns.SafeCall("tooltip", Inspect.TooltipUnit, tt)
 		end)
 	end
-	if not hooked then
+	if not hooked and GameTooltip then
 		pcall(GameTooltip.HookScript, GameTooltip, "OnTooltipSetUnit", function(tt)
-			ns.SafeCall("tooltip", OnTooltipUnit, tt)
+			if not ns.Gate.Allowed("tooltip-unit") then return end
+			ns.SafeCall("tooltip", Inspect.TooltipUnit, tt)
 		end)
 	end
 	ns.Log("tooltip hook: %s", hooked and "TooltipDataProcessor" or "OnTooltipSetUnit")
-end)
+end })
 

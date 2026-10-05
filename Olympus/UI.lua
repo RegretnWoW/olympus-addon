@@ -50,8 +50,15 @@ local TABS = {
 	{ key = "crafters", label = "TAB_CRAFTERS", icon = "Interface\\Icons\\Trade_BlackSmithing" },
 	-- The Treasury precedes the King's remaining tabs in the canonical visual order.
 	{ key = "treasury", label = "TAB_TREASURY", icon = "Interface\\Icons\\INV_Misc_Coin_02" },
-	-- The King's alone (King.lua): hidden for everyone else, see UI.Refresh.
-	{ key = "throne", label = "TAB_THRONE", icon = function() return UI.FirstTexture(UI.CROWNS) end },
+	-- The King's alone (King.lua): hidden for everyone else, see UI.Refresh. 1.1.5: in its place, a
+	-- guild master's Guild tab (King.TabLabel): its label and icon follow whose tab it is (UI.RelabelTabs).
+	{ key = "throne", label = "TAB_THRONE", icon = function() return UI.FirstTexture(UI.CROWNS) end,
+		labelOf = function() return ns.King and ns.King.TabLabel and ns.King.TabLabel() or "TAB_THRONE" end,
+		iconOf = function(label)
+			if label ~= "TAB_GUILD" then return UI.FirstTexture(UI.CROWNS) end
+			local faction = ns.faction or (UnitFactionGroup and UnitFactionGroup("player"))
+			return UI.FirstTexture(faction == "Horde" and UI.GUILD_ICONS_HORDE or UI.GUILD_ICONS)
+		end },
 	-- The King's and his Hands' questions to the army (Vox.lua), the same way.
 	{ key = "vox", label = "TAB_VOX", icon = function() return UI.FirstTexture(UI.HORNS) end },
 	-- The addon author's alone (Workshop.lua), the same way.
@@ -66,6 +73,11 @@ function UI.FirstTexture(paths)
 	return paths[#paths]
 end
 UI.CROWNS = { "Interface\\Icons\\INV_Crown_01", "Interface\\Icons\\INV_Crown_02", "Interface\\Icons\\INV_Misc_Head_Dragon_01" }
+-- (1.1.5) A guild master's Guild tab: his faction's guild standard (FileDataIDs 461816 and 461819,
+-- in the game's data since Cataclysm, as the guild perk icon the Census tab wears), else the
+-- guild tabard the Tabards tab wears (UI.FirstTexture asks the client for each file first).
+UI.GUILD_ICONS = { "Interface\\Icons\\INV_Guild_Standard_Alliance_A", "Interface\\Icons\\INV_Shirt_GuildTabard_01" }
+UI.GUILD_ICONS_HORDE = { "Interface\\Icons\\INV_Guild_Standard_Horde_A", "Interface\\Icons\\INV_Shirt_GuildTabard_01" }
 UI.HORNS = { "Interface\\Icons\\Ability_Warrior_BattleShout", "Interface\\Icons\\INV_Misc_Horn_01" }
 UI.CHAT_ICONS = { "Interface\\Icons\\UI_Chat", "Interface\\Icons\\INV_Misc_Note_01" }
 UI.PARCHMENTS = { "Interface\\QuestFrame\\QuestBG", "Interface\\Stationery\\StationeryTest1" }
@@ -115,8 +127,10 @@ local BUTTONS = {
 	},
 	-- The Throne: the agenda (the King and his Hands), the court (the King's).
 	-- The roll call lives in the Realm, the inspection in the Tabards (King.RollCallLines...).
+	-- (1.1.5: each the Throne's people's alone: a guild master's Guild tab, or a councillor who is no
+	-- Hand, has none of them.)
 	throne = {
-		{ "THRONE_AGENDA", function() ns.King.AgendaPrompt() end },
+		{ "THRONE_AGENDA", function() ns.King.AgendaPrompt() end, shown = function() return ns.King.ThroneShown() and ns.King.CanCall() end },
 		{ "COURT_BTN", function() ns.Court.Toggle() end, refresh = true, shown = function() return ns.King.IsKing() or ns.King.Preview() end,
 			label = function() return ns.Court.Holding() and L.COURT_BTN_CLOSE or L.COURT_BTN_OPEN end,
 			tooltip = function(tt)
@@ -197,7 +211,8 @@ local DETAIL_BUTTONS = {
 					tt:AddLine(L.THRONE_LOCATION_NOW_OFF, 0.6, 0.6, 0.6, true)
 				end
 			end },
-		{ "THRONE_CANCEL_AGENDA", function() ns.King.CancelAgendaButton() end, shown = function() return ns.King.Agenda() ~= nil end },
+		{ "THRONE_CANCEL_AGENDA", function() ns.King.CancelAgendaButton() end,
+			shown = function() return ns.King.Agenda() ~= nil and ns.King.ThroneShown() and ns.King.CanCall() end },
 	},
 	-- The full roll call (0.9.9), right above Roll call: rounds on its own until nearly every addon
 	-- user answered; the same button stops it. Then the author's views, to see and try what only
@@ -209,10 +224,10 @@ local DETAIL_BUTTONS = {
 				tt:AddLine(ns.Workshop.FullRunning() and L.WORKSHOP_FULL_STOP or L.WORKSHOP_FULL_BTN, 1, 0.82, 0)
 				tt:AddLine(L.WORKSHOP_FULL_BTN_TIP, 1, 1, 1, true)
 			end },
-		{ "DEV_KING_VIEW", function() ns.King.SetDevView(not ns.King.Preview()) end, refresh = true,
-			label = function() return ns.King.Preview() and L.DEV_KING_VIEW_OFF or L.DEV_KING_VIEW_ON end },
-		{ "DEV_TREASURER_VIEW", function() ns.Treasury.SetDevView(not ns.Treasury.DevView()) end, refresh = true,
-			label = function() return ns.Treasury.DevView() and L.DEV_TREASURER_VIEW_OFF or L.DEV_TREASURER_VIEW_ON end },
+		-- (1.1.5, the author's ask) View as: one button for the previews (Asmon's, the Treasurer's,
+		-- the guild master's), its menu (ViewAs.lua) picking one at a time.
+		{ "VIEW_AS_TITLE", function() ns.ViewAs.ToggleMenu() end, refresh = true,
+			label = function() return ns.ViewAs.Previewing() and L.VIEW_AS_PREVIEW_BTN:format(ns.ViewAs.Label()) or L.VIEW_AS_TITLE end },
 	},
 	heraldry = {
 		{ "HERALDRY_BTN", DecreeAction("HERALDRY") },
@@ -231,8 +246,8 @@ DETAIL_BUTTONS.realm = DETAIL_BUTTONS.realm or {}
 table.insert(DETAIL_BUTTONS.realm, { "COUNCIL_ASK_BTN", function() ns.ShowDialog("OLYMPUS_COUNCIL_ASK") end,
 	-- Only where a council exists (a signed list reached us).
 	shown = function() local c = ns.rdb and ns.rdb.council return type(c) == "table" and next(c.names or {}) ~= nil end })
--- A councillor's own icon before their name in the Olympus chats (0.9.8, Workshop.lua): shown
--- to councillors alone.
+-- A councillor's own icon with their name (0.9.8, Workshop.lua; since 1.1.5 in the game's own
+-- chat, Borders.lua): the button shown to councillors alone.
 table.insert(DETAIL_BUTTONS.realm, { "COUNCIL_ICON_BTN", function() ns.Workshop.ShowIconPicker() end,
 	shown = function() return ns.IsHighCouncillor(ns.me) end })
 -- 1.1 (Fern's #28): an officer keeps the gear of the player he targets, in range (Inspect.lua).
@@ -280,7 +295,7 @@ end
 -- The same for a one-line font string: the first of `fonts` the text fits `room` in, else
 -- the last one, cut with "...". Fonts the client does not have are skipped. The string must
 -- be left-justified and not wrap.
-local function FitText(fs, room, fonts)
+local function FitText(fs, room, fonts) -- gp:lookups
 	fs:SetWidth(0)
 	for _, font in ipairs(fonts) do
 		if _G[font] then
@@ -358,7 +373,8 @@ end
 local ISSUE_GAP = 4
 
 local reporterHooked, hiddenByUs = false, false
-local function Reporter()
+local reporterButton -- our Hide button on it (1.1.5: hidden at a switch to the gamepad UI, the gate's park)
+local function Reporter() -- gp:issue-reporter
 	local r = _G.PTR_IssueReporter
 	if type(r) == "table" and r.Hide and r.Show and r.IsShown then return r end
 end
@@ -368,26 +384,29 @@ local function CanTouch(r)
 end
 function UI.IssueReporterHidden() return ns.db and ns.db.hideIssueReporter == true end
 
-function UI.ApplyIssueReporter()
+function UI.ApplyIssueReporter() -- gp:issue-reporter
 	-- Blizzard's gamepad UI (0.9.8): the game hides the Issue Reporter there itself and shows it
 	-- only with its gamepad menu, centred, with bindings of its own (see
 	-- Blizzard_PTRFeedback_Gamepad.lua), so it never covers our window. Hidden from our code, its
 	-- hide would run that gamepad code from ours: Olympus leaves it alone there (no hook, no
 	-- button, never hidden or shown).
-	if ns.GamepadUI() then return false end
+	-- (1.1.5: the gamepad gate's "issue-reporter"; its button hidden at a switch to it, see below.)
+	if not ns.Gate.Allowed("issue-reporter") then return false end
 	local r = Reporter()
 	if not r then return false end
 	if not reporterHooked and r.HookScript then
 		reporterHooked = true
 		-- Hooked, not replaced: Blizzard's own OnShow runs as always, then it goes away.
 		r:HookScript("OnShow", function(self)
-			if UI.IssueReporterHidden() and CanTouch(self) and not ns.GamepadUI() then
+			if not ns.Gate.Allowed("issue-reporter") then return end
+			if UI.IssueReporterHidden() and CanTouch(self) then
 				self:Hide()
 				hiddenByUs = true
 			end
 		end)
 		local ok, b = pcall(CreateFrame, "Button", nil, r, "UIPanelButtonTemplate")
 		if ok and b then
+			reporterButton = b
 			b:SetSize(48, 18)
 			b:SetText(L.ISSUE_HIDE)
 			b:SetPoint("BOTTOMRIGHT", r, "TOPRIGHT", 0, 2)
@@ -419,7 +438,16 @@ function UI.SetIssueReporterHidden(on)
 	if ns.GamepadUI() then ns.Print(L.ISSUE_GAMEPAD) end
 	UI.ApplyIssueReporter()
 end
-function UI.ResetIssueReporter() reporterHooked, hiddenByUs = false, false end -- tests
+function UI.ResetIssueReporter() reporterHooked, hiddenByUs, reporterButton = false, false, nil end -- tests
+-- A switch to the gamepad UI: our Hide button off the game's box (it would be a gamepad target
+-- there); back to mouse and keyboard, shown, and the player's choice applied again.
+ns.Gate.Hooks("issue-reporter", {
+	park = function() if reporterButton then reporterButton:Hide() end end,
+	install = function()
+		if reporterButton then reporterButton:Show() end
+		UI.ApplyIssueReporter()
+	end,
+})
 
 ns.On("LOGIN", function()
 	ns.After(2, "issue reporter", function() ns.SafeCall("issue reporter", UI.ApplyIssueReporter) end)
@@ -456,7 +484,7 @@ function UI.ClearUp(win, obstacle, screenTop, gap)
 end
 
 -- The Issue Reporter's screen rect with its border, bug button and info button, if shown.
-local function IssueReporterRect()
+local function IssueReporterRect() -- gp:lookups
 	local r = _G.PTR_IssueReporter
 	if type(r) ~= "table" or not r.IsVisible or not r:IsVisible() then return nil end
 	local rect
@@ -504,7 +532,7 @@ end
 
 -- The Social window's size, which is the old Guild window's (the Guild tab fills it).
 local function SocialSize()
-	if FriendsFrame and FriendsFrame.GetWidth then
+	if FriendsFrame and FriendsFrame.GetWidth and ns.Gate.Allowed("communities-button") then -- gp:communities-button
 		local w, h = FriendsFrame:GetWidth(), FriendsFrame:GetHeight()
 		if w and w > 200 and h and h > 200 then return w, h end
 	end
@@ -527,7 +555,7 @@ end
 -- which), else the Social window's (the HD one with the Communities window's height).
 local function HostSize(style)
 	local hook = ns.GuildFrameHook
-	local host = hook and hook.ActiveHost and hook.ActiveHost()
+	local host = hook and hook.ActiveHost and ns.Gate.Allowed("communities-button") and hook.ActiveHost()
 	if host and host.dock and host.dock.GetWidth then
 		return UI.DockSize(host.dock:GetWidth(), host.dock:GetHeight(), host.heightOnly, SocialSize())
 	end
@@ -711,7 +739,7 @@ UI.HELP_ICON = "Interface\\Common\\help-i"
 -- The help button in the title bar, just left of the close button, where Blizzard puts a
 -- window's minimize button (0.9.9, asked for by Max of Asmongold's moderators). A plain button:
 -- a click opens the copy box (UI.ShowHelp), which already keeps to the gamepad UI's rules.
-local function HelpButton(f)
+local function HelpButton(f) -- gp:lookups
 	local close = f.CloseButton or _G[f:GetName() .. "CloseButton"]
 	local b = CreateFrame("Button", nil, f)
 	-- As big as the close button's art: Forever's is 24 and fills it, Classic's red disc is
@@ -1008,7 +1036,7 @@ local function CreateMain(style)
 			for n, template in ipairs(templates) do
 				local name = f:GetName() .. "Tab" .. n .. "_" .. i
 				local okTab, res = pcall(CreateFrame, "Button", name, f, template)
-				if okTab and res and (res.Left or res.LeftActive or _G[name .. "Left"] or _G[name .. "LeftDisabled"]) then
+				if okTab and res and (res.Left or res.LeftActive or _G[name .. "Left"] or _G[name .. "LeftDisabled"]) then -- gp:lookups
 					tab = res
 					UI.tabTemplate = template
 					break
@@ -1234,7 +1262,7 @@ function UI.Layout()
 				b:ClearAllPoints()
 				b:SetPoint("TOPLEFT", main.colHeader, "TOPLEFT", x, 0)
 				-- The old headers' middle part is sized by Blizzard's code; the HD ones stretch.
-				if (main.style == "old" or b.whoTemplate) and WhoFrameColumn_SetWidth then pcall(WhoFrameColumn_SetWidth, b, width) else b:SetWidth(width) end
+				if (main.style == "old" or b.whoTemplate) and WhoFrameColumn_SetWidth then pcall(WhoFrameColumn_SetWidth, b, width) else b:SetWidth(width) end -- gp:own-templates
 				b:SetWidth(width)
 				b:SetText(L[col.key])
 				b.sortKey = col.sort
@@ -1387,6 +1415,29 @@ end
 function UI.Clicked()
 end
 
+-- The tabs whose name follows the player (TABS' labelOf, 1.1.5: the Throne or a guild master's
+-- Guild tab): their text (the side tabs: tooltip and icon) set again when it changed.
+function UI.RelabelTabs()
+	if not main then return end
+	for i, tab in ipairs(main.tabs) do
+		local t = TABS[i]
+		if t and t.labelOf then
+			local key = t.labelOf()
+			if tab.labelKey ~= key then
+				tab.labelKey = key
+				local text = rawget(L, key) or L[t.label]
+				if main.tabStyle == "side" then
+					tab.tooltip = text
+					if t.iconOf and tab.Icon then tab.Icon:SetTexture(t.iconOf(key)) end
+				else
+					tab:SetText(text)
+					if PanelTemplates_TabResize then pcall(PanelTemplates_TabResize, tab, 0) end
+				end
+			end
+		end
+	end
+end
+
 -- Opening the window picks its look again, from the guild window in use (UI.Style).
 -- Called from clicks and slash commands. `focus`: see ShowTab.
 function UI.SelectTab(key, focus)
@@ -1422,7 +1473,9 @@ local function PageOf(tab, locked)
 	if tab == "realm" then
 		-- (1.1: our guild's members page, Members.lua, a page of its own.)
 		sub = (ns.Views.BoardShown and ns.Views.BoardShown() and "board") or (ns.Views.PageShown and ns.Views.PageShown()) or ns.Members and ns.Members.PageId and ns.Members.PageId() or "tree"
-	elseif tab == "throne" then sub = ns.King and ns.King.mode
+	elseif tab == "throne" then
+		-- (1.1.5: a guild master's Guild tab, in the Throne's place.)
+		sub = ns.King and ns.King.ThroneShown and not ns.King.ThroneShown() and "guild" or ns.King and ns.King.mode
 	elseif tab == "treasury" then sub = ns.Treasury and ns.Treasury.mode end
 	return tab .. "/" .. tostring(sub or "")
 end
@@ -1535,9 +1588,9 @@ function UI.Refresh()
 			main.sub:SetText(sub)
 		else
 			lines, title, text = ns.Views.Build(main.tab)
-			-- The treasury next to the soldiers, on the Throne and the Treasury tabs (the King's
-			-- and the Treasurer's screens: Treasury.HeaderText).
-			if main.tab == "throne" or main.tab == "treasury" then
+			-- The treasury next to the soldiers, on the Treasury tab (Treasury.HeaderText; 1.1.5, the
+			-- author's call: no longer on the Throne, the treasury has its own tab).
+			if main.tab == "treasury" then
 				local gold = ns.Treasury and ns.Treasury.HeaderText and ns.Treasury.HeaderText()
 				if type(gold) == "string" then main.total:SetText(L.ARMY_TOTAL:format(F(s.total)) .. "   " .. gold) end
 			end
@@ -1557,13 +1610,14 @@ function UI.Refresh()
 		-- test builds, King.Preview and Workshop.Preview).
 		local only = {
 			chat = ChatTabVisible(), -- (1.1.1)
-			throne = ns.King and ns.King.Visible and ns.King.Visible() or false,
+			throne = ns.King and ns.King.TabVisible and ns.King.TabVisible() or false, -- (1.1.5: or a guild master's Guild tab)
 			vox = ns.Vox and ns.Vox.Visible and ns.Vox.Visible() or false,
 			treasury = ns.Treasury and ns.Treasury.TabVisible and ns.Treasury.TabVisible() or false, -- (1.1: the dues' button too)
 			workshop = ns.Workshop and ns.Workshop.Visible and ns.Workshop.Visible() or false,
 		}
 		if only[main.tab] == false then return ShowTab("census") end
 		for _, tab in ipairs(main.tabs) do tab:SetShown(not locked and only[tab.key] ~= false) end
+		UI.RelabelTabs()
 		UI.LayoutTabs()
 		-- The Chat tab (ChatWindow.lua) over the list's place while it is the one shown.
 		ChatPane(not locked and main.tab == "chat")
@@ -1589,7 +1643,9 @@ end
 -- Open glued to the right of a Blizzard window (the guild window the button was clicked
 -- in), in `style` (its look, see UI.Style), sized by UI.DockSize, and close together with
 -- it (GuildFrame.lua hooks that).
+-- (1.1.5, the gamepad gate: with the gamepad UI on, never by the game's guild windows: on its own.)
 function UI.OpenDocked(host, tab, heightOnly, style)
+	if not ns.Gate.Allowed("communities-button") then return UI.SelectTab(tab or "census") end
 	UseStyle(style or UI.Style())
 	main.host, main.heightOnly = host, heightOnly
 	main:SetSize(UI.DockSize(host:GetWidth(), host:GetHeight(), heightOnly, SocialSize()))
@@ -1603,6 +1659,7 @@ end
 -- minimized and maximized): take its new height. The HD window also keeps clear of the
 -- host's side tabs, which come and go (GuildFrame.lua calls this then too).
 function UI.FollowHost(host)
+	if not ns.Gate.Allowed("communities-button") then return end
 	if main and main.docked and main.host == host then
 		main:SetSize(UI.DockSize(host:GetWidth(), host:GetHeight(), main.heightOnly, SocialSize()))
 		if main.style == "hd" then DockTo(host) end
@@ -1612,6 +1669,16 @@ end
 -- Closes the window if it is docked: to `host` when given, to anything otherwise.
 function UI.CloseIfDocked(host)
 	if main and main.docked and main:IsShown() and (host == nil or main.host == host) then main:Hide() end
+end
+
+-- 1.1.5 (the gamepad gate, GuildFrame.lua's park): a switch to the gamepad UI takes the window off
+-- the guild window it was docked to, to its own place, open or not. True when it was docked.
+function UI.Undock()
+	if not (main and main.docked) then return false end
+	main.docked, main.host = false, nil
+	main:ClearAllPoints()
+	main:SetPoint("CENTER", 0, 40)
+	return true
 end
 
 ---------------------------------------------------------------------------
@@ -1636,7 +1703,7 @@ local function SendWhisper(name, text)
 		ns.Print(L.WHISPER_LOCKDOWN)
 		return false
 	end
-	SendChatMessage(text:sub(1, 255), "WHISPER", nil, name)
+	SendChatMessage(text:sub(1, 255), "WHISPER", nil, name) -- gp:roster-actions
 	return true
 end
 -- A whisper window closed: the Answers list it opened lets go of its box (Answers.lua), which the
@@ -1733,18 +1800,19 @@ end
 -- Whisper, invite and /who take the name the server finds (ns.TellName).
 local function Whisper(name)
 	name = ns.TellName(name)
-	if ns.GamepadUI() then return UI.WhisperWindow(name) end
-	if ChatFrame_SendTell then ChatFrame_SendTell(name) else ChatFrame_OpenChat("/w " .. name .. " ") end
+	if not ns.Gate.Allowed("chat-box") then return UI.WhisperWindow(name) end
+	ns.Gate.Used("chat-box") -- (1.1.5, the gamepad gate: told at a switch to the gamepad UI)
+	if ChatFrame_SendTell then ChatFrame_SendTell(name) else ChatFrame_OpenChat("/w " .. name .. " ") end -- gp:chat-box
 end
 
 local function Invite(name)
 	name = ns.TellName(name)
-	if C_PartyInfo and C_PartyInfo.InviteUnit then C_PartyInfo.InviteUnit(name) elseif InviteUnit then InviteUnit(name) end
+	if C_PartyInfo and C_PartyInfo.InviteUnit then C_PartyInfo.InviteUnit(name) elseif InviteUnit then InviteUnit(name) end -- gp:roster-actions
 end
 
 -- Through Who.lua, which keeps it apart from our quiet /who searches (see SendPlain).
 local function Who(name)
-	ns.Who.SendPlain(('n-"%s"'):format(ns.TellName(name)))
+	ns.Who.SendPlain(('n-"%s"'):format(ns.TellName(name))) -- gp:who
 end
 
 local function PersonButtonScripts(f)
@@ -1760,8 +1828,10 @@ local function PersonButtonScripts(f)
 	end)
 end
 
+-- (1.1.5) Both cards in the Olympus window's metal without its portrait (ns.Window, Dialog.lua),
+-- "<guild name>" in the title bar; their X hides them, in combat too.
 local function CreatePersonFrame()
-	local f = CreateFrame("Frame", "OlympusPersonFrame", UIParent, "BasicFrameTemplateWithInset")
+	local f = ns.Window("OlympusPersonFrame", UIParent, {})
 	f:SetSize(230, 210)
 	f:SetFrameStrata("MEDIUM")
 	f:SetToplevel(true)
@@ -1770,15 +1840,15 @@ local function CreatePersonFrame()
 	f:SetClampedToScreen(true)
 	f:EnableMouse(true)
 	f:Hide()
-	ns.EscapeCloses("OlympusPersonFrame")
 	f.name = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
 	f.name:SetPoint("TOPLEFT", 14, -32)
 	f.name:SetPoint("TOPRIGHT", -14, -32)
 	f.name:SetJustifyH("LEFT")
 	f.name:SetWordWrap(false) -- a long Name-Realm is fitted (UI.ShowPerson), not wrapped over the lines below
-	if f.TitleText then
-		-- "<guild name>", centred: kept clear of the close button on both sides.
-		f.TitleText:SetWidth(f:GetWidth() - 64)
+	if not f.metal and f.TitleText then
+		-- "<guild name>", centred: kept clear of the close button on both sides (the metal's title
+		-- bar keeps it clear itself).
+		f.TitleText:SetWidth(ns.WindowTitleRoom(f))
 		f.TitleText:SetWordWrap(false)
 	end
 	f.lines = {}
@@ -1814,58 +1884,40 @@ local function ClearHDSelection()
 end
 
 -- The HD window's panel: the Guild & Communities window's member card
--- (CommunitiesGuildMemberDetailFrameTemplate, GuildRoster.xml): a dark dialog box hanging
--- off the window's right side under its first tab (the left side where the screen ends,
--- see UI.ShowPerson), the name on top, small buttons at the
--- bottom, above everything of the window (Blizzard's is at level 1000). A child of the HD
--- window, as Blizzard's is of theirs. Its box is a child too, like Blizzard's Border: the
--- dialog border template takes its parent's level, so the panel keeps its own. nil when
--- the client lacks that template (the old panel is used then).
+-- (CommunitiesGuildMemberDetailFrameTemplate, GuildRoster.xml) hanging off the window's right
+-- side under its first tab (the left side where the screen ends, see UI.ShowPerson), the name
+-- on top, small buttons at the bottom, above everything of the window (Blizzard's is at level
+-- 1000). A child of the HD window, as Blizzard's is of theirs. 1.1.5: in the Olympus window's
+-- metal (ns.Window; its border, title bar and X raised with it, ns.SetWindowLevel), "<guild>" in
+-- its title bar as on the old panel. nil when the client lacks the metal (the old panel is used
+-- then).
 local function CreatePersonFrameHD()
 	local parent = frames.hd
 	if not parent then return nil end
-	local f = CreateFrame("Frame", "OlympusPersonFrameHD", parent)
-	local okBorder, border = pcall(CreateFrame, "Frame", nil, f, "DialogBorderDarkTemplate")
-	if not (okBorder and border and border.Bg) then
-		if okBorder and border then border:Hide() end
+	local f = ns.Window("OlympusPersonFrameHD", parent, {})
+	if not f.metal then
 		f:Hide()
-		ns.Log("DialogBorderDarkTemplate unavailable, using the old person panel")
+		ns.Log("the metal frame unavailable, using the old person panel")
 		return nil
 	end
-	border:SetAllPoints()
-	f.Border = border
 	f.hd = true
 	f:SetSize(214, 226)
 	f:SetToplevel(true)
 	f:EnableMouse(true)
 	f:SetClampedToScreen(true)
-	f:SetFrameLevel(parent:GetFrameLevel() + 1000)
+	ns.SetWindowLevel(f, parent:GetFrameLevel() + 1000)
 	f:Hide()
-	ns.EscapeCloses("OlympusPersonFrameHD")
-	local okClose, close = pcall(CreateFrame, "Button", nil, f, "UIPanelCloseButton")
-	if okClose and close then
-		close:ClearAllPoints()
-		close:SetPoint("TOPRIGHT", -3, -4)
-		close:SetFrameLevel(f:GetFrameLevel() + 2)
-		close:SetScript("OnClick", function() f:Hide() end)
-		f.CloseButton = close
-	end
-	-- Name, then "<guild>" under it where the old panel has it in its title bar.
+	-- The name under the title bar.
 	f.name = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-	f.name:SetPoint("TOPLEFT", 13, -18)
-	f.name:SetPoint("TOPRIGHT", -30, -18)
+	f.name:SetPoint("TOPLEFT", 13, -30)
+	f.name:SetPoint("TOPRIGHT", -13, -30)
 	f.name:SetJustifyH("LEFT")
 	f.name:SetWordWrap(false)
-	f.nameRoom, f.nameFonts = 214 - 13 - 30, { "GameFontNormal", "GameFontNormalSmall" }
-	f.guild = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-	f.guild:SetPoint("TOPLEFT", f.name, "BOTTOMLEFT", 0, -2)
-	f.guild:SetPoint("RIGHT", -13, 0)
-	f.guild:SetJustifyH("LEFT")
-	f.guild:SetWordWrap(false)
+	f.nameRoom, f.nameFonts = 214 - 26, { "GameFontNormal", "GameFontNormalSmall" }
 	f.lines = {}
 	for i = 1, 6 do
 		local fs = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-		fs:SetPoint("TOPLEFT", 13, -52 - (i - 1) * 15)
+		fs:SetPoint("TOPLEFT", 13, -50 - (i - 1) * 15)
 		fs:SetPoint("RIGHT", -13, 0)
 		fs:SetJustifyH("LEFT")
 		fs:SetWordWrap(false)
@@ -1926,11 +1978,10 @@ function UI.ShowPerson(p)
 	local councillor = ns.CouncilVisible() and not ns.CouncilMasked() and ns.IsHighCouncillor(full)
 	f.name:SetText((color and ("|c%s%s|r"):format(color.colorStr, name) or name) .. (councillor and (" " .. ns.CouncilMark(full)) or ""))
 	FitText(f.name, f.nameRoom or (f:GetWidth() - 28), f.nameFonts or { "GameFontNormalLarge", "GameFontNormal" })
-	if f.guild then
-		f.guild:SetText(guild and ("<" .. guild .. ">") or "")
-	elseif f.TitleText then
-		f.TitleText:SetText(guild and ("<" .. guild .. ">") or L.TITLE)
-	end
+	-- "<guild>" in the title bar, fitted as the name is (1.1.5: the HD card had it on a line of its
+	-- own, 188 wide; its title bar is 160, where a long guild name did not fit in the normal font).
+	ns.SetWindowTitle(f, guild and ("<" .. guild .. ">") or L.TITLE)
+	if f.TitleText then FitText(f.TitleText, ns.WindowTitleRoom(f), { "GameFontNormal", "GameFontNormalSmall" }) end
 	local className = (file and LOCALIZED_CLASS_NAMES_MALE and LOCALIZED_CLASS_NAMES_MALE[file]) or ""
 	local rows = {}
 	if p.level or className ~= "" then rows[#rows + 1] = (p.level and (L.LEVEL_N:format(p.level) .. " ") or "") .. className end
@@ -1997,7 +2048,8 @@ function UI.WindowStyle() return main and main.style end
 function UI.StatusLine()
 	local guild = GetGuildInfo("player")
 	if not guild then return L.STATUS_NOGUILD end
-	if not ns.IsFederation(guild) then return L.STATUS_NOTFED:format(guild) end
+	-- (1.1.5: a guild the High Council removed says so, and how to appeal.)
+	if not ns.IsFederation(guild) then return (ns.IsRemovedGuild(guild) and L.STATUS_REMOVED or L.STATUS_NOTFED):format(guild) end
 	local c = ns.Comm
 	local users = c.PeerCount() + 1
 	if c.isReporter or not c.reporterName then return L.STATUS_REPORTER:format(guild, users) end
@@ -2050,10 +2102,14 @@ ns.On("LAYERS_CHANGED", function()
 end)
 ns.On("HOP_CHANGED", function() if main and (main.tab == "census" or main.tab == "realm") then UI.RefreshSoon() end end)
 ns.On("DECREES_CHANGED", function() UI.RefreshSoon() end)
--- The King's calls show on the Throne, the roll call in the Realm, the inspection in the Tabards.
+-- The King's calls show on the Throne, the roll call in the Realm, the inspection in the Tabards;
+-- since 1.1.5 the Agenda's current event shows in the King's week on top of the Decrees tab.
 ns.On("THRONE_CHANGED", function()
-	if main and (main.tab == "throne" or main.tab == "realm" or main.tab == "heraldry") then UI.RefreshSoon() end
+	if main and (main.tab == "throne" or main.tab == "realm" or main.tab == "heraldry" or main.tab == "decrees") then UI.RefreshSoon() end
 end)
+-- 1.1.5: the King's week (Week.lua, whose changes fire the Board's event) tops the Decrees tab too:
+-- an entry heard or taken off, a sheet's counts, our own signup. The Board redraws itself (Board.lua).
+ns.On("BOARD_CHANGED", function() if main and main.tab == "decrees" then UI.RefreshSoon() end end)
 ns.On("VOX_CHANGED", function() if main and main.tab == "vox" then UI.RefreshSoon() end end)
 -- The Treasurer's book and report: his tab, the King's Throne, the Realm's line under him.
 ns.On("TREASURY_CHANGED", function()
@@ -2099,7 +2155,8 @@ UI.LINKS = {
 
 -- The help button's page: the version, the tabs in a line each, then the lines /oly help prints
 -- for the privacy switches and the chats (the same strings, so they never disagree), and the
--- links. In the copy box, so a link can be copied; its button is Report a bug.
+-- links. In the copy box, so a link can be copied; its buttons are Report a bug and (1.1.5) the
+-- version letters, every one (Letters.lua): the Olympus window's "i" keeps them.
 function UI.ShowHelp()
 	local lines = {
 		L.TITLE .. " " .. tostring(ns.VERSION),
@@ -2136,7 +2193,8 @@ function UI.ShowHelp()
 		"  " .. L.HELP_ISSUES .. ": " .. UI.LINKS.issues,
 		"  CurseForge: " .. UI.LINKS.curseforge,
 	}
-	UI.ShowCopy(L.HELP_TITLE, table.concat(lines, "\n"), { label = L.REPORT_BUG, fn = function() UI.ShowBugReport() end })
+	UI.ShowCopy(L.HELP_TITLE, table.concat(lines, "\n"), { label = L.REPORT_BUG, fn = function() UI.ShowBugReport() end },
+		{ second = { label = L.LETTERS_BTN, fn = function() ns.Letters.ShowHistory() end } })
 end
 
 -- action: an optional { label, fn } button at the bottom (fn returns true once done).
@@ -2145,7 +2203,8 @@ end
 -- opts (1.1.2): { key = a window of its own (the author's bug reports "bug", his version checks
 -- "versions", his /oly status "status"; the help and every Copy share "copy"), big = larger, with
 -- a Select all button (the reports: long, and read before copied), auto = opened by itself (no
--- keyboard: see the end) }. Each key's window keeps its place and text while another one shows.
+-- keyboard: see the end), second = (1.1.5) a { label, fn } button after the first (the help's
+-- version letters) }. Each key's window keeps its place and text while another one shows.
 local copyFrames = {}
 local COPY_PLACES = { bug = { 0, 30 }, versions = { 60, -30 }, status = { -60, 30 } }
 
@@ -2153,7 +2212,10 @@ local function CopyFrame(key, big)
 	if copyFrames[key] then return copyFrames[key] end
 	local name = key == "copy" and "OlympusCopyFrame" or ("OlympusCopyFrame" .. key:sub(1, 1):upper() .. key:sub(2))
 	local w, h = big and 680 or 520, big and 460 or 340
-	local f = CreateFrame("Frame", name, UIParent, "BasicFrameTemplateWithInset")
+	-- (1.1.5, the author's ask: the help's window was the plain silver frame) The Olympus window's
+	-- metal without its portrait, as every other window of ours (ns.Window, Dialog.lua). Its X hides it
+	-- itself, in combat too (1.1.2: the author's report may open in the middle of a fight).
+	local f = ns.Window(name, UIParent, {})
 	f:SetSize(w, h)
 	local place = COPY_PLACES[key] or { 30, -30 }
 	if key == "copy" then f:SetPoint("CENTER") else f:SetPoint("CENTER", place[1], place[2]) end
@@ -2166,13 +2228,6 @@ local function CopyFrame(key, big)
 		self:StopMovingOrSizing()
 		self.movedByPlayer = true -- where the player puts it, it stays
 	end)
-	ns.EscapeCloses(name)
-	-- (1.1.2) Its X hides it itself, in combat too (the template's HideUIPanel does nothing there
-	-- for a call that is not secure: the author's report may open in the middle of a fight).
-	f.onCloseCallback = function()
-		f:Hide()
-		return false
-	end
 	local hint = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 	hint:SetPoint("BOTTOM", 0, 10)
 	hint:SetText(L.COPY_HINT)
@@ -2248,7 +2303,36 @@ function UI.ShowCopy(title, text, action, opts)
 		copyFrame.selectAll:ClearAllPoints()
 		if action then copyFrame.selectAll:SetPoint("LEFT", button, "RIGHT", 6, 0) else copyFrame.selectAll:SetPoint("BOTTOMLEFT", 10, 6) end
 	end
-	if copyFrame.TitleText then copyFrame.TitleText:SetText(title) end
+	-- (1.1.5) A second button after the first (and Select all), made the first time one is asked for.
+	local second = type(opts.second) == "table" and type(opts.second.fn) == "function" and opts.second or nil
+	if second and not copyFrame.second then
+		local b = CreateFrame("Button", nil, copyFrame, "UIPanelButtonTemplate")
+		b:SetSize(140, 20)
+		b:SetScript("OnClick", function(self) ns.SafeCall("copy second", function() if self.fn then self.fn() end end) end)
+		copyFrame.second = b
+	end
+	if copyFrame.second then
+		local b = copyFrame.second
+		b.fn = second and second.fn or nil
+		b:SetShown(second ~= nil)
+		if second then
+			b:SetText(second.label)
+			local fs = b:GetFontString()
+			local textW = fs and (fs.GetUnboundedStringWidth and fs:GetUnboundedStringWidth() or fs:GetStringWidth()) or 120
+			b:SetWidth(math.max(110, math.ceil(textW) + 24))
+			b:ClearAllPoints()
+			local after = copyFrame.selectAll or (action and button) or nil
+			if after then b:SetPoint("LEFT", after, "RIGHT", 6, 0) else b:SetPoint("BOTTOMLEFT", 10, 6) end
+			-- The hint takes the room right of the buttons, wrapped there if it must (a longer
+			-- language's), never under them.
+			copyFrame.hint:ClearAllPoints()
+			copyFrame.hint:SetPoint("BOTTOMLEFT", b, "BOTTOMRIGHT", 8, 0)
+			copyFrame.hint:SetPoint("BOTTOMRIGHT", copyFrame, "BOTTOMRIGHT", -12, 6)
+			copyFrame.hint:SetJustifyH("RIGHT")
+			if copyFrame.hint.SetWordWrap then copyFrame.hint:SetWordWrap(true) end
+		end
+	end
+	ns.SetWindowTitle(copyFrame, title)
 	copyFrame.text = text
 	copyFrame.eb:SetText(text)
 	copyFrame:Show()
@@ -2274,7 +2358,7 @@ function UI.CopyFrame(key) return copyFrames[key or "copy"] end
 
 local minimapButton
 
-local function PositionMinimapButton()
+local function PositionMinimapButton() -- gp:minimap
 	local angle = math.rad(ns.db.minimapAngle or 200)
 	-- On the ring, like Blizzard's own minimap buttons (and LibDBIcon): 5 past the map's edge.
 	local radius = (Minimap:GetWidth() / 2) + 5
@@ -2282,7 +2366,7 @@ local function PositionMinimapButton()
 	minimapButton:SetPoint("CENTER", Minimap, "CENTER", math.cos(angle) * radius, math.sin(angle) * radius)
 end
 
-local function CreateMinimapButton()
+local function CreateMinimapButton() -- gp:minimap
 	local b = ns.MakeRoundButton("OlympusMinimapButton", Minimap, 31)
 	b:SetFrameStrata("MEDIUM")
 	b:SetFrameLevel(8)
@@ -2330,11 +2414,18 @@ local function CreateMinimapButton()
 	return b
 end
 
+-- (1.1.5, the gamepad gate: with the gamepad UI no command is typed, GamepadRegistry.lua's "slash",
+-- so there the button shows even when /oly minimap hid it: it is how a gamepad player opens Olympus,
+-- and the command that brings it back can't be typed there. Back to mouse and keyboard, hidden again.)
 function UI.UpdateMinimapButton()
 	minimapButton = minimapButton or CreateMinimapButton()
 	PositionMinimapButton()
-	minimapButton:SetShown(not ns.db.hideMinimap)
+	minimapButton:SetShown(not ns.db.hideMinimap or not ns.Gate.Allowed("slash"))
 end
+ns.Gate.Hooks("minimap", {
+	park = function() if minimapButton then UI.UpdateMinimapButton() end end,
+	install = function() if minimapButton then UI.UpdateMinimapButton() end end,
+})
 
 ns.On("LOGIN", function()
 	UI.UpdateMinimapButton()
@@ -2375,7 +2466,7 @@ local function PhotoOff()
 	for f, alpha in pairs(was or {}) do pcall(f.SetAlpha, f, alpha) end
 end
 
-function UI.TogglePhoto()
+function UI.TogglePhoto() -- gp:photo
 	if not UI.PhotoAllowed() then return ns.Print(L.PHOTO_ONLY_AUTHOR) end
 	if InCombatLockdown and InCombatLockdown() then return ns.Print(L.PHOTO_COMBAT) end
 	if photo then

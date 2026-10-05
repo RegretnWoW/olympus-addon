@@ -633,11 +633,13 @@ function Board.ZoneText(zone)
 	return Grey(L.BOARD_ZONE_HIDDEN)
 end
 
--- The whisper is the player's own (the game's chat box; Olympus's window with the gamepad UI).
+-- The whisper is the player's own (the game's chat box; Olympus's window with the gamepad UI: the
+-- gate's "chat-box", whose use with mouse and keyboard a switch to the gamepad UI tells of).
 function Board.Whisper(name)
 	local tell = ns.TellName(name) or name
-	if ns.GamepadUI() then return ns.UI.WhisperWindow(tell) end
-	if ChatFrame_SendTell then ChatFrame_SendTell(tell) end
+	if not ns.Gate.Allowed("chat-box") then return ns.UI.WhisperWindow(tell) end
+	ns.Gate.Used("chat-box")
+	if ChatFrame_SendTell then ChatFrame_SendTell(tell) end -- gp:chat-box
 end
 
 local function Colored(name, class)
@@ -891,7 +893,7 @@ end
 function Board.RefreshCamps()
 	local Pins = ns.Pins()
 	if not Pins or not (ns.Map and ns.Map.Badge) then return end
-	local world = ns.WorldMapIcons(Pins, Board)
+	local world = ns.WorldMapIcons(Pins, Board) -- gp:worldmap-icons
 	local want, newest = {}, {}
 	if world and ns.db.showCamps ~= false and ns.IsMember() then
 		for _, e in ipairs(Board.List("camp")) do

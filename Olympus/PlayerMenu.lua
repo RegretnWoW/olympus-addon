@@ -149,6 +149,12 @@ end
 
 -- One menu opening: every feature's lines for its player, after the game's own.
 function PlayerMenu.Build(which, root, ctx)
+	-- Forever's gamepad player menu drives protected interact-target state while it is being
+	-- assembled. Even Menu.ModifyMenu's supported callbacks are unnecessary there and a client
+	-- report tied opening that menu to SetPreferredGamepadInteractTarget being refused. Once a
+	-- callback was registered in mouse mode it cannot be removed, so make it a strict no-op after
+	-- a switch to gamepad mode as well.
+	if ns.GamepadUI() then return 0 end
 	if type(root) ~= "table" and type(root) ~= "userdata" then return 0 end
 	if not ns.IsMember() then return 0 end
 	local target = PlayerMenu.Target(which, ctx)
@@ -161,8 +167,14 @@ function PlayerMenu.Build(which, root, ctx)
 end
 
 -- Every menu above, once (at login: Blizzard_Menu loads before any addon).
-function PlayerMenu.Hook()
+function PlayerMenu.Hook() -- gp:player-menu
 	if hooked then return true end
+	-- Do not register an addon callback in Blizzard's protected gamepad player-menu path. If the
+	-- player later returns to mouse and keyboard, the input-style event below installs it then.
+	if ns.GamepadUI() then
+		ns.Log("player menus: disabled with the gamepad UI")
+		return false
+	end
 	if not (Menu and type(Menu.ModifyMenu) == "function") then
 		ns.Log("player menus: this client has no Menu.ModifyMenu, no Olympus lines in them")
 		return false
@@ -170,6 +182,7 @@ function PlayerMenu.Hook()
 	for _, which in ipairs(PlayerMenu.WHICH) do
 		local w = which
 		local ok, err = pcall(Menu.ModifyMenu, "MENU_UNIT_" .. w, function(_, root, ctx)
+			if ns.GamepadUI() then return end
 			ns.SafeCall("player menu", PlayerMenu.Build, w, root, ctx)
 		end)
 		if not ok then ns.Log("player menu %s not hooked: %s", w, tostring(err)) end
@@ -183,9 +196,15 @@ function PlayerMenu.Hooked() return hooked end
 function PlayerMenu.StatusLine()
 	local keys = {}
 	for _, e in ipairs(entries) do keys[#keys + 1] = e.key end
-	return ("%s, lines: %s"):format(hooked and ("hooked (" .. #PlayerMenu.WHICH .. " menus)") or "not hooked", #keys > 0 and table.concat(keys, ", ") or "none")
+	local state = ns.GamepadUI() and "disabled with the gamepad UI"
+		or (hooked and ("hooked (" .. #PlayerMenu.WHICH .. " menus)") or "not hooked")
+	return ("%s, lines: %s"):format(state, #keys > 0 and table.concat(keys, ", ") or "none")
 end
 
 function PlayerMenu.Reset() hooked = false end -- (tests: the entries stay, each file's own)
 
 ns.On("LOGIN", function() PlayerMenu.Hook() end)
+-- A player who logged in with the gamepad UI has no Blizzard-menu callbacks from Olympus. Install
+-- them only after a later switch to mouse and keyboard (1.1.5: the gamepad gate, Gamepad.lua, on the
+-- next frame); switching back is covered by the no-op guard in the already registered callbacks.
+ns.Gate.Hooks("player-menu", { install = function() PlayerMenu.Hook() end })

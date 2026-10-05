@@ -1,0 +1,15 @@
+# The gamepad audit's ratchet (scripts/gamepad-audit.lua): per file, Olympus's uses of the
+# game's GameTooltip (tooltip) and chat window (print) that need no gp: tag. A count may go down;
+# raising one is a change the review reads. Format: file kind count.
+Answers.lua tooltip 8
+Board.lua tooltip 6
+Channels.lua print 3
+ChatWindow.lua tooltip 22
+Decree.lua tooltip 6
+GuildFrame.lua tooltip 5
+King.lua tooltip 5
+Map.lua tooltip 12
+Positions.lua tooltip 5
+UI.lua tooltip 48
+Views.lua tooltip 21
+Workshop.lua tooltip 4

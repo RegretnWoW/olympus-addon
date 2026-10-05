@@ -53,13 +53,20 @@ Olympian and Olympia out on purpose) counts as an Olympus guild once the author 
 signed list: the same list, signed with the same key on his own computer, that names the High
 Council and the King's Steward, for one faction and realm group. No census vote counts, and nobody
 else can add one. A few ship with the addon itself, so their members have nothing to paste: since
-1.1, the Alliance's `<OLYMPIAN>` (only a new version takes one of those off). Its members' addons, no Olympus members
+1.1, the Alliance's `<OLYMPIAN>`, and since 1.1.5 its `<OLYMPIANS>` too (only a new version takes one of those off). Its members' addons, no Olympus members
 until they hold that list, take it over their own guild alone (the list only: nothing else is
 read, and they send nothing). The first of them pastes it with `/oly approved paste`, or a click
 on the Join Olympus screen's last line (the author
 or a High Councillor hands out the signed text; it is checked like any list, so it can't be forged
 or changed), and his addon passes it to his guild every 5 minutes. `/oly approved` lists the
 approved guilds of your faction. A newer signed list without a guild ends it on every client.
+
+**Removed guilds (1.1.5).** A guild the High Council removed from Olympus is no Olympus guild,
+whatever its name: its census, chats and marks are gone and its members' addon shows the Join
+Olympus screen. Its way back is an appeal to the council: once the author names it in his signed
+approved list, it counts again, with no new version. Until a player updates, the council's
+[net-off](#net-off-11-the-moderators-hide-a-character-or-take-a-guild-off-the-network) word takes
+such a guild off the network live.
 
 ### Not in Olympus yet?
 First it asks the obvious question: *"<Your Guild>? Disband immediately. What are you
@@ -89,7 +96,9 @@ versions before 1.1 just get the whisper, as before.
 
 ### Census: the army at a glance
 - Every Olympus guild in one list: **Guild · Members · Online · Lord**. Columns sort by
-  clicking, like the Guild window.
+  clicking, like the Guild window. By default, fresh reports and larger guilds come first;
+  at the same size the exact `<OLYMPUS>` comes first, then the higher average level, then the
+  name (1.1.5). The Realm lists its guilds in the same order.
 - **Total soldiers** and **online now** across the whole realm.
 - **Where the army stands**: top zones ("Stormwind City 742") and totals per continent
   (Eastern Kingdoms, Kalimdor), counted by the guilds whose census comes from a member who
@@ -156,6 +165,20 @@ versions before 1.1 just get the whisper, as before.
   online, then one of his Captains, and says yes: **one whisper to each** from that click, the
   Captain told who to look after, the recruit told who to ask. The pair shows on his list (his
   client's alone); nothing goes on the channel.
+- **Centurions and correspondents** (1.1.5): a guild master of an Olympus guild (not the King's)
+  has a tab of his own in the Throne's place, **Guild** (or `/oly nominees`), laid out as the
+  King's Hands page: **+ Name a centurion** (his target, or a name he types), his list (a click
+  takes a title back, asked first), and a line per High Council department to name its
+  correspondent. Up to 10
+  centurions and one correspondent per department (6 at most), members of his own guild only: the
+  addon refuses an 11th centurion, a second correspondent for a department, one name twice and
+  anyone outside his roster, and says why. Each wears Max's bronze border without wings, and the
+  bronze mark on nameplates and in the game's chat, only while the server gives them that guild.
+  His own client sends the list on the Olympus channel; every addon takes it from that guild's
+  master alone (proven as for his bronze wings: your roster for your own guild, two census senders
+  for another), keeps it 6 hours after he stops repeating it, and drops it at once when he is no
+  longer guild master. `/oly nominees centurion <name>`, `/oly nominees correspondent <department
+  number> <name>` and `/oly nominees remove <name>` do the same from the chat.
 - **Level race**: the highest level players of the realm.
 - **Recruiting**: the guilds that still have free slots, so new players go where there is room
   (the five with the most, then every one on a click, 1.1).
@@ -174,7 +197,12 @@ Layer"** with his crown. One click (or `/oly hop`) and the addon does the asking
   askers is spread over many players instead of flooding one.
 - It picks one of them, favouring players outside a group and with fewer recent invites. They
   get **"X wants to join your layer"** with **Invite**, **Not now** and **Always invite**. No
-  answer or a no, and the next one is asked.
+  answer or a no, and the next one is asked. **Always invite** invites the next ones without
+  the window while that player is alone or with only the addon's hop guests; clicked while they
+  lead a party or raid of their own, it also covers that group until it ends (1.1.5, GitHub
+  issue #50: the window came back with every request there). That group's permission is never
+  saved: a later group asks first again, after a `/reload` the window asks once more, and
+  `/oly layerauto off` ends it at once.
 - The invite is accepted for you when that player is one the addon can vouch for (a member of
   your own guild, or a Lord or Captain the census confirms); anyone else's, and every invite
   while Blizzard's gamepad UI is on, waits for your click in the game's own invite window. The
@@ -211,6 +239,10 @@ Click any Lord, Captain, racer or inspected player. You get the same card the Gu
 shows: level, class, zone, rank and status, with **Whisper**, **Invite** and **Who** buttons.
 Any soldier can reach the Lord of another Olympus guild in two clicks.
 
+A High Councillor's tooltip (1.1.5) says so too: their mark and own icon after their name, then
+**High Councillor**, their department and their title, for whoever may see the council (the
+same as their card); none on the King's screen while the council's names are hidden.
+
 ### Right-click a player (1.1.2)
 Right-click a player (the target frame, party and raid frames, a name in chat, the Who list, the
 friends list, the guild roster) and the game's menu gets an **Olympus** part at the bottom:
@@ -239,7 +271,12 @@ friends list, the guild roster) and the game's menu gets an **Olympus** part at 
   now**. Send goes to him alone, in game; Not now sends nothing; an ask from anyone else is
   ignored. On his side the report he asked for opens by itself in a window you can copy from (the
   sender and time on top, **Select all**), and stays in the Workshop's list; chat gets one short
-  line. A report nobody asked for gets its line and the list only. His version checks and his
+  line. A report nobody asked for gets its line and the list only. Since 1.1.5 his addon keeps the
+  last 30 reports in its saved variables: where the game loads those back, a logout or a `/reload`
+  loses none, and his list opens them in the same window, the date on top for one from an earlier
+  day. The Forever beta, which forgets addon data at every login, still loses them at each logout
+  or `/reload`. No other player's addon keeps any, and the Workshop's copy for Discord says only
+  how many came, never who sent them or what they say. His version checks and his
   `/oly status` open in copy windows too. A window that opens by itself takes no keyboard, waits
   until a fight is over, and never covers a report he is reading.
 - In a dungeon, a raid or a match the game holds addon messages: the lines that send show greyed
@@ -248,8 +285,9 @@ friends list, the guild roster) and the game's menu gets an **Olympus** part at 
   without it gets no lines); no Blizzard function is replaced, and nothing opens the game's chat
   box.
 
-**Explanations and Answers.** Each page has a **?** in its bottom box (next to the gear on the
-Chat tab): what the page shows and, where it counts, why the numbers can differ between players.
+**Explanations and Answers.** Each page has a **?** in its bottom box: what the page shows and,
+where it counts, why the numbers can differ between players. The Chat tab has no bottom box and,
+since 1.1.5, no **?** of its own: the help button left of the window's X is the one there.
 A count's tooltip (the header's totals, a guild's row, the Realm's online, Captains and
 Recruiting, a layer's ~N, a zone and a map pin, the Treasury's week and ranking, the dues' guilds,
 the Throne's roll call) ends with **Why can this differ?** and a short answer. The author, the
@@ -292,7 +330,7 @@ sound changes: the chat line, the raid warning and the Olympus window stay, and 
 
 **In an instance or Busy (1.1).** In a dungeon, raid, battleground or arena, or while you are
 Busy (`/dnd`), Olympus's alerts wait: no raid warning, no sound and no popup from the addon. Each
-one still prints its chat line and waits on top of the Decrees tab, where a click shows it now.
+one still prints its chat line and waits on the Decrees tab (under the King's week since 1.1.5), where a click shows it now.
 Once you are out and not Busy, one line (and one raid warning and one sound) says what waited and
 is still current, and only what is still open pops up: a Vox question still open, the King's call
 to his audience within its two minutes, the Agenda still to come, a roll call within its minute,
@@ -370,6 +408,22 @@ WoW channel number to join). Each channel is exclusive to a rank:
   up to 3 messages; if the game refuses one of them, the rest of that line is not sent
   either, and you are told (1.1.1).
 - The channels show only in the chat of players with the addon.
+- **Marks in the game's own chat (1.1.5).** Before the name of an Olympus player in the game's
+  channels (General, Trade, LocalDefense, LookingForGroup and any other), say, yell, emote,
+  party, raid, instance chat and whispers both ways: the mark of their border's tier, the game's
+  gold elite dragon for the King, its silver one for a High Councillor (then the icon they
+  picked), the bronze for a guild master of an Olympus guild and the centurions and correspondents
+  he names (1.1.5, in his guild alone), and Olympus's star for any other
+  member your addon can check: your guild's roster, or for another guild its census, naming them
+  in the guild their own Olympus messages speak for (someone else's report alone proves nothing,
+  and a plain member of another guild is in no census, so gets none). Guild and officer chat show
+  the dragons alone (the King's gold, a High Councillor's silver, the bronze of a guild master and the people he names), never
+  the star: everyone there is of your guild, and you know who they are. Never on Olympus's own
+  lines ([Olympus], [Captains], [Lords] and the Chat tab), which show the name in its colour alone.
+  Through the game's own name filter, so the name's link, right-click and /r stay the game's. On
+  by default (`/oly chatmarks off` hides them), hidden with the gamepad UI, and a High
+  Councillor's on the King's screen while the council's names are hidden. The 1.1.5 letter
+  (`/oly letters 1.1.5`) draws each mark with who it is.
 - **Block terms (1.1).** `/oly filter add <word>` hides, on your screen, every line of addon
   text with that word: the Olympus chats, the King's writs, a decree's words and Vox Populi's
   question and answers. Whole words only, any case or accent, one word of 2 to 24 letters or
@@ -473,15 +527,11 @@ bottom-to-top always gives the same tab order; changing role or debug view never
   are kept, from every session, and scroll back. The tab follows the newest line until you scroll
   up; then the line you are reading stays in its place while new lines come in and the oldest go,
   and **N new** at the bottom takes you down to them.
-- By each name, Olympus's marks, by the rules of the borders and the nameplate marks (but not
-  switched off with them), and only where the guild a line names is proven: a nameplate reads the
-  guild from the game, a chat line only claims it. The King's crown, the High Council's mark and
-  colour, the game's silver elite mark for Lords and Captains, bronze for Raiders and Veterans of
-  your own guild (the census does not carry other guilds' rank names), a star for any other member
-  of your guild's roster or anyone the census names in theirs (and the King's Stewards and Hands),
-  the Treasurer's coin, and **Steward** or **Hand** after the King's. A name whose Olympus guild
-  cannot be checked (a plain member of another guild, or anyone claiming a guild's name) gets no
-  mark. A click on a name whispers that player, in Olympus's whisper window.
+- By each name, the name in its colour (the High Council's for a councillor, the writer's class
+  for anyone else), the Treasurer's coin, and **Steward** or **Hand** after the King's. No mark
+  before a name since 1.1.5: Olympus's marks show in the game's own chat instead, where players
+  outside Olympus are ([Channels](#channels), `/oly chatmarks`). A click on a name whispers that
+  player, in Olympus's whisper window.
 - A line your block terms hide shows as a grey bubble, and a click shows it, marked. Over the
   lines, like the pinned line, how many your filter hides in the channel (no room while it hides
   none), and a click there shows them all (another hides them again). A link shows its tooltip
@@ -527,8 +577,9 @@ bottom-to-top always gives the same tab order; changing role or debug view never
 - The tab has no place or size of its own: it is the Olympus window's, docked by your guild
   window or wherever you put it. Escape or the window's X closes it; it never opens by itself.
   With the chats off on this client it says so, what the choice means, and offers it.
-- **Blizzard's gamepad mode**: the same tab, opened directly or with `/oly talk` or `/ol`; click
-  into the box with the gamepad cursor to write. The Olympus window stays off the
+- **Blizzard's gamepad mode**: the same tab, opened from the Olympus window (the minimap button
+  opens it; no command is typed with the gamepad UI, see below); click into the box with the
+  gamepad cursor to write. The Olympus window stays off the
   Escape list there (its X closes it), and the tab opens no game popup: the whisper, a pinned
   line's takedown and the settings' pin use Olympus's own windows.
 
@@ -536,7 +587,7 @@ bottom-to-top always gives the same tab order; changing role or debug view never
 The Realm tab links **the Board** (or `/oly lfg`): who in Olympus wants a group right now, from
 what each player chose to share, and the King's week.
 
-- **The King's week** (1.1, on top of the Board, `/oly week`): the King's Agenda for the next 7
+- **The King's week** (1.1, on top of the Board and, since 1.1.5, of the Decrees tab, `/oly week`): the King's Agenda for the next 7
   days, by day, at the realm's hour, with your own guild's events from the game's calendar
   (green) among them, read on your computer and sent nowhere (on the King's screen, his stream,
   they read "Guild event"). Raid night, PvP night and court on one page, so nobody books the
@@ -687,7 +738,8 @@ alts and the census counts people:
 - The army's total then counts each player once, whatever guilds their characters are in (each
   guild's own size stays its roster's; the header's tooltip says how many were counted once).
   The treasury's ranking and its week's donors put a player's characters on one line, under the
-  main's name. Vox Populi takes one vote per player.
+  main's name, and a dues payment made from an alt counts for its main (1.1.5, see the dues
+  below). Vox Populi takes one vote per player.
 - Each linked character's addon says so on the Olympus channel (its name, its guild and the
   names it confirmed), and a link counts on a client only when both characters said it: a name
   someone claims alone links nothing.
@@ -702,8 +754,11 @@ alts and the census counts people:
 A tab with a crown that only the King sees: the guild master of the guild named exactly
 "Olympus" (of his faction), and on the Alliance that very character, Asmongold Asmongler: the
 addon knows him by name, like the Treasurer. It opens on **the Throne Room** (the queue of
-his court while it is open, and the Treasury), and holding court takes him there. Each of his
-tools lives where it belongs:
+his court while it is open, and the army's key), and holding court takes him there. Since 1.1.5
+the Treasury has its own tab alone, and under the Throne Room are **the centurions of the King's
+guild** (up to 10, bronze without wings), named by the King or a High Councillor, who has the
+Throne for them; his Steward and Hands read the list (department heads come in 1.1.6). Each of
+his tools lives where it belongs:
 - **The King's Agenda** (a button on the Throne): minutes and an event ("30 Raid on
   Crossroads"). The whole army gets a popup with the appointment (what, in how long, where)
   and sees it on the Census, with reminders 10 minutes and 1 minute before. Since 1.1 it also
@@ -894,7 +949,7 @@ alone until then).
   read 0.9's treasury, and 0.9 clients get a short copy of 1.0's, in 0.9's shape, from the
   Treasurer's addon.
 - **The ranking of donors** (all time) and the week's donations, with a copy for Discord.
-- **Early supporters**: everyone who gave before 1.0 (from 0.9's closed book, sent by the Treasurer's addon), names only, in alphabetical order, under the ranking and with its switch. They go out only once the Treasurer said yes to 1.0's question, which says their names go to everyone on the channel (his yes of 0.9.3 is not enough: he is asked again).
+- **Early supporters**: everyone who gave before 1.0 (from 0.9's closed book, sent by the Treasurer's addon), names only, in alphabetical order, with the ranking's switch: the Treasury tab's last section, folded until a click opens it (1.1.5). They go out only once the Treasurer said yes to 1.0's question, which says their names go to everyone on the channel (his yes of 0.9.3 is not enough: he is asked again).
 - **The guild bank of <Olympus>**: whoever of that guild opens the bank with the addon on takes
   a snapshot of it (each tab's items with icons and counts, the bank's gold, when it was seen);
   a keeper's snapshot (the newest, whoever took it) reaches the King and, with his "book"
@@ -935,7 +990,7 @@ alone until then).
   number and the count, 3 open requests per character, each for 3 days. His addon whispers it to
   the keepers, the King and his Steward heard online whose addon reads it (1.1 or later), and
   again every 15 minutes while it is open.
-  Their Treasury tab lists it next to the bank (**Requests to the treasury**, with what the bank
+  Their Treasury tab lists it under **Requests to the treasury** (with what the bank
   holds of it); a click marks it done or declines it, and the requester is told. Handing it over
   stays a normal trade or mail, the keeper's own click: the request closes by itself when his book
   records that item given to that player. While the King shows the army the book, the keepers'
@@ -954,8 +1009,8 @@ alone until then).
   was seen; the tabs' names left out, shown as "Tab 1", "Tab 2") to the King, his Steward and
   his Hands when their addon asks, never on the Olympus channel. Their addon takes it only from
   a Lord or Captain of that guild as the census confirms (a snapshot is its sender's word), keeps
-  it until logout, and shows it on the Treasury tab under **Sister guilds' banks** (a Hand's tab
-  appears for it), its items in the search too. His no takes it back from their screens: at once
+  it until logout, and shows it on the Treasury tab under **Guild treasuries**, each guild a page of
+  its own (a Hand's tab appears for it and shows it, even while the King shows the army nothing), its items in the search too. His no takes it back from their screens: at once
   from each one whose addon asked in the last 18 minutes (their addon asks every 15; his keeps who
   asked, and when, through a `/reload`), from the others at their next ask, once each, even after
   a `/reload` of his, for as long as his no stands (Konig's review: one who asked before could
@@ -1026,6 +1081,28 @@ alone until then).
     King's latest, or the Treasurer's is not the addon it says), the page says so and asks for a
     newer list, the King's table shows its "paid" as "?", and that list removes nobody. The
     army's Treasury tab keeps the King's three switches, and nothing of this.
+  - **A payment made from a confirmed alt counts for its main (1.1.5)**, the one gap Fern's #21
+    had (see Alt links above): on a guild's dues page the main's line adds what his alts paid that
+    week with that guild on it and names them, so he is above the amount once their gold together
+    reaches it, and his guild's table counts him once there (one payer, the gold in once). It is
+    never another guild's: an alt's payment with another guild on it, or with none ("guild not
+    known"), counts for the alt alone, and the alt's own line keeps its own gold, never its
+    main's. An alt counts only while it and its main are of that guild now, by the best word the
+    viewer's addon has: on a guild's own page, its roster (the server's word); on the Treasurer's,
+    his roster for his own guild and, for another, the guild each one's own payments of this week
+    carry. Never an earlier week's, even where the ledger still puts their gold in that guild by
+    it, and never the guild a link's claim names (it goes out again only when the links change).
+    The King's and his Steward's page of a guild not theirs has no such word, so there each
+    character shows its own gold, as before; their table counts the player once by the Treasurer's
+    ledger.
+    A guild's own page counts each player once among those at the amount, as the table does (a
+    linked alt of a main on that roster goes with him; the count's tooltip says how many), and on
+    a list too long to send whole, a main whose linked alt of the roster is not on it shows as not
+    known, never below. Only a link both characters confirmed counts: an offer not answered, or a
+    name one character claims alone, adds nothing, and a link taken apart stops counting at once
+    (the books keep each character's own weeks; the link is looked up each time a list is drawn).
+    The table goes by the links the Treasurer's addon heard, a guild's page by the viewer's own
+    addon: one that has not heard the link yet shows each character's own gold, as before.
   - **Clearing a seat (a guild's Captains and Lord)**: on their own guild's list, one click
     filters the roster to whoever is under the amount this week (never someone the Treasurer's
     list can't tell yet: a list still coming, or cut). A click picks one name; under it,
@@ -1045,7 +1122,7 @@ alone until then).
     character last played. **Remove** shows only with the Treasurer's list of the last 10
     minutes, counted by the King's amount; with an older one, or one counted by another amount,
     it says so, and a removal confirmed anyway does nothing and asks again.
-  - **Send this week's dues**: a button on top of the Treasury tab, for every member on the
+  - **Send this week's dues**: a button on the Treasury tab, for every member on the
     Treasurer's realms (the tab is there for it even while the King shows the army nothing;
     a keeper has none: gold between keepers is a transfer). Its click fills in what the usual
     miss gets wrong, the person and the amount: with your mailbox open on its Send Mail tab, a
@@ -1172,6 +1249,9 @@ whisper to a named crafter (`/oly craft`).
   who can, with their skill and the item, and a click whispers one of them.
 - A crafter's row opens a whisper to him and, on a click, the recipes he listed (hover one for the
   item). Search the board by crafter, guild or profession.
+- Each profession is one group under its English name, whatever language its crafters' clients
+  list it in (1.1.5): Cooking, Cocina and Culinária are all Cooking. A search finds a crafter by
+  either name.
 - It stays light on the Olympus channel and on your own messages: your listing goes once at login,
   every 45 minutes, and after a change (a profession listed or taken off 2 minutes after the last
   at the soonest, a skill up 10 minutes), so about 1.3 an hour while you play and 6 at most while
@@ -1182,8 +1262,8 @@ whisper to a named crafter (`/oly craft`).
   nothing is whispered for you: the whisper is yours to write. Old clients ignore the board.
 
 ### World map
-- Soldiers per zone on zone and continent maps, and per continent on the world map (with
-  Blizzard's gamepad mode, only per continent: see below).
+- Soldiers per zone on zone and continent maps, and per continent on the world map (none with
+  Blizzard's gamepad mode since 1.1.5: see below).
 - Decrees are round icons (the horn, the war cry...) where they were called, and the King's
   crown where he stands; the Board's camps (1.1) one fire badge per zone, with how many. Over a
   zone's circle they move just outside its edge, top right first, so its number stays readable;
@@ -1301,6 +1381,14 @@ the game is removed at login, with one line saying so.
 
 ### Everywhere
 - **Copy**: every tab produces a ready-to-paste text for Discord.
+- **Version letters** (1.1.5): after the addon updates, once a version, a short letter on
+  parchment, in a window like the Olympus window's, says what changed in that version, in the
+  dev's own words. It waits until the privacy page is closed, and never opens in combat, in a
+  dungeon or outside an Olympus guild. On the Forever beta, whose saved variables never load, it
+  shows again every session, as the privacy page asks again. The Olympus window's help button
+  (the **i** left of the X) keeps every letter: **Version letters** on its page lists them,
+  newest first, and a click opens one; `/oly letters` (or `/oly letters 1.1.4`) does too. Nothing
+  is sent: which letters you saw is kept on your computer, for your account.
 - **What this client saw** (1.1, the Decrees tab and `/oly log`): a log of the acts your addon
   took while you were online (decrees, the gates opening and closing, pardons, the King's
   visibility switches for the treasury and the untabarded list, and the shared block terms'
@@ -1331,7 +1419,7 @@ the game is removed at login, with one line saying so.
 - **Search**: a box on top of the Census (guilds, Lords, Captains, players, zones, recruiting),
   the Realm (guilds, Lords, Captains, members seen online), Crafters (crafter, guild or profession), the
   Tabards (inspected and untabarded players, by name or guild), the Treasury (donors in the
-  ranking and the book, and since 1.1 the bank's items), the Decrees (since 1.1: the log of what this client saw) and the Chat tab (since 1.1.1: a name, a guild or words of a line). Any case, accents too; only what matches shows, under the headers it belongs to (a Captain under his guild, opened
+  ranking and the book, and since 1.1 the bank's items), the Decrees (since 1.1: the log of what this client saw; since 1.1.5 the King's week too) and the Chat tab (since 1.1.1: a name, a guild or words of a line). Any case, accents too; only what matches shows, under the headers it belongs to (a Captain under his guild, opened
   for you, a page of guilds at a time), with an **x** to empty it. Each tab keeps its text until
   you log out or `/reload`; a guild clicked in the Census opens in the Realm with its box emptied.
   It only changes what the list shows: **Copy** still gives everything, and nothing is sent.
@@ -1350,11 +1438,24 @@ the game is removed at login, with one line saying so.
   Throne's /who line for his key rotation, 1.1: the answer shows in the game's
   Who list), and the Issue Reporter is the game's to show. Since 0.9.9 it leaves the world map
   alone there too: no zone counts, decrees, crown or guildmate dots on it (the minimap keeps
-  the crown and the dots, the Azeroth map its continent totals), because each of those went
-  through the map library into the gamepad map's own state. If the game still says it blocked Olympus, a
+  the crown and the dots), because each of those went through the map library into the gamepad
+  map's own state; since 1.1.5 its continent totals and Olympus button go too, the gamepad map
+  being the game's alone. If the game still says it blocked Olympus, a
   `/reload` clears it; to tell us what it was, open the Olympus window, press its help button
-  (left of the X), then **Report a bug**. Don't type `/oly bug` with the gamepad: a command
-  typed in the chat there can set the block off again.
+  (left of the X), then **Report a bug**.
+  **The gamepad gate (1.1.5).** Every way Olympus reaches into the game's own windows is listed in
+  one place (`Olympus/GamepadRegistry.lua`) and asks one gate before it acts, so a new feature
+  can't reach them with the gamepad UI on by accident. With the gamepad UI on, Olympus registers
+  no typed command (`/oly`, `/olympus`, `/ol`, `/olc`, `/oll`): the game's chat box runs a
+  command's function and then closes itself in that function's name, which is the very call the
+  gamepad UI refuses. Nor does it put its round button in the game's guild windows, where the
+  gamepad cursor would select it. Open Olympus with the minimap button (it shows there even when
+  `/oly minimap` hid it), and use its window (its help button: **Report a bug**). Switched to the
+  gamepad UI in the middle of a session (Options, Gamepad), Olympus steps back from the game's
+  windows on the next frame: its marks, borders and buttons there hide, its tooltip lines and menu
+  lines stop, and what the game keeps until a `/reload` (the commands typed with mouse and
+  keyboard among it) is told once, in Olympus's own window, with a **Reload** button. Back to
+  mouse and keyboard, it all comes back without a `/reload`.
 - English and Portuguese in full, and since 1.1 Spanish, French and German for the main
   screens, the alerts and decrees, the Join screen and its whisper, the chats and the privacy
   questions (the rest in English; the pages' **?** explanations and the Answers of 1.1.2 are in
@@ -1467,10 +1568,12 @@ message (the game adds it). What goes where:
 | Check version (1.1.2): nothing but a number to match the answer | the player you right-clicked, alone (a whisper) | only when you pick **Check version** (a player once every 2 minutes, 6 a minute) |
 | The answer to a version check (1.1.2): your addon's version | the player whose addon asked, alone (a whisper) | when a player's addon asks: each once every 30 seconds at most, 20 a minute in all; never to a player you block or ignore, and to the author only after your yes to his roll calls (his checks are roll calls) |
 | Ask to update (1.1.2): the newest version your addon knows | the player you right-clicked, alone (a whisper) | only when you pick **Ask to update** for a player on 1.1.2 or newer (a player once a day, 5 an hour); for an older one it only opens a whisper you send yourself |
-| Your bug report (the same text as `/oly bug`) | the author alone (whispers) | only when you press **Send to** him in Report a bug, or **Send** in the window his ask opens (1.1.2) |
+| Your bug report (the same text as `/oly bug`) | the author alone (whispers); since 1.1.5 his addon keeps the last 30 it got in his saved variables | only when you press **Send to** him in Report a bug, or **Send** in the window his ask opens (1.1.2) |
 | The shared block terms (1.1): each word, whether it was added or removed, and when; for 15 minutes after an edit, the editor's own client adds his name to it (never to anyone else's) | everyone on the Olympus channel | only from the client of the King, his Steward, a Hand or a High Councillor: at once when they edit it, and every 10 minutes while they play (not when another client just sent the same list). Your own filter is never sent |
 | Your position as a dot on the map | your guild | only with `/oly share` (off by default) |
 | A Lord's mentor pair (1.1): the recruit's name to the Captain, the Captain's name to the recruit, as whispers in his words | those two players | only when the Lord clicks **Send both** |
+| A guild master's centurions and correspondents (1.1.5): their names, and each correspondent's department | everyone on the Olympus channel | only from that guild master's client: a few seconds after he names someone or takes a title back, and every 5 minutes while he plays |
+| The centurions of the King's guild (1.1.5): their names | everyone on the Olympus channel | only from the King's or a High Councillor's client: a few seconds after one of them names someone or takes a title back, and every 5 minutes from one of them while they play |
 | Join Olympus (1.1, outside an Olympus guild): "which guild should I ask?" (J1), and your request (J3: the guild you ask, your level and class) | the one member the screen asks: one found with `/who` at a search, and the one you are about to whisper | J1 at a search (one member every 15 seconds at most, none while a recent answer is known; while only one answer names the gates, one more member at once, three in 10 minutes at most) and just before a whisper (again if that member never answered); J3 with each whisper you send |
 | The answer (J2): whether you take recruit whispers, the King's gates, and up to 8 guilds with room the census confirms, each with its free slots and up to 2 of its Lords and Captains online that two reports name (never the King) | the recruit who asked, alone | when a recruit's addon asks you, once a minute per recruit and 10 a minute at most (with do not contact on, a bare "no" to the rest) |
 | A treasury keeper's book (balance, gold and items given and who gave them, the ranking) and the guild bank of `<Olympus>` (its gold and items) | the parts the King shows the army (his switches): everyone on the Olympus channel. The rest (1.1): the King, his Steward and the keepers alone, by whisper, never on the channel (from a keeper whose addon is 1.1: one still on 1.0 sends his whole book on the channel, as 1.0 did) | only after that keeper says yes (each keeper, the King too, is asked once; `/oly treasurer on\|off`), withdrawn at once when he turns it off, and again every 5 minutes while he plays, for clients that were offline |
@@ -1478,7 +1581,7 @@ message (the game adds it). What goes where:
 | That you are taking donations, if you keep a book of the treasury (1.1), with your zone only if you share your location | everyone on the Olympus channel | only while you turn it on (**Taking donations**, `/oly donations on`): every 2 minutes and when your zone changes, off when you log out |
 | A request to the treasury, if you are a Lord or a Captain (1.1): the item's number, the count, your guild | the treasury's keepers, the King and his Steward heard online (their addon 1.1 or later), by whisper; while the King shows the army the book, the open ones also on the Olympus channel, from the keepers' addons | when you ask (a click on an item, or `/oly need`; 6 new requests an hour at most), then every 15 minutes while it is open |
 | Your guild bank's snapshot, if you are the guild master or an officer of an Olympus guild other than the King's (1.1): items and counts, its gold, when it was seen (not the tabs' names) | the King, his Steward and his Hands alone, by whisper, when their addon asks (never on the Olympus channel) | only after your yes (asked once when you open the bank; `/oly bank share on\|off`); your no takes it back from their screens: at once from those whose addon asked in the last 18 minutes, from the others at their next ask while you are online (one never heard again keeps it until he logs out) |
-| Your character's name, if you gave to the treasury before 1.0 (the early supporters): names only, no amounts, in alphabetical order | with the King's ranking switch on: everyone on the Olympus channel, shown under the ranking. Otherwise (1.1): the keepers, the King and his Steward alone, by whisper | from the Treasurer's addon once he said yes to 1.0's question or to his line on the first-open page, both of which say their names go to everyone on the channel (his 0.9.3 yes is not enough), after his login and when a client asks: a donor is not asked |
+| Your character's name, if you gave to the treasury before 1.0 (the early supporters): names only, no amounts, in alphabetical order | with the King's ranking switch on: everyone on the Olympus channel, shown at the end of the Treasury tab. Otherwise (1.1): the keepers, the King and his Steward alone, by whisper | from the Treasurer's addon once he said yes to 1.0's question or to his line on the first-open page, both of which say their names go to everyone on the channel (his 0.9.3 yes is not enough), after his login and when a client asks: a donor is not asked |
 | The dues' amount (1.1): one amount a week, the same for everyone | everyone on the Olympus channel | from the King's and his Steward's addons alone, when they set it and every 5 minutes |
 | Your guild's dues list (1.1): each of its players who paid the Treasurer in the last 5 weeks with that guild on the payment (name, gold this week, hours since his last payment), how many hours ago the Treasurer's mail character last played, and a digest (with a secret of his session) that changes when this week's payers with no guild change | the King, his Steward, or a Captain or Lord of that guild who asked, alone (whispers from the Treasurer's addon); when nothing changed, one whisper saying so | when they open the dues page, once every 5 minutes per asker at most, while the Treasurer shares his book |
 | A Captain's ask about his roster (1.1): five letters of the hash of each name on his guild's roster missing from its dues list | the Treasurer alone (whispers) | from a Captain's or Lord's dues page while this week's list says some paid with no guild on it, when that changes or his roster does, once a minute at most |
@@ -1589,7 +1692,7 @@ map to invisible, and gives every frame its look back on the second `/oly photo`
 `/reload`. Never in combat, not with the gamepad UI, not on a screen of more than 1000 frames
 (it says so and leaves them as they are), and nothing is sent to anyone.
 To check the elite borders his own rank doesn't carry, `/oly borders test <tier>` (his
-character only) shows one of the six round his own portrait, and on his target frame when he
+character only) shows one of the borders round his own portrait, and on his target frame when he
 targets himself, and its nameplate mark after his own name on his player frame and on every
 friendly player's nameplate (`/oly borders test member`: the member's star alone), on his screen
 alone until `/oly borders test off` or a `/reload`. It follows the borders' and the marks' own
@@ -1645,6 +1748,15 @@ few characters working together can still reach is said plainly further down
     Steward's own list names (their word, never a vote; the King can't take back a Steward's
     Hand: that Steward does, or the author by removing him): everywhere else they count as
     Captains, so outsiders' reports can't add one to the Crown.
+  - **The centurions of the King's guild** (1.1.5) count only from the King's character or a
+    councillor on the signed list (the sender the server stamps), the newest list heard, and end
+    when its sender is neither any more; their border shows only on a player the server puts in
+    the King's guild.
+  - **A guild master's centurions and correspondents** (1.1.5) count only from the list his own
+    client sends (the sender the server stamps), and only while the census or your roster proves
+    him that guild's master as for his bronze wings; a list from anyone else is refused and never
+    replaces his. Their border shows only on a player the server puts in that guild, so nobody can
+    borrow it, and the list ends when he is no longer guild master.
   - A sender speaks for one guild only (a player who changed guilds can speak for the new one
     after 15 quiet minutes). A guild is one whatever the capitals a report spells it with: a
     second spelling is a vote on the same guild, never a second guild.
@@ -1842,6 +1954,7 @@ Other limits:
 | `/oly inactive [7\|14\|30]` | your guild's members offline that long, by name (a rank that may remove members removes one per click, asked first) |
 | `/oly warndays <days>` | when a Lord or Captain counts as away: red in the Realm, and one line when a Lord crosses it |
 | `/oly recruits` | Lords: your recruits, and a Captain as each one's mentor (one whisper to each, from your click) |
+| `/oly nominees [centurion <name> \| correspondent <n> <name> \| remove <name>]` | guild masters (1.1.5): up to 10 centurions and one correspondent per High Council department, members of your guild, who wear bronze without wings while in it; the King and the High Council, the King's guild's 10 centurions; alone, your Guild tab (the Throne for the King's people) |
 | `/oly nocontact on\|off` | do not contact: recruits' Join screens skip you (on), or may ask you (off) |
 | `/oly patrol` | start or stop the tabard patrol |
 | `/oly mark [note]` | mark your target |
@@ -1863,13 +1976,14 @@ Other limits:
 | `/oly bank share on\|off` | the guild master or an officer of an Olympus guild other than the King's shows his guild bank's snapshot to the King, his Steward and his Hands (by whisper, never on the channel), or not (1.1) |
 | `/oly rollcall on\|off` | answer the author's roll calls (version, client, channel state) or not (1.1: not until you say yes) |
 | `/oly privacy` | the first-open page again: what the addon shares, and your Yes or No to each (1.1) |
+| `/oly letters [version]` | the version letters (1.1.5): every one, newest first, a click opens one; with a version, that letter |
 | `/oly chat on\|off` | the Olympus chats on this client; off, nothing is sent or shown (1.1: off until you say yes) |
 | `/oly talk [olympus\|captains\|lords]` | open or close the Olympus window on its Chat tab, on that channel; also `/ol`, `/olc` or `/oll` with nothing after it, or Shift-click the minimap button (1.1.1) |
 | `/oly inspection on\|off` | take part in the King's Royal Inspection when sampled (a 2-minute patrol reported to him), or not (1.1: not until you say yes) |
 | `/oly issuereporter hide\|show` | hide Blizzard's Issue Reporter box (beta clients) at every login, or show it again (also a "Hide" button on it) |
 | `/oly helpme [text]` (or **Ask a High Councillor** on the Realm tab) | ask the High Council (the moderators) for help: it goes by whisper to up to three of them online who take requests |
 | `/oly council list` · `/oly council help on\|off` | the High Council as your addon knows it; moderators: take help requests or not. The list is signed by the author on his own computer and checked by every client: no name is written in the addon's code, and nobody can forge or change it. An addon without the list (`High Council: -`) asks the channel for it a minute or so after login, and again until it has it (two and a half minutes later when nobody answered, up to 3 times). Since 1.0.0 the list also crosses realms through guild chat: guildmates on another realm answer the ask and pass the list on, and it goes on to your realm's channel |
-| `/oly council icon` (or **My council icon** on the Realm tab, councillors only) | moderators: a councillor's name in the Olympus chats always carries the High Council's mark (the game's target-frame skull), which nobody can change. An icon of your own after it is optional: pick it from the game's icons, like a macro's. Your addon announces it on the channel (at once, then every 20 minutes), and other clients take it only from a councillor and only as a game icon |
+| `/oly council icon` (or **My council icon** on the Realm tab, councillors only) | moderators: a councillor's name always carries the High Council's mark, which nobody can change: in the game's own chat (1.1.5, `/oly chatmarks`) the game's silver elite dragon, on their tooltip and in the census the game's target-frame skull. An icon of your own after it is optional: pick it from the game's icons, like a macro's. Your addon announces it on the channel (at once, then every 20 minutes), and other clients take it only from a councillor and only as a game icon |
 | `/oly discord <code>` · `/oly discord` | Olympus Link: link this character to your Discord account with the bot's code (or paste it in a box) |
 | `/oly discord show` · `status` · `forget` | the Olympus Link window (QR code and link) again; every character's request or proof; drop this character's |
 | `/oly discord key <id> <key>` · `key` · `key new` · `key off` | confirmers (High Councillors too): keep the key the bot's keeper gave you for this character (once the bot's key is in the addon), show its id and public half, say where a new one comes from (the keeper; a key made in game only with the council authority on, off as it ships), remove it (and its certificate) and print the old key's id, which counts at the bot until its keeper revokes it |
@@ -1884,8 +1998,9 @@ Other limits:
 | `/oly layerhelp on` · `/oly layerhelp off` | get (or not) requests to invite players to your layer (1.1: not until you say yes) |
 | `/oly layerauto on` · `/oly layerauto off` | invite layer requests without the window |
 | `/oly location on` · `/oly location off` | share (or not) your zone and layer on the Olympus channel |
-| `/oly borders on` · `/oly borders off` | elite borders round the portrait of your target, focus and your own frame (Forever): the game's gold wings for the King, silver wings for the High Council, gold for Lords and silver for Captains, and Max's bronze wings for Raiders and bronze for Veterans of Olympus guilds (none for a character or a guild the moderators took off, net-off); on by default, hidden with the gamepad UI. Off, the nameplate marks go too |
-| `/oly nameplates on` · `/oly nameplates off` | a small mark left of the name on friendly players' nameplates (Forever; friendly nameplates show with Shift+V), like an elite creature's dragon: the game's gold elite mark for the King, its silver for the High Council, Lords and Captains, bronze for Raiders and Veterans, and a star for any other member of an Olympus guild (none for a character or a guild the moderators took off, net-off); on by default, hidden with the gamepad UI and with `/oly borders off` |
+| `/oly borders on` · `/oly borders off` | elite borders round the portrait of your target, focus, party members and your own frame (Forever): the game's gold wings for the King, silver wings for the High Council, Max's bronze wings for the guild masters of Olympus guilds, and his bronze without wings for the centurions and correspondents a guild master names, while they are in his guild (none for a character or a guild the moderators took off, net-off). Since 1.1.5 the rank borders (gold for Lords, silver for Captains, bronze for Raiders and Veterans) are gone, and any other member has the nameplate star alone. On by default, hidden with the gamepad UI. Off, the nameplate marks go too |
+| `/oly nameplates on` · `/oly nameplates off` | a small mark left of the name on friendly players' nameplates (Forever; friendly nameplates show with Shift+V), like an elite creature's dragon: the game's gold elite mark for the King, its silver for the High Council, bronze for guild masters and the people they name, and a star for any other member of an Olympus guild (none for a character or a guild the moderators took off, net-off); on by default, hidden with the gamepad UI and with `/oly borders off` |
+| `/oly chatmarks on` · `/oly chatmarks off` | 1.1.5: the mark of a player's border tier before their name in the game's own chat (channels, say, yell, emote, party, raid, instance and whispers; guild and officer chat the dragons alone, never the star): the King's gold dragon, a High Councillor's silver then their icon, the bronze of a guild master and the people he names, the star for any other member your addon can check. Olympus's own lines carry none. Through the game's own name filter, so the name's link, right-click and /r stay the game's; on by default, hidden with the gamepad UI, and a councillor's on the King's screen while the council's names are hidden |
 | `/oly key <secret>` | officers: seal the Olympus channel |
 | `/oly key rotate` | the King or his Steward: a new key for the whole army, by whisper to the Lords and Captains his /who saw in the guilds he picks and over guild chat, never on the Olympus channel (also on the Throne) (1.1) |
 | `/oly block <name>` | ignore a player |
@@ -1930,20 +2045,42 @@ Council signing round trip: a throwaway key in a temporary folder, lists signed 
 `scripts/council-sign.py` and checked by `Olympus/Sign.lua` (never the author's key). This
 is the same command CI uses; it stops with a nonzero exit status on failure.
 The TOC file check also catches filename case mismatches on CI's Linux filesystem.
+The gamepad gate's audit (1.1.5, `scripts/gamepad-audit.lua`) compiles every addon file without
+running it and reads its bytecode: every place the addon reaches into the game's own UI must be
+registered in `Olympus/GamepadRegistry.lua`, tagged `-- gp:<id>` and behind the gate, and no
+global that is not Olympus's may be written; Olympus's own tooltips and chat lines are counted
+per file against `scripts/gamepad-baseline.txt`. AGENTS.md says how to register one.
+The gamepad pass (`tests/gamepad.lua`, run by the offline suite) plays whole sessions with the
+gamepad UI simulated, from a gamepad login and across switches both ways, in a model of Forever's
+client that offers only what `tests/fixtures/forever-api.lua` lists (made from the client's own UI
+source by `scripts/forever-api.lua`); it fails when anything of Olympus's reaches the game's UI
+where the registry doesn't allow it.
 The offline suite checks the border textures in `Olympus/media/borders/` (32-bit TGAs with
 alpha, 256 x 256, and the member's 32 x 32 star for the nameplate marks); with Pillow installed,
 `scripts/check.sh` also checks they are what `scripts/make-borders.py` builds from Max's PNGs in
 `media/borders/src/` (the star it draws itself: no game file is copied).
+The CurseForge description is `docs/CURSEFORGE-STORE.md` (1.1.5): CurseForge's editor refuses a
+page above about 100 KiB, so `scripts/curseforge-page.lua` makes it from `docs/CURSEFORGE.md`
+(the whole page), with the last versions from this repository's `ROADMAP.md` and the longest
+sections cut to their opening and a link to the same section here. `scripts/check.sh` checks it
+is what the script makes, and that `scripts/curseforge-size.lua` measures its body under the
+budget (92,000 bytes).
 
 ```bash
 bash scripts/check.sh                    # full repository checks used by CI
 luajit tests/run.lua                      # offline tests: codec, roster, hierarchy, security, layers, decrees, channels
 scripts/lint-globals.sh                   # catches locals used before they are declared
+luajit scripts/gamepad-audit.lua [--list]  # the gamepad gate: every reach into the game's UI registered (--list: each one)
+luajit tests/gamepad.lua                   # the gamepad pass alone (the offline suite runs it too)
+luajit scripts/forever-api.lua <Interface> [--check]  # the client model's fixture, from Forever's extracted UI source (local)
+luajit scripts/forever-pins.lua <Interface>  # the registry's source pins against that source (local)
 bash tests/check-scripts.sh               # verify check-script failure handling (also run in CI)
 bash tests/sign-roundtrip.sh              # the High Council signing script end to end (needs python3)
 python3 tests/fixtures/make-link-vectors.py --check  # Olympus Link's shared vectors, sample, draw and inbox (needs "cryptography")
 node --test web/test/*.test.mjs          # Olympus Link's page, core, Worker and tools (Node 22.13 or newer; also run in CI)
 python3 scripts/make-borders.py [--check] # the border textures from media/borders/src (needs Pillow)
+luajit scripts/curseforge-page.lua [--check]  # docs/CURSEFORGE-STORE.md, the CurseForge description, from docs/CURSEFORGE.md
+luajit scripts/curseforge-size.lua [--check] [page]  # that page's body as CurseForge's editor sends it (or another page's)
 python3 scripts/link-keys.py ca           # the author, once: Olympus Link's council authority (see below)
 python3 scripts/council-sign.py sign "First Surname,..." [realm group]  # the author: sign the High Council list
 python3 scripts/council-sign.py council [council.json]  # the author: sign the names, departments and titles (see the script)
@@ -2032,7 +2169,7 @@ Gundlach and contributors (speedata, 3-clause BSD) for Olympus Link's QR code
 - **Feature requests:** Fernmelder, whose 39 posts became 1.1 (the Fernmelder release);
   shenanigans_ (the nameplate marks), Valdericht (`<OLYMPIAN>`), Pyralis Ashandar (taking
   donations) and Zeal (what the King hides stays off the channel).
-- **Art:** Max (the bronze elite borders of Raiders and Veterans, drawn over the game's own).
+- **Art:** Max (the bronze elite borders, drawn over the game's own: the winged one is the guild masters' since 1.1.5, the plain one their centurions' and correspondents').
 - **Reports from the field:** Riukensei and PartyRockAce (the gamepad UI), Ignitheus (whispers
   to Forever names), Pyralis Ashandar, the Treasurer (the treasury and the guild bank), and the
   player who told us WoW had handed him the channel.

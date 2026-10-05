@@ -67,6 +67,10 @@ local recent = {}     -- times of our last invites
 local stats = { asks = 0, offers = 0, requests = 0, invites = 0, noes = 0, joins = 0, moves = 0, releases = 0 }
 local guests = {}     -- [short name] = { name, id, t, release }: players we invited for a hop
 local kingMode        -- this session's answer to the King's layer window: auto, manual or no
+-- 1.1.5 (GitHub issue #50): "Always invite" clicked while leading a party or raid of our own also
+-- covers that group, as long as it lasts. This session's alone, never saved: after a /reload the
+-- window asks once more. Cleared when the group ends (Hop.OnRoster), and by /oly layerauto off.
+local groupAuto
 local promptShown, lastPromptCheck = false, -math.huge
 local privateHinted = false -- told this session what an ask says while the player shares nothing
 
@@ -128,6 +132,13 @@ local function OnlyGuests()
 	for short in pairs(GroupNames()) do
 		if not guests[short] then return false end
 	end
+	return true
+end
+
+-- The group the "Always invite" click covers (groupAuto) is still the one we are in.
+local function GroupAutoActive()
+	if not groupAuto then return false end
+	if not (IsInGroup and IsInGroup()) then groupAuto = nil return false end
 	return true
 end
 
@@ -214,7 +225,7 @@ function Hop.HandleAsk(dist, sender, text)
 end
 
 -- release: the addon lets the guest go after GUEST_TIME (the helper chose that).
-local function Invite(name, id, release)
+local function Invite(name, id, release) -- gp:hop-group
 	local target = ns.TellName(name)
 	if C_PartyInfo and C_PartyInfo.InviteUnit then C_PartyInfo.InviteUnit(target) elseif InviteUnit then InviteUnit(target) end
 	guests[ns.ShortName(name)] = { name = name, id = id or 0, t = ns.Now(), release = release and true or false }
@@ -243,10 +254,11 @@ function Hop.HandleRequest(dist, sender, text)
 	local _, room = Hop.GroupState()
 	if not room or pending or (InCombatLockdown and InCombatLockdown()) then return SayNo(sender, id) end
 	-- On its own ("Always invite", or "For Olympus!" on the King's layer): only while we are
-	-- alone or with hop guests; in a group of our own we get the window.
+	-- alone or with hop guests; in a group of our own we get the window, until "Always invite"
+	-- is clicked in it (1.1.5, #50: then that group too, GroupAutoActive).
 	-- "For Olympus!" invites on its own only for a King two reports confirm.
 	local auto = ns.db.layerAutoInvite or (KingChoice() == "auto" and OnKingLayer(true))
-	if auto and OnlyGuests() then return Invite(sender, id, true) end
+	if auto and (OnlyGuests() or GroupAutoActive()) then return Invite(sender, id, true) end
 	pending = { from = sender, id = id, t = ns.Now() }
 	-- In an instance or on Busy (1.1, ns.Alert): no sound and no window; they come once the player
 	-- is out, while the asker still waits (Hop.WAIT), else the request only lapses.
@@ -262,7 +274,10 @@ local function Answer(data, invite, always)
 	pending = nil
 	if always then
 		ns.db.layerAutoInvite = true
-		ns.Print(L.HOP_AUTO_ON)
+		-- The kept setting still asks first in a group of our own (OnlyGuests). Clicked in one, the
+		-- player answered that question for it (#50: the window came back with every request).
+		groupAuto = (IsInGroup and IsInGroup() and not OnlyGuests()) and true or nil
+		ns.Print(groupAuto and L.HOP_AUTO_GROUP_ON or L.HOP_AUTO_ON)
 	end
 	if invite then
 		declines = 0
@@ -482,7 +497,7 @@ local function AskedHelper(name)
 	return nil
 end
 
-function Hop.OnInvite(name)
+function Hop.OnInvite(name) -- gp:party-invite
 	if not ask or (ask.phase ~= "requested" and ask.phase ~= "accepted") then return end
 	local helper = AskedHelper(name)
 	if not helper then return end
@@ -512,7 +527,7 @@ function Hop.OnInvite(name)
 	Changed()
 end
 
-local function LeaveGroup()
+local function LeaveGroup() -- gp:hop-group
 	if C_PartyInfo and C_PartyInfo.LeaveParty then C_PartyInfo.LeaveParty() elseif LeaveParty then LeaveParty() end
 end
 
@@ -554,6 +569,7 @@ StaticPopupDialogs["OLYMPUS_HOP_LEAVE"] = {
 }
 
 function Hop.OnRoster()
+	if groupAuto and not (IsInGroup and IsInGroup()) then groupAuto = nil end -- (the group "Always invite" covered ended)
 	if not ask or ask.phase == "done" then return end
 	local grouped = IsInGroup and IsInGroup()
 	if ask.phase == "joined" then
@@ -795,6 +811,7 @@ end
 -- No more invites on its own: every request shows the window again.
 function Hop.StopAuto()
 	ns.db.layerAutoInvite = false
+	groupAuto = nil
 	if KingChoice() == "auto" then
 		kingMode = "manual"
 		if ns.db.hopKingChoice == "auto" then ns.db.hopKingChoice = "manual" end
@@ -853,21 +870,18 @@ local function PromptButton(f, label, choice, look)
 	return b
 end
 
--- A window like the game's own dialogs, with three answers and "Don't ask me again".
+-- A window like the game's own dialogs, with three answers and "Don't ask me again". 1.1.5: in the
+-- Olympus window's metal without its portrait (ns.Window, Dialog.lua), "Olympus" in its title bar,
+-- no X (its answers close it; Escape too, with mouse and keyboard).
+Hop.PROMPT_TOP = -34 -- its text, under the title bar
 local function MakePrompt()
-	local f = CreateFrame("Frame", "OlympusKingLayerPrompt", UIParent)
+	local f = ns.Window("OlympusKingLayerPrompt", UIParent, { title = L.TITLE, close = false })
 	f:SetFrameStrata("DIALOG")
 	f:SetToplevel(true)
 	f:EnableMouse(true)
 	f:SetPoint("CENTER", UIParent, "CENTER", 0, 80) -- clear of the game's popups at the top
-	local okBorder, border = pcall(CreateFrame, "Frame", nil, f, "DialogBorderTemplate")
-	if not okBorder or not border then
-		border = f:CreateTexture(nil, "BACKGROUND")
-		border:SetColorTexture(0, 0, 0, 0.85)
-	end
-	border:SetAllPoints()
 	f.text = f:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
-	f.text:SetPoint("TOP", 0, -20)
+	f.text:SetPoint("TOP", 0, Hop.PROMPT_TOP)
 	f.text:SetJustifyH("CENTER")
 	-- Left to right: the way out (grey), inviting by hand, and "For Olympus!" (lit, white).
 	f.buttons = {
@@ -884,7 +898,6 @@ local function MakePrompt()
 	f:SetScript("OnHide", function(self)
 		if not self.answered then kingMode = kingMode or "manual" end
 	end)
-	ns.EscapeCloses("OlympusKingLayerPrompt")
 	return f
 end
 
@@ -908,7 +921,7 @@ function Hop.ShowKingPrompt()
 	f.check:SetPoint("BOTTOMLEFT", f.buttons[1], "TOPLEFT", -4, 6)
 	f.check:SetChecked(false)
 	local textH = f.text.GetStringHeight and f.text:GetStringHeight() or f.text:GetHeight()
-	f:SetHeight(20 + math.max(40, textH or 0) + 12 + 24 + 6 + 22 + 18)
+	f:SetHeight(-Hop.PROMPT_TOP + math.max(40, textH or 0) + 12 + 24 + 6 + 22 + 18)
 	f.answered = false
 	f:Show()
 end
@@ -921,8 +934,8 @@ function Hop.StatusLine()
 	local s = stats
 	local n = 0
 	for _ in pairs(guests) do n = n + 1 end
-	return ("help=%s auto=%s king=%s  |  asks=%d offers=%d requests=%d invites=%d noes=%d joins=%d moves=%d releases=%d guests=%d  |  now=%s"):format(
-		tostring(Hop.Helps()), tostring(ns.db.layerAutoInvite == true), tostring(KingChoice() or "-"),
+	return ("help=%s auto=%s group-auto=%s king=%s  |  asks=%d offers=%d requests=%d invites=%d noes=%d joins=%d moves=%d releases=%d guests=%d  |  now=%s"):format(
+		tostring(Hop.Helps()), tostring(ns.db.layerAutoInvite == true), tostring(GroupAutoActive()), tostring(KingChoice() or "-"),
 		s.asks, s.offers, s.requests, s.invites, s.noes, s.joins, s.moves, s.releases, n, ask and ask.phase or "-")
 end
 
@@ -948,9 +961,11 @@ function Hop.KingStatusLine()
 	return ("%s  |  realm %s  |  layer %s  |  crown %s"):format(state, realm, layer, crown)
 end
 
--- On again also forgets the King's layer answer: the window may ask again.
+-- On again also forgets the King's layer answer: the window may ask again. Off also ends the
+-- group "Always invite" covered (#50).
 function Hop.SetHelp(on)
 	ns.db.layerHelp = on
+	if not on then groupAuto = nil end
 	if on then
 		ns.db.hopKingChoice, kingMode, promptShown = nil, nil, false
 	end
@@ -969,7 +984,7 @@ function Hop.Reset()
 	ask, pending, lastAsk = nil, nil, -math.huge
 	fails, failedAt = 0, -math.huge
 	wipe(heard)
-	kingMode, promptShown, lastPromptCheck, privateHinted = nil, false, -math.huge, false
+	kingMode, groupAuto, promptShown, lastPromptCheck, privateHinted = nil, nil, false, -math.huge, false
 	lastOffer, declines, pausedUntil = -math.huge, 0, -math.huge
 	wipe(offered); wipe(answeredAt); wipe(recent); wipe(guests)
 	for k in pairs(stats) do stats[k] = 0 end

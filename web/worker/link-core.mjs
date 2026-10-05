@@ -659,7 +659,7 @@ async function proofKey(env, p) {
 		if (row.public_key !== cert.publicHex || row.kind !== cert.tier || row.character !== cert.character) {
 			return { why: "its certificate is not the one registered for this key (public key, tier and character)" };
 		}
-		// Checked as the council authority's are (Konig's review, Codex on #39): whoever holds a
+		// Checked as the council authority's are (Konig's review on #39): whoever holds a
 		// registered key's seed cannot make up its certificate, nor outlive the one it had.
 		if (row.cert_exp === null || row.cert_exp === undefined) return { why: 'no certificate was issued for this key' };
 		if (!(await backendCertificate(env, cert))) return { why: 'its certificate is not signed by the backend key' };

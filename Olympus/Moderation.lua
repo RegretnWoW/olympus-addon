@@ -125,6 +125,13 @@ local function GuildName(input, target)
 	if name == "" and target and GetGuildInfo then name = GetGuildInfo("target") or "" end
 	if name == "" then return nil end
 	local clean = ns.King and ns.King.CleanGuild and ns.King.CleanGuild(name)
+	-- 1.1.5: a guild the High Council removed is no Olympus guild here any more, but the word that
+	-- takes it off the network still matters to the 1.1-1.1.4 addons: it is given, kept and
+	-- repeated as before (it changes nothing on this client).
+	if not clean and ns.IsRemovedGuild and ns.IsRemovedGuild(name) then
+		local s = name:gsub("[%c|]", "")
+		if #s <= 24 and s:match("^[%w\128-\255 ]+$") then clean = s end
+	end
 	if not clean then return nil end
 	-- The spelling the census keeps (a guild is one whatever its case).
 	return ns.Data and ns.Data.GuildKey and ns.Data.GuildKey(clean) or clean
@@ -308,11 +315,13 @@ end
 
 -- For every surface: does a word hide what this sender sends (in the name of `guild`)? The word
 -- and the name or guild it is on. Never the pinned King; one who gives words, only from higher up.
-function Moderation.Hides(sender, guild)
+-- look (1.1.5): a lookup with a guild that is not one his own message named (the game's chat
+-- marks, Borders.MarkOfName, try the guilds he may be proven in): the same answer, nothing noted.
+function Moderation.Hides(sender, guild, look)
 	if type(sender) == "string" and IsKing(sender) then return nil end
 	local e, on = Moderation.Hidden(sender)
 	if e then return e, on end
-	if guild then Moderation.NoteGuild(sender, guild) end
+	if guild and not look then Moderation.NoteGuild(sender, guild) end
 	if Index().n.g == 0 then return nil end
 	local rank
 	local function Counts(w)

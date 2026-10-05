@@ -108,6 +108,24 @@ function King.Preview()
 end
 function King.Visible() return King.IsKing() or King.IsSteward() or King.IsHand() or King.Preview() end
 
+-- 1.1.5 (the author's call): the tab in the Throne's place is the Throne for the King's people
+-- (the King, his Steward, his Hands, Asmon's view, and the High Council: the King's guild's
+-- centurions are theirs to name, Nominees.lua), and a guild master's Guild tab for the guild master of
+-- another Olympus guild (his centurions and correspondents). Under the author's guild master's
+-- view (Nominees.DevView), the Guild tab alone: it shows what a guild master sees.
+function King.ThroneShown()
+	local N = ns.Nominees
+	if N and N.DevView and N.DevView() then return false end
+	return King.Visible() or (ns.IsMember() == true and ns.IsHighCouncillor(ns.me) == true)
+end
+function King.GuildShown()
+	local N = ns.Nominees
+	return N ~= nil and not N.missing and N.IsMaster ~= nil and N.IsMaster() == true
+end
+function King.TabVisible() return King.ThroneShown() or King.GuildShown() end
+-- The tab's name (a locale key): the Throne's, or the Guild tab's (UI.lua relabels it).
+function King.TabLabel() return (King.ThroneShown() or not King.GuildShown()) and "TAB_THRONE" or "TAB_GUILD" end
+
 -- The King's Steward (1.0.0): this character, where the signed titles list marks it for our
 -- King (ns.IsSteward), and not the King himself.
 function King.IsSteward() return not King.IsKing() and ns.IsSteward(ns.me) end
@@ -1053,7 +1071,7 @@ end
 -- mouse and keyboard (ns.WorldMapIcons); drawn again when that changes, even where he stands still.
 function King.RefreshCrown()
 	if not Pins then return end
-	local world = ns.WorldMapIcons(Pins, King)
+	local world = ns.WorldMapIcons(Pins, King) -- gp:worldmap-icons
 	if kingAt and ns.Now() - kingAt.t > King.LOCATION_EXPIRE then kingAt = nil end
 	if not kingAt then
 		if crowns and crownAt then
@@ -1074,7 +1092,7 @@ function King.RefreshCrown()
 	end
 	crownAt = { mapID = kingAt.mapID, x = kingAt.x, y = kingAt.y, world = world }
 	if world then Pins:AddWorldMapIconMap(King, crowns.world, kingAt.mapID, kingAt.x, kingAt.y, SHOW_FLAG) end
-	Pins:AddMinimapIconMap(King, crowns.mini, kingAt.mapID, kingAt.x, kingAt.y, true, true)
+	Pins:AddMinimapIconMap(King, crowns.mini, kingAt.mapID, kingAt.x, kingAt.y, true, true) -- gp:minimap
 end
 
 local function OnLocation(king, rest)
@@ -1429,27 +1447,42 @@ King.Line, King.INK, King.TITLE = Line, INK, TITLE
 local function Go(mode) return function() King.Show(mode) end end
 
 -- The Throne Room: what is the King's alone. Each tool lives where it belongs (the agenda and
--- the court on the buttons below, the roll call in the Realm, the inspection in the Tabards,
--- Vox Populi and the treasury on their own tabs): here, the court's queue while it is open and
--- the treasury. A Hand's: where their tools are. His Steward's (1.0.0): the King's, with what is
--- his to do in the King's name (he holds no court: no queue).
+-- the court on the buttons below, the Hands and his crown on the map on the buttons beside, the
+-- roll call in the Realm, the inspection in the Tabards, Vox Populi on its own tab): here, the
+-- court's queue while it is open and the army's key. A Hand's: where their tools are. His
+-- Steward's (1.0.0): the King's, with what is his to do in the King's name (he holds no court: no
+-- queue). 1.1.5 (the author's calls): no treasury here any more (its own tab has it all), and
+-- under it all, the King's guild's centurions (Nominees.lua: the King's and the High Council's to
+-- name, the others' to read); a High Councillor who is none of them has the Throne for them alone.
+-- One who also leads another Olympus guild has his Guild tab's section after it.
 local function HomeLines()
 	local mine = King.IsKing() or King.Preview()
 	local steward = not mine and King.IsSteward()
-	local title = (mine or steward) and L.THRONE_ROOM or L.THRONE_ROOM_HAND:format(ns.KingName(handsKing or ns.KingCharacter()))
+	local hand = not mine and not steward and King.IsHand()
+	local title = (mine or steward) and L.THRONE_ROOM
+		or hand and L.THRONE_ROOM_HAND:format(ns.KingName(handsKing or ns.KingCharacter())) or L.THRONE_ROOM_COUNCIL
 	local lines = { Line(title, TITLE, { gapAfter = true }) }
 	if steward then
 		Para(lines, L.THRONE_STEWARD_HINT, INK, { gapAfter = true })
+	elseif hand then
+		Para(lines, L.THRONE_HAND_HINT, INK, { gapAfter = true })
 	elseif not mine then
-		return Para(lines, L.THRONE_HAND_HINT, INK)
+		Para(lines, L.THRONE_COUNCIL_HINT, INK, { gapAfter = true })
 	end
-	for _, l in ipairs(ns.Court and ns.Court.HomeLines and ns.Court.HomeLines() or {}) do lines[#lines + 1] = l end
-	-- 1.1: the army's key, the King's to rotate, or his Steward's for him (Keys.lua).
 	if mine or steward then
+		for _, l in ipairs(ns.Court and ns.Court.HomeLines and ns.Court.HomeLines() or {}) do lines[#lines + 1] = l end
+		-- 1.1: the army's key, the King's to rotate, or his Steward's for him (Keys.lua).
 		for _, l in ipairs(ns.Keys.ThroneLines and ns.Keys.ThroneLines() or {}) do lines[#lines + 1] = l end
 	end
 	if #lines > 1 then lines[#lines].gapAfter = true end
-	for _, l in ipairs(ns.Treasury and ns.Treasury.ThroneLines and ns.Treasury.ThroneLines() or {}) do lines[#lines + 1] = l end
+	local N = ns.Nominees
+	if N and not N.missing and N.MainLines then
+		N.MainLines(lines)
+		if King.GuildShown() then
+			lines[#lines].gapAfter = true
+			N.PageLines(lines)
+		end
+	end
 	return lines
 end
 
@@ -1461,6 +1494,12 @@ King.KING_PAGES = { hands = true }
 -- treasury; a Hand's: where their tools are), and holding court takes him there. (1.0.0: no
 -- letter before it any more.) His Steward's says on top, on every page, that he acts for the King.
 function King.Build(s)
+	-- 1.1.5: a guild master's Guild tab, in the Throne's place (Nominees.lua).
+	if not King.ThroneShown() then
+		local N = ns.Nominees
+		local master, guild = King.GuildShown(), N and N.IsMaster and select(2, N.IsMaster())
+		return master and N.GuildLines() or {}, L.TAB_GUILD, master and L.GUILD_TAB_DETAIL:format(tostring(guild)) or nil
+	end
 	local lines, home
 	if not King.mode then King.mode = "home" end
 	local mode = King.mode
@@ -1476,7 +1515,8 @@ function King.Build(s)
 	local steward = King.IsSteward()
 	if steward then table.insert(lines, 1, Line("|T" .. ns.CROWN_ICON .. ":0|t " .. L.STEWARD_ACTING, TITLE, { gapAfter = true })) end
 	local detail = steward and L.THRONE_YOU_ARE_STEWARD:format(ns.KingName(ns.KingCharacter()))
-		or King.IsHand() and L.THRONE_YOU_ARE_HAND:format(ns.KingName(handsKing or ns.KingCharacter())) or L.THRONE_YOU_ARE_KING
+		or King.IsHand() and L.THRONE_YOU_ARE_HAND:format(ns.KingName(handsKing or ns.KingCharacter()))
+		or (King.IsKing() or King.Preview()) and L.THRONE_YOU_ARE_KING or L.THRONE_YOU_ARE_COUNCILLOR
 	return lines, L.TAB_THRONE, detail
 end
 
@@ -1531,6 +1571,8 @@ function King.SetDevView(on)
 	ns.db.devKingView = on and true or false
 	-- The preview's treasury switches and keepers were its own: gone with it.
 	if not on then ns.db.previewTreasuryFlags, ns.db.previewTreasuryKeepers = nil, nil end
+	-- (1.1.5: and the King's guild's centurions it named, Nominees.lua.)
+	if not on then ns.db.previewMainNominees = nil end
 	ns.Print(on and L.DEV_KING_VIEW_NOW_ON or L.DEV_KING_VIEW_NOW_OFF)
 	ns.Fire("DATA_CHANGED")
 	Changed()

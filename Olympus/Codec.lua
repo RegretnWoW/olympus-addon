@@ -287,19 +287,29 @@ function Codec.DecodeReport(s)
 	if guild == "" or LongGuild(guild) then return nil end
 	local total, online = num(f[3]), num(f[4])
 	if not total or not online or total > Codec.GUILD_CAP then return nil end
+	online = math.min(online, total)
+	local zones, classes = decMap(f[8], 120), decMap(f[9], 20)
 	local levels = {}
 	local lv = split(f[10], ",")
 	for i = 1, 7 do levels[i] = num(lv[i]) or 0 end
+	-- Each breakdown counts online members at most once. A hidden zone, an unresolved
+	-- class or a partial roster may leave fewer entries, never more than are online.
+	-- Reject an impossible report rather than inventing a distribution by truncating it.
+	for _, counts in ipairs({ zones, classes, levels }) do
+		local sum = 0
+		for _, count in pairs(counts) do sum = sum + count end
+		if sum > online then return nil end
+	end
 	local leader = f[5] ~= "" and f[5]:sub(1, 48) or nil
 	return {
 		guild = guild,
 		total = total,
-		online = math.min(online, total > 0 and total or online),
+		online = online,
 		leader = leader,
 		leaderOnline = f[6] == "1",
 		users = num(f[7]) or 0,
-		zones = decMap(f[8], 120),
-		classes = decMap(f[9], 20),
+		zones = zones,
+		classes = classes,
 		levels = levels,
 		ranks = decList(f[11], Codec.MAX_RANKS),
 		officers = decOfficers(f[12], Codec.MAX_OFFICERS),

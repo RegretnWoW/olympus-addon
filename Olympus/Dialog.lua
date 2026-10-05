@@ -26,6 +26,127 @@ local ADDON, ns = ...
 local Dialog = {}
 ns.Dialog = Dialog
 
+---------------------------------------------------------------------------
+-- Olympus's windows (1.1.5, the author's asks: every window in the Olympus window's frame colour,
+-- and none but the Olympus window with the round portrait and the logo in its top left corner)
+---------------------------------------------------------------------------
+
+-- The Olympus window (UI.lua's CreateMain) is the game's PortraitFrameTemplate: Forever's bronze
+-- metal (its NineSlice's UI-Frame-Metal atlases, drawn Forever's own way: Blizzard_SharedXML's
+-- Camelot/NineSliceLayoutOverrides.lua) with the logo in the round portrait. Every other window of
+-- ours is made here, in the same metal without the ring: DefaultPanelTemplate (its NineSlice's
+-- layout "ButtonFrameTemplateNoPortrait", the same atlases with a plain top left corner: Forever's
+-- own Help window, and its AddOn list after ButtonFrameTemplate_HidePortrait), with an X of its own
+-- as the Help window has (UIPanelCloseButtonDefaultAnchors). A client without that template gets
+-- the plain silver frame (BasicFrameTemplateWithInset), else a bare dark one.
+Dialog.METAL = "DefaultPanelTemplate"
+Dialog.PLAIN = "BasicFrameTemplateWithInset"
+Dialog.BAR = 24 -- the title bar's height (both looks): a window's content starts below it
+-- The inside under the title bar (TOPLEFT x, y, BOTTOMRIGHT x, y): where the plain frame has its
+-- inset (BasicFrameTemplateWithInset's InsetBg); on the metal one, inside its thicker left edge
+-- (ButtonFrameTemplate_HidePortrait's Inset, at 9: the plain corner sits 5 further in than the
+-- portrait one).
+Dialog.INNER = { metal = { 9, -24, -6, 4 }, plain = { 4, -24, -6, 4 } }
+
+local function Made(kind, name, parent, template)
+	local ok, f = pcall(CreateFrame, kind, name, parent, template)
+	if ok and f then return f end
+	return nil
+end
+
+-- The window's title, in its title bar (f.TitleText is the font string that shows it, on every look).
+function ns.SetWindowTitle(f, text)
+	f.titleText = text
+	if f.TitleText then f.TitleText:SetText(text or "") end
+end
+
+-- The title bar's room for its text, for a title that may be long (a guild's name on a person card,
+-- fitted there: UI.ShowPerson). The metal's title spans its TitleContainer, the window less 30 on the
+-- left and 24 on the right (DefaultPanelBaseTemplate); the plain frame's, centred, keeps clear of its
+-- X on both sides.
+Dialog.TITLE_SIDES = { metal = 30 + 24, plain = 64 }
+function ns.WindowTitleRoom(f)
+	return f:GetWidth() - Dialog.TITLE_SIDES[f.metal and "metal" or "plain"]
+end
+
+-- A window raised (the HD window's person card, over the window and its tabs): its metal border,
+-- title and X kept above it, at Blizzard's own steps (PortraitFrameMixin:SetFrameLevelsFromBaseLevel).
+function ns.SetWindowLevel(f, level)
+	f:SetFrameLevel(level)
+	if not f.metal then return end
+	if f.NineSlice then f.NineSlice:SetFrameLevel(level + 500) end
+	if f.TitleContainer then f.TitleContainer:SetFrameLevel(level + 510) end
+	if f.CloseButton then f.CloseButton:SetFrameLevel(level + 510) end
+end
+
+-- A window of ours (name: its global name, parent: UIParent unless given). opts:
+--   title   the title bar's text
+--   inset   false: no inset box, the window brings its own ground (a parchment, a compartment);
+--           else the game's inset box over the inside, as the plain frame has its own
+--   close   false: no X (a question answered by its buttons alone)
+--   escape  false: never on the escape list; else Escape closes it with mouse and keyboard,
+--           checked each time it shows (ns.EscapeCloses: never with the gamepad UI)
+-- Its X hides it itself, in combat too: UIPanelCloseButton_OnClick runs onCloseCallback first, and
+-- its HideUIPanel does nothing in combat for a call that is not secure (the Olympus window's).
+-- f.windowLook: "metal", "plain" or "bare" (f.metal: the first); f.inner: the inside's rect for it.
+function ns.Window(name, parent, opts)
+	opts = type(opts) == "table" and opts or {}
+	parent = parent or UIParent
+	local f, look = Made("Frame", name, parent, Dialog.METAL), "metal"
+	if not (f and f.NineSlice and f.TitleContainer and f.TitleContainer.TitleText) then
+		-- (The name stays the failed one's: the plain frame takes another, as the Olympus window's.)
+		if f then f:Hide() end
+		local plainName = name and f and (name .. "Basic") or name
+		f = Made("Frame", plainName, parent, Dialog.PLAIN) or CreateFrame("Frame", plainName, parent)
+		look = f.CloseButton and f.TitleText and "plain" or "bare"
+		ns.Log("%s unavailable for %s: the %s frame", Dialog.METAL, tostring(name), look)
+	end
+	f.windowLook, f.metal = look, look == "metal"
+	f.inner = Dialog.INNER[f.metal and "metal" or "plain"]
+	if f.metal then
+		f.TitleText = f.TitleContainer.TitleText
+		if opts.close ~= false then
+			local xName = f:GetName() and (f:GetName() .. "CloseButton")
+			local x = Made("Button", xName, f, "UIPanelCloseButtonDefaultAnchors")
+			if not x then
+				x = Made("Button", xName, f, "UIPanelCloseButton")
+				if x then x:SetPoint("TOPRIGHT", -2, 1) end -- (Forever's default anchors)
+			end
+			f.CloseButton = x
+		end
+		if opts.inset ~= false then
+			local box = Made("Frame", nil, f, "InsetFrameTemplate")
+			if box then
+				box:SetPoint("TOPLEFT", f.inner[1], f.inner[2])
+				box:SetPoint("BOTTOMRIGHT", f.inner[3], f.inner[4])
+				f.Inset = box
+			end
+		end
+	elseif look == "bare" then
+		local ground = f:CreateTexture(nil, "BACKGROUND")
+		ground:SetAllPoints()
+		ground:SetColorTexture(0.05, 0.05, 0.06, 0.95)
+		f.TitleText = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+		f.TitleText:SetPoint("TOP", 0, -6)
+		if opts.close ~= false then
+			f.CloseButton = Made("Button", nil, f, "UIPanelCloseButton")
+			if f.CloseButton then f.CloseButton:SetPoint("TOPRIGHT", -2, -2) end
+		end
+	elseif opts.close == false then
+		f.CloseButton:Hide()
+	end
+	f.onCloseCallback = function()
+		f:Hide()
+		return false
+	end
+	ns.SetWindowTitle(f, opts.title)
+	if opts.escape ~= false and f:GetName() then
+		ns.EscapeCloses(f:GetName())
+		f:HookScript("OnShow", function(self) ns.EscapeCloses(self:GetName()) end)
+	end
+	return f
+end
+
 Dialog.MAX = 3        -- dialogs up at once; one more takes the oldest's place
 Dialog.TOP = -135     -- where the game's first popup sits
 Dialog.GAP = 8
@@ -46,7 +167,7 @@ local function Call(f, where, fn, ...)
 end
 
 -- Stacked from the top, under the game's own popups when some are up.
-local function Layout()
+local function Layout() -- gp:lookups
 	local anchor, point, y = UIParent, "TOP", Dialog.TOP
 	for i = 1, 4 do
 		local p = _G["StaticPopup" .. i]
@@ -63,7 +184,7 @@ local function Layout()
 end
 
 -- The game's popups, as last seen: when one comes or goes, ours move under it.
-local function GamePopups()
+local function GamePopups() -- gp:lookups
 	local n = 0
 	for i = 1, 4 do
 		local p = _G["StaticPopup" .. i]
@@ -96,28 +217,27 @@ local function Button(f, index)
 	return b
 end
 
+-- The text's top: under the title bar (1.1.5: the Olympus window's metal, ns.Window).
+Dialog.TEXT_TOP = -32
+
 local function Build(i)
-	local f = CreateFrame("Frame", "OlympusDialog" .. i, UIParent)
+	-- The Olympus window's metal, "Olympus" in its title bar (the game's popup says nothing of who
+	-- asks), no X and off the escape list: like the game's popups, answered by a click alone.
+	local f = ns.Window("OlympusDialog" .. i, UIParent, { title = ns.L.TITLE, close = false, escape = false })
 	f:SetFrameStrata("DIALOG")
 	f:SetToplevel(true)
 	f:EnableMouse(true)
 	f:SetClampedToScreen(true)
 	f:Hide()
-	local okBorder, border = pcall(CreateFrame, "Frame", nil, f, "DialogBorderTemplate")
-	if not okBorder or not border then
-		border = f:CreateTexture(nil, "BACKGROUND")
-		border:SetColorTexture(0, 0, 0, 0.85)
-	end
-	border:SetAllPoints()
 	f.text = f:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
-	f.text:SetPoint("TOP", 0, -18)
+	f.text:SetPoint("TOP", 0, Dialog.TEXT_TOP)
 	f.text:SetJustifyH("CENTER")
 	local okBox, eb = pcall(CreateFrame, "EditBox", "OlympusDialog" .. i .. "EditBox", f, "InputBoxTemplate")
 	if not okBox or not eb then eb = CreateFrame("EditBox", nil, f) end
 	eb.olympusBox = true
 	-- The definitions' OnShow focus the box (eb:SetFocus()): not away from the chat.
 	local setFocus = eb.SetFocus
-	eb.SetFocus = function(self) ns.Focus(self, setFocus) end
+	eb.SetFocus = function(self) ns.Focus(self, setFocus) end -- gp:popup-focus
 	eb:SetAutoFocus(false)
 	-- Like the game's popup box: no select-all on focus (InputBoxTemplate's), or the first key
 	-- would replace what the dialog put in it (a recruit message, a Board note).
@@ -264,7 +384,7 @@ function Dialog.Show(which, a, b, data)
 	f:SetWidth(width)
 	f.text:SetWidth(width - 40)
 	local textH = f.text.GetStringHeight and f.text:GetStringHeight() or 14
-	local y = -18 - textH - 10
+	local y = Dialog.TEXT_TOP - textH - 10
 	if def.hasEditBox then
 		eb:ClearAllPoints()
 		eb:SetPoint("TOP", f, "TOP", 0, y)
