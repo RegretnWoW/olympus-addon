@@ -23,7 +23,7 @@ local _, own = ...; local ns = own.host; if not ns then return end
 --   - How to play: a pop-up of its own, centred on the screen above the table's strata, on the
 --     game's parchment, four pages (Rules, Scores, Examples, Drink), every number and example from
 --     FarkleRules; shown by itself the first time the table opens, and on "How to play";
---   - the lesson (1.1.6): a practice game against the House started with "Learn the rules" says,
+--   - the lesson (1.1.6): an innkeeper practice game with Show tips checked says,
 --     in the column, what the rules make of the dice in front of the player: which dice of a throw
 --     score and for how much, what is at stake, the chance of BONES! with the dice left, hot dice,
 --     a bust and a bank (Board.Lesson, Board.BustChance: FarkleRules alone).
@@ -114,7 +114,7 @@ local FILL = { [0] = 0, 0.25, 0.5, 1 } -- the mug's fill by level: empty, a quar
 
 -- The board's state: the table shown (id), which seat sits on the near side, the dice of each
 -- side, the event queue, and what the column says.
-local S = { gen = 0, target = 5000, sel = {}, last = {}, hits = { 0, 0 }, shake = {}, flying = { 0, 0 }, hand = { 0, 0 }, ready = { 0, 0 },
+local S = { gen = 0, target = 5000, practiceTips = false, sel = {}, last = {}, hits = { 0, 0 }, shake = {}, flying = { 0, 0 }, hand = { 0, 0 }, ready = { 0, 0 },
 	queue = {}, sound = true, mode = "setup", near = 1, logs = {} }
 local win, shell, banner, help, setup, create, info, primary, bankBtn, extraBtn, ask, card, esc
 local rows, targets, tallies = {}, {}, {}
@@ -1221,7 +1221,7 @@ end
 -- the chance of BONES! on the dice left, hot dice; while the House plays, the last bust or bank
 -- of his and what it meant. S.lesson keeps his last bust or bank (the event handlers).
 function Board.Lesson(v)
-	if type(v) ~= "table" or not v.learn or not v.game or v.watching then return nil end
+	if type(v) ~= "table" or not v.practice or not v.learn or not v.game or v.watching then return nil end
 	local g = v.game
 	if g.over then return nil end
 	if g.open then return L.FARKLE_L_OPENING end
@@ -1308,7 +1308,12 @@ local function OnPrimary()
 	if S.mode == "setup" or not v then return end
 	if v.over then
 		if Busy() then return end
-		if v.practice then S.mode = "setup"; S.id = nil; S.gen = S.gen + 1; return Refresh() end
+		if v.practice then
+			S.mode, S.id, S.target = "setup", nil, v.target or S.target
+			S.hint, S.lesson = nil, nil
+			S.gen = S.gen + 1
+			return Refresh()
+		end
 		return Board.Rematch(v)
 	end
 	if not MyTurn(v) then return end
@@ -1579,6 +1584,10 @@ Refresh = function()
 		b:SetEnabled(not first or i == 1)
 	end
 	setup:SetShown(S.mode == "setup")
+	setup.intro:SetText(first and L.FARKLE_INTRO_TEXT or L.FARKLE_B_SETUP_NOTE)
+	setup.note:SetShown(first)
+	setup.tips:SetOn(first or S.practiceTips)
+	setup.tips:SetEnabled(not first)
 	create:SetShown(S.mode == "create")
 	if create:IsShown() then Board.CreateRefresh() end
 	local playing = S.mode == "table" and v ~= nil
@@ -1800,9 +1809,8 @@ local function Row(side)
 	rows[side] = p
 end
 
--- The setup step, in the middle of the table: the target, then Start, in dark ink straight on the
--- table (no panel behind it; the line between the halves hides while it shows). Play someone
--- opens the create panel.
+-- Innkeeper training: choose the target and optional lesson tips, then Start. Player matches
+-- use the Bones lobby's own entries; repeating practice stays with the innkeeper.
 local function Setup()
 	setup = CreateFrame("Frame", nil, win)
 	setup:SetFrameLevel((win:GetFrameLevel() or 0) + 13)
@@ -1812,34 +1820,24 @@ local function Setup()
 	setup.intro = Text(setup, 13, INK, STANDARD_TEXT_FONT, "CENTER")
 	setup.intro:SetPoint("TOP", 0, -42); setup.intro:SetSize(530, 74); setup.intro:SetJustifyV("TOP")
 	setup.intro:SetText(L.FARKLE_INTRO_TEXT)
-	setup.find = Button(setup, L.ARENA_FIND_PLAYER, 220, 32, function()
-		local ok = ArenaUI.FindOpponent and ArenaUI.FindOpponent("b")
-		if ok ~= false then Board.Close() end
-	end)
-	setup.find:SetPoint("TOP", 0, -122)
 	local title = Text(setup, 20, INK, MORPHEUS)
-	title:SetPoint("TOP", 0, -167); title:SetText(L.FARKLE_B_PLAY_TO_TITLE)
+	title:SetPoint("TOP", 0, -128); title:SetText(L.FARKLE_B_PLAY_TO_TITLE)
 	setup.title = title
 	local sub = { L.FARKLE_B_QUICK, L.FARKLE_B_STANDARD, L.FARKLE_B_LONG }
 	for k, target in ipairs(FR().TARGETS) do
 		local b = Button(setup, Num(target), 104, 32, function() S.target = target; Refresh() end)
-		b:SetPoint("TOPLEFT", setup, "TOPLEFT", 110 + (k - 1) * 116, -197)
+		b:SetPoint("TOPLEFT", setup, "TOPLEFT", 110 + (k - 1) * 116, -158)
 		local fs = Text(setup, 13, SOFT)
 		fs:SetPoint("TOP", b, "BOTTOM", 0, -4); fs:SetText(sub[k] or "")
 		targets[k] = b
 	end
-	local start = Button(setup, L.FARKLE_B_START, 150, 32, function() Board.StartPractice(S.target) end)
-	start:SetPoint("TOP", setup, "TOP", -80, -263)
+	setup.tips = Check(setup, L.FARKLE_B_TIPS, function(on) S.practiceTips = on end)
+	setup.tips:SetPoint("TOP", setup, "TOP", 0, -224)
+	local start = Button(setup, L.FARKLE_B_START, 150, 32, function() Board.StartPractice(S.target, setup.tips.checked) end)
+	start:SetPoint("TOP", setup, "TOP", 0, -272)
 	setup.start = start
-	local someone = Button(setup, L.FARKLE_B_PLAY_SOMEONE, 150, 32, function() Board.OpenCreate({}) end)
-	someone:SetPoint("TOP", setup, "TOP", 80, -263)
-	setup.someone = someone
-	-- (1.1.6: the same game against the House, the rules' hints on: Board.Lesson)
-	local learn = Button(setup, L.FARKLE_B_LEARN, 310, 32, function() Board.StartPractice(S.target, true) end)
-	learn:SetPoint("TOP", setup, "TOP", 0, -306)
-	setup.learn = learn
 	setup.note = Text(setup, 13, SOFT)
-	setup.note:SetPoint("TOP", setup, "TOP", 0, -348); setup.note:SetWidth(530); setup.note:SetWordWrap(false)
+	setup.note:SetPoint("TOP", setup, "TOP", 0, -324); setup.note:SetWidth(530); setup.note:SetWordWrap(false)
 	setup.note:SetText(L.FARKLE_B_SETUP_NOTE)
 end
 
@@ -2919,7 +2917,12 @@ function Board.CardSpec(id)
 	spec.buttons[#spec.buttons + 1] = { L.FARKLE_B_OK, nil }
 	if mine then
 		spec.buttons[#spec.buttons + 1] = { v.practice and L.FARKLE_B_PLAY_AGAIN or L.FARKLE_B_REMATCH, function()
-			if v.practice then S.mode = "setup"; S.id = nil; S.gen = S.gen + 1; Board.Open() else Board.Rematch(v) end
+			if v.practice then
+				S.mode, S.id, S.target = "setup", nil, v.target or S.target
+				S.hint, S.lesson = nil, nil
+				S.gen = S.gen + 1
+				Board.Open(false)
+			else Board.Rematch(v) end
 		end }
 	end
 	return spec
@@ -3348,7 +3351,7 @@ function Board.ShowDeparture(id)
 end
 
 -- A practice game against the House, to `target` (the setup's Start, /oly farkle practice N);
--- learn: the lesson's hints on (the setup's Learn the rules, 1.1.6).
+-- learn: the lesson's hints on (the training setup's Show tips checkbox).
 function Board.StartPractice(target, learn)
 	local id, why = A().Do("farkle.practice", { target = target or S.target, learn = learn == true or nil })
 	if type(id) ~= "string" then S.hint = WhyText(why or "error"); return Refresh() end

@@ -1,5 +1,5 @@
 -- 1.1.6, Bones' lesson (Olympus_Arena/FarkleBoard.lua's Board.Lesson and Board.BustChance): a
--- practice game against the House started with "Learn the rules" says, in the table's column, what
+-- practice game against the innkeeper with Show tips checked says, in the table's column, what
 -- the rules make of the dice in front of the player: which dice of a throw score and for how much,
 -- the turn's points and the chance of BONES! with the dice left, hot dice, a bust and a bank. The
 -- plain practice (Start) says none of it. Last, the points (Daniel's call for 1.1.6): practice and
@@ -63,7 +63,7 @@ end
 local function Info(c) return P(c).info:GetText() or "" end
 local function T(c, key, ...) return c.ns.L[key]:format(...) end
 
--- The practice setup, the guide closed, the target 2,000, then Learn the rules (or Start).
+-- The practice setup, the guide closed, the target 2,000, optional tips, then Start.
 local function Lesson(o)
 	o = o or {}
 	local w = FW.New({ seed = o.seed or 7, compliance = "shipped" })
@@ -71,7 +71,8 @@ local function Lesson(o)
 	Show(w, a, "practice")
 	if P(a).help and P(a).help:IsShown() then Click(w, a, P(a).help.ok) end
 	for i, t in ipairs(R(a).TARGETS) do if t == 2000 then Click(w, a, P(a).targets[i]) end end
-	check(Click(w, a, o.plain and P(a).setup.start or P(a).setup.learn), "the setup's button")
+	if not o.plain then check(Click(w, a, P(a).setup.tips), "Show tips") end
+	check(Click(w, a, P(a).setup.start), "the setup's Start button")
 	w:Run(0)
 	return w, a
 end
@@ -89,7 +90,7 @@ test("1.1.6 Bones lesson: the chance of BONES! with n dice, from the rules: 67% 
 	NoErrors(w)
 end)
 
-test("1.1.6 Bones lesson: Learn the rules starts a game against the House with the tips: the throw, the dice that score, what is at stake with the chance of BONES!, the bank; then a bust and what it cost", function()
+test("1.1.6 Bones lesson: Show tips then Start teaches the throw, scoring dice, BONES! chance, banking and a bust", function()
 	local w, a = Lesson()
 	local v = View(w, a)
 	eq(v.practice, true); eq(v.learn, true, "a lesson"); eq(v.stake, 0, "nothing at stake")
@@ -155,11 +156,11 @@ test("1.1.6 Bones lesson: Start (the plain practice) gives no tip, the table's o
 	NoErrors(w)
 end)
 
-test("1.1.6 Bones lesson: with the gamepad UI, Learn the rules is a button like Start (32 px), and the lesson plays with its tips", function()
+test("1.1.6 Bones lesson: with the gamepad UI, Show tips has a 32 px click area and the lesson plays with its tips", function()
 	H.WithGamepadUI(true, function()
 		local w, a = Lesson()
-		local x, y, wd, h = a.K.Within(P(a).setup.learn, P(a).win)
-		check(h >= 32 - 0.01, "the Learn button is %.0f px tall", h)
+		local x, y, wd, h = a.K.Within(P(a).setup.tips, P(a).win)
+		check(h >= 32 - 0.01, "the tips checkbox is %.0f px tall", h)
 		eq(View(w, a).learn, true)
 		eq(Info(a), T(a, "FARKLE_L_ROLL", 6))
 		NoErrors(w)
@@ -191,7 +192,7 @@ local function Words(locale)
 	if not ok then error(err, 0) end
 	return L
 end
-local POINTS_KEYS = { "FARKLE_B_SETUP_NOTE", "FARKLE_B_SETUP_HINT", "FARKLE_B_LEARN", "FARKLE_B_LESSON", "FARKLE_B_CREATE_HINT_POINTS", "FARKLE_B_C_PLAYS_FOR",
+local POINTS_KEYS = { "FARKLE_B_SETUP_NOTE", "FARKLE_B_SETUP_HINT", "FARKLE_B_TIPS", "FARKLE_B_LESSON", "FARKLE_B_CREATE_HINT_POINTS", "FARKLE_B_C_PLAYS_FOR",
 	"FARKLE_B_C_POINTS", "FARKLE_B_POINTS_FUN", "COMPLIANCE_LOTTERY_PRACTICE", "ARENA_CHALLENGE_CASUAL", "ARENA_GAMES_MINE", "ARENA_GAMES_MINE_DESC",
 	"ARENA_GAMES_MINE_TIP", "ARENA_GAMES_EVERY_GAME", "ARENA_GAMES_EVERY_GAME_TIP", "ARENA_PANE_GAMES" }
 local POINTS_PREFIXES = { "FARKLE_L_", "LOTTERY_PRACTICE_", "ARENA_GAME_", "ARENA_GAMES_HEAD", "ARENA_GAMES_TEXT", "ARENA_GAMES_ABOUT", "ARENA_GAMES_NONE" }

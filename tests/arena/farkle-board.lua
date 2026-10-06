@@ -152,7 +152,7 @@ end
 
 print("FarkleBoard: the practice table, the dice, the column")
 
-test("1.1.6 games presentation: Bones has a framed headerless window with the original wooden table and a player search before seats", function()
+test("1.1.6 games presentation: Bones has a framed headerless window with the original wooden table and an innkeeper training setup", function()
 	local w, a = Practice({ noStart = true })
 	local p = P(a)
 	check(p.shell and p.shell.border and p.shell:IsShown(), "the game border without a title strip")
@@ -160,15 +160,12 @@ test("1.1.6 games presentation: Bones has a framed headerless window with the or
 	check(p.shell:GetWidth() > 880, "a larger table")
 	check(p.win.table and #p.win.table == 2, "the original wooden table")
 	for _, half in ipairs(p.win.table) do eq(half.tex, "Interface\\AddOns\\Olympus_Arena\\media\\farkle\\table") end
-	check(p.setup.intro and p.setup.find, "the setup explains play and offers a search")
-	check(p.setup.intro:GetText():find(a.ns.L.FARKLE_INTRO_TEXT, 1, true), "the original introduction")
+	check(p.setup.intro and p.setup.tips, "the setup explains training and offers its tips checkbox")
+	eq(p.setup.intro:GetText(), a.ns.L.FARKLE_B_SETUP_NOTE, "a trained player gets the innkeeper practice explanation")
+	eq(p.setup.find, nil); eq(p.setup.someone, nil); eq(p.setup.learn, nil)
 	for _, row in ipairs(p.rows) do
 		check(not row.name:IsShown() and not row.line:IsShown() and not row.total:IsShown(), "no seats before play")
 	end
-	local asked
-	a.ns.Arena.ui.FindOpponent = function(game) asked = game return true end
-	check(Click(w, a, p.setup.find), "Look for a player")
-	eq(asked, "b")
 	Board(a).Close()
 	check(not p.shell:IsShown(), "closing the game closes its shell")
 	NoErrors(w)
