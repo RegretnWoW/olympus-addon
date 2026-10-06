@@ -147,7 +147,7 @@ local MEDIA = "Interface\\AddOns\\Olympus\\media\\borders\\"
 Borders.TIERS = {
 	{ name = "gold-elite", atlas = WINGED, metal = "gold", x = 11, y = -4, king = true },
 	{ name = "treasurer-dragon", file = MEDIA .. "treasurer-dragon", coords = { 0, 200 / 256, 0, 190 / 256 }, width = 100, height = 95,
-		x = 0, y = 1, fallback = PLAIN, treasurer = true, metal = "none" }, -- (its own art whole: no plain dragon under it)
+		x = 0, y = 1, fallback = PLAIN, treasurer = true, metal = "none", party = { x = -8, y = -4 } }, -- (its own art whole: no plain dragon under it; party: its ring on the smaller portrait, from the owner's screenshot)
 	{ name = "silver-elite", atlas = "UI-HUD-UnitFrame-Target-PortraitOn-Boss-Rare-Silver-Winged", x = 8, y = -7,
 		metal = "silver", council = true },
 	{ name = "silver", atlas = PLAIN_SILVER, metal = "silver", x = 0, y = 1, dev = true },
@@ -564,7 +564,8 @@ end
 local function PartyRig(frame)
 	local s = PARTY_SCALE
 	return MakeRig(frame, true, s, function(tex, t)
-		tex:SetPoint("TOPLEFT", frame, "TOPLEFT", PARTY_LEFT - (t.x + TARGET_RIGHT) * s, (t.y + TARGET_TOP) * s - PARTY_TOP)
+		local p = type(t.party) == "table" and t.party or t
+		tex:SetPoint("TOPLEFT", frame, "TOPLEFT", PARTY_LEFT - ((p.x or t.x) + TARGET_RIGHT) * s, ((p.y or t.y) + TARGET_TOP) * s - PARTY_TOP)
 	end, PARTY_SUBLEVEL)
 end
 
