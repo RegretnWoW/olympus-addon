@@ -847,7 +847,7 @@ function Handlers.R(info, done)
 			else
 				local lost = info.lost or (info.lastTurn and info.lastTurn.lost) or 0
 				S.last[side] = lost > 0 and T("FARKLE_B_ROW_BONES_LOST", Num(lost)) or L.FARKLE_B_ROW_BONES
-				Banner(L.FARKLE_B_BONES, RED, nil, nil, info.hicAttempted and L.FARKLE_B_HIC_FAIL or nil)
+				Banner(L.FARKLE_B_BONES, RED, nil, nil, info.hicAttempted and L.FARKLE_B_HIC_FAIL or nil, RED)
 				Sound("farkle")
 				if Mine(seat) then Log(lost > 0 and T("FARKLE_B_LOG_BONES_ME_LOST", Num(lost)) or L.FARKLE_B_LOG_BONES_ME)
 				else Log(lost > 0 and T("FARKLE_B_LOG_BONES_LOST", Who(seat), Num(lost)) or T("FARKLE_B_LOG_BONES", Who(seat))) end

@@ -954,6 +954,8 @@ test("1.2 the Bone Throw tables board: drunk at the table: recorded level, exact
 	check(color and color[1] > color[2] and color[1] > color[3], "BONES stays red after HIC success")
 	check(P(a).banner.subtitle and P(a).banner.subtitle:IsShown(), "HIC success has a visible subtitle")
 	eq(P(a).banner.subtitle:GetText(), "HIC succeeded")
+	local successColor = P(a).banner.subtitle.textColor
+	check(successColor[2] > successColor[1] and successColor[2] > successColor[3], "HIC success uses the standard green")
 	check(not P(a).primary.enabled, "the next roll waits while the HIC success is displayed")
 	Until(w, function() return Idle(a) and (View(w, a, Id(a)).expect or {}).phase == "roll" end, 5)
 	eq(#a.asked, asked + 1); eq(a.asked[#a.asked].hi, rules.RANGES[6], "only the original six-dice throw")
@@ -977,6 +979,7 @@ test("1.2 the Bone Throw tables board: drunk at the table: recorded level, exact
 	check(P(a).banner.text:GetText() == "BONES!", "the bust stands: %s", tostring(P(a).banner.text:GetText()))
 	check(P(a).banner:IsShown() and P(a).banner.subtitle and P(a).banner.subtitle:IsShown(), "failed HIC has a visible subtitle below BONES")
 	eq(P(a).banner.subtitle:GetText(), "HIC failed")
+	for i = 1, 3 do eq(P(a).banner.subtitle.textColor[i], P(a).banner.text.textColor[i], "HIC failure uses the same red as BONES") end
 	eq(select(3, rules.Level(Game(w, a), 1)), 1, "one shake-off left")
 	check(P(a).rows[1].line:GetText():find("HIC saves left: 1", 1, true), "BONES keeps the remaining HIC saves visible: %s", P(a).rows[1].line:GetText())
 	NoErrors(w)
