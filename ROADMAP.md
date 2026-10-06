@@ -29,7 +29,7 @@
   way into the game's own UI listed and asked of one gate: with the gamepad UI no typed command, no
   button in the guild windows, nothing on the world map; a switch steps back and says what a
   `/reload` completes); the nameplate marks no longer hook a plate's own layout (Lua errors)
-- v1.1.6 The Watch (each guild's moderation desk, the Tabards in it); crafting requests on the Crafters
+- v1.2.0 The Watch (each guild's moderation desk, the Tabards in it); crafting requests on the Crafters
   tab; the King's arrow on the minimap; Vox Populi's history and a guild master's own questions; the
   Guild treasuries in one list with one search; Bones between players for points, at a tavern or at a
   camp; no arbiters without bets (duels and Bones between their two players); duel points that

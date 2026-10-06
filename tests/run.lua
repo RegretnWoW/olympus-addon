@@ -59335,10 +59335,10 @@ end)()
 		assert(#pt.VERSION_INVITE_TEXT:format("https://www.curseforge.com/wow/addons/olympus-guild") <= 255)
 	end)
 
-	test("1.1.6: the version, the TOC's files in order, the new message types in Comm.lua's list", function()
-		eq(ns.VERSION, "1.1.6")
+	test("1.2.0: the version, the TOC's files in order, the new message types in Comm.lua's list", function()
+		eq(ns.VERSION, "1.2.0")
 		local toc = assert(ReadFile(ADDON_DIR .. "Olympus.toc"))
-		assert(toc:find("## Version: 1.1.6", 1, true))
+		assert(toc:find("## Version: 1.2.0", 1, true))
 		local at = {}
 		local n = 0
 		for line in toc:gmatch("[^\n]+") do n = n + 1; at[line:gsub("%s+$", "")] = n end
@@ -59709,6 +59709,39 @@ end)()
 		return n
 	end
 
+	test("1.2.0 version letters: release identity agrees across both TOCs and localized letters; reading the old test build does not hide the new letter", function()
+		eq(ns.VERSION, "1.2.0")
+		for _, path in ipairs({ "Olympus/Olympus.toc", "Olympus_Arena/Olympus_Arena.toc" }) do
+			local toc = assert(ReadFile(ROOT .. path))
+			eq(toc:match("## Version:%s*(%S+)"), ns.VERSION, path)
+		end
+		for _, code in ipairs({ "enUS", "ptBR" }) do
+			local savedLocale = GetLocale
+			GetLocale = function() return code end
+			local ok, err = pcall(function()
+				local lns = setmetatable({ On = function() end }, { __index = ns })
+				assert(loadfile(ADDON_DIR .. "Locales.lua"))("Olympus", lns)
+				assert(loadfile(ADDON_DIR .. "Letters.lua"))("Olympus", lns)
+				local title, body = lns.Letters.Text(ns.VERSION)
+				assert(type(title) == "string" and title ~= "", code .. ": current letter title")
+				assert(type(body) == "string" and body:find("1.2.0", 1, true), code .. ": current letter version")
+				eq(body:find("1.1.6", 1, true), nil, code .. ": no old build label")
+				eq(lns.Letters.Versions()[1], ns.VERSION, code .. ": current letter first")
+				assert(lns.Letters.Has("1.1.5"), code .. ": published letter retained")
+			end)
+			GetLocale = savedLocale
+			if not ok then error(err, 0) end
+		end
+		WithLetters(function(w)
+			ns.db.lettersRead = { ["1.1.6"] = true }
+			ns.Consent.Show():Hide()
+			eq(w.Letters.Ask("update"), true)
+			eq(w.Letters.Frame().version, "1.2.0")
+			eq(ns.db.lettersRead["1.2.0"], true)
+			eq(w.Letters.Ask("update"), false, "shown once per release")
+		end)
+	end)
+
 	-- (1.1.5, the author's later word: no round portrait with the logo on any window but the Olympus
 	-- window. The letter's window had the portrait frame and the logo: these lines asked for them;
 	-- they ask for the metal without the portrait now, the header and the compartment under the
@@ -59833,7 +59866,7 @@ end)()
 			eq(f.title:IsShown(), false); eq(f.body:IsShown(), false); eq(f.all:IsShown(), false)
 			local versions = Lt.Versions()
 			eq(#versions, #Lt.LIST, "a letter for every version listed")
-			eq(table.concat(versions, " "), "1.1.6 1.1.5 1.1.4 1.1.3 1.1.2 1.1.1 1.1.0", "newest first")
+			eq(table.concat(versions, " "), "1.2.0 1.1.5 1.1.4 1.1.3 1.1.2 1.1.1 1.1.0", "newest first")
 			for i, v in ipairs(versions) do
 				local r = f.rows[i]
 				eq(r:IsShown(), true); eq(r.version, v)

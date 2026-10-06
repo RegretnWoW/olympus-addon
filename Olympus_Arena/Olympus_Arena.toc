@@ -2,7 +2,7 @@
 ## Title: |cffe6c35cOlympus|r Arena
 ## Notes: The Blood Arena's screens for Olympus (fights, Farkle, the Lottery). Loads when you open the arena; needs Olympus.
 ## Author: Olympus addon contributors
-## Version: 1.1.6
+## Version: 1.2.0
 ## LoadOnDemand: 1
 ## Dependencies: Olympus
 ## SavedVariables: OlympusArenaDB
