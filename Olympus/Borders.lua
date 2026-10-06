@@ -147,7 +147,7 @@ local MEDIA = "Interface\\AddOns\\Olympus\\media\\borders\\"
 Borders.TIERS = {
 	{ name = "gold-elite", atlas = WINGED, metal = "gold", x = 11, y = -4, king = true },
 	{ name = "treasurer-dragon", file = MEDIA .. "treasurer-dragon", coords = { 0, 200 / 256, 0, 190 / 256 }, width = 100, height = 95,
-		x = 0, y = 1, fallback = PLAIN, treasurer = true },
+		x = 0, y = 1, fallback = PLAIN, treasurer = true, metal = "none" }, -- (its own art whole: no plain dragon under it)
 	{ name = "silver-elite", atlas = "UI-HUD-UnitFrame-Target-PortraitOn-Boss-Rare-Silver-Winged", x = 8, y = -7,
 		metal = "silver", council = true },
 	{ name = "silver", atlas = PLAIN_SILVER, metal = "silver", x = 0, y = 1, dev = true },
