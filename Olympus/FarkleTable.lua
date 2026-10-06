@@ -124,7 +124,7 @@ FT.HIST_MAX, FT.TX_MAX, FT.TX_EVENTS, FT.TX_DAYS = 100, 10, 600, 7
 FT.WHY = { target = "t", cap = "c", concede = "o", forfeit = "f", void = "v" }
 FT.WHY_OF = { t = "target", c = "cap", o = "concede", f = "forfeit", v = "void" }
 FT.HOUSE_PAUSE = { think = 0.6, bank = 0.85, next = 0.35, farkle = 1.6, roll = 0.45 } -- the House's pace (the lab's)
-FT.REASONS = { b = true, d = true, l = true, n = true, a = true, g = true, c = true, x = true, m = true, t = true, r = true, s = true, p = true, v = true, k = true, o = true }
+FT.REASONS = { b = true, d = true, l = true, n = true, a = true, g = true, c = true, x = true, m = true, t = true, r = true, s = true, p = true, v = true, k = true, o = true, f = true }
 
 -- The stake sources by kind (the design): direct o/o; arbiter t/t or w/w; the King w/w.
 FT.SOURCES = { d = { o = true }, a = { t = true, w = true } }
@@ -2478,7 +2478,11 @@ local function OnInvite(dist, sender, mode, body)
 	t.players = { t.host, t.guest }
 	if invitedBy[key] and now - invitedBy[key] < FT.GUEST_GAP then return Refuse(t, sender, "b") end
 	invitedBy[key] = now
-	if not FT.CanPlayPlayers() then return Refuse(t, sender, "o") end
+	-- (1.2.0: his first game with an innkeeper still to play: he is told so, and the host why, "f".)
+	if not FT.CanPlayPlayers() then
+		ns.Print(L.FARKLE_INVITED_NOT_TRAINED:format(ns.DisplayName(sender) or "?"))
+		return Refuse(t, sender, "f")
+	end
 	if FT.Live() then return Refuse(t, sender, "b") end
 	if (InCombatLockdown and InCombatLockdown()) or A().Blocked() then return Refuse(t, sender, "c") end
 	if stake > 0 then

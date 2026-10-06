@@ -278,6 +278,23 @@ test("1.2 the Bone Throw tables: a table never starts in an instance or chat loc
 	NoErrors(w)
 end)
 
+test("1.2.0 the Bone Throw tables: a guest who hasn't played his first game with an innkeeper refuses with that reason, and both are told why", function()
+	local w = FW.New()
+	local a, b = w:Player(P1), w:Player(P2, { bonesTrained = false })
+	w:Group({ a, b })
+	local told
+	b.ns.Print = function(msg) told = msg end
+	local id = FT(w, a).Create({ guest = b.name, target = 2000, rehearsal = true })
+	assert(id, "the host's invite goes")
+	w:Run(0)
+	local ka = w:Sent({ from = b, type = "KA" })
+	eq(#ka, 1); assert(ka[1].msg:find("~0~f~", 1, true), ka[1].msg)
+	eq(Get(a, id).state, "declined"); eq(Get(a, id).why, "f", "the host's reason: his first game")
+	assert(a.ns.L.FARKLE_WHY_F ~= "FARKLE_WHY_F", "the host's words for it")
+	assert(told and told:find(b.ns.L.FARKLE_INVITED_NOT_TRAINED:match("^%%s(.-)%."), 1, true), "the guest is told: " .. tostring(told))
+	NoErrors(w)
+end)
+
 print("FarkleTable: the wire (the design)")
 
 -- A table message as another client would send it (a forged or out-of-turn one).

@@ -78,6 +78,8 @@ L.FARKLE_WHY_P = "not in a party together"
 L.FARKLE_WHY_V = "a void"
 L.FARKLE_WHY_K = "the King holds no gold: both stakes must be in the wallet"
 L.FARKLE_WHY_O = "another reason"
+L.FARKLE_WHY_F = "they still have to play their first Bones game with an innkeeper"
+L.FARKLE_INVITED_NOT_TRAINED = "%s invited you to Bones. Play your first game with an innkeeper first, then you can play other Olympians."
 L.FARKLE_WHY_CROWD = "the crowd bets only at an arbiter's table that lets watchers in, never beside stakes in the wallet"
 
 -- Alerts.
@@ -178,6 +180,8 @@ if GetLocale and GetLocale() == "ptBR" then
 	L.FARKLE_WHY_V = "anulado"
 	L.FARKLE_WHY_K = "o Rei não guarda ouro: as duas apostas têm de estar na carteira"
 	L.FARKLE_WHY_O = "outro motivo"
+	L.FARKLE_WHY_F = "ainda precisa jogar a primeira partida de Bones com um taverneiro"
+	L.FARKLE_INVITED_NOT_TRAINED = "%s te convidou para o Bones. Jogue primeiro com um taverneiro, depois você pode jogar com outros Olympians."
 	L.FARKLE_WHY_CROWD = "o público só aposta numa mesa com árbitro que aceita espectadores, nunca junto de apostas na carteira"
 
 	L.FARKLE_ALERT_INVITE = "%s te convida para o Bones"
