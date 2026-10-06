@@ -1629,7 +1629,10 @@ Refresh = function()
 		p.line:ClearAllPoints(); Place(p.line, nx + 1, ROW[side] + (side == 2 and 33 or 32))
 		p.name:SetWidth(drink and 242 or 270); p.line:SetWidth(drink and 242 or 270)
 		local lv = drink and v.levels[seat]
-		Mug(side, lv and lv.level or 0, lv and lv.pct or 0, lv and lv.shakes or 0, drink, lv and lv.wins, lv and lv.total)
+		local mugLevel = lv and lv.level or 0
+		-- Practice shows your observed drinking immediately; odds still use the recorded turn.
+		if v.practice and seat == v.seat and v.feel ~= nil then mugLevel = v.feel end
+		Mug(side, mugLevel, lv and lv.pct or 0, lv and lv.shakes or 0, drink, lv and lv.wins, lv and lv.total)
 		local score = (v.watching and v.snap and (seat == 1 and v.snap.s1 or v.snap.s2)) or (v.scores and v.scores[seat]) or 0
 		Count("total" .. side, p.total, score, Num, 0.7)
 	end

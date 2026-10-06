@@ -1482,6 +1482,47 @@ end)
 
 print("FarkleTable: practice, self-test, tester log, storage")
 
+test("Bones first lesson opening: a reset learner starts before the House despite stored alternation", function()
+	local w = FW.New({ compliance = "shipped" })
+	local a = w:Player(P1, { bonesTrained = false })
+	w:Stand(a.name, FW.INN, true)
+	FT(w, a).Opts().practiceFirst = 1
+	FT(w, a).Opts().innkeeperLearned = nil
+	local id = assert(FT(w, a).Practice({ target = 5000 }))
+	local t = Get(a, id)
+	eq(t.first, 1, "first lesson starts with the learner after reset")
+	eq(t.target, 2000)
+	eq(t.game.scores[1], 0); eq(t.game.scores[2], 0)
+	eq(t.game.over, false)
+	NoErrors(w)
+end)
+
+test("1.2 the Bone Throw tables: practice own drunk readability: missing other formats still observes real self drink lines, missing self levels disables safely", function()
+	local w = FW.New()
+	local a = w:Player(P1)
+	w:Stand(a.name, FW.INN, true)
+	a.globals.DRUNK_MESSAGE_OTHER4 = nil
+	eq(FT(w, a).DrunkReadable(), false, "multiplayer still requires every format")
+	local id = assert(FT(w, a).Practice({ target = 2000, first = 1 }))
+	local text = FW.DRUNK.enUS.DRUNK_MESSAGE_ITEM_SELF3:format("Rhapsody Malt")
+	w:Fire(a, "CHAT_MSG_SYSTEM", text)
+	eq(FT(w, a).View(id).feel, 2, "practice observes the player's own server line")
+	eq(Get(a, id).news.level, 2, "the observed level reaches the practice decision")
+	eq(#w.sent, 0, "practice sends no messages")
+	assert(FT(w, a).Close(id))
+	for n = 1, 4 do
+		a.globals["DRUNK_MESSAGE_SELF" .. n] = nil
+		a.globals["DRUNK_MESSAGE_ITEM_SELF" .. n] = nil
+	end
+	local sober = assert(FT(w, a).Practice({ target = 2000, first = 1 }))
+	eq(Get(a, sober).hic, false)
+	w:Fire(a, "CHAT_MSG_SYSTEM", text)
+	eq(FT(w, a).View(sober).feel, nil)
+	eq(Get(a, sober).news, nil)
+	eq(#w.sent, 0)
+	NoErrors(w)
+end)
+
 test("1.2 the Bone Throw tables: practice against the House: the player's dice from his own /roll lines (the real parser), the House's local dice; a seeded game plays to its end and nothing is sent", function()
 	local w = FW.New({ seed = 7 })
 	local a = w:Player(P1)

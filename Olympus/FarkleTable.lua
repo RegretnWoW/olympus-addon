@@ -595,6 +595,16 @@ function FT.DrunkReadable()
 	return true
 end
 
+-- Practice observes only this player's lines; either self form can identify each level.
+local function OwnDrunkReadable()
+	for n = 1, 4 do
+		local plain = rawget(_G, "DRUNK_MESSAGE_SELF" .. n)
+		local item = rawget(_G, "DRUNK_MESSAGE_ITEM_SELF" .. n)
+		if not ((type(plain) == "string" and plain ~= "") or (type(item) == "string" and item ~= "")) then return false end
+	end
+	return true
+end
+
 -- A drunk line: "self" (this player's own "You feel ...") or the name it gives, and the level
 -- (0 sober .. 3 completely smashed); nil when it is none, or ambiguous.
 function FT.ReadDrunk(text)
@@ -3092,11 +3102,12 @@ function FT.Practice(opts)
 	local first = opts.first
 	if first ~= 1 and first ~= 2 then
 		local o = FT.Opts()
-		first = o.practiceFirst == 1 and 2 or 1
+		if not FT.TrainingComplete() and not A().Sim() then first = 1
+		else first = o.practiceFirst == 1 and 2 or 1 end
 		o.practiceFirst = first
 	end
 	local t = { id = id, role = "practice", mode = "T", host = Me(), guest = keeper or L.FARKLE_HOUSE, inn = inn, kind = "d", stake = 0, target = target,
-		secs = FT.SECS, hic = FT.DrunkReadable(), hiccupRule = "bones2", src = { "-", "-" }, spec = { false, false }, created = Now(), state = "play", seat = 1,
+		secs = FT.SECS, hic = OwnDrunkReadable(), hiccupRule = "bones2", src = { "-", "-" }, spec = { false, false }, created = Now(), state = "play", seat = 1,
 		first = first, gen = 1, log = {}, learn = (opts.learn == true or not FT.TrainingComplete()) or nil }
 	t.players = { Me(), t.guest }
 	if not NewGame(t) then return nil, "rules" end

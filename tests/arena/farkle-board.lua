@@ -902,6 +902,9 @@ test("1.2 the Bone Throw tables board: drunk at the table: recorded level, exact
 	-- you drink: completely smashed; your own board says so, the level counts once the House decides
 	w:Drink(a.name, 3)
 	w:As(a, function() Board(a).Refresh() end)
+	check(P(a).rows[1].mug.fill:IsShown() and math.abs(P(a).rows[1].mug.fill.h - 26) < 0.01, "practice mug immediately shows the observed drunk level")
+	eq(Game(w, a).level[1], 0, "the current turn's recorded level is unchanged until the House decides")
+	eq(P(a).rows[2].mug.level, 0, "the innkeeper never inherits the player's drinking")
 	check(P(a).info:GetText():find("Completely smashed: counts from your next turn", 1, true), "your own board: %s", P(a).info:GetText())
 	HouseRolls({ R(a).Encode({ 1, 1, 1, 2, 3, 4 }) }, function()
 		w:QueueRoll(a.name, Roll(a, { 1, 2, 3, 4, 6, 2 }))
