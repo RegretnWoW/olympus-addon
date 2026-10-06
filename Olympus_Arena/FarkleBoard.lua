@@ -477,7 +477,7 @@ local function Tally(pts, list)
 	Sound("tally")
 end
 
-local function Banner(text, color, stay)
+local function Banner(text, color, stay, duration)
 	banner.text:SetText(text); banner.text:SetTextColor(color[1], color[2], color[3])
 	banner:SetAlpha(1); banner:Show()
 	banner.stay = stay and true or false
@@ -485,12 +485,13 @@ local function Banner(text, color, stay)
 	local a = banner.anim
 	if a then pcall(function() a.fade:Stop(); a.show:Stop(); a.show:Play() end) end
 	if not stay then
+		duration = duration or 1.6
 		local gen, at = S.gen, banner.shownAt
-		C_Timer.After(1.18, function()
+		C_Timer.After(max(0, duration - 0.42), function()
 			if gen ~= S.gen or banner.shownAt ~= at or banner.stay then return end
 			if a then pcall(function() a.fade:Play() end) end
 		end)
-		C_Timer.After(1.6, function() if gen == S.gen and banner.shownAt == at and not banner.stay then banner:Hide() end end)
+		C_Timer.After(duration, function() if gen == S.gen and banner.shownAt == at and not banner.stay then banner:Hide() end end)
 	end
 end
 
@@ -831,7 +832,7 @@ function Handlers.R(info, done)
 			for _, i in ipairs(sd.play) do local d = sd.dice[i]; d.dull = true; Draw(d) end
 			if info.shaken == seat then
 				S.hic = nil
-				Banner(L.FARKLE_B_SHAKEN, AMBER); Sound("tally")
+				Banner(L.FARKLE_B_SHAKEN, AMBER, nil, 0.9); Sound("tally")
 				S.last[side] = L.FARKLE_B_SHAKEN
 				Log(T("FARKLE_B_LOG_REUSE", Who(seat)))
 				for _, i in ipairs(sd.play) do local d = sd.dice[i]; d.dull = nil; Draw(d) end
@@ -1645,12 +1646,15 @@ Refresh = function()
 		local seat = SeatOf(side)
 		local p = rows[side]
 		p.hl:SetShown(acting == seat)
+		local lv = drink and v.levels[seat]
+		local saves = lv and lv.level > 0 and not (g and g.over) and T("FARKLE_B_ROW_SAVES", lv.shakes) or nil
+		local function WithSaves(text) return saves and (text .. " · " .. saves) or text end
 		local turnPts = g and g.turn and g.turn.points or 0
 		if v.watching and v.snap then turnPts = v.snap.turnPts or 0 end
 		if acting == seat and not (g and g.over) then
 			local base = Mine(seat) and L.FARKLE_B_ROW_YOUR_TURN or (IsHouse(seat) and L.FARKLE_B_ROW_ITS_TURN or L.FARKLE_B_ROW_THEIR_TURN)
 			if S.hic and S.hic.seat == seat then base = L.FARKLE_B_ROW_HIC end
-			Count("turn" .. side, p.line, turnPts, function(n) return n > 0 and T("FARKLE_B_ROW_THIS_TURN", Num(n)) or base end, 0.45)
+			Count("turn" .. side, p.line, turnPts, function(n) return WithSaves(n > 0 and T("FARKLE_B_ROW_THIS_TURN", Num(n)) or base) end, 0.45)
 		else
 			local lv = drink and v.levels[seat]
 			local idle = IsHouse(seat) and L.FARKLE_B_ROW_HOUSE or (Mine(seat) and L.FARKLE_B_ROW_YOURS or L.FARKLE_B_ROW_THEIRS)
@@ -1658,7 +1662,7 @@ Refresh = function()
 				if lv.total then idle = T("FARKLE_B_ROW_REUSE", lv.wins, lv.total, lv.shakes)
 				elseif lv.pct > 0 then idle = T("FARKLE_B_ROW_DRUNK", OneIn(lv.pct), lv.shakes) end
 			end
-			RowLine(side, S.last[side] or idle)
+			RowLine(side, S.last[side] and WithSaves(S.last[side]) or idle)
 		end
 	end
 	-- the column: the target and the stake, the round and the clock

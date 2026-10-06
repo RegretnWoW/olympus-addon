@@ -293,6 +293,30 @@ test("1.2 the Bone Throw tables board: a slow roll line: the dice shake in the h
 	NoErrors(w)
 end)
 
+test("1.2.0 Bones selection: deselecting a non-scoring die immediately restores Keep and roll", function()
+	local w, a = Practice({ target = 2000 })
+	w:QueueRoll(a.name, Roll(a, { 1, 2, 3, 4, 6, 2 }))
+	Click(w, a, P(a).primary)
+	Until(w, function() return Idle(a) and InPlay(a)[1].where == "lane" end, 5)
+	local one, two = InPlay(a)[1], InPlay(a)[2]
+	check(Click(w, a, one.f), "select the scoring one")
+	eq(P(a).primary:GetText(), "Keep & roll 5")
+	check(P(a).primary.enabled, "the one alone can be kept")
+	check(Click(w, a, two.f), "select the non-scoring two")
+	check(not P(a).primary.enabled and not P(a).bank.enabled, "one plus two cannot be kept")
+	check(Click(w, a, two.f), "deselect the non-scoring two")
+	check(one.lit and not two.lit, "only the scoring one remains selected")
+	eq(P(a).primary:GetText(), "Keep & roll 5")
+	check(P(a).primary.enabled and P(a).bank.enabled, "actions restore on that same deselection")
+	eq(P(a).bank:GetText(), "Bank 100")
+	w:QueueRoll(a.name, Roll(a, { 5, 2, 3, 4, 6 }))
+	check(Click(w, a, P(a).primary), "Keep and roll works without another die click")
+	Until(w, function() return Idle(a) and #InPlay(a) == 5 and InPlay(a)[1].where == "lane" end, 5)
+	eq(Game(w, a).turn.points, 100, "only the scoring one was kept")
+	eq(table.concat(Values(InPlay(a)), " "), "5 2 3 4 6")
+	NoErrors(w)
+end)
+
 test("1.2 the Bone Throw tables board: a picked die lifts and lights on itself (no ring), the column shows its points, a die that doesn't score is explained", function()
 	local w, a = Practice({ target = 2000 })
 	w:QueueRoll(a.name, Roll(a, { 1, 5, 3, 4, 6, 2 }))
@@ -918,7 +942,7 @@ test("1.2 the Bone Throw tables board: drunk at the table: recorded level, exact
 	eq(lvl, 3, "recorded by the House's keep: " .. table.concat(Game(w, a).events, " ")); eq(pct, rules.HICCUP[3]); eq(shakes, rules.SHAKES)
 	local mug = P(a).rows[1].mug
 	check(mug.fill:IsShown() and math.abs(mug.fill.h - 26) < 0.01, "the mug full")
-	eq(P(a).rows[1].line:GetText(), "Your turn")
+	eq(P(a).rows[1].line:GetText(), "Your turn · HIC saves left: 2")
 	-- The selected zero-score throw itself saves the turn; no percentile button or timer.
 	local asked = #a.asked
 	w:QueueRoll(a.name, Roll(a, { 2, 2, 3, 3, 4, 4 }))
@@ -926,6 +950,9 @@ test("1.2 the Bone Throw tables board: drunk at the table: recorded level, exact
 	Until(w, function() return Idle(a) and (View(w, a, Id(a)).expect or {}).phase == "roll" end, 5)
 	eq(#a.asked, asked + 1); eq(a.asked[#a.asked].hi, rules.RANGES[6], "only the original six-dice throw")
 	eq(Game(w, a).shakes[1], 1)
+	check(not P(a).banner:IsShown(), "HIC success clears before the next roll is enabled")
+	check(P(a).primary.enabled, "the next roll is enabled after HIC success")
+	eq(P(a).rows[1].line:GetText(), "Your turn · HIC saves left: 1")
 	local wins, total = rules.HiccupTurnOdds(Game(w, a), 1)
 	eq(mug.wins, wins); eq(mug.total, total)
 	check(P(a).logs[1]:GetText():find("saved the original throw", 1, true) or P(a).logs[2]:GetText():find("saved the original throw", 1, true), "the original-throw save is logged")
@@ -940,6 +967,7 @@ test("1.2 the Bone Throw tables board: drunk at the table: recorded level, exact
 	Step(w, 0.3)
 	check(P(a).banner.text:GetText() == "BONES!", "the bust stands: %s", tostring(P(a).banner.text:GetText()))
 	eq(select(3, rules.Level(Game(w, a), 1)), 1, "one shake-off left")
+	check(P(a).rows[1].line:GetText():find("HIC saves left: 1", 1, true), "BONES keeps the remaining HIC saves visible: %s", P(a).rows[1].line:GetText())
 	NoErrors(w)
 end)
 
