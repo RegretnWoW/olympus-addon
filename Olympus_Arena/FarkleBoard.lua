@@ -477,8 +477,12 @@ local function Tally(pts, list)
 	Sound("tally")
 end
 
-local function Banner(text, color, stay, duration)
+local function Banner(text, color, stay, duration, subtitle, subtitleColor)
 	banner.text:SetText(text); banner.text:SetTextColor(color[1], color[2], color[3])
+	banner.subtitle:SetText(subtitle or "")
+	banner.subtitle:SetShown(subtitle ~= nil)
+	local subColor = subtitleColor or SOFT
+	banner.subtitle:SetTextColor(subColor[1], subColor[2], subColor[3])
 	banner:SetAlpha(1); banner:Show()
 	banner.stay = stay and true or false
 	banner.shownAt = Now()
@@ -832,7 +836,7 @@ function Handlers.R(info, done)
 			for _, i in ipairs(sd.play) do local d = sd.dice[i]; d.dull = true; Draw(d) end
 			if info.shaken == seat then
 				S.hic = nil
-				Banner(L.FARKLE_B_SHAKEN, AMBER, nil, 0.9); Sound("tally")
+				Banner(L.FARKLE_B_BONES, RED, nil, 0.9, L.FARKLE_B_HIC_SUCCESS, GREEN); Sound("tally")
 				S.last[side] = L.FARKLE_B_SHAKEN
 				Log(T("FARKLE_B_LOG_REUSE", Who(seat)))
 				for _, i in ipairs(sd.play) do local d = sd.dice[i]; d.dull = nil; Draw(d) end
@@ -843,7 +847,7 @@ function Handlers.R(info, done)
 			else
 				local lost = info.lost or (info.lastTurn and info.lastTurn.lost) or 0
 				S.last[side] = lost > 0 and T("FARKLE_B_ROW_BONES_LOST", Num(lost)) or L.FARKLE_B_ROW_BONES
-				Banner(L.FARKLE_B_BONES, RED)
+				Banner(L.FARKLE_B_BONES, RED, nil, nil, info.hicAttempted and L.FARKLE_B_HIC_FAIL or nil)
 				Sound("farkle")
 				if Mine(seat) then Log(lost > 0 and T("FARKLE_B_LOG_BONES_ME_LOST", Num(lost)) or L.FARKLE_B_LOG_BONES_ME)
 				else Log(lost > 0 and T("FARKLE_B_LOG_BONES_LOST", Who(seat), Num(lost)) or T("FARKLE_B_LOG_BONES", Who(seat))) end
@@ -3116,6 +3120,10 @@ local function Build()
 	banner.text = banner:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 	SetFont(banner.text, MORPHEUS, 46, "OUTLINE"); banner.text:SetPoint("CENTER")
 	banner.text:SetShadowColor(0, 0, 0, 0.6); banner.text:SetShadowOffset(2, -2)
+	banner.subtitle = banner:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+	SetFont(banner.subtitle, FontFor(ns.me), 18, "OUTLINE")
+	banner.subtitle:SetPoint("TOP", banner.text, "BOTTOM", 0, -3)
+	banner.subtitle:SetWidth(420); banner.subtitle:SetText(""); banner.subtitle:Hide()
 	-- it lands (from 1.6 times its size, fading in over 0.22 s) and, unless it stays, fades out
 	pcall(function()
 		local g = banner:CreateAnimationGroup()

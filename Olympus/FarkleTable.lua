@@ -892,6 +892,11 @@ local function Written(t, from, how, before)
 			info.k, info.value = ev.k, ev.value
 			info.dice = R().Decode(ev.value, ev.k)
 			info.farkle = info.dice and R().Farkle(info.dice) or nil
+			-- Eligibility was captured before a bust hands the turn to the other seat.
+			if ev.p == before.rollSeat and ev.value == before.rollValue and ev.k == before.rollK then
+				info.hicAttempted = info.farkle and before.hicEligible or nil
+				before.hicEligible = nil
+			end
 			dice = info.dice
 		elseif ev.t == "K" then
 			local _, list = R().Mask(ev.mask)
@@ -933,6 +938,11 @@ local function Apply(t, ev, how)
 	local g = t.game
 	if not g or g.over then return nil, "over" end
 	local before = { dice = g.turn.dice, step = g.step, shakes = g.shakes and { g.shakes[1], g.shakes[2] } }
+	if ev.t == "R" and ev.p == g.current and g.hiccupRule == "bones2" then
+		before.rollSeat, before.rollValue, before.rollK = ev.p, ev.value, ev.k
+		local _, chance, left = R().Level(g, ev.p)
+		before.hicEligible = chance and chance > 0 and left and left > 0 or nil
+	end
 	local ok, note = R().Apply(g, ev)
 	if t.own ~= g and t.own and not t.own.over then R().Apply(t.own, ev) end
 	if not ok then return nil, note end

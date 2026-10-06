@@ -374,6 +374,7 @@ test("1.2 the Bone Throw tables board: Keep & roll: the kept dice move to your t
 	-- (nothing scores: BONES, the turn's 150 lost, the dice dull)
 	Step(w, 0.3)
 	check(P(a).banner:IsShown() and P(a).banner.text:GetText() == "BONES!", "the BONES! banner")
+	check(P(a).banner.subtitle and not P(a).banner.subtitle:IsShown() and (P(a).banner.subtitle:GetText() or "") == "", "a sober bust has no HIC subtitle")
 	for _, d in ipairs(InPlay(a)) do check(d.dull and d.f.face.desat, "a bust's dice go dull") end
 	eq(P(a).rows[1].line:GetText(), "Bones: lost 150")
 	NoErrors(w)
@@ -947,6 +948,13 @@ test("1.2 the Bone Throw tables board: drunk at the table: recorded level, exact
 	local asked = #a.asked
 	w:QueueRoll(a.name, Roll(a, { 2, 2, 3, 3, 4, 4 }))
 	Click(w, a, P(a).primary)
+	Until(w, function() return P(a).banner:IsShown() end, 5)
+	eq(P(a).banner.text:GetText(), "BONES!", "the saved original throw keeps the BONES title")
+	local color = P(a).banner.text.textColor
+	check(color and color[1] > color[2] and color[1] > color[3], "BONES stays red after HIC success")
+	check(P(a).banner.subtitle and P(a).banner.subtitle:IsShown(), "HIC success has a visible subtitle")
+	eq(P(a).banner.subtitle:GetText(), "HIC succeeded")
+	check(not P(a).primary.enabled, "the next roll waits while the HIC success is displayed")
 	Until(w, function() return Idle(a) and (View(w, a, Id(a)).expect or {}).phase == "roll" end, 5)
 	eq(#a.asked, asked + 1); eq(a.asked[#a.asked].hi, rules.RANGES[6], "only the original six-dice throw")
 	eq(Game(w, a).shakes[1], 1)
@@ -963,9 +971,12 @@ test("1.2 the Bone Throw tables board: drunk at the table: recorded level, exact
 	-- A different eligible ordered throw fails; failed saves consume no shake-off.
 	w:QueueRoll(a.name, Roll(a, { 6, 6, 4, 4, 3, 3 }))
 	Click(w, a, P(a).primary)
-	Until(w, function() return (View(w, a, Id(a)).expect or {}).who == 2 and P(a).banner.text:GetText() == "BONES!" end, 5)
+	Until(w, function() return (View(w, a, Id(a)).expect or {}).who == 2 and P(a).banner:IsShown()
+		and P(a).banner.subtitle:GetText() == "HIC failed" end, 5)
 	Step(w, 0.3)
 	check(P(a).banner.text:GetText() == "BONES!", "the bust stands: %s", tostring(P(a).banner.text:GetText()))
+	check(P(a).banner:IsShown() and P(a).banner.subtitle and P(a).banner.subtitle:IsShown(), "failed HIC has a visible subtitle below BONES")
+	eq(P(a).banner.subtitle:GetText(), "HIC failed")
 	eq(select(3, rules.Level(Game(w, a), 1)), 1, "one shake-off left")
 	check(P(a).rows[1].line:GetText():find("HIC saves left: 1", 1, true), "BONES keeps the remaining HIC saves visible: %s", P(a).rows[1].line:GetText())
 	NoErrors(w)
