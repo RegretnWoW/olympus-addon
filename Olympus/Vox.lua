@@ -6,10 +6,18 @@ local L = ns.L
 -- with the answers and a countdown; each vote goes to whoever asked, alone (Y1), and when
 -- time is up the results go to everyone (T1~E): a bar chart in the window, a line in chat.
 -- The asker's Vox Populi tab counts the votes as they come, and the same chart can go on his
--- screen (on stream) while they do.
+-- screen (on stream) while they do. His last questions stay on that tab, with their results,
+-- across sessions (1.1.6).
+-- 1.1.6: the asker picks who a question is for (Vox.AUDIENCES): the whole army, the High
+-- Council or the guild masters (the King's, his Steward's or a Hand's), or his own guild (a guild
+-- master's, Y3). Both ends check it: a client opens the window only when its own character is
+-- in that audience, and the asker counts a vote only from someone he can place in it.
 --   T1~V~<id>~<guild>~<seconds>~<1|M>~<question>~<answer 1>~...~<answer n>   (n = 2 to 6)
+--   T1~V~<id>~<guild>~<H|M>~<seconds>~<1|M>~<question>~<answer 1>~...   (1.1.6: an audience)
 --   T1~E~<id>~<guild>~<voters>~<votes for 1>~...~<votes for n>
 --   Y1~<id>~<the answers picked, e.g. 2 or 136>~<guild>       (whisper to the asker)
+--   Y3~V~<id>~<seconds>~<1|M>~<question>~<answer 1>~...   (1.1.6: a guild master to his guild, GUILD)
+--   Y3~E~<id>~<voters>~<votes for 1>~...~<votes for n>    (its results, GUILD)
 
 local Vox = {}
 ns.Vox = Vox
@@ -29,9 +37,24 @@ Vox.RESULTS_SHOWN = 30  -- a voter's window shows the results this long, then cl
 -- Swappable in tests.
 Vox.after = function(seconds, where, fn) ns.After(seconds, where, fn) end
 
-local poll          -- the asker's open question: { id, q, answers, multi, t, at, votes = { [sender] = picks }, counts, voters, others }
-local history = {}  -- the asker's questions this session, newest last: { q, answers, multi, counts, voters, others, t }
-local shown         -- the question on this client's window: { id, asker, q, answers, multi, at, byKing, picks, voted, counts, voters }
+-- Who a question is for (1.1.6), each one checked on both ends:
+--   E the whole army: every Olympus member with the addon (the questions before 1.1.6)
+--   H the High Council: the author's signed list (ns.IsHighCouncillor)
+--   M the guild masters of the Olympus guilds: rank 0, the server's roster for our own guild,
+--     the census or the signed manifest for the others (Data.AuthorizedRank)
+--   G the asker's own guild: a guild master's question to his members, over GUILD (Y3), which
+--     the server carries between the members of one guild alone
+-- (Not the writs' letters, Acts.lua: there L is the Lords and C the Lords and Captains.)
+-- An audience is who the addon shows the question to and whose vote it counts: like everything
+-- on the channel (or in the guild), the question's bytes reach every addon there. Clients
+-- before 1.1.6 read the seconds first, find a letter, and show H and M to nobody.
+Vox.AUDIENCES = { "E", "H", "M", "G" }
+local KNOWN = { E = true, H = true, M = true, G = true }
+local THRONE_TO = { H = true, M = true } -- (the letters a T1~V may carry; any other: no window)
+
+local poll          -- the asker's open question: { id, q, answers, multi, to, t, at, votes = { [sender] = picks }, counts, voters, others }
+local shown         -- the question on this client's window: { id, asker, q, answers, multi, to, guild, at, byKing, picks, voted, counts, voters }
+local previewed = {} -- the author's preview's questions (King.Preview): this session alone, never saved
 local frame         -- the window (made on the first question): a voter's, or the asker's chart (frame.live)
 local composer      -- the asker's "new question" window
 local lastSent = -math.huge
@@ -55,6 +78,103 @@ end
 
 local function Grey(s) return "|cff9d9d9d" .. s .. "|r" end
 local function Gold(s) return "|cffffd200" .. s .. "|r" end
+
+local function AudienceText(to) return KNOWN[to] and L["VOX_TO_" .. to] or L.VOX_TO_E end
+
+-- The guild master of an Olympus guild (rank 0: the server's word): he asks his own guild (G).
+function Vox.GuildMaster() return ns.IsMember() and ns.Roster.MyRank() == 0 end
+
+-- Is this client's own character in that audience? (The receiving end's check.)
+function Vox.InAudience(to)
+	if to == "H" then return ns.IsHighCouncillor(ns.me) end
+	if to == "M" then return Vox.GuildMaster() end
+	if to == "G" then return ns.IsMember() end
+	return to == "E"
+end
+
+-- May this character ask that audience? The King, his Steward or a Hand the army, the council
+-- and the guild masters (the Throne's tools); a guild master his own guild.
+function Vox.MayAsk(to)
+	if to == "G" then return Vox.GuildMaster() end
+	return (to == "E" or THRONE_TO[to] == true) and ns.King.CanCommand() or false
+end
+
+-- The audiences this character may pick, in the composer's order (the author's preview: all).
+function Vox.Audiences()
+	local out, preview = {}, ns.King.Preview()
+	for _, to in ipairs(Vox.AUDIENCES) do
+		if preview or Vox.MayAsk(to) then out[#out + 1] = to end
+	end
+	return out
+end
+
+---------------------------------------------------------------------------
+-- The asker's history (1.1.6): kept across sessions
+---------------------------------------------------------------------------
+
+-- Each asker's questions, newest last, at most MAX_HISTORY, in the account's saved variables
+-- under his character's name ("name-realm"), as his chat windows are: the question, its answers,
+-- who it was for, the counts and when. Never in the realm group's store: a realm link merges two
+-- stores into one (Core.lua's OpenStore) and keeps one side's value of a key it does not know,
+-- so one realm's askers would lose their lists (1.1.6 review). Never who voted: the names stay
+-- with the open question alone (poll.votes), and go with it. (The author's preview keeps its own
+-- apart, for the session: previewed.)
+local checked = setmetatable({}, { __mode = "k" }) -- the saved lists read back this session
+
+local function Count(n) return math.max(0, math.min(Vox.MAX_VOTES, math.floor(tonumber(n) or 0))) end
+
+-- One saved question checked again (the SavedVariables can be edited), or nil.
+local function Kept(h)
+	if type(h) ~= "table" or type(h.q) ~= "string" or type(h.answers) ~= "table" or type(h.counts) ~= "table" then return nil end
+	local q, answers, counts = Plain(h.q, Vox.MAX_Q), {}, {}
+	for i = 1, math.min(#h.answers, Vox.MAX_ANSWERS) do
+		local a = type(h.answers[i]) == "string" and Plain(h.answers[i], Vox.MAX_A) or ""
+		if a == "" then return nil end
+		answers[i], counts[i] = a, Count(h.counts[i])
+	end
+	if #answers < 2 or #q < 3 then return nil end
+	return { q = q, answers = answers, multi = h.multi == true, to = KNOWN[h.to] and h.to or "E", counts = counts,
+		voters = Count(h.voters), others = Count(h.others), t = math.max(0, math.floor(tonumber(h.t) or 0)) }
+end
+
+-- This character's list (create: made when missing), checked once a session.
+local function History(create)
+	local db, me = ns.db, ns.me and ns.FullName(ns.me)
+	if type(db) ~= "table" or not me then return {} end
+	if type(db.voxHistory) ~= "table" then
+		if not create then return {} end
+		db.voxHistory = {}
+	end
+	local list = db.voxHistory[me]
+	if type(list) ~= "table" then
+		if not create then return {} end
+		list = {}
+		db.voxHistory[me] = list
+	end
+	if not checked[list] then
+		checked[list] = true
+		-- From the newest end (the entries ipairs would walk), until MAX_HISTORY good ones: an
+		-- edited file can hold any number, and the older ones are never opened (1.1.6 review).
+		local n, good = 0, {}
+		while list[n + 1] ~= nil do n = n + 1 end
+		for i = n, 1, -1 do
+			if #good >= Vox.MAX_HISTORY then break end
+			good[#good + 1] = Kept(list[i])
+		end
+		wipe(list)
+		for i = 1, #good do list[i] = good[#good + 1 - i] end
+	end
+	return list
+end
+
+-- The list the tab, the chart and the Discord copy read: the author's preview's while it is on.
+local function List() return ns.King.Preview() and previewed or History() end
+
+-- When it was asked: "5 min ago" the first day, its date after.
+local function When(t)
+	if not t or t == 0 or ns.Now() - t < 86400 or not date then return ns.Ago(t) end
+	return date("%Y-%m-%d", t)
+end
 
 -- Whose vote counts in the results: our own guild's members (the server's roster), or a
 -- guild of the census, fresh and undisputed, and never more voters from it than it has
@@ -80,6 +200,26 @@ local function Placed(sender, guild)
 	if not g or g.votes >= math.max(g.online, 1) then return false end
 	g.votes = g.votes + 1
 	return true
+end
+
+-- 1.1.6: the asker's end of the audience, whatever the voter's client showed. The council: a
+-- name of the signed list (the server sets the sender's). The guild masters: rank 0 of the guild
+-- the vote names, as the roster, the census or the signed manifest place him (a claim alone
+-- places nobody). Our own guild: a member of our roster who says our guild. The army: Placed.
+-- (The author's preview counts his own vote, whatever its audience: nothing went out.)
+local function Counts(p, sender, guild)
+	if p.preview and sender == ns.me then return true end
+	if p.to == "H" then return ns.IsHighCouncillor(sender) end
+	if p.to == "M" then return ns.Data.AuthorizedRank(sender, guild) == 0 end
+	if p.to == "G" then return ns.Roster.RankOf(sender) ~= nil and guild == GetGuildInfo("player") end
+	return sender == ns.me or Placed(sender, guild)
+end
+
+-- Which open question gives way to another (1.1.6): the King's comes first, then the Throne's
+-- (a Hand's, a Steward's), then a guild master's to his guild (the King's to his own among them).
+local function Weight(byKing, to)
+	if to == "G" then return 1 end
+	return byKing and 3 or 2
 end
 
 ---------------------------------------------------------------------------
@@ -167,10 +307,15 @@ end
 local function Close(id)
 	if not poll or poll.id ~= id or poll.closed then return end
 	poll.closed = true
-	history[#history + 1] = { q = poll.q, answers = poll.answers, multi = poll.multi, counts = { unpack(poll.counts) },
-		voters = poll.voters, others = poll.others, t = poll.t }
+	-- (1.1.6: saved, for the tab after a /reload; never poll.votes, the voters' names. The
+	-- preview's: for the session alone.)
+	local history = poll.preview and previewed or History(true)
+	history[#history + 1] = { q = poll.q, answers = { unpack(poll.answers) }, multi = poll.multi, to = poll.to,
+		counts = { unpack(poll.counts) }, voters = poll.voters, others = poll.others, t = poll.t }
 	while #history > Vox.MAX_HISTORY do table.remove(history, 1) end
-	if not poll.preview then
+	if not poll.preview and poll.to == "G" then
+		ns.Comm.Send("GUILD", ("Y3~E~%d~%d~%s"):format(poll.id, poll.voters, table.concat(poll.counts, "~")), "voxend", true)
+	elseif not poll.preview then
 		ns.Comm.Send("CHANNEL", ("T1~E~%d~%s~%d~%s"):format(poll.id, GetGuildInfo("player") or "", poll.voters,
 			table.concat(poll.counts, "~")), "voxend", true)
 	end
@@ -187,10 +332,17 @@ local function Close(id)
 	Changed()
 end
 
--- opts: { q, answers = { ... }, seconds, multi }. The composer's way, and the typed one's.
+-- opts: { q, answers = { ... }, seconds, multi, to }. The composer's way, and the typed one's.
+-- to (1.1.6): one of Vox.AUDIENCES, the army when left out.
 function Vox.AskWith(opts)
 	local preview = ns.King.Preview()
-	if not ns.King.CanCommand() and not preview then return ns.Print(L.THRONE_ONLY_KING) end
+	local to = opts.to or "E"
+	if not KNOWN[to] then return ns.Print(L.VOX_USAGE) end
+	if not Vox.MayAsk(to) and not preview then return ns.Print(to == "G" and L.VOX_ONLY_GM or L.THRONE_ONLY_KING) end
+	-- A guild master the moderators took off (net-off, Moderation.lua): his guild's clients drop
+	-- his question (Moderation.Hides), so it does not go.
+	local off = to == "G" and not preview and ns.Moderation.SelfOff and ns.Moderation.SelfOff()
+	if off then return ns.Print(ns.Moderation.YouText(off)) end
 	local q = Plain(opts.q, Vox.MAX_Q)
 	if #q < 3 then return ns.Print(L.VOX_ASK_NEED_Q) end
 	local answers = {}
@@ -204,24 +356,29 @@ function Vox.AskWith(opts)
 	local multi = opts.multi and true or false
 	local now = ns.Now()
 	if poll and not poll.closed then return ns.Print(L.VOX_BUSY) end
-	-- Someone else's question still open (the King's, a Hand's): it would not be shown.
-	if shown and shown.asker ~= ns.me and now <= shown.at and not shown.counts then return ns.Print(L.VOX_BUSY_OTHER) end
+	-- Someone else's question still open (the King's, a Hand's): it would not be shown. (1.1.6: a
+	-- guild's gives way to the Throne's, Weight.)
+	if shown and shown.asker ~= ns.me and now <= shown.at and not shown.counts
+		and Weight(ns.King.IsKing(), to) <= Weight(shown.byKing, shown.to) then return ns.Print(L.VOX_BUSY_OTHER) end
 	if not preview and now - lastSent < Vox.GAP then
 		return ns.Print(L.THRONE_WAIT:format(math.ceil(Vox.GAP - (now - lastSent))))
 	end
 	lastSent = now
 	local counts = {}
 	for i = 1, #answers do counts[i] = 0 end
-	poll = { id = ns.King.NewId(), q = q, answers = answers, multi = multi, t = now, at = now + seconds,
+	poll = { id = ns.King.NewId(), q = q, answers = answers, multi = multi, to = to, t = now, at = now + seconds,
 		votes = {}, counts = counts, voters = 0, others = 0, preview = preview or nil }
 	placed, placedAt = {}, -math.huge
 	if composer then composer:Hide() end
+	local body = ("%d~%s~%s~%s"):format(seconds, multi and "M" or "1", q, table.concat(answers, "~"))
 	if preview then
 		ns.Print(L.THRONE_PREVIEW_NOTE)
-		Vox.Show(ns.me, poll.id, seconds, q, answers, multi, true) -- how the army sees it
+		Vox.Show(ns.me, poll.id, seconds, q, answers, multi, true, nil, to) -- how they see it
+	elseif to == "G" then
+		-- Over GUILD (at most 233 bytes: never in pieces, which GUILD puts together for a few types alone).
+		ns.Comm.Send("GUILD", ("Y3~V~%d~%s"):format(poll.id, body), "vox", true)
 	else
-		local msg = ("T1~V~%d~%s~%d~%s~%s~%s"):format(poll.id, GetGuildInfo("player") or "", seconds, multi and "M" or "1", q,
-			table.concat(answers, "~"))
+		local msg = ("T1~V~%d~%s~%s%s"):format(poll.id, GetGuildInfo("player") or "", to == "E" and "" or (to .. "~"), body)
 		-- Ahead of the census (every soldier's countdown starts when it arrives); a long one
 		-- goes in pieces.
 		if #msg <= 250 then ns.Comm.Send("CHANNEL", msg, "vox", true) else ns.Comm.SendChunked(msg, true) end
@@ -233,11 +390,11 @@ function Vox.AskWith(opts)
 	return true
 end
 
--- Typed (tests, the test bench): see Vox.Parse. multi: several answers each.
-function Vox.Ask(input, multi)
+-- Typed (tests, the test bench): see Vox.Parse. multi: several answers each. to: the audience.
+function Vox.Ask(input, multi, to)
 	local seconds, q, answers = Vox.Parse(input)
 	if not seconds then return ns.Print(L.VOX_USAGE) end
-	return Vox.AskWith({ q = q, answers = answers, seconds = seconds, multi = multi })
+	return Vox.AskWith({ q = q, answers = answers, seconds = seconds, multi = multi, to = to })
 end
 
 function Vox.CloseNow()
@@ -273,7 +430,7 @@ function Vox.HandleVote(dist, sender, text)
 		if poll.votes[ns.FullName(other)] then return end
 	end
 	poll.votes[sender] = digits
-	if sender == ns.me or Placed(sender, guild) then
+	if Counts(poll, sender, guild) then
 		for _, i in ipairs(picks) do poll.counts[i] = poll.counts[i] + 1 end
 		poll.voters = poll.voters + 1
 	else
@@ -398,13 +555,23 @@ end
 -- voter's question.
 local function Source()
 	if frame.live then
+		local history = List()
 		local p = (poll and not poll.closed) and poll or history[#history]
 		if not p then return nil end
-		return { q = p.q, answers = p.answers, multi = p.multi, counts = p.counts, voters = p.voters,
+		return { q = p.q, answers = p.answers, multi = p.multi, to = p.to, counts = p.counts, voters = p.voters,
 			at = p.at or 0, final = p ~= poll or poll.closed, live = true, asker = ns.me,
-			byKing = ns.King.IsKing() or ns.King.Preview() }
+			guild = GetGuildInfo("player"), byKing = ns.King.IsKing() or ns.King.Preview() }
 	end
 	return shown
+end
+
+-- "Asmon asks the army", "Helper, Hand of the King, asks the High Council", "Zed asks <Olympus Zeus>".
+local function Title(s, name)
+	local to = s.to or "E"
+	if to == "G" then return L.VOX_ASKS_G:format(name, s.guild or "") end
+	if to == "H" then return (s.byKing and L.VOX_ASKS_H or L.VOX_ASKS_HAND_H):format(name) end
+	if to == "M" then return (s.byKing and L.VOX_ASKS_M or L.VOX_ASKS_HAND_M):format(name) end
+	return (s.byKing and L.VOX_ASKS or L.VOX_ASKS_HAND):format(name)
 end
 
 function Vox.Refresh()
@@ -413,7 +580,7 @@ function Vox.Refresh()
 	if not s then return frame:Hide() end
 	local now = ns.Now()
 	local byName = s.byKing and ns.KingName(s.asker) or ns.DisplayName(s.asker)
-	frame.title:SetText(s.byKing and L.VOX_ASKS:format(byName) or L.VOX_ASKS_HAND:format(byName))
+	frame.title:SetText(Title(s, byName))
 	frame.question:SetText(s.q)
 	local results = s.live or s.counts ~= nil
 	local open = not s.counts and not s.final and now <= (s.at or 0)
@@ -482,9 +649,10 @@ function Vox.Refresh()
 	end
 end
 
-function Vox.Show(asker, id, seconds, q, answers, multi, byKing, hidden)
+-- to (1.1.6): who it is for, the army when left out (the title names them).
+function Vox.Show(asker, id, seconds, q, answers, multi, byKing, hidden, to)
 	shown = { id = id, asker = asker, q = q, answers = answers, multi = multi and true or false, at = ns.Now() + seconds,
-		byKing = byKing, picks = {}, hidden = hidden and true or nil }
+		byKing = byKing, picks = {}, hidden = hidden and true or nil, to = to or "E", guild = GetGuildInfo("player") }
 	-- 1.1 (#31): the player's block terms hit its question or an answer: no window, no sound, no
 	-- line in chat; the Decrees tab offers it with a click while it is open (Vox.Reveal).
 	if hidden then
@@ -519,17 +687,17 @@ end
 
 -- The asker's chart on his screen: live while the question is open, then the final results.
 function Vox.ShowLive()
-	if not (poll or history[#history]) then return ns.Print(L.VOX_NONE) end
+	if not (poll or List()[1]) then return ns.Print(L.VOX_NONE) end
 	frame = frame or MakeFrame()
 	frame.live = true
 	frame:Show()
 	Vox.Refresh()
 end
 
--- A question from the King or a Hand (King.Authorized checked the sender): not our own.
-local function OnQuestion(sender, id, rest, guild)
+-- A question for this client, its audience already checked: not our own.
+local function Take(sender, id, rest, guild, to)
 	if ns.FullName(sender) == ns.me then return end
-	-- 1.1: a Hand the moderators took off (net-off, Moderation.lua): no window of theirs.
+	-- 1.1: a Hand (or a guild master) the moderators took off (net-off, Moderation.lua): no window of theirs.
 	if ns.Moderation.Hides and ns.Moderation.Hides(sender, guild) then return end
 	local byKing = ns.King.FromKing(sender, guild)
 	local seconds, kind, q, a = rest:match("^(%d+)~([1M])~([^~]+)~(.+)$")
@@ -544,10 +712,10 @@ local function OnQuestion(sender, id, rest, guild)
 	if #answers < 2 or #q < 3 then return end
 	local now = ns.Now()
 	local from = ns.FullName(sender)
-	-- One question at a time: another asker's still open stays, unless this one is the
-	-- King's and that one a Hand's. And from each asker a new window SHOW_GAP apart at most.
+	-- One question at a time: another asker's still open stays, unless this one comes first
+	-- (Weight: the King's before a Hand's). And from each asker a new window SHOW_GAP apart at most.
 	local open = shown and now <= shown.at and not shown.counts
-	if open and shown.asker ~= from and not (byKing and not shown.byKing) then return end
+	if open and shown.asker ~= from and Weight(byKing, to) <= Weight(shown.byKing, shown.to) then return end
 	if now - (lastShownBy[from] or -math.huge) < Vox.SHOW_GAP then return end
 	lastShownBy[from] = now
 	-- 1.1 (#31): hidden when the player's block terms hit the question or an answer (Filter.lua).
@@ -556,7 +724,18 @@ local function OnQuestion(sender, id, rest, guild)
 		hidden = F.Hides(q)
 		for _, x in ipairs(answers) do hidden = hidden or F.Hides(x) end
 	end
-	Vox.Show(from, id, seconds, q, answers, kind == "M", byKing, hidden)
+	Vox.Show(from, id, seconds, q, answers, kind == "M", byKing, hidden, to)
+end
+
+-- A question from the King or a Hand (King.Authorized checked the sender). 1.1.6: a letter
+-- before the seconds names a narrower audience (THRONE_TO); a client outside it opens nothing,
+-- and a letter it does not know opens nothing either.
+local function OnQuestion(sender, id, rest, guild)
+	local to, after = rest:match("^(%a)~(.*)$")
+	if to and not THRONE_TO[to] then return end
+	to = to or "E"
+	if not Vox.InAudience(to) then return end
+	Take(sender, id, after or rest, guild, to)
 end
 
 -- The question the player's block terms hid, while it is open (the Decrees tab), or nil.
@@ -582,8 +761,11 @@ function Vox.Reveal()
 	Vox.Refresh()
 end
 
-local function OnResults(sender, id, rest)
+-- overGuild (1.1.6): the results of a guild's question come over GUILD (Y3), every other's on
+-- the channel (T1~E): never the one for the other.
+local function OnResults(sender, id, rest, overGuild)
 	if not shown or shown.id ~= id or ns.FullName(sender) ~= shown.asker then return end
+	if (shown.to == "G") ~= (overGuild == true) then return end
 	local voters, tail = rest:match("^(%d+)~(.*)$")
 	voters = tonumber(voters)
 	if not voters then return end
@@ -608,7 +790,20 @@ local function OnResults(sender, id, rest)
 end
 
 ns.King.Register("V", OnQuestion)
-ns.King.Register("E", OnResults)
+ns.King.Register("E", function(sender, id, rest) OnResults(sender, id, rest) end)
+
+-- Y3 (1.1.6): a guild master's question to his own guild, and its results. Over GUILD alone,
+-- which the server carries between the members of one guild (and names who sent it), from the
+-- character our roster has at rank 0: a guildmate who is not our guild master opens nothing.
+function Vox.HandleGuild(dist, sender, text)
+	if dist ~= "GUILD" or type(text) ~= "string" or ns.Roster.RankOf(sender) ~= 0 then return end
+	local kind, id, rest = text:match("^Y3~([VE])~(%d+)~(.*)$")
+	if not kind then return end
+	if kind == "E" then return OnResults(sender, tonumber(id), rest, true) end
+	if not Vox.InAudience("G") then return end
+	Take(sender, tonumber(id), rest, GetGuildInfo("player"), "G")
+end
+ns.Comm.Handle("Y3", function(...) Vox.HandleGuild(...) end)
 
 ---------------------------------------------------------------------------
 -- The Vox Populi tab (the King and his Hands)
@@ -636,27 +831,33 @@ function Vox.Build()
 	if poll and not poll.closed then
 		local left = math.max(0, math.ceil(poll.at - ns.Now()))
 		lines[#lines + 1] = { text = Gold(poll.q), right = L.VOX_LEFT:format(math.floor(left / 60), left % 60) }
-		lines[#lines + 1] = { text = Grey(KindText(poll.multi) .. (poll.multi and ("  " .. L.VOX_SHARE_OF_VOTERS) or "")) }
+		lines[#lines + 1] = { text = Grey(KindText(poll.multi) .. (poll.multi and ("  " .. L.VOX_SHARE_OF_VOTERS) or "")
+			.. "  ·  " .. AudienceText(poll.to)) }
 		ChartLines(lines, poll)
 		lines[#lines + 1] = { text = Grey(L.VOX_TOTAL:format(poll.voters) .. "  ·  " .. Vox.Verdict(poll.answers, poll.counts, poll.voters, poll.multi)), gapAfter = true }
 		if poll.others > 0 then
+			-- (1.1.6: a narrower audience's are the votes from outside it.)
+			local army = poll.to == "E"
 			lines[#lines].gapAfter = nil
-			lines[#lines + 1] = { text = Grey(L.VOX_UNPLACED:format(poll.others)), gapAfter = true,
-				tooltip = function(tt) tt:AddLine(L.VOX_UNPLACED_TIP, 1, 1, 1, true) end }
+			lines[#lines + 1] = { text = Grey((army and L.VOX_UNPLACED or L.VOX_OUTSIDE):format(poll.others)), gapAfter = true,
+				tooltip = function(tt) tt:AddLine(army and L.VOX_UNPLACED_TIP or L.VOX_OUTSIDE_TIP, 1, 1, 1, true) end }
 		end
 	else
 		lines[#lines + 1] = { text = Grey(L.VOX_NONE), gapAfter = true }
 	end
+	-- (1.1.6: the last MAX_HISTORY questions, kept across sessions.)
+	local history = List()
 	lines[#lines + 1] = { header = true, text = L.VOX_HISTORY:format(#history) }
 	if #history == 0 then lines[#lines + 1] = { text = Grey(L.VOX_HISTORY_NONE) } end
 	for i = #history, 1, -1 do
 		local h = history[i]
 		lines[#lines + 1] = {
-			text = h.q, right = Grey(L.VOX_VOTERS:format(h.voters) .. "  " .. ns.Ago(h.t)),
+			text = h.q .. (h.to ~= "E" and Grey("  (" .. AudienceText(h.to) .. ")") or ""),
+			right = Grey(L.VOX_VOTERS:format(h.voters) .. "  " .. When(h.t)),
 			onClick = function() ns.UI.ShowCopy(L.VOX_TITLE, Vox.DiscordText(h)) end,
 			tooltip = function(tt)
 				tt:AddLine(h.q, 1, 0.82, 0, true)
-				tt:AddLine(KindText(h.multi), 0.6, 0.6, 0.6)
+				tt:AddLine(KindText(h.multi) .. "  ·  " .. AudienceText(h.to), 0.6, 0.6, 0.6)
 				tt:AddLine(Vox.Verdict(h.answers, h.counts, h.voters, h.multi), 1, 1, 1, true)
 				tt:AddLine(L.VOX_CLICK_COPY, 0.6, 0.6, 0.6)
 			end,
@@ -667,11 +868,14 @@ function Vox.Build()
 	return lines, L.TAB_VOX, L.VOX_HINT
 end
 
--- For Discord: the question, each answer with its share and votes, the verdict.
+-- For Discord: the question (who it was for), each answer with its share and votes, the verdict.
 function Vox.DiscordText(h)
-	h = h or history[#history]
+	if not h then
+		local history = List()
+		h = history[#history]
+	end
 	if not h then return "" end
-	local out = { ("**%s** (%s)"):format(h.q, KindText(h.multi)) }
+	local out = { ("**%s** (%s  ·  %s)"):format(h.q, KindText(h.multi), AudienceText(h.to)) }
 	for _, r in ipairs((Vox.Tally(h.answers, h.counts, h.voters, h.multi))) do
 		out[#out + 1] = ("- %s: %d%% (%d)"):format(r.answer, r.pct, r.votes)
 	end
@@ -680,7 +884,8 @@ function Vox.DiscordText(h)
 end
 
 ---------------------------------------------------------------------------
--- The composer: the question, two to six answers, pick one or several, how long
+-- The composer: the question, two to six answers, pick one or several, how long, who it is
+-- for (1.1.6: the audiences this character may pick, Vox.Audiences)
 ---------------------------------------------------------------------------
 
 local function Box(parent, width, letters)
@@ -714,7 +919,7 @@ end
 -- Cancel do (checked each time it shows: a switch to the gamepad UI since takes it off the list).
 local function MakeComposer()
 	local f = ns.Window("OlympusVoxAskFrame", UIParent, { title = L.VOX_ASK_TITLE })
-	f:SetSize(420, 330)
+	f:SetSize(420, 410)
 	f:SetPoint("CENTER", 0, 40)
 	f:SetFrameStrata("DIALOG")
 	f:SetToplevel(true)
@@ -773,8 +978,28 @@ local function MakeComposer()
 		b.seconds = sec
 		f.times[i] = b
 	end
+	-- Who it is for (1.1.6): one box each, two a row; only those this character may pick show
+	-- (Vox.RefreshComposer places them). Plain check boxes, as the kinds: no menu, gamepad or not.
+	local wl = Label(f, L.VOX_ASK_TO)
+	wl:SetPoint("TOPLEFT", 18, -264)
+	f.audiences = {}
+	for i, to in ipairs(Vox.AUDIENCES) do
+		local okc, c = pcall(CreateFrame, "CheckButton", nil, f, "UICheckButtonTemplate")
+		if not okc or not c then c = CreateFrame("CheckButton", nil, f) end
+		c:SetSize(22, 22)
+		c.to = to
+		c:SetScript("OnClick", function() f.to = to; ns.SafeCall("vox composer", Vox.RefreshComposer) end)
+		c.label = Label(f, AudienceText(to), "GameFontHighlightSmall")
+		c.label:SetPoint("LEFT", c, "RIGHT", 2, 0)
+		f.audiences[i] = c
+	end
+	-- Under them, for the council and the guild masters (1.1.6 review): who sees the window is not
+	-- who can read the question, which goes on the channel as every Throne call does.
+	f.open = Label(f, L.VOX_ASK_OPEN, "GameFontDisableSmall")
+	f.open:SetWidth(384)
+	f.open:SetWordWrap(true)
 	f.ask = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-	f.ask:SetSize(150, 24)
+	f.ask:SetSize(190, 24)
 	f.ask:SetPoint("BOTTOMRIGHT", -18, 16)
 	f.ask:SetText(L.VOX_ASK_SEND)
 	f.ask:SetScript("OnClick", function() ns.SafeCall("vox ask", Vox.AskFromComposer) end)
@@ -792,29 +1017,54 @@ function Vox.RefreshComposer()
 	for _, b in ipairs(composer.times) do
 		if b.seconds == composer.seconds then b:LockHighlight() else b:UnlockHighlight() end
 	end
+	-- (1.1.6) The audiences this character may pick, in order; the one picked, and the button
+	-- that names it.
+	local may = {}
+	for _, to in ipairs(Vox.Audiences()) do may[to] = true end
+	local n = 0
+	for _, c in ipairs(composer.audiences) do
+		local shows = may[c.to] == true
+		c:SetShown(shows)
+		c.label:SetShown(shows)
+		if shows then
+			c:ClearAllPoints()
+			c:SetPoint("TOPLEFT", 18 + (n % 2) * 190, -278 - math.floor(n / 2) * 24)
+			n = n + 1
+		end
+		c:SetChecked(c.to == composer.to)
+	end
+	composer.open:ClearAllPoints()
+	composer.open:SetPoint("TOPLEFT", 18, -280 - math.ceil(n / 2) * 24)
+	composer.open:SetShown(THRONE_TO[composer.to] == true)
+	composer.ask:SetText(composer.to == "E" and L.VOX_ASK_SEND or L["VOX_ASK_SEND_" .. tostring(composer.to)] or L.VOX_ASK_SEND)
 end
 
 function Vox.AskFromComposer()
 	if not composer then return end
 	local answers = {}
 	for i, eb in ipairs(composer.a) do answers[i] = eb:GetText() end
-	return Vox.AskWith({ q = composer.q:GetText(), answers = answers, seconds = composer.seconds, multi = composer.multi })
+	return Vox.AskWith({ q = composer.q:GetText(), answers = answers, seconds = composer.seconds, multi = composer.multi,
+		to = composer.to })
 end
 
--- A fresh question: Yes / No ready as the first two answers, pick one, 90 seconds.
+-- A fresh question: Yes / No ready as the first two answers, pick one, 90 seconds, for the first
+-- audience this character may pick (the Throne: the whole army; a guild master: his guild).
 function Vox.Prompt()
-	if not ns.King.CanCommand() and not ns.King.Preview() then return ns.Print(L.THRONE_ONLY_KING) end
+	local audiences = Vox.Audiences()
+	if #audiences == 0 then return ns.Print(L.THRONE_ONLY_KING) end
 	composer = composer or MakeComposer()
 	composer.q:SetText("")
 	for i, eb in ipairs(composer.a) do eb:SetText(i == 1 and L.VOX_YES or i == 2 and L.VOX_NO or "") end
-	composer.multi, composer.seconds = false, Vox.DEFAULT
+	composer.multi, composer.seconds, composer.to = false, Vox.DEFAULT, audiences[1]
 	Vox.RefreshComposer()
 	composer:Show()
 	ns.Focus(composer.q)
 end
 
-function Vox.Visible() return ns.King.Visible() end
-function Vox.State() return poll, history, shown end
+-- The tab: the Throne's (the King, his Steward, his Hands, the author's preview) and, 1.1.6, every
+-- guild master's, for his guild's questions.
+function Vox.Visible() return ns.King.Visible() or Vox.GuildMaster() end
+function Vox.State() return poll, List(), shown end
 function Vox.Frame() return frame end
 function Vox.Composer() return composer end
 
@@ -834,7 +1084,8 @@ end
 function Vox.Reset()
 	poll, shown = nil, nil
 	placed, placedAt = {}, -math.huge
-	wipe(history)
+	wipe(previewed); wipe(checked)
+	if ns.db then ns.db.voxHistory = nil end
 	lastSent, changePending = -math.huge, false
 	wipe(lastShownBy)
 	if frame then frame:Hide(); frame.live = nil end

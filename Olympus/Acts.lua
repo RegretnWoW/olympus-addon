@@ -6,7 +6,7 @@ local L = ns.L
 --     Captains, on parchment. Each one can acknowledge it; the King sees how many did.
 --   Open the Gates (Realm tab, Recruiting): the guild the army should send new recruits to,
 --     for two hours. The King or a Hand opens them.
---   Royal Pardon (Tabards tab, Wall of Shame): a name off the wall, for everyone, for a week.
+--   Royal Pardon (The Watch's Tabards, Wall of Shame): a name off the wall, for everyone, for a week.
 --   T1~W~<id>~<guild>~<L|C>~<text>               a writ (the King's)
 --   T6~<id>~<guild>                               acknowledged (whisper to the King)
 --   T1~G~<id>~<guild>~<seconds left>~<guild to join>   gates open (empty guild: closed)
@@ -186,9 +186,13 @@ function Acts.HandleAck(dist, sender, text)
 	guild = ns.King.CleanGuild(guild)
 	if not id or not guild then return end
 	sender = ns.FullName(sender)
-	-- Only someone the writ was for: a Lord or Captain the census (or our roster) confirms,
-	-- and a Lord of the Crown for a writ to the Lords.
-	local rank = ns.Roster.RankOf(sender) or ns.Data.KnownRank(sender, guild)
+	-- Only someone the writ was for: a Lord or Captain. Before signed enforcement this keeps the
+	-- old roster/census decision exactly; afterwards a local roster role is valid only for its
+	-- actual guild and every cross-guild role comes from the manifest.
+	local enforcing = ns.Authority and ns.Authority.Enforced and ns.Authority.Enforced()
+	local rank
+	if not enforcing then rank = ns.Roster.RankOf(sender) end
+	if rank == nil then rank = ns.Data.AuthorizedRank(sender, guild) end
 	if rank == nil or rank > ns.CAPTAIN_RANK then return end
 	for _, w in ipairs(Read("writsSent")) do
 		if w.id == id and ns.Now() - w.t < 86400 then

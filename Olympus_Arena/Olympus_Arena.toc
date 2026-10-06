@@ -1,0 +1,35 @@
+## Interface: 11509, 16001, 20506
+## Title: |cffe6c35cOlympus|r Arena
+## Notes: The Blood Arena's screens for Olympus (fights, Farkle, the Lottery). Loads when you open the arena; needs Olympus.
+## Author: Olympus addon contributors
+## Version: 1.1.6
+## LoadOnDemand: 1
+## Dependencies: Olympus
+## SavedVariables: OlympusArenaDB
+## IconTexture: Interface\AddOns\Olympus\media\logo64
+## X-License: MIT
+## X-Website: https://github.com/dnl-gentile/olympus-addon
+
+Handoff.lua
+Locales\UIText.lua
+Locales\FarkleText.lua
+Locales\LotteryText.lua
+Panes.lua
+Kit.lua
+Window.lua
+PagesPlayer.lua
+PagesStaff.lua
+Slip.lua
+Card.lua
+BracketView.lua
+ChatPanel.lua
+Overlay.lua
+Popups.lua
+FarkleBoard.lua
+LotteryBoard.lua
+Games\GamesRules.lua
+Games\Games.lua
+Games\Bicho.lua
+Games\Farkle.lua
+Games\Hookup.lua
+Sim.lua

@@ -134,14 +134,22 @@ end
 local function Changed() ns.Fire("REALM_PAGE_CHANGED", "crafters") end
 
 -- A name the moderators took off (net-off, Moderation.lua), in the name of `guild` when known.
+-- 1.1.6: or a sanctioned one (WatchChat.Barred "crafting": a moderator's timeout, a hold): his
+-- listing and his asks are dropped while it lasts.
 local function Off(name, guild)
 	local M = ns.Moderation
-	return M.Hides ~= nil and M.Hides(name, guild) ~= nil
+	if M.Hides ~= nil and M.Hides(name, guild) ~= nil then return true end
+	local WC = ns.WatchChat
+	return type(WC) == "table" and not WC.missing and type(WC.Barred) == "function" and WC.Barred("crafting", name) ~= nil
 end
--- This client's own character or guild is off: the word (nothing it sends would show).
+-- This client's own character or guild is off: the word (nothing it sends would show); 1.1.6: or
+-- the sanction on this character (WatchChat.Barred: its .entry, told by WatchChat.TellBarred).
 local function SelfOff()
 	local M = ns.Moderation
-	return M.SelfOff and M.SelfOff() or nil
+	local off = M.SelfOff and M.SelfOff() or nil
+	if off then return off end
+	local WC = ns.WatchChat
+	return type(WC) == "table" and not WC.missing and type(WC.Barred) == "function" and WC.Barred("crafting") or nil
 end
 local function Recent(times, window)
 	local now = ns.Now()
@@ -283,7 +291,7 @@ function Crafters.Choose(key, yes)
 	local off = SelfOff()
 	if yes and off then
 		-- (1.1, Konig's review: kept, and listed once the moderators put us back on.)
-		ns.Print(ns.Moderation.YouText(off))
+		if off.entry and ns.WatchChat.TellBarred then ns.WatchChat.TellBarred(off) else ns.Print(ns.Moderation.YouText(off)) end
 	elseif yes then
 		Crafters.SendListing(true)
 		ns.Print(L.CRAFTER_LISTED)
@@ -646,9 +654,13 @@ local function Whisper(name) -- gp:chat-box
 end
 Crafters.Whisper = Whisper
 
--- The ask's box: with mouse and keyboard the chat's, "/oly craft " in it, where a shift-click
--- puts an item's link; with the gamepad UI Olympus's own window (words only there).
+-- 1.2: "who can make it?" opens the full-page request composer (CraftRequests.lua) in both input
+-- modes. Without that file (a client updated without a restart) the old ask stays: with mouse and
+-- keyboard the chat's, "/oly craft " in it, where a shift-click puts an item's link; with the
+-- gamepad UI Olympus's own window (words only there).
 function Crafters.AskPrompt() -- gp:chat-box
+	local requests = ns.CraftRequests
+	if requests and requests.OpenComposer then return requests.OpenComposer() end
 	if ns.Gate.Allowed("chat-box") and ChatFrame_OpenChat then
 		ns.Gate.Used("chat-box")
 		return ChatFrame_OpenChat("/oly craft ")
@@ -680,11 +692,22 @@ end
 
 -- The tab's lines; `q`, its search: crafters whose name, guild or profession holds it.
 function Crafters.Lines(q)
-	local lines = { { header = true, text = L.CRAFTER_TITLE,
-		tooltip = function(tt) tt:AddLine(L.CRAFTER_TITLE, 1, 0.82, 0); tt:AddLine(L.CRAFTER_ABOUT, 1, 1, 1, true) end } }
+	local lines = {}
+	local requests = ns.CraftRequests
+	-- 1.2: the request board first (its own ask line on top), so a crafter sees work he can do
+	-- before the directory of listed crafters.
+	if requests and requests.BoardLines then
+		for _, line in ipairs(requests.BoardLines(q) or {}) do lines[#lines + 1] = line end
+		-- Personal request views contain their own records, not the shared directory.
+		if requests.Page and requests.Page() ~= "board" then return lines end
+	end
+	lines[#lines + 1] = { header = true, text = L.CRAFTER_TITLE,
+		tooltip = function(tt) tt:AddLine(L.CRAFTER_TITLE, 1, 0.82, 0); tt:AddLine(L.CRAFTER_ABOUT, 1, 1, 1, true) end }
 	if not q then
-		lines[#lines + 1] = { text = Green(L.CRAFTER_ASK), onClick = function() Crafters.AskPrompt() end,
-			tooltip = function(tt) tt:AddLine(L.CRAFTER_ASK, 1, 0.82, 0); tt:AddLine(L.CRAFTER_ASK_TIP, 1, 1, 1, true) end }
+		if not (requests and requests.BoardLines) then
+			lines[#lines + 1] = { text = Green(L.CRAFTER_ASK), onClick = function() Crafters.AskPrompt() end,
+				tooltip = function(tt) tt:AddLine(L.CRAFTER_ASK, 1, 0.82, 0); tt:AddLine(L.CRAFTER_ASK_TIP, 1, 1, 1, true) end }
+		end
 		-- Our own listing, and how to change it.
 		local listed = Crafters.Listed()
 		if #listed > 0 then
@@ -712,7 +735,7 @@ function Crafters.Lines(q)
 				right = Grey(#answers == 0 and (ns.Now() - a.t < Crafters.ASK_WAIT and L.CRAFTER_WAITING or L.CRAFTER_NOBODY) or tostring(#answers)) }
 			for _, x in ipairs(answers) do
 				local who = ns.DisplayName(x.name)
-				lines[#lines + 1] = { indent = 1, key = x.name,
+				lines[#lines + 1] = { indent = 1, key = x.name, player = x.name,
 					text = who .. "  " .. Grey("<" .. x.e.guild .. ">"), right = Gold(L.CRAFTER_WHISPER) .. "  " .. Grey(("%s %d"):format(x.e.prof, x.e.rank)),
 					onClick = function() Whisper(x.name) end,
 					tooltip = function(tt)
@@ -760,7 +783,7 @@ function Crafters.Lines(q)
 			local who = ns.DisplayName(c.name)
 			local id = c.name .. "~" .. p.key
 			local opened = open[id] == true
-			lines[#lines + 1] = { indent = 1, key = c.name,
+			lines[#lines + 1] = { indent = 1, key = c.name, player = c.name,
 				text = (opened and "[-] " or "[+] ") .. who .. "  " .. Grey("<" .. c.guild .. ">"),
 				right = Grey(L.CRAFTER_SKILL:format(p.rank, p.max, p.n)),
 				onClick = function()

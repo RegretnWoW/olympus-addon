@@ -1,0 +1,6 @@
+# The files only the bets (2.0) need: scripts/package.sh --release116 leaves each one out of the
+# package and drops its line from its folder's TOC. The rest of 1.2 ships in 1.1.6, its betting
+# paths inert behind the compliance gate (Olympus/Compliance.lua); tests/arena/compliance.lua loads
+# the core's TOC without these and plays the games. One path per line, from the repository root.
+Olympus/Markets.lua
+Olympus/MarketBank.lua

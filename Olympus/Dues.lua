@@ -101,6 +101,7 @@ local heardAt, heardName = -math.huge, nil   -- the Treasurer's addon as last he
 local asked = {}             -- [what] = when this client last asked for it
 local busy = {}              -- [what] = when the Treasurer's addon said it was too busy to answer (FB)
 local answered = {}          -- the Treasurer's client: [asker|what] = when it last answered
+local answerJobs, replyOwner = {}, {}
 local outbox = {}            -- the Treasurer's client: whispers waiting their turn { to, msg, key, tag }
 local codeAsks = {}          -- the Treasurer's client: [asker|guild] = a Captain's ask about his roster, coming (FC)
 local answers = {}           -- [guild lower] = one guild's list as it came (FA)
@@ -223,11 +224,15 @@ local function SeesAll() return KingView() or Dues.IsTreasurer() end
 
 -- A sender the King's word comes from (by name: the server sets it), or his Steward.
 local function KingOrSteward(name) return ns.IsKingCharacter(name) or ns.King.IsStewardName(name) end
--- A Captain (or the Lord) of `guild`: by our own roster when it is our guild, else by the census.
+-- A Captain (or the Lord) of `guild`: by our own roster when it is our guild. Another guild
+-- keeps the legacy census until explicit enforcement, then uses the signed manifest.
 local function CaptainOf(name, guild)
 	local own = ns.IsMember() and GetGuildInfo("player")
-	local rank
-	if own and own:lower() == guild:lower() then rank = ns.Roster.RankOf(name) else rank = ns.Data.KnownRank(name, guild) end
+	if own and own:lower() == guild:lower() then
+		local rank = ns.Roster.RankOf(name)
+		return rank ~= nil and rank <= ns.CAPTAIN_RANK
+	end
+	local rank = ns.Data.AuthorizedRank(name, guild)
 	return rank ~= nil and rank <= ns.CAPTAIN_RANK
 end
 
@@ -438,7 +443,8 @@ end
 -- A counted gift into its giver's sum for its week (copper < 0: out of it), while the week is
 -- one of the WEEKS_KEPT; older weeks are dropped (folded first: Fold).
 function Dues.WeekAdd(s, e, copper)
-	if type(s) ~= "table" or type(e) ~= "table" or e.item or e.out or e.kind == "transfer" then return end
+	-- (1.2: the arena's fee and a keeper's arena money are never dues, whoever rebuilds the sums.)
+	if type(s) ~= "table" or type(e) ~= "table" or e.item or e.out or e.kind == "transfer" or e.kind == "fee" or e.kind == "arena" then return end
 	copper = math.floor(tonumber(copper) or 0)
 	local key = Dues.Key(e.name)
 	if not key or copper == 0 then return end
@@ -790,35 +796,70 @@ function Dues.GuildMessages(led, guild)
 	return out, id, u, mail
 end
 
--- An answer waits its turn in the outbox, in place of any older one to the same asker for the
--- same list (never twice); false when the outbox has no room for it.
+-- Who may ask for `what`: the King or his Steward, any guild or every guild (all);
+-- a guild's Captain or Lord, his own guild alone. Rechecked at the actual send as well.
+local function May(sender, what, all)
+	return KingOrSteward(sender) or (not all and CaptainOf(sender, what)) or false
+end
+local function AnswerGuard(to, what, all)
+	local me, guild = ns.me, GetGuildInfo("player")
+	return function()
+		return me == ns.me and guild == GetGuildInfo("player") and Dues.Answers() and May(to, what, all)
+	end
+end
+
+-- An answer has one lifetime across this outbox and Comm. Replacing it or withdrawing
+-- consent cancels both queues, including a piece already handed to Comm but not sent.
 local function Drop(tag)
+	local job = answerJobs[tag]
+	if job then
+		job.cancelled, answerJobs[tag] = true, nil
+		ns.Comm.Cancel(job)
+	end
 	for i = #outbox, 1, -1 do if outbox[i].tag == tag then table.remove(outbox, i) end end
 end
-local function Queue(to, msgs, tag)
+function Dues.CancelAnswers()
+	local jobs = answerJobs
+	answerJobs = {}
+	for _, job in pairs(jobs) do job.cancelled = true end
+	wipe(outbox); wipe(codeAsks); wipe(answered)
+	for _, job in pairs(jobs) do ns.Comm.Cancel(job) end
+	local owner = replyOwner
+	replyOwner = {}
+	ns.Comm.Cancel(owner)
+end
+local function Queue(to, msgs, tag, what, all)
 	tag = to .. "|" .. tag
 	Drop(tag)
 	if #outbox + #msgs > Dues.MAX_OUTBOX then return false end
-	for i, msg in ipairs(msgs) do outbox[#outbox + 1] = { to = to, msg = msg, key = ("dues %s %d"):format(tag, i), tag = tag } end
-	Dues.Pump() -- (the first one at once, the rest a whisper every PACE)
+	local job = { remaining = #msgs, valid = AnswerGuard(to, what, all) }
+	answerJobs[tag] = job
+	for i, msg in ipairs(msgs) do
+		outbox[#outbox + 1] = { to = to, msg = msg, key = ("dues %s %d"):format(tag, i), tag = tag, job = job }
+	end
+	Dues.Pump()
 	return true
 end
--- One whisper of the outbox, while the channel's queue has room: the Treasurer's other messages
--- (his book, the amount, a census report) never wait behind the dues.
+-- These messages have their own assembler (no Codec lifetime). Keep their light feeder;
+-- permission and consent remain binding while a piece waits in the shared queue.
 function Dues.Pump()
 	if #outbox == 0 then return end
-	if ns.Comm.QueueSize and (tonumber(ns.Comm.QueueSize()) or 0) >= Dues.QUEUE_ROOM then return end
+	if not Dues.Answers() then return Dues.CancelAnswers() end
+	if ns.Comm.QueueSize() >= Dues.QUEUE_ROOM then return end
 	local item = table.remove(outbox, 1)
-	ns.Comm.Whisper(item.to, item.msg, item.key)
+	local job = item.job
+	if job.cancelled or not job.valid() then return Drop(item.tag) end
+	ns.Comm.Whisper(item.to, item.msg, item.key, nil, nil, function(ok)
+		if job.cancelled then return end
+		if not ok then return Drop(item.tag) end
+		job.remaining = job.remaining - 1
+		if job.remaining == 0 and answerJobs[item.tag] == job then answerJobs[item.tag] = nil end
+	end, { owner = job, guard = function() return not job.cancelled and job.valid() end })
 end
--- Told at once, in one whisper of its own: the list held is his still (FU), or his addon is too
--- busy to answer now (FB).
-local function Tell(to, msg, key) ns.Comm.Whisper(to, msg, key .. " " .. to) end
-
--- Who may ask for `what`: the King or his Steward, any guild or every guild (all); a guild's
--- Captain or Lord, his own guild alone.
-local function May(sender, what, all)
-	return KingOrSteward(sender) or (not all and CaptainOf(sender, what)) or false
+-- Told at once: the held list is still current (FU), or this client is busy (FB).
+local function Tell(to, msg, key, what, all)
+	ns.Comm.Whisper(to, msg, key .. " " .. to, nil, nil, nil,
+		{ owner = replyOwner, guard = AnswerGuard(to, what, all) })
 end
 
 -- An ask (a whisper): every guild from the King or his Steward; a guild's list from them, or
@@ -845,11 +886,11 @@ function Dues.HandleAsk(dist, sender, text)
 	if held == id then
 		answered[key] = ns.Now()
 		Drop(sender .. "|" .. tag)
-		Tell(sender, ("FU~%d~%d~%s~%s~%s"):format(id, week, what, u or "0", mail or "-"), "duesu " .. tag)
-	elseif Queue(sender, msgs, tag) then
+		Tell(sender, ("FU~%d~%d~%s~%s~%s"):format(id, week, what, u or "0", mail or "-"), "duesu " .. tag, what, all)
+	elseif Queue(sender, msgs, tag, what, all) then
 		answered[key] = ns.Now()
 	else
-		Tell(sender, ("FB~%d~%s"):format(week, what), "duesb " .. tag)
+		Tell(sender, ("FB~%d~%s"):format(week, what), "duesb " .. tag, what, all)
 	end
 end
 ns.Comm.Handle("FQ", function(...) Dues.HandleAsk(...) end)
@@ -912,10 +953,10 @@ function Dues.HandleCodeAsk(dist, sender, text)
 	if #pieces == 0 then pieces[1] = "" end
 	local out = {}
 	for j, p in ipairs(pieces) do out[j] = Head(j, #pieces) .. p end
-	if Queue(sender, out, "codes " .. what:lower()) then
+	if Queue(sender, out, "codes " .. what:lower(), what, false) then
 		answered[key .. "|codes"] = now
 	else
-		Tell(sender, ("FB~%d~%s"):format(week, what), "duesb codes " .. what:lower())
+		Tell(sender, ("FB~%d~%s"):format(week, what), "duesb codes " .. what:lower(), what, false)
 	end
 end
 ns.Comm.Handle("FC", function(...) Dues.HandleCodeAsk(...) end)
@@ -1743,6 +1784,7 @@ end)
 
 -- Tests start from a clean state.
 function Dues.Reset()
+	Dues.CancelAnswers()
 	anchor = nil
 	lastAmountSent, lastOlder = -math.huge, -math.huge
 	heardAt, heardName, summary, salt = -math.huge, nil, nil, nil

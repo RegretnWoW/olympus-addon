@@ -448,6 +448,38 @@ function Data.KnownRank(sender, guild, soft)
 	return rank, named
 end
 
+-- A rank that may grant a capability. Our own guild comes from Blizzard's roster and the pinned
+-- King from Core.lua. The existing census trust model remains byte-for-byte compatible until the
+-- author's signed list explicitly activates Authority.lua's one-way enforcement boundary. From
+-- then on every other guild requires the signed, time-bounded leadership manifest and a missing,
+-- expired or revoked entry fails closed. The third result is the census support count in legacy
+-- mode (Recruit.lua preserves its old two-report rule).
+function Data.AuthorizedRank(sender, guild)
+	if type(sender) ~= "string" or type(guild) ~= "string" or guild == "" then return nil end
+	local enforcing = ns.Authority and ns.Authority.Enforced and ns.Authority.Enforced()
+	-- Until an explicit author-signed marker activates the boundary, this is deliberately the
+	-- old function.  In particular, keep its exact guild-name comparison, census timing and
+	-- support-count results: merely installing a build that can read the extension changes no
+	-- existing authority decision.
+	if not enforcing then
+		local rank, named = Data.KnownRank(sender, guild)
+		local mine = GetGuildInfo("player")
+		local source = rank ~= nil and mine ~= nil and guild == mine and "roster"
+			or (rank ~= nil and "census" or nil)
+		return rank, source, named
+	end
+	local who, mine = ns.FullName(sender), GetGuildInfo("player")
+	if mine and ns.Fold(mine) == ns.Fold(guild) then
+		local rank = ns.Roster.RankOf(who)
+		return rank, rank ~= nil and "roster" or nil
+	end
+	-- A guildmate cannot simultaneously exercise a stale signed role in another guild.
+	if ns.Roster.RankOf(who) ~= nil or NetOff(guild) or not ns.IsFederation(guild) then return nil end
+	if ns.IsKingGuild(guild) and ns.IsKingCharacter(who) then return 0, "pinned" end
+	local rank = ns.Authority.Rank(who, guild)
+	return rank, rank ~= nil and "signed" or "enforced"
+end
+
 -- The shared default order of guilds in the Census and the Realm. A current report stays
 -- ahead of an old one; the army's largest guild comes first. If two guilds are the same size,
 -- the exact <OLYMPUS> is the standard-bearer, then the higher average level breaks the next

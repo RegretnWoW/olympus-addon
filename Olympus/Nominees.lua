@@ -136,12 +136,13 @@ end
 local function DeptName(s)
 	s = Trim(tostring(s or ""):gsub("[%c|~;=]", ""))
 	if s == "" or #s > Nominees.DEPT_LEN then return nil end
+	if s:lower() == "association of citizenry" or s:lower() == "association of artisanry" then return "Association of Artisanry" end
 	return s
 end
 
 -- The High Council's six departments (the author's names, 1.1.5): the correspondents' roles, one
 -- each per guild. (The signed titles list names only the departments that have councillors.)
-Nominees.DEPARTMENTS = { "Federal Treasury", "Department of War", "Council of Justice", "Association of Citizenry",
+Nominees.DEPARTMENTS = { "Federal Treasury", "Department of War", "Council of Justice", "Association of Artisanry",
 	"Department of Heritage", "The Missionary Church of Olympus" }
 Nominees.SHIPPED_DEPARTMENTS = Nominees.DEPARTMENTS
 function Nominees.Departments()
@@ -153,6 +154,8 @@ function Nominees.Departments()
 end
 local function IsDept(dept)
 	if type(dept) ~= "string" then return nil end
+	dept = DeptName(dept)
+	if not dept then return nil end
 	for _, d in ipairs(Nominees.Departments()) do
 		if d:lower() == dept:lower() then return d end
 	end
@@ -180,15 +183,28 @@ end
 
 -- The author's "guild master's view" (1.1.5, his ask: his character is no guild master): from the
 -- Workshop, his section shows as a guild master's would, to see and try it. Nothing it does is
--- sent (Nominees.Send refuses it): what he names stays on his screen.
+-- sent (Nominees.Send refuses it): what he names stays on his screen. Since 1.2 it is View as's
+-- "Guild Master" (ViewAs.lua): that preview drives it, and /oly nominees view picks it there.
+local function ViewAsGM()
+	local V = ns.ViewAs
+	return type(V) == "table" and not V.missing and type(V.Is) == "function" and V.Is("gm") == true
+end
 function Nominees.DevView()
+	if RealMaster() then return false end
+	if ViewAsGM() then return true end
 	return ns.db ~= nil and ns.db.devGMView == true and ns.Workshop ~= nil and ns.Workshop.Visible ~= nil
-		and ns.Workshop.Visible() == true and not RealMaster()
+		and ns.Workshop.Visible() == true
 end
 function Nominees.SetDevView(on)
-	ns.db.devGMView = on and true or false
+	local V = ns.ViewAs
+	if type(V) == "table" and not V.missing and type(V.Available) == "function" and V.Available() == true
+		and type(V.Set) == "function" and (on or ViewAsGM()) then
+		V.Set(on and "gm" or "my") -- (it clears the old switch, ns.db.devGMView, and redraws)
+	else
+		ns.db.devGMView = on and true or false
+		ns.Fire("DATA_CHANGED")
+	end
 	ns.Print(on and ns.L.DEV_GM_VIEW_NOW_ON or ns.L.DEV_GM_VIEW_NOW_OFF)
-	ns.Fire("DATA_CHANGED")
 end
 
 function Nominees.IsMaster()
@@ -363,7 +379,54 @@ function Nominees.RoleOf(who, guild)
 	local l = ListOf(guild)
 	local e = l and l.set[ns.FullName(who):lower()]
 	if not e then return nil end
-	return e.role, e.dept
+	return e.role, e.dept and DeptName(e.dept)
+end
+
+-- Operational duties require our own live guild roster, not the census used for a border.
+-- Recheck the list's master on every use so revocation does not wait for the pruning timer.
+function Nominees.IsCorrespondent(who, guild, dept)
+	if type(who) ~= "string" or type(dept) ~= "string" or not ns.IsMember() then return false end
+	local mine = GetGuildInfo and GetGuildInfo("player")
+	local R = ns.Roster
+	if type(guild) ~= "string" or guild ~= mine or not ns.IsFederation(guild)
+		or not R or R.complete ~= true or R.guild ~= guild or R.group ~= ns.group or R.faction ~= ns.faction
+		or type(R.byName) ~= "table" or type(R.RankOf) ~= "function" or type(R.snapshotAt) ~= "number"
+		or type(R.generation) ~= "number" or R.generation < 1 then return false end
+	local age = ns.Now() - R.snapshotAt
+	if age < 0 or age > (R.AUTHORITY_FRESH or 600) then return false end
+	local full = ns.FullName(who)
+	if R.RankOf(full) == nil then return false end
+	local list = ListOf(guild)
+	if not list or type(list.by) ~= "string" or R.RankOf(ns.FullName(list.by)) ~= 0 then return false end
+	local role, department = Nominees.RoleOf(full, guild)
+	return role == "correspondent" and department == DeptName(dept)
+end
+
+function Nominees.Correspondent(guild, dept)
+	local list = ListOf(guild)
+	for _, entry in ipairs(list and list.entries or {}) do
+		if Nominees.IsCorrespondent(entry.name, guild, dept) then return entry.name end
+	end
+	return nil
+end
+
+function Nominees.OwnDepartment(who)
+	local guild = GetGuildInfo and GetGuildInfo("player")
+	for _, dept in ipairs(Nominees.Departments()) do
+		if Nominees.IsCorrespondent(who or ns.me, guild, dept) then return dept, guild end
+	end
+	return nil
+end
+
+function Nominees.GuildAccess()
+	local V, guild = ns.ViewAs, GetGuildInfo and GetGuildInfo("player")
+	if V and V.Available and V.Available() and V.Role and V.Role() ~= "my" then
+		return V.Role() == "gm" or V.Role() == "correspondent", guild
+	end
+	local master, mine = Nominees.IsMaster()
+	if master then return true, mine end
+	local dept = Nominees.OwnDepartment()
+	return dept ~= nil, guild
 end
 
 -- Its parts, each one addon message: NM~1~<guild>~<rev>~<i>~<n>~<entries>.
@@ -915,10 +978,43 @@ end
 
 -- A guild master's Guild tab (1.1.5): the tab in the Throne's place, his guild's page (King.Build).
 function Nominees.GuildLines()
-	local master, guild = Nominees.IsMaster()
-	if not master then return {} end
-	local Line, _, TITLE = Ink()
-	return Nominees.PageLines({ Line(L.GUILD_TAB_TITLE:format(tostring(guild)), TITLE, { gapAfter = true }) })
+	local allowed, guild = Nominees.GuildAccess()
+	if not allowed then return {} end
+	local Line, INK, TITLE, Para = Ink()
+	local V = ns.ViewAs
+	local preview = V and V.Available and V.Available() and V.Role and V.Role() ~= "my"
+	local master = preview and V.Role() == "gm" or not preview and Nominees.IsMaster()
+	local dept = not preview and Nominees.OwnDepartment() or nil
+	local lines = { Line(L.GUILD_TAB_TITLE:format(tostring(guild)), TITLE, { gapAfter = true }) }
+	if master then Nominees.PageLines(lines) end
+	Para(lines, L.GUILD_DEPARTMENT_SCOPE:format(tostring(guild)), INK, { gapAfter = true })
+	local routes = { ["Federal Treasury"] = "treasury", ["Department of War"] = "war", ["Council of Justice"] = "watch",
+		["Association of Artisanry"] = "crafters", ["Department of Heritage"] = "decrees", ["The Missionary Church of Olympus"] = "church" }
+	for _, department in ipairs(Nominees.Departments()) do
+		if master or preview or dept == department then
+			local name = not preview and Nominees.Correspondent(guild, department) or nil
+			lines[#lines + 1] = Line(department, TITLE)
+			lines[#lines + 1] = Line(name and L.GUILD_DEPARTMENT_NAMED:format(ns.DisplayName(name)) or L.GUILD_DEPARTMENT_EMPTY, INK, { indent = 1 })
+			local route = routes[department]
+			if department == "Association of Artisanry" or department == "Department of Heritage" then
+				Para(lines, L.GUILD_DEPARTMENT_LIMITED, INK, { indent = 1 })
+			elseif department == "The Missionary Church of Olympus" then
+				Para(lines, L.GUILD_DEPARTMENT_CHURCH, INK, { indent = 1 })
+			end
+			if route then lines[#lines + 1] = Line(L.GUILD_DEPARTMENT_OPEN, INK, { indent = 1,
+				onClick = not preview and function()
+					local current = ns.ViewAs
+					if current and current.Previewing and current.Previewing() then return end
+					if not Nominees.IsMaster() and not Nominees.IsCorrespondent(ns.me, guild, department) then return end
+					if route == "war" then if ns.War and ns.War.Show then ns.War.Show() end
+					elseif route == "treasury" then if ns.Treasury and ns.Treasury.OpenOwnGuild then ns.Treasury.OpenOwnGuild() end
+					else if route == "watch" and ns.Watch then ns.Watch.Show("chat") end; ns.UI.SelectTab(route) end
+				end or nil }) end
+			lines[#lines].gapAfter = true
+		end
+	end
+	if preview then for _, row in ipairs(lines) do row.onClick = nil end end
+	return lines
 end
 
 -- The King's guild's centurions (1.1.5), on the Throne's page: a title, a hint, then for the King

@@ -44,7 +44,10 @@ while true; do
 		sha=$(git rev-parse FETCH_HEAD)
 		if [ "$sha" != "$last" ]; then
 			rm -rf "$WORK/tree" && mkdir -p "$WORK/tree"
-			git archive "$sha" Olympus scripts | tar -xf - -C "$WORK/tree"
+			# (1.2: the Blood Arena's companion folder too, on a branch that has it.)
+			paths="Olympus scripts"
+			git cat-file -e "$sha:Olympus_Arena" 2>/dev/null && paths="Olympus Olympus_Arena scripts"
+			git archive "$sha" $paths | tar -xf - -C "$WORK/tree"
 			if deploy; then
 				last=$sha
 				echo "$(date +%H:%M:%S) deployed $(git log -1 --format='%h %s' "$sha") to ${DEPLOYED//$'\n'/ }  -> /reload in game"

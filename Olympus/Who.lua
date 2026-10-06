@@ -121,11 +121,14 @@ local function Info(i)
 	if C_FriendList and C_FriendList.GetWhoInfo then
 		local w = C_FriendList.GetWhoInfo(i)
 		if type(w) == "table" then
-			return Plain(w.fullName), Plain(w.fullGuildName), Plain(w.level), Plain(w.filename) or Plain(w.classStr), Plain(w.area)
+			local raceName = Plain(w.raceStr)
+			return Plain(w.fullName), Plain(w.fullGuildName), Plain(w.level), Plain(w.filename) or Plain(w.classStr),
+				Plain(w.area), Plain(w.raceFilename) or raceName, raceName
 		end
 	elseif GetWhoInfo then
-		local name, guild, level, _, class, zone, file = GetWhoInfo(i)
-		return name, guild, level, file or class, zone
+		local name, guild, level, raceName, class, zone, file = GetWhoInfo(i)
+		raceName = Plain(raceName)
+		return Plain(name), Plain(guild), Plain(level), Plain(file) or Plain(class), Plain(zone), raceName, raceName
 	end
 end
 
@@ -465,11 +468,12 @@ local function Read()
 	local shown, total = Counts()
 	local rows, byName = {}, {}
 	for i = 1, shown do
-		local name, guild, level, class, zone = Info(i)
+		local name, guild, level, class, zone, race, raceName = Info(i)
 		if name and name ~= "" then Saw(name, guild) end
 		if name and name ~= "" and not byName[name] and ns.IsFederation(guild) then
 			local gname, gRealm = Who.GuildName(guild)
-			local p = { name = name, guild = gname, guildRealm = gRealm, level = tonumber(level), class = class, zone = zone }
+			local p = { name = name, guild = gname, guildRealm = gRealm, level = tonumber(level), class = class,
+				zone = zone, race = race, raceName = raceName }
 			byName[name] = p
 			rows[#rows + 1] = p
 		end

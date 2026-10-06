@@ -2,7 +2,7 @@
 ## Title: |cffe6c35cOlympus|r
 ## Notes: Live census of every Olympus guild: army size, leaders and where everyone is on the map.
 ## Author: Olympus addon contributors
-## Version: 1.1.5
+## Version: 1.1.6
 ## SavedVariables: OlympusDB
 ## IconTexture: Interface\AddOns\Olympus\media\logo64
 ## X-License: MIT
@@ -19,6 +19,16 @@ Locales.lua
 Locales\deDE.lua
 Locales\esES.lua
 Locales\frFR.lua
+Locales\ArenaNetText.lua
+Locales\ArenaMoneyText.lua
+Locales\ArenaMarketsText.lua
+Locales\ArenaFightsText.lua
+Locales\ArenaFarkleText.lua
+Locales\ArenaHomeText.lua
+Locales\ArenaLotteryText.lua
+Locales\ArenaMatchText.lua
+Locales\ComplianceText.lua
+Locales\ChurchText.lua
 Core.lua
 GamepadRegistry.lua
 Gamepad.lua
@@ -27,6 +37,7 @@ Dialog.lua
 PlayerMenu.lua
 Codec.lua
 Sign.lua
+Authority.lua
 Zones.lua
 Who.lua
 Data.lua
@@ -41,6 +52,7 @@ Channels.lua
 Filter.lua
 Inspect.lua
 King.lua
+HopSightings.lua
 Vox.lua
 Court.lua
 Board.lua
@@ -55,6 +67,7 @@ Moderation.lua
 Alts.lua
 Keys.lua
 Loot.lua
+War.lua
 Crafters.lua
 Workshop.lua
 Versions.lua
@@ -67,12 +80,56 @@ Answers.lua
 Views.lua
 Members.lua
 Nominees.lua
-ViewAs.lua
 UI.lua
+Watch.lua
+Judgment.lua
+KingArrow.lua
 Consent.lua
+ChatRooms.lua
+WarSquads.lua
+CraftRequests.lua
+ViewAs.lua
+Church.lua
+ChurchCount.lua
+ChurchView.lua
+TabardsV2.lua
 Letters.lua
 GuildFrame.lua
 Borders.lua
 Nameplates.lua
 ChatWindow.lua
+WatchChat.lua
 Bridge.lua
+Wanted.lua
+ArenaMath.lua
+Compliance.lua
+ArenaRating.lua
+ArenaBracket.lua
+ArenaFarkle.lua
+ArenaParse.lua
+Honors.lua
+ArenaPlaces.lua
+ArenaNet.lua
+ArenaRoles.lua
+ArenaMoney.lua
+Debts.lua
+Wallet.lua
+Stakes.lua
+Markets.lua
+MarketBank.lua
+Lottery.lua
+ArenaFights.lua
+ArenaLedger.lua
+ArenaTourney.lua
+ArenaProfile.lua
+ProfileEdit.lua
+PlayerProfile.lua
+HonorsNet.lua
+ChatMarks.lua
+FarkleTable.lua
+InnkeeperGossip.lua
+InnkeeperArrow.lua
+ArenaMatch.lua
+ArenaChat.lua
+ArenaTest.lua
+ArenaHome.lua

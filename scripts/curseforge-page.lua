@@ -28,6 +28,7 @@ M.RECENT = 3 -- versions under "Recent versions": the TOC's and the two before i
 -- is a paragraph, a list, a table or a quote; an opening line that runs into a list is a part).
 M.CUTS = {
 	{ title = "Channels", keep = 2 }, -- what each channel is, and its table
+	{ title = "The Chat tab (1.1.1)", keep = 1 }, -- (1.1.6: the page grew past the budget with 1.2's sections)
 	{ title = "Net-off (1.1): the moderators hide a character or take a guild off the network", keep = 1 },
 	{ title = "The Throne (the King and his Hands)", keep = 1 },
 	{ title = "The King's Steward (1.0.0)", keep = 3 }, -- his opening, what he does, and what he never does
@@ -35,6 +36,7 @@ M.CUTS = {
 	{ title = "Privacy", keep = 1 },
 	{ title = "Security and trust", keep = 2 },
 	{ title = "What colluding characters can reach", keep = 1 },
+	{ title = "The Missionary Church of Olympus (1.1.6)", keep = 1 }, -- (1.1.6: its details stay in the README)
 }
 
 -- The commands table's rows that stay, by their first command as the table writes it.

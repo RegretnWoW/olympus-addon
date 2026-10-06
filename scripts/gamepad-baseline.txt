@@ -2,6 +2,7 @@
 # game's GameTooltip (tooltip) and chat window (print) that need no gp: tag. A count may go down;
 # raising one is a change the review reads. Format: file kind count.
 Answers.lua tooltip 8
+ArenaChat.lua print 1
 Board.lua tooltip 6
 Channels.lua print 3
 ChatWindow.lua tooltip 22
@@ -9,7 +10,17 @@ Decree.lua tooltip 6
 GuildFrame.lua tooltip 5
 King.lua tooltip 5
 Map.lua tooltip 12
+Olympus_Arena/BracketView.lua tooltip 5
+Olympus_Arena/Card.lua tooltip 4
+Olympus_Arena/FarkleBoard.lua tooltip 6
+Olympus_Arena/Games/Bicho.lua print 2
+Olympus_Arena/Games/Farkle.lua print 1
+Olympus_Arena/Games/Games.lua print 1
+Olympus_Arena/Games/Games.lua tooltip 5
+Olympus_Arena/Kit.lua tooltip 6
+Olympus_Arena/LotteryBoard.lua tooltip 5
 Positions.lua tooltip 5
-UI.lua tooltip 48
-Views.lua tooltip 21
+UI.lua tooltip 53
+Views.lua tooltip 25
+Wanted.lua tooltip 4
 Workshop.lua tooltip 4

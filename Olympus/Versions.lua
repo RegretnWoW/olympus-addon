@@ -62,6 +62,7 @@ local checks = {}        -- [folded short name] = { name, id, t (asked), sent (l
 local sentTimes = {}     -- our checks this last minute
 local answeredAt = {}    -- [sender] = when we last answered their check
 local answerTimes = {}   -- our answers this last minute
+local updateFrame        -- the plain-language parchment opened from a received notice
 
 local function W() return ns.Workshop end
 local function Newer(a, b) return W().Newer(a, b) == true end
@@ -356,22 +357,29 @@ function Versions.AskWhisper(name, version)
 	return UI.WhisperText(ns.TellName(Full(name)), L.VERSION_ASK_WHISPER:format(tostring(version or "?"), Versions.Latest(), link))
 end
 
-function Versions.AskUpdate(name)
+-- Check the action twice: once before its question is shown, and once when the player accepts.
+-- Merely opening the question never spends a rate-limit slot or sends anything.
+local function AskContext(name)
 	local full = Full(name)
+	if full == "" then return nil end
 	if ns.ChatLocked() then
 		ns.Print(L.VERSION_LOCKED)
-		return false
+		return nil
 	end
 	local state, version = Versions.Status(full)
-	if state ~= "outdated" then return false end
+	if state ~= "outdated" then return nil end
 	local author = IsAuthor()
-	if not author and Newer(Versions.FIRST, version) then return Versions.AskWhisper(full, version) ~= nil end
 	-- (A player the moderators took off sends no ask: every receiver drops it, 1.1.2's review.)
 	local M = ns.Moderation
 	local off = M and not M.missing and type(M.SelfOff) == "function" and M.SelfOff() or nil
 	if off then
 		if type(M.YouText) == "function" then ns.Print(M.YouText(off)) end
-		return false
+		return nil
+	end
+	-- An addon older than 1.1.2 cannot receive V9. After confirmation this opens an editable
+	-- whisper instead, so it does not consume the automatic ask limits below.
+	if not author and Newer(Versions.FIRST, version) then
+		return { full = full, version = version, latest = Versions.Latest(), whisper = true }
 	end
 	local now, key = ns.Now(), Key(full)
 	ns.db.updateAsked = type(ns.db.updateAsked) == "table" and ns.db.updateAsked or {}
@@ -380,12 +388,22 @@ function Versions.AskUpdate(name)
 	for k, t in pairs(asked) do if type(t) ~= "number" or now - t >= Versions.ASK_GAP then asked[k] = nil end end
 	if asked[key] then
 		ns.Print(L.VERSION_ASK_WAIT_ONE:format(ns.DisplayName(full)))
-		return false
+		return nil
 	end
 	if Recent(times, 3600, now) >= Versions.ASK_HOUR then
 		ns.Print(L.VERSION_ASK_WAIT_HOUR:format(Versions.ASK_HOUR))
-		return false
+		return nil
 	end
+	return { full = full, version = version, latest = Versions.Latest(), author = author, now = now, key = key,
+		asked = asked, times = times }
+end
+
+local function SendUpdateAsk(name)
+	local ask = AskContext(name)
+	if not ask then return false end
+	if ask.whisper then return Versions.AskWhisper(ask.full, ask.version) ~= nil end
+	local full, now, key = ask.full, ask.now, ask.key
+	local asked, times = ask.asked, ask.times
 	asked[key] = now
 	table.insert(times, now)
 	local function Undo()
@@ -406,8 +424,8 @@ function Versions.AskUpdate(name)
 			ns.Print(L.VERSION_NOT_SENT:format(ns.DisplayName(full)))
 		end
 	end
-	local latest = Versions.Latest()
-	if author then
+	local latest = ask.latest
+	if ask.author then
 		-- His usual update window (V3), naming the version he marked as out; the Workshop's own
 		-- 10 minutes per player hold it too.
 		if not W().AskUpdate(full, latest, Sent) then
@@ -420,6 +438,39 @@ function Versions.AskUpdate(name)
 	ns.Comm.Whisper(full, "V9~" .. latest, "vask:" .. key, nil, nil, Sent)
 	return true
 end
+
+-- The sender gets a compact confirmation first. Under the gamepad UI ns.ShowDialog uses the
+-- addon's safe small window; with mouse and keyboard it follows the compatible popup path.
+function Versions.AskUpdate(name)
+	local ask = AskContext(name)
+	if not ask then return false end
+	local which = ask.whisper and "OLYMPUS_UPDATE_CONFIRM_LEGACY" or "OLYMPUS_UPDATE_CONFIRM"
+	local shown = ns.ShowDialog(which, ns.DisplayName(ask.full), ask.latest, ask.full)
+	if ns.GamepadUI() then return shown ~= nil end
+	return true -- StaticPopup_Show may return nil on an older supported client after showing.
+end
+
+StaticPopupDialogs["OLYMPUS_UPDATE_CONFIRM"] = {
+	text = L.VERSION_ASK_CONFIRM,
+	button1 = L.VERSION_ASK_CONFIRM_BTN,
+	button2 = CANCEL or "Cancel",
+	OnAccept = function(_, full) ns.SafeCall("ask to update", SendUpdateAsk, full) end,
+	timeout = 0,
+	whileDead = true,
+	hideOnEscape = true,
+	preferredIndex = 3,
+}
+
+StaticPopupDialogs["OLYMPUS_UPDATE_CONFIRM_LEGACY"] = {
+	text = L.VERSION_ASK_CONFIRM_OLD,
+	button1 = L.VERSION_ASK_CONFIRM_OLD_BTN,
+	button2 = CANCEL or "Cancel",
+	OnAccept = function(_, full) ns.SafeCall("ask to update", SendUpdateAsk, full) end,
+	timeout = 0,
+	whileDead = true,
+	hideOnEscape = true,
+	preferredIndex = 3,
+}
 
 -- A player asks us to update: a small notice (held in an instance or while Busy), once a day at
 -- most, never while "Don't remind me" holds, only when really behind the version they name, and
@@ -436,28 +487,122 @@ function Versions.HandleAsk(dist, sender, text)
 	local named
 	if type(heard) == "string" then
 		if not Newer(heard, ns.VERSION) then return end
-		named = Newer(latest, heard) and heard or latest
+		-- A peer's V9 proves only that they chose to remind us. The release number and all
+		-- user-facing copy come from the author's separately heard release word.
+		named = heard
 	end
 	local now = ns.Now()
 	if (tonumber(ns.db.updateAskSnooze) or 0) > now then return end
 	if now - (tonumber(ns.db.updateAskShown) or -math.huge) < Versions.SHOWN_GAP then return end
 	ns.db.updateAskShown = now
 	local who = ns.DisplayName(ns.FullName(sender))
-	local notice = named and L.VERSION_NOTICE:format(who, ns.VERSION, named) or L.VERSION_NOTICE_ANY:format(who, ns.VERSION)
+	local notice = { who = who, current = ns.VERSION, latest = named, verified = named ~= nil }
+	notice.text = named and L.VERSION_NOTICE:format(who, ns.VERSION, named) or L.VERSION_NOTICE_ANY:format(who, ns.VERSION)
 	-- (A window any player can make appear: after a fight too, as the author's windows.)
 	ns.Alert("update", "soft", { what = L.HELD_UPDATE_ASK:format(who), key = "updateask",
 		show = function() ns.OutOfCombat("update ask", function() Versions.ShowNotice(notice) end) end })
 end
+
+-- Release notes shown here are deliberately local, reviewed, user-facing copy. A player's wire
+-- message can carry only a version number; it can never provide text for this page. Unknown future
+-- releases therefore use the safe fallback instead of raw build, commit or internal notes.
+local PUBLIC_NOTES = { ["1.1.4"] = "VERSION_UPDATE_PUBLIC_114" }
+function Versions.PublicNote(version, verified)
+	if not verified then return L.VERSION_UPDATE_UNVERIFIED end
+	local key = PUBLIC_NOTES[version]
+	return key and L[key] or L.VERSION_UPDATE_PUBLIC_DEFAULT
+end
+
+function Versions.LetterText(notice)
+	notice = type(notice) == "table" and notice or {}
+	local current = type(notice.current) == "string" and notice.current:match("^%d+%.%d+%.%d+$") and notice.current or "?"
+	local latest = type(notice.latest) == "string" and notice.latest:match("^%d+%.%d+%.%d+$") and notice.latest or nil
+	local verified = notice.verified == true and latest ~= nil
+	local who = tostring(notice.who or "Olympus")
+	local status = verified and L.VERSION_UPDATE_STATUS:format(current, latest) or L.VERSION_UPDATE_STATUS_CHECK:format(current)
+	return table.concat({ L.VERSION_UPDATE_FROM:format(who), "", status, "", Versions.PublicNote(latest, verified), "", L.VERSION_UPDATE_NEXT }, "\n")
+end
+
+local function OfficialLink()
+	return ns.UI and ns.UI.LINKS and ns.UI.LINKS.curseforge or "https://www.curseforge.com/wow/addons/olympus-guild"
+end
+
+local function MakeUpdateFrame()
+	local f = ns.Window("OlympusUpdateLetterFrame", UIParent, { inset = false, close = false, escape = false })
+	f:SetFrameStrata("DIALOG")
+	f:SetToplevel(true)
+	f:SetSize(430, 390)
+	f:SetPoint("CENTER", 0, 45)
+	f:EnableMouse(true)
+	f:SetMovable(true)
+	f:RegisterForDrag("LeftButton")
+	f:SetScript("OnDragStart", f.StartMoving)
+	f:SetScript("OnDragStop", f.StopMovingOrSizing)
+	-- (1.1.5: every window in the Olympus window's bronze metal, ns.Window; the parchment inside it.)
+	local bg = f:CreateTexture(nil, "BACKGROUND", nil, 1)
+	bg:SetPoint("TOPLEFT", f.inner[1], f.inner[2])
+	bg:SetPoint("BOTTOMRIGHT", f.inner[3], f.inner[4])
+	local ui = ns.UI
+	local parchments = ui and ui.PARCHMENTS or { "Interface\\QuestFrame\\QuestBG", "Interface\\Stationery\\StationeryTest1" }
+	local file = ui and ui.FirstTexture and ui.FirstTexture(parchments) or parchments[1]
+	if GetFileIDFromPath and not GetFileIDFromPath(file) then
+		bg:SetColorTexture(0.87, 0.80, 0.64, 0.97)
+	else
+		bg:SetTexture(file)
+		if file:find("QuestBG", 1, true) then bg:SetTexCoord(0, 296 / 512, 0, 331 / 512) end
+	end
+	f.title = f:CreateFontString(nil, "ARTWORK", _G.QuestTitleFont and "QuestTitleFont" or "GameFontNormalLarge")
+	f.title:SetPoint("TOP", 0, -30)
+	f.title:SetText(L.VERSION_UPDATE_LETTER_TITLE)
+	f.body = f:CreateFontString(nil, "ARTWORK", _G.QuestFont and "QuestFont" or "GameFontHighlight")
+	f.body:SetPoint("TOPLEFT", 38, -76)
+	f.body:SetPoint("RIGHT", -38, 0)
+	f.body:SetJustifyH("LEFT")
+	f.body:SetJustifyV("TOP")
+	f.done = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+	f.done:SetSize(94, 24)
+	f.done:SetPoint("BOTTOMRIGHT", -28, 24)
+	f.done:SetText(L.VERSION_UPDATE_DONE)
+	f.done:SetScript("OnClick", function() f:Hide() end)
+	f.copy = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+	f.copy:SetSize(142, 24)
+	f.copy:SetPoint("BOTTOMLEFT", 28, 24)
+	f.copy:SetText(L.VERSION_UPDATE_COPY)
+	f.copy:SetScript("OnClick", function()
+		local copy = ns.UI and ns.UI.ShowCopy
+		if copy then copy(L.VERSION_UPDATE_LETTER_TITLE, OfficialLink(), nil, { key = "update-link" }) else ns.Print(OfficialLink()) end
+	end)
+	f.close = CreateFrame("Button", nil, f, "UIPanelCloseButton")
+	f.close:SetPoint("TOPRIGHT", -4, -4)
+	f.close:SetScript("OnClick", function() f:Hide() end)
+	if ns.EscapeCloses then ns.EscapeCloses("OlympusUpdateLetterFrame") end
+	if f.HookScript and ns.EscapeCloses then
+		f:HookScript("OnShow", function(self) ns.EscapeCloses(self:GetName()) end)
+	end
+	return f
+end
+
+-- The details are parchment in both input modes. It has no edit box and never opens one of the
+-- game's popups, so choosing it from the compact notice remains safe with the gamepad UI.
+function Versions.ShowLetter(notice)
+	updateFrame = updateFrame or MakeUpdateFrame()
+	updateFrame.body:SetText(Versions.LetterText(notice))
+	updateFrame:Show()
+	return updateFrame
+end
+
+function Versions.LetterFrame() return updateFrame end
 
 -- Olympus's own window, in both input modes: any Olympus player can make it appear, so never the
 -- game's popup (whose Escape would also press "Don't remind me": StaticPopup_CallEscapeHandler calls
 -- OnCancel with "clicked"). Answered by a click alone.
 function Versions.ShowNotice(notice)
 	if ns.Dialog.missing then
-		ns.Print(notice)
+		ns.Print(type(notice) == "table" and notice.text or notice)
 		return nil
 	end
-	return ns.Dialog.Show("OLYMPUS_UPDATE_ASKED", notice)
+	if type(notice) ~= "table" then notice = { text = tostring(notice or "") } end
+	return ns.Dialog.Show("OLYMPUS_UPDATE_ASKED", notice.text, nil, notice)
 end
 
 function Versions.Snooze()
@@ -467,11 +612,11 @@ end
 
 StaticPopupDialogs["OLYMPUS_UPDATE_ASKED"] = {
 	text = "%s",
-	button1 = OKAY or "OK",
-	button2 = L.VERSION_SNOOZE,
-	OnCancel = function(_, _, reason)
-		if reason == "clicked" then ns.SafeCall("update ask snooze", Versions.Snooze) end
-	end,
+	button1 = L.VERSION_UPDATE_DETAILS,
+	button2 = L.VERSION_UPDATE_LATER,
+	button3 = L.VERSION_SNOOZE,
+	OnAccept = function(_, notice) ns.SafeCall("update letter", Versions.ShowLetter, notice) end,
+	OnAlt = function() ns.SafeCall("update ask snooze", Versions.Snooze) end,
 	noCancelOnEscape = true, -- (were it ever the game's popup: Escape only closes it)
 	timeout = 0,
 	whileDead = true,
@@ -509,16 +654,21 @@ function Versions.MenuLines(target, menu)
 	-- In a dungeon, a raid or a match nothing can go: the lines show, greyed, and say why.
 	local locked = target.locked == true
 	local function Tip(text) return locked and L.PLAYERMENU_LOCKED or text end
-	if state == "outdated" then
+	-- Ask to update and Check version (the owner's call, 2026-09-30): both there for anyone who
+	-- runs Olympus or may, greyed with the reason when they can't go (he runs the latest; checked
+	-- a moment ago; a dungeon, a raid or a match).
+	if state ~= "none" and state ~= "checking" then
 		local tipText = IsAuthor() and L.VERSION_ASK_AUTHOR_TIP or L.VERSION_ASK_TIP
-		if not IsAuthor() and Newer(Versions.FIRST, version) then tipText = L.VERSION_ASK_OLD_TIP:format(version) end
-		menu.Button(L.VERSION_ASK, function() Versions.AskUpdate(name) end, L.VERSION_ASK, Tip(tipText), not locked)
+		if not IsAuthor() and version and Newer(Versions.FIRST, version) then tipText = L.VERSION_ASK_OLD_TIP:format(version) end
+		local latest = state == "current" or state == "newer"
+		menu.Button(L.VERSION_ASK, function() Versions.AskUpdate(name) end, L.VERSION_ASK,
+			latest and L.VERSION_ASK_CURRENT_TIP or Tip(tipText), not locked and not latest)
 	end
 	local c = checks[Key(name)]
 	local recheck = not c or ns.Now() - c.t >= Versions.PING_GAP
-	if state == "unknown" or ((state == "none" or state == "olympus" or Stale(how, at)) and state ~= "checking" and recheck) then
+	if state ~= "checking" then
 		menu.Button(L.VERSION_CHECK, function() Versions.Check(name) end, L.VERSION_CHECK,
-			Tip(IsAuthor() and L.VERSION_CHECK_AUTHOR_TIP or L.VERSION_CHECK_TIP), not locked)
+			not recheck and L.VERSION_CHECK_WAIT_TIP or Tip(IsAuthor() and L.VERSION_CHECK_AUTHOR_TIP or L.VERSION_CHECK_TIP), not locked and recheck)
 	end
 	if state == "none" then
 		menu.Button(L.VERSION_TELL, function() Versions.Tell(name) end, L.VERSION_TELL, Tip(L.VERSION_TELL_TIP), not locked)
@@ -544,6 +694,8 @@ end
 
 function Versions.Reset() -- (tests)
 	wipe(checks); wipe(sentTimes); wipe(answeredAt); wipe(answerTimes)
+	if updateFrame and updateFrame.Hide then updateFrame:Hide() end
+	updateFrame = nil
 end
 
 ns.PlayerMenu.Add("versions", function(target, menu) Versions.MenuLines(target, menu) end, 10)

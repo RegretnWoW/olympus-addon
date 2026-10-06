@@ -93,12 +93,13 @@ function ns.Window(name, parent, opts)
 	opts = type(opts) == "table" and opts or {}
 	parent = parent or UIParent
 	local f, look = Made("Frame", name, parent, Dialog.METAL), "metal"
-	if not (f and f.NineSlice and f.TitleContainer and f.TitleContainer.TitleText) then
+	-- (Its parts as tables: a frame stand-in that answers every field with a method has none.)
+	if not (f and type(f.NineSlice) == "table" and type(f.TitleContainer) == "table" and type(f.TitleContainer.TitleText) == "table") then
 		-- (The name stays the failed one's: the plain frame takes another, as the Olympus window's.)
 		if f then f:Hide() end
 		local plainName = name and f and (name .. "Basic") or name
 		f = Made("Frame", plainName, parent, Dialog.PLAIN) or CreateFrame("Frame", plainName, parent)
-		look = f.CloseButton and f.TitleText and "plain" or "bare"
+		look = type(f.CloseButton) == "table" and type(f.TitleText) == "table" and "plain" or "bare"
 		ns.Log("%s unavailable for %s: the %s frame", Dialog.METAL, tostring(name), look)
 	end
 	f.windowLook, f.metal = look, look == "metal"
@@ -150,6 +151,11 @@ end
 Dialog.MAX = 3        -- dialogs up at once; one more takes the oldest's place
 Dialog.TOP = -135     -- where the game's first popup sits
 Dialog.GAP = 8
+Dialog.BUTTON_HEIGHT = 22        -- the game's popup buttons
+Dialog.FONT = "GameFontHighlight" -- and its text
+-- A definition may ask for more (1.2, the arena's matchmaking: the gamepad UI's 24 px buttons and
+-- 13 px text or more): buttonHeight = px, textFont = a font object's name (used where the client
+-- has it). The game's popups ignore both; every other dialog keeps the sizes above.
 
 local frames = {}     -- built once, reused
 local order = 0       -- to know the oldest
@@ -212,7 +218,7 @@ end
 
 local function Button(f, index)
 	local b = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-	b:SetHeight(22)
+	b:SetHeight(Dialog.BUTTON_HEIGHT)
 	b:SetScript("OnClick", function() Click(f, index) end)
 	return b
 end
@@ -229,7 +235,7 @@ local function Build(i)
 	f:EnableMouse(true)
 	f:SetClampedToScreen(true)
 	f:Hide()
-	f.text = f:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+	f.text = f:CreateFontString(nil, "ARTWORK", Dialog.FONT)
 	f.text:SetPoint("TOP", 0, Dialog.TEXT_TOP)
 	f.text:SetJustifyH("CENTER")
 	local okBox, eb = pcall(CreateFrame, "EditBox", "OlympusDialog" .. i .. "EditBox", f, "InputBoxTemplate")
@@ -337,6 +343,11 @@ function Dialog.Show(which, a, b, data)
 		local ok, res = pcall(string.format, text, a, b)
 		if ok then text = res end
 	end
+	-- (The window is reused: each dialog sets its own font and button height, or the defaults.)
+	local font = type(def.textFont) == "string" and _G[def.textFont] ~= nil and def.textFont or Dialog.FONT -- gp:lookups
+	f.text:SetFontObject(font)
+	local buttonH = math.max(Dialog.BUTTON_HEIGHT, tonumber(def.buttonHeight) or Dialog.BUTTON_HEIGHT)
+	for _, b in ipairs(f.buttons) do b:SetHeight(buttonH) end
 	f.text:SetText(text)
 	-- Width: the game's 320, wider for a wide edit box or long buttons.
 	local width = 320
@@ -396,7 +407,7 @@ function Dialog.Show(which, a, b, data)
 		b:SetPoint("TOPLEFT", f, "TOP", x, y)
 		x = x + b:GetWidth() + 8
 	end
-	f:SetHeight(-y + 22 + 16)
+	f:SetHeight(-y + buttonH + 16)
 	f:Show()
 	Layout()
 	Call(f, "show", def.OnShow, f, data)

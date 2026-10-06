@@ -31,6 +31,8 @@ local HD_DEFAULT_H = 426            -- CommunitiesFrame.xml
 local main                          -- the window in use: frames.old or frames.hd
 local frames = {}                   -- style -> window, each created on first use
 local personFrames = {}             -- style -> person details panel (created on first use, further below)
+local playerProfile, playerReturn   -- the full-window person page, and the list page it returns to
+local playerTrail = {}              -- the person pages Back goes through first, oldest first: { person, scroll }
 
 -- icon: the side tab's (HD window), a texture or a function giving one. A new tab is one
 -- entry here, its L.TAB_ label and, if it has any, its BUTTONS.
@@ -45,10 +47,12 @@ local TABS = {
 	-- own chat icon (CommunitiesFrame.xml's ChatTab), else a note.
 	{ key = "chat", label = "TAB_CHAT", icon = function() return UI.FirstTexture(UI.CHAT_ICONS) end },
 	{ key = "decrees", label = "TAB_DECREES", icon = "Interface\\Icons\\INV_Scroll_04" },
-	{ key = "heraldry", label = "TAB_HERALDRY", icon = "Interface\\Icons\\INV_Shirt_GuildTabard_01" },
+	-- (1.2: no Tabards tab: the Tabards are a section of The Watch, Watch.lua, with their own
+	-- buttons below, BUTTONS.heraldry and DETAIL_BUTTONS.heraldry.)
 	-- The crafters' board (1.1.4): its own destination, no longer a page inside the Realm.
 	{ key = "crafters", label = "TAB_CRAFTERS", icon = "Interface\\Icons\\Trade_BlackSmithing" },
-	-- The Treasury precedes the King's remaining tabs in the canonical visual order.
+	-- The treasury: its keepers' books together (Treasury.lua), before the Throne. Watch.lua
+	-- registers after "treasury", so the canonical run is Treasury, Watch, Throne.
 	{ key = "treasury", label = "TAB_TREASURY", icon = "Interface\\Icons\\INV_Misc_Coin_02" },
 	-- The King's alone (King.lua): hidden for everyone else, see UI.Refresh. 1.1.5: in its place, a
 	-- guild master's Guild tab (King.TabLabel): its label and icon follow whose tab it is (UI.RelabelTabs).
@@ -82,6 +86,50 @@ UI.HORNS = { "Interface\\Icons\\Ability_Warrior_BattleShout", "Interface\\Icons\
 UI.CHAT_ICONS = { "Interface\\Icons\\UI_Chat", "Interface\\Icons\\INV_Misc_Note_01" }
 UI.PARCHMENTS = { "Interface\\QuestFrame\\QuestBG", "Interface\\Stationery\\StationeryTest1" }
 UI.TABS = TABS
+
+-- 1.2: a tab another file adds (the Blood Arena's, ArenaHome.lua), before the window is built:
+--   UI.AddTab{ key, label, icon, after, visible, build, buttons, view }
+-- label: its L key; icon: as TABS' (a texture or a function giving one); after: the key of the tab
+-- it follows (the end when there is none such, or nil); visible(): whether it shows now (UI.Refresh
+-- asks it, as it asks the Throne's); build(s): its lines, detail title and text (Views.Register);
+-- buttons: its bottom buttons (as BUTTONS'); view(): the key of the view a section of it shows now,
+-- whose buttons, detail buttons and columns it takes (The Watch's Tabards: "heraldry"), or nil for
+-- its own. The HD side columns always preserve this canonical
+-- TABS order: right top-to-bottom, then left bottom-to-top. Refused (false, why) once a window was built (its tabs are made
+-- with it), for a key taken ("taken"), without a key and a label ("shape"), or when Views refuses
+-- its builder ("view": a tab of the same key there).
+local added = {} -- [key] = visible, the tabs UI.AddTab added
+local addedButtons = {} -- [key] = their bottom buttons
+local addedViews = {} -- [key] = view(), the section of it shown now
+function UI.AddTab(t)
+	if type(t) ~= "table" or type(t.key) ~= "string" or t.key == "" or type(t.label) ~= "string" then return false, "shape" end
+	if next(frames) ~= nil then return false, "built" end
+	for _, x in ipairs(TABS) do if x.key == t.key then return false, "taken" end end
+	if type(t.build) == "function" and not (ns.Views and ns.Views.Register and ns.Views.Register(t.key, t.build)) then return false, "view" end
+	local at = #TABS + 1
+	for i, x in ipairs(TABS) do if t.after and x.key == t.after then at = i + 1 end end
+	table.insert(TABS, at, { key = t.key, label = t.label, icon = t.icon })
+	added[t.key] = type(t.visible) == "function" and t.visible or function() return true end
+	if type(t.buttons) == "table" then addedButtons[t.key] = t.buttons end
+	if type(t.view) == "function" then addedViews[t.key] = t.view end
+	return true
+end
+
+-- The view tab `tab` shows now: its own key, or the one its section borrows (UI.AddTab's view).
+local function ViewOf(tab)
+	local view = addedViews[tab]
+	if not view then return tab end
+	local ok, key = pcall(view)
+	return ok and type(key) == "string" and key ~= "" and key or tab
+end
+UI.ViewOf = ViewOf
+
+-- 1.2: the rows other files add to the person card (UI.ShowPerson), after its rank row: each
+-- fn(p, rows) appends strings to rows (the arena's title and its "Arena profile" line).
+UI.personRows = {}
+-- 1.2: on the card of the player himself, each fn(p, rows) may append rows and return a function:
+-- the card then shows "Edit my profile", which calls it (ProfileEdit.lua's Edit in this window).
+UI.profileEditors = {}
 
 local function DecreeAction(kind)
 	return function()
@@ -125,7 +173,8 @@ local BUTTONS = {
 		{ "MARK_TARGET", function() ns.Inspect.MarkTarget() end },
 		{ "COPY_BTN", function() UI.ShowCopy(L.INSPECT_TITLE, ns.Inspect.DiscordText()) end },
 	},
-	-- The Throne: the agenda (the King and his Hands), the court (the King's).
+	-- The Throne: the agenda, Hold Court and the King's/Steward's own administration. The
+	-- restricted court queue (Judgment) lives in The Watch.
 	-- The roll call lives in the Realm, the inspection in the Tabards (King.RollCallLines...).
 	-- (1.1.5: each the Throne's people's alone: a guild master's Guild tab, or a councillor who is no
 	-- Hand, has none of them.)
@@ -211,6 +260,22 @@ local DETAIL_BUTTONS = {
 					tt:AddLine(L.THRONE_LOCATION_NOW_OFF, 0.6, 0.6, 0.6, true)
 				end
 			end },
+		{ "KING_ARROW_TITLE", function()
+			local A = ns.KingArrow
+			if A then A.SetEnabled(not A.ScopeEnabled("global"), "global") end
+		end, refresh = true, shown = function()
+			local A = ns.KingArrow
+			return A and A.CanControl and A.CanControl("global") == true
+		end,
+			label = function()
+				local A = ns.KingArrow
+				local on = not A or A.ScopeEnabled("global")
+				return "|TInterface\\Minimap\\MinimapArrow:0|t " .. L.KING_ARROW_TITLE .. ": " .. (on and L.KING_ARROW_ON or L.KING_ARROW_OFF)
+			end,
+			tooltip = function(tt)
+				tt:AddLine(L.KING_ARROW_TITLE, 1, 0.82, 0)
+				tt:AddLine(L.KING_ARROW_GLOBAL_TIP, 1, 1, 1, true)
+			end },
 		{ "THRONE_CANCEL_AGENDA", function() ns.King.CancelAgendaButton() end,
 			shown = function() return ns.King.Agenda() ~= nil and ns.King.ThroneShown() and ns.King.CanCall() end },
 	},
@@ -224,8 +289,8 @@ local DETAIL_BUTTONS = {
 				tt:AddLine(ns.Workshop.FullRunning() and L.WORKSHOP_FULL_STOP or L.WORKSHOP_FULL_BTN, 1, 0.82, 0)
 				tt:AddLine(L.WORKSHOP_FULL_BTN_TIP, 1, 1, 1, true)
 			end },
-		-- (1.1.5, the author's ask) View as: one button for the previews (Asmon's, the Treasurer's,
-		-- the guild master's), its menu (ViewAs.lua) picking one at a time.
+		-- (1.1.5, the author's ask) View as: one button for the previews, its menu (ViewAs.lua)
+		-- picking one at a time (1.2: every role's; the title bar's button opens the same menu).
 		{ "VIEW_AS_TITLE", function() ns.ViewAs.ToggleMenu() end, refresh = true,
 			label = function() return ns.ViewAs.Previewing() and L.VIEW_AS_PREVIEW_BTN:format(ns.ViewAs.Label()) or L.VIEW_AS_TITLE end },
 	},
@@ -248,11 +313,25 @@ table.insert(DETAIL_BUTTONS.realm, { "COUNCIL_ASK_BTN", function() ns.ShowDialog
 	shown = function() local c = ns.rdb and ns.rdb.council return type(c) == "table" and next(c.names or {}) ~= nil end })
 -- A councillor's own icon with their name (0.9.8, Workshop.lua; since 1.1.5 in the game's own
 -- chat, Borders.lua): the button shown to councillors alone.
-table.insert(DETAIL_BUTTONS.realm, { "COUNCIL_ICON_BTN", function() ns.Workshop.ShowIconPicker() end,
+-- 1.2: it opens the profile's Edit in this window once ProfileEdit.lua gives one (the icon picker
+-- moved there, Workshop.IconPickerHost), the picker's own window until then.
+function UI.OpenIconPicker()
+	local PE = ns.ProfileEdit
+	if type(PE) == "table" and not PE.missing and type(PE.Open) == "function" then return PE.Open("icon") end
+	return ns.Workshop.ShowIconPicker()
+end
+table.insert(DETAIL_BUTTONS.realm, { "COUNCIL_ICON_BTN", function() UI.OpenIconPicker() end,
 	shown = function() return ns.IsHighCouncillor(ns.me) end })
 -- 1.1 (Fern's #28): an officer keeps the gear of the player he targets, in range (Inspect.lua).
 table.insert(DETAIL_BUTTONS.heraldry, 1, { "GEAR_BTN", function() ns.Inspect.InspectGear() end,
 	shown = function() return ns.IsMember() and ns.Roster.IsOfficer() end })
+
+-- The same buttons, greyed (the Join screen's under the author's "Not in Olympus" preview).
+local function InertButtons(defs)
+	local out = {}
+	for i, def in ipairs(defs) do out[i] = { def[1], def[2], enabled = false } end
+	return out
+end
 
 -- Buttons that come and go (def.shown): only the ones shown, in order.
 local function Shown(defs)
@@ -568,7 +647,7 @@ end
 -- the Guild & Communities window (ButtonFrameTemplate's Inset at 4,-60 / -6,26, buttons 20
 -- tall at y 5, ColumnDisplay headers 24 tall on the list's top border, the thin scroll bar
 -- of ScrollFrameTemplate). topNoCols: without column titles (other tabs, the Join screen);
--- the old list box never moves.
+-- page navigation adds its fixed header space before the dark list in both looks.
 local GEOMETRY = {
 	old = {
 		box = { left = 6, top = -56, right = -6, bottom = 36 + DETAIL_H + 4 },
@@ -612,20 +691,21 @@ local function ChatPaneReady()
 end
 
 -- Where the Chat tab's parts go in window `f`, from its look's numbers (offsets from its corners):
--- the search box right of the portrait, where the counts are (the channels' switch and the gear
--- at that row's end, ChatWindow.lua); the lines from where the list's box starts without column
--- titles (the channel pills' row there is gone, the author's ask) down to the buttons' row; the
--- box across that row, as wide as its buttons together.
+-- search and its controls on the light header, then fixed destination tabs below them,
+-- then the conversation down to the bottom composer row.
 function UI.ChatPlaces(f)
 	f = f or main
 	if not f then return nil end
 	if f.chatPlaces then return f.chatPlaces end
 	local g = GEOMETRY[f.style]
 	local b = g.buttons
+	local navTop = g.box.topNoCols or g.box.top
 	f.chatPlaces = {
-		search = { left = f.headerX or 12, right = -HEADER_RIGHT, top = -30 },
+		search = { left = f.headerX or 62, right = -HEADER_RIGHT, top = -30 },
 		box = { left = g.box.left, right = g.box.right, top = g.box.topNoCols or g.box.top, bottom = b.y + b.h + 4 },
 		input = { left = b.x, right = b.x - b.margin, y = b.y, h = b.h },
+		-- The same fixed navigation row as other pages, below Chat's own header search.
+		nav = { left = g.scroll.left, right = (f.scrollRight or g.scroll.right) - 2, top = navTop },
 	}
 	return f.chatPlaces
 end
@@ -777,6 +857,53 @@ local function HelpButton(f) -- gp:lookups
 	return b
 end
 
+-- 1.2: View as (ViewAs.lua), the author's alone (and his test builds'), left of the help button:
+-- which view the window shows, his own or a role's preview (in orange), its menu under it. A plain
+-- button of ours, as the help button (no Blizzard dropdown: the gamepad UI's rules). UI.Refresh
+-- shows it and sets its text.
+local function ViewAsButton(f)
+	local b = CreateFrame("Button", nil, f)
+	b:SetSize(104, 18)
+	b:SetPoint("RIGHT", f.helpButton, "LEFT", -4, 0)
+	b:SetFrameLevel(f.helpButton:GetFrameLevel())
+	b.text = b:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+	b.text:SetAllPoints()
+	b.text:SetJustifyH("RIGHT")
+	b.text:SetWordWrap(false)
+	-- (No highlight texture, 1.1.5: the quest title's glow sat badly on the title bar. On hover the
+	-- words go white, as the game's title bar links do.)
+	b:SetScript("OnClick", function(self) ns.SafeCall("view as", ns.ViewAs.ToggleMenu, self) end)
+	-- (The title bar still drags the window from there.)
+	b:RegisterForDrag("LeftButton")
+	b:SetScript("OnDragStart", function() f:StartMoving() end)
+	b:SetScript("OnDragStop", function() f:GetScript("OnDragStop")(f) end)
+	b:SetScript("OnEnter", function(self)
+		self.text:SetTextColor(1, 1, 1)
+		GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+		GameTooltip:AddLine(L.VIEW_AS_TITLE, 1, 0.82, 0)
+		GameTooltip:AddLine(L.VIEW_AS_TIP, 1, 1, 1, true)
+		GameTooltip:Show()
+	end)
+	b:SetScript("OnLeave", function(self) self.text:SetTextColor(1, 0.82, 0); GameTooltip:Hide() end)
+	b:Hide()
+	return b
+end
+
+-- The author's View as in use (ViewAs.lua), or nil: on a client updated without a restart it is
+-- Core.lua's stand-in.
+local function AuthorView()
+	local V = ns.ViewAs
+	if type(V) ~= "table" or V.missing or type(V.Available) ~= "function" or V.Available() ~= true then return nil end
+	return V
+end
+
+-- The Join screen alone: outside an Olympus guild, or the author's "Not in Olympus" preview.
+function UI.Locked()
+	if not ns.IsMember() then return true end
+	local V = AuthorView()
+	return V ~= nil and V.Is("outsider") == true
+end
+
 local function CreateMain(style)
 	local g = GEOMETRY[style]
 	local hd = style == "hd"
@@ -839,6 +966,7 @@ local function CreateMain(style)
 		end
 	end
 	f.helpButton = HelpButton(f)
+	f.viewAs = ViewAsButton(f)
 
 	-- One dark panel over the whole interior, like the Guild window (its inside is near
 	-- black, not the lighter marble of the plain portrait frame).
@@ -991,7 +1119,8 @@ local function CreateMain(style)
 
 	-- Bottom buttons (the HD ones as low as "View Log" and "Invite Member", CommunitiesFrame.xml)
 	f.buttons = {}
-	for i = 1, 3 do
+	-- (Four at most: the Games tab's Arena, Bones, Lottery and Wallet, 1.2; the others use three.)
+	for i = 1, 4 do
 		local b = Button(f, 10, 22)
 		if hd then b:SetHeight(g.buttons.h) end
 		f.buttons[i] = b
@@ -1010,7 +1139,7 @@ local function CreateMain(style)
 				icon = okIcon and res or nil
 			end
 			tab.Icon:SetTexture(icon or "Interface\\Icons\\INV_Misc_QuestionMark")
-			tab.tooltip = L[t.label] -- shown by RightSideTabMixin:OnEnter
+			tab.tooltip = L[t.label] -- shown by RightSideTabMixin:OnEnter: the tab's name alone (1.1.6, the owner's call)
 			tab.key = t.key
 			tab:SetID(i)
 			tab:SetFrameLevel(level)
@@ -1076,6 +1205,10 @@ local function CreateMain(style)
 		-- 1.1 (Fern's #11): the first-open page, over the window, while anything is unanswered
 		-- (Consent.lua: once a session, never in combat or an instance). The window works anyway.
 		ns.SafeCall("privacy page", ns.Consent.Ask, "window")
+		-- 1.2: a King's letter waiting for the player's own click (the gamepad UI) opens with the
+		-- window, whichever look and template it was made with (HonorsNet.WaitForWindow).
+		local H = ns.HonorsNet
+		if type(H) == "table" and type(H.WindowShown) == "function" then ns.SafeCall("kings letter", H.WindowShown) end
 	end)
 	f:SetScript("OnHide", function(self)
 		local person = personFrames[self.style]
@@ -1102,15 +1235,18 @@ local function UseStyle(style)
 	return main
 end
 
--- The bottom buttons share the window width: three on a tab, two on the Join screen.
+-- The bottom buttons share the window width: three on a tab (four on the Games tab), two on the
+-- Join screen.
 local function LayoutButtons()
 	local g = GEOMETRY[main.style].buttons
 	local shown = {}
 	for _, b in ipairs(main.buttons) do
 		if b:IsShown() then shown[#shown + 1] = b end
 	end
-	if #shown == 0 then shown = main.buttons end
+	-- (None shown yet: the usual three's widths; the fourth is the Games tab's alone.)
+	if #shown == 0 then shown = { main.buttons[1], main.buttons[2], main.buttons[3] } end
 	local bw = math.floor((main:GetWidth() - g.margin - 2 * (#shown - 1)) / #shown)
+	for _, b in ipairs(main.buttons) do if not b:IsShown() then b:SetWidth(bw) end end
 	for i, b in ipairs(shown) do
 		b:SetWidth(bw)
 		b:ClearAllPoints()
@@ -1155,7 +1291,8 @@ end
 -- The shown tabs follow one another, a hidden one (the Throne, the Workshop) leaving no gap,
 -- in the HD window's side column too. That column holds seven: past them, the canonical tail
 -- continues on the left edge. Reading the right top-to-bottom and then the left bottom-to-top
--- therefore gives exactly the TABS order, regardless of which role-only tabs are visible.
+-- therefore gives exactly the TABS order, regardless of which role-only tabs are visible. Role
+-- and debug visibility never changes that canonical order.
 function UI.LayoutTabs()
 	if not main or not main.tabs then return end
 	local shown = {}
@@ -1225,6 +1362,45 @@ end
 
 -- Positions that depend on the window width (buttons, columns, list width) and on
 -- membership (the Join screen has no column titles).
+local function DrawPageNavigation()
+	local g = GEOMETRY[main.style]
+	local page = main.pageNavTab == main.tab and not playerProfile and not UI.Locked()
+	local lines = page and main.pageNavLines or {}
+	local width = main:GetWidth() - g.scroll.left + (main.scrollRight or g.scroll.right) - 2
+	local searchHeight = 0
+	main.pageSearchHolders = main.pageSearchHolders or {}
+	for tab, holder in pairs(main.pageSearchHolders) do
+		if not page or tab ~= main.tab or not main.pageSearchLine then holder:Hide() end
+	end
+	if page and main.pageSearchLine then
+		local holder = main.pageSearchHolders[main.tab]
+		if not holder then
+			holder = CreateFrame("Frame", nil, main)
+			holder.style = main.style
+			main.pageSearchHolders[main.tab] = holder
+		end
+		holder:ClearAllPoints()
+		holder:SetPoint("TOPLEFT", main, "TOPLEFT", g.scroll.left, g.box.topNoCols or g.box.top)
+		holder:SetWidth(width)
+		if main.listBox then holder:SetFrameLevel(main.listBox:GetFrameLevel() + 3) end
+		ns.Views.Render(holder, { main.pageSearchLine })
+		holder:Show()
+		searchHeight = holder:GetHeight()
+	end
+	main.pageNavRows = main.pageNavRows or {}
+	for i, line in ipairs(lines) do
+		local row = main.pageNavRows[i]
+		if not row then row = CreateFrame("Frame", nil, main); main.pageNavRows[i] = row end
+		row.line = line
+		row:ClearAllPoints()
+		row:SetPoint("TOPLEFT", main, "TOPLEFT", g.scroll.left, (g.box.topNoCols or g.box.top) - searchHeight - (i - 1) * ns.Views.SUBTAB_STYLE.height)
+		row:SetSize(width, ns.Views.DrawNav(row, line.nav, width))
+		row:Show()
+	end
+	for i = #lines + 1, #main.pageNavRows do main.pageNavRows[i]:Hide() end
+	return searchHeight + (#lines > 0 and #lines * ns.Views.SUBTAB_STYLE.height + 3 or 0)
+end
+
 function UI.Layout()
 	if not main then return end
 	local g = GEOMETRY[main.style]
@@ -1232,23 +1408,27 @@ function UI.Layout()
 	LayoutButtons()
 	LayoutDetailButtons()
 	FitHeader()
-	main.layoutLocked = not ns.IsMember()
-	local hasCols = not main.layoutLocked and ns.Views.COLUMNS[main.tab] ~= nil and main.tab == "census"
+	main.layoutLocked = UI.Locked()
+	local hasCols = not playerProfile and not main.layoutLocked and ns.Views.COLUMNS[main.tab] ~= nil and main.tab == "census"
 	main.colHeader:SetShown(hasCols)
 	-- The Chat tab: the header's counts, the list and the detail box give their place to its parts.
-	local chat = not main.layoutLocked and main.tab == "chat" and ChatPaneReady()
-	for _, key in ipairs({ "total", "sub", "headerHover", "listBox", "scroll", "detail" }) do
+	local chat = not playerProfile and not main.layoutLocked and main.tab == "chat" and ChatPaneReady()
+	local navHeight = DrawPageNavigation()
+	for _, key in ipairs({ "total", "sub", "listBox", "scroll", "detail" }) do
 		if main[key] then main[key]:SetShown(not chat) end
 	end
+	-- The count's hover and the page answer describe tabs, not a player profile.
+	if main.headerHover then main.headerHover:SetShown(not chat and not playerProfile) end
+	if main.pageHelp then main.pageHelp:SetShown(not playerProfile) end
 	-- The HD list box starts right under the column titles, higher without them.
-	if g.box.topNoCols and main.listBox then
+	if main.listBox then
 		main.listBox:ClearAllPoints()
-		main.listBox:SetPoint("TOPLEFT", g.box.left, hasCols and g.box.top or g.box.topNoCols)
+		main.listBox:SetPoint("TOPLEFT", g.box.left, hasCols and g.box.top or (g.box.topNoCols or g.box.top) - navHeight)
 		main.listBox:SetPoint("BOTTOMRIGHT", g.box.right, g.box.bottom)
 	end
 	local right = main.scrollRight or g.scroll.right
 	main.scroll:ClearAllPoints()
-	main.scroll:SetPoint("TOPLEFT", g.scroll.left, hasCols and g.scroll.top or g.scroll.topNoCols)
+	main.scroll:SetPoint("TOPLEFT", g.scroll.left, hasCols and g.scroll.top or g.scroll.topNoCols - navHeight)
 	main.scroll:SetPoint("BOTTOMRIGHT", right, g.scroll.bottom)
 	local listW = w - g.scroll.left + right - 2
 	for _, v in pairs(main.views) do v:SetWidth(listW) end
@@ -1317,9 +1497,12 @@ local function SetButtons(list, defs)
 		local def = defs and defs[i]
 		if def then
 			local label = def.label and def.label() or L[def[1]]
+			local enabled = def.enabled == nil or (type(def.enabled) == "function" and def.enabled() or def.enabled) == true
 			if def[1] == "PATROL_BTN" then label = ns.Inspect.IsPatrolling() and L.PATROL_STOP or L.PATROL_START end
 			b:SetText(label)
+			b:SetEnabled(enabled)
 			b:SetScript("OnClick", function()
+				if not enabled then return end
 				ns.SafeCall("button " .. def[1], def[2])
 				-- A button that shows a state (def.label) shows the new one at once.
 				if def.refresh then UI.Refresh() end
@@ -1441,6 +1624,9 @@ end
 -- Opening the window picks its look again, from the guild window in use (UI.Style).
 -- Called from clicks and slash commands. `focus`: see ShowTab.
 function UI.SelectTab(key, focus)
+	-- A tab is an explicit destination. If a person page was open, do not leave a hidden
+	-- profile in front of the newly selected tab; its Back history belongs only to that page.
+	playerProfile, playerReturn, playerTrail = nil, nil, {}
 	if not (main and main:IsShown()) then UseStyle(UI.Style()) end
 	ShowTab(key, focus)
 	UI.Clicked()
@@ -1469,21 +1655,97 @@ UI.PLACE_HOLD = 1  -- seconds a redraw's place is given again when the client me
 -- Which page of its tab the list shows: another one starts at the top.
 local function PageOf(tab, locked)
 	if locked then return "join" end
+	if playerProfile then return "player-profile:" .. tostring(ns.FullName(playerProfile.name, playerProfile.realm)) end
 	local sub
 	if tab == "realm" then
 		-- (1.1: our guild's members page, Members.lua, a page of its own.)
-		sub = (ns.Views.BoardShown and ns.Views.BoardShown() and "board") or (ns.Views.PageShown and ns.Views.PageShown()) or ns.Members and ns.Members.PageId and ns.Members.PageId() or "tree"
+		sub = (ns.Views.BoardShown and ns.Views.BoardShown() and "board") or (ns.Views.PageShown and ns.Views.PageShown())
+			or ns.Members and ns.Members.PageId and ns.Members.PageId()
+			or ns.Views.RealmMode and ns.Views.RealmMode() or "guilds"
 	elseif tab == "throne" then
 		-- (1.1.5: a guild master's Guild tab, in the Throne's place.)
 		sub = ns.King and ns.King.ThroneShown and not ns.King.ThroneShown() and "guild" or ns.King and ns.King.mode
-	elseif tab == "treasury" then sub = ns.Treasury and ns.Treasury.mode end
+	elseif tab == "treasury" then sub = ns.Treasury and ns.Treasury.mode
+	elseif tab == "wanted" then sub = ns.Wanted and ns.Wanted.PageId and ns.Wanted.PageId()
+	elseif tab == "watch" then sub = ns.Watch and ns.Watch.PageId and ns.Watch.PageId() end -- (1.1.6: desk, reports, cases, case)
 	return tab .. "/" .. tostring(sub or "")
 end
 
 -- 1.1.2: the page shown now ("census/", "realm/tree", "treasury/book", "join"...), for its "?".
 function UI.PageId()
 	if not main then return nil end
-	return PageOf(main.tab, not ns.IsMember())
+	return PageOf(main.tab, UI.Locked())
+end
+
+-- 1.2: how many person pages Back walks through before the list (A -> B -> C... -> Back -> B):
+-- past it the oldest page is dropped, never the list the first one was opened from.
+UI.PROFILE_BACK_MAX = 8
+
+-- Who a person page is of: the whole name, folded ("Ann" on our realm is "Ann-Realm", and never
+-- "Ann-Other", a player of another realm of the group).
+local function ProfileKey(p) return ns.Fold(tostring(ns.FullName(p.name, p.realm))) end
+
+-- A person selected from the normal Census/Realm/inspection lists occupies this same window.
+-- The Arena companion has its own profile and never calls this path. Keep the normal tab's
+-- exact subpage, search state and scroll offset so Back returns to what the player was reading.
+-- Another person opened from a person page (a deep link, PlayerProfile.OpenName) is one step
+-- further: Back goes to the page before it, one step at a time, then to the list. The page shown,
+-- opened again, is no new step and stays as it is: its record kept whole (the Mark, the tabard
+-- and the note only the inspection list hands, each fact with the source and time it came
+-- with), not swapped for the other way in's, often poorer one.
+function UI.OpenPlayerProfile(p)
+	if type(p) ~= "table" or type(p.name) ~= "string" or p.name == "" or not ns.IsMember() then return false end
+	if not (main and main:IsShown()) then UI.SelectTab(main and main.tab or "census") end
+	local scroll = main.scroll:GetVerticalScroll() or 0
+	if not playerProfile then
+		playerReturn = {
+			tab = main.tab,
+			page = PageOf(main.tab, false),
+			scroll = scroll,
+		}
+		playerTrail = {}
+	elseif ProfileKey(p) == ProfileKey(playerProfile) then
+		UI.Refresh()
+		return true
+	else
+		playerTrail[#playerTrail + 1] = { person = playerProfile, scroll = scroll }
+		if #playerTrail > UI.PROFILE_BACK_MAX then table.remove(playerTrail, 1) end
+	end
+	playerProfile = p
+	main.scroll:SetVerticalScroll(0)
+	main.page = nil
+	UI.Layout()
+	UI.Refresh()
+	return true
+end
+
+function UI.PlayerProfileShown() return playerProfile ~= nil end
+function UI.CurrentPlayerProfile() return playerProfile end
+
+function UI.BackFromPlayerProfile()
+	if not playerProfile then return false end
+	local prior = table.remove(playerTrail)
+	if prior then
+		-- The person page before this one, where it was scrolled to.
+		playerProfile = prior.person
+		if not (main and main:IsShown()) then return true end
+		main.restorePage, main.restoreScroll = PageOf(main.tab, false), prior.scroll or 0
+		UI.Layout()
+		UI.Refresh()
+		return true
+	end
+	local back = playerReturn
+	playerProfile, playerReturn = nil, nil
+	if not (main and main:IsShown()) then return true end
+	if back and back.tab ~= main.tab then
+		ShowTab(back.tab)
+	else
+		main.restorePage = back and back.page
+		main.restoreScroll = back and back.scroll or 0
+		UI.Layout()
+		UI.Refresh()
+	end
+	return true
 end
 
 -- The "?" of the page shown (Answers.lua).
@@ -1510,7 +1772,10 @@ function UI.KeepPlace(content, offset, click, page, focus)
 	local scroll = main.scroll
 	local view = scroll:GetHeight() or 0
 	local want = 0
-	if page == main.page then
+	if main.restorePage == page then
+		want = main.restoreScroll or 0
+		main.restorePage, main.restoreScroll = nil, nil
+	elseif page == main.page then
 		want = offset
 		local rows = content.rows or {}
 		local r = click and GetTime() - (click.t or 0) <= UI.CLICK_KEEP and rows[click.index]
@@ -1563,9 +1828,18 @@ function UI.Scrolled(frame)
 	frame.wantScroll = nil
 end
 
+-- The client's millisecond clock (debugprofilestop), or nil where there is none.
+local function Clock()
+	local clock = rawget(_G, "debugprofilestop")
+	if type(clock) ~= "function" then return nil end
+	local ok, ms = pcall(clock)
+	return ok and type(ms) == "number" and ms or nil
+end
+
 function UI.Refresh()
 	if not main or not main:IsShown() then return end
 	UI.lastRedraw = GetTime()
+	local started = Clock()
 	ns.SafeCall("ui refresh", function()
 		local s = ns.Data.Summary()
 		local F = ns.FormatNumber
@@ -1574,18 +1848,28 @@ function UI.Refresh()
 		-- Right after login (1.1): the census is being rebuilt, and the header says so.
 		local heard = ns.Data.Rebuilding and ns.Data.Rebuilding()
 		if heard then main.sub:SetText(L.REBUILDING_SUB:format(heard) .. "  ·  " .. UI.CensusName()) end
-		-- Outside an Olympus guild nothing but the Join Olympus screen is shown.
-		local locked = not ns.IsMember()
+		-- Outside an Olympus guild nothing but the Join Olympus screen is shown (and in the
+		-- author's "Not in Olympus" preview, where nothing on it acts: ViewAs.Inert).
+		local locked = UI.Locked()
+		local views = AuthorView()
+		local previewing = views ~= nil and views.Previewing() == true
+		local inert = locked and ns.IsMember() -- (locked by the preview alone)
+		if locked and playerProfile then playerProfile, playerReturn, playerTrail = nil, nil, {} end
 		-- Joined or left a guild while the window is open: lay it out again.
 		if locked ~= main.layoutLocked then UI.Layout() end
-		local lines, title, text
+		local lines, title, text, profileButtons, profileHeader, profileSubheader
 		if locked then
 			-- Not an Olympus member yet: the only thing on offer is joining one.
 			lines = ns.Views.RecruitLines()
+			if inert then lines = views.Inert(lines) end
 			title, text = L.MEMBERS_ONLY, L.MEMBERS_ONLY_HINT
 			local header, sub = ns.Recruit.Roast()
 			main.total:SetText(header)
 			main.sub:SetText(sub)
+		elseif playerProfile and ns.PlayerProfile and ns.PlayerProfile.Build then
+			lines, title, text, profileButtons, profileHeader, profileSubheader = ns.PlayerProfile.Build(playerProfile)
+			main.total:SetText(profileHeader or L.PLAYER_PROFILE_TITLE)
+			main.sub:SetText(profileSubheader or "")
 		else
 			lines, title, text = ns.Views.Build(main.tab)
 			-- The treasury next to the soldiers, on the Treasury tab (Treasury.HeaderText; 1.1.5, the
@@ -1595,16 +1879,33 @@ function UI.Refresh()
 				if type(gold) == "string" then main.total:SetText(L.ARMY_TOTAL:format(F(s.total)) .. "   " .. gold) end
 			end
 		end
+		-- 1.2: the author's View as says in the header that what shows is a role's preview.
+		if previewing then main.sub:SetText("|cffff9933" .. L.VIEW_AS_PREVIEWING:format(views.Label()) .. "|r") end
 		FitHeader()
+		if main.viewAs then
+			main.viewAs:SetShown(views ~= nil)
+			main.viewAs.text:SetText(previewing and ("|cffff9933" .. L.VIEW_AS_PREVIEW_BTN:format(views.Label()) .. "|r") or L.VIEW_AS_TITLE)
+		end
+		-- The view the tab shows now (UI.AddTab's view: The Watch's Tabards are "heraldry"), for
+		-- its columns and buttons.
+		local view = ViewOf(main.tab)
 		-- Drawn again where it was (UI.KeepPlace): the offset and the row clicked, taken first.
 		local content = main.views[main.tab]
 		local offset, click, focus = main.scroll:GetVerticalScroll() or 0, ns.Views.TakeClick(content), main.focus
 		main.focus = nil
-		ns.Views.Render(content, lines, not locked and ns.Views.COLUMNS[main.tab] or nil)
+		local navigation, search
+		lines, navigation, search = ns.Views.SplitPageNav(lines, not locked and not playerProfile and main.tab ~= "census")
+		local previous, previousTab = main.pageNavLines and #main.pageNavLines or 0, main.pageNavTab
+		local previousSearch = main.pageSearchLine ~= nil
+		main.pageNavLines, main.pageNavTab = navigation, main.tab
+		main.pageSearchLine = search
+		if previous ~= #navigation or previousTab ~= main.tab or previousSearch ~= (search ~= nil) then UI.Layout() else DrawPageNavigation() end
+		ns.Views.Render(content, lines, not locked and not playerProfile and ns.Views.COLUMNS[view] or nil)
 		UI.KeepPlace(content, offset, click, PageOf(main.tab, locked), focus)
 		main.detailTitle:SetText(title or "")
 		main.detailText:SetText(text or "")
-		SetButtons(main.buttons, locked and RECRUIT_BUTTONS or Shown(BUTTONS[main.tab]))
+		local recruit = inert and InertButtons(RECRUIT_BUTTONS) or RECRUIT_BUTTONS
+		SetButtons(main.buttons, locked and recruit or profileButtons or Shown(BUTTONS[view] or addedButtons[view]))
 		local tabsWere = main.tabs[1] and main.tabs[1]:IsShown()
 		-- The Throne only for the King, the Workshop only for the addon's author (and their
 		-- test builds, King.Preview and Workshop.Preview).
@@ -1615,13 +1916,27 @@ function UI.Refresh()
 			treasury = ns.Treasury and ns.Treasury.TabVisible and ns.Treasury.TabVisible() or false, -- (1.1: the dues' button too)
 			workshop = ns.Workshop and ns.Workshop.Visible and ns.Workshop.Visible() or false,
 		}
+		-- (1.2: the tabs UI.AddTab added, each by its own visible(); one that fails is hidden.)
+		for key, visible in pairs(added) do
+			local okVisible, shows = pcall(visible)
+			only[key] = okVisible and shows == true
+		end
+		-- 1.2 (ViewAs.lua): every tab for the author in his own view (he works as part of the council
+		-- and debugs everything: each page still shows what his own client may), a role's tabs in
+		-- its preview. Presentation alone: no page's own rights change.
+		if views and not locked then
+			for _, tab in ipairs(main.tabs) do
+				local shows = views.TabShown(tab.key, only[tab.key])
+				if shows ~= nil then only[tab.key] = shows end
+			end
+		end
 		if only[main.tab] == false then return ShowTab("census") end
 		for _, tab in ipairs(main.tabs) do tab:SetShown(not locked and only[tab.key] ~= false) end
 		UI.RelabelTabs()
 		UI.LayoutTabs()
 		-- The Chat tab (ChatWindow.lua) over the list's place while it is the one shown.
-		ChatPane(not locked and main.tab == "chat")
-		local detail = not locked and Shown(DETAIL_BUTTONS[main.tab]) or nil
+		ChatPane(not locked and not playerProfile and main.tab == "chat")
+		local detail = not locked and not playerProfile and Shown(DETAIL_BUTTONS[view]) or nil
 		SetButtons(main.detailButtons, detail)
 		-- Room for the text where no button shows (the Decrees tab has one for the King alone).
 		local hasDetailButtons = detail ~= nil and #detail > 0
@@ -1630,6 +1945,8 @@ function UI.Refresh()
 		-- so it steps above the Issue Reporter again.
 		if not locked and not tabsWere then ns.SafeCall("issue reporter", ClearOfIssueReporter, MainClearOfIssueReporter) end
 	end)
+	local finished = started and Clock()
+	if finished then UI.lastCost = math.max(0, (finished - started) / 1000) end
 end
 
 -- Glued to the right of `host`, past its side tabs when it shows them (UI.DockOffset).
@@ -1651,6 +1968,7 @@ function UI.OpenDocked(host, tab, heightOnly, style)
 	main:SetSize(UI.DockSize(host:GetWidth(), host:GetHeight(), heightOnly, SocialSize()))
 	DockTo(host)
 	main.docked = true
+	playerProfile, playerReturn, playerTrail = nil, nil, {}
 	ShowTab(tab or main.tab or "census")
 	UI.Clicked()
 end
@@ -1802,7 +2120,7 @@ local function Whisper(name)
 	name = ns.TellName(name)
 	if not ns.Gate.Allowed("chat-box") then return UI.WhisperWindow(name) end
 	ns.Gate.Used("chat-box") -- (1.1.5, the gamepad gate: told at a switch to the gamepad UI)
-	if ChatFrame_SendTell then ChatFrame_SendTell(name) else ChatFrame_OpenChat("/w " .. name .. " ") end -- gp:chat-box
+	if ChatFrame_SendTell then ChatFrame_SendTell(name) elseif ChatFrame_OpenChat then ChatFrame_OpenChat("/w " .. name .. " ") end -- gp:chat-box
 end
 
 local function Invite(name)
@@ -1812,13 +2130,39 @@ end
 
 -- Through Who.lua, which keeps it apart from our quiet /who searches (see SendPlain).
 local function Who(name)
-	ns.Who.SendPlain(('n-"%s"'):format(ns.TellName(name))) -- gp:who
+	if ns.Who and ns.Who.SendPlain then ns.Who.SendPlain(('n-"%s"'):format(ns.TellName(name))) end -- gp:who
+end
+
+function UI.PersonTarget(p)
+	if type(p) ~= "table" or type(p.name) ~= "string" or p.name == "" then return nil end
+	return p.realm and ns.FullName(p.name, p.realm) or p.name
+end
+
+function UI.WhisperPerson(p)
+	local name = p and p.online ~= false and UI.PersonTarget(p)
+	if not name then return false end
+	Whisper(name)
+	return true
+end
+
+function UI.InvitePerson(p)
+	local name = p and p.online ~= false and UI.PersonTarget(p)
+	if not name then return false end
+	Invite(name)
+	return true
+end
+
+function UI.WhoPerson(p)
+	local name = UI.PersonTarget(p)
+	if not name then return false end
+	Who(name)
+	return true
 end
 
 local function PersonButtonScripts(f)
 	-- The whole name (a report's names are short for its sender's realm), made the one the
 	-- server finds by Whisper, Invite and Who.
-	local function Target() local p = f.person return p.realm and ns.FullName(p.name, p.realm) or p.name end
+	local function Target() return UI.PersonTarget(f.person) end
 	f.whisper:SetScript("OnClick", function() ns.SafeCall("whisper", Whisper, Target()) end)
 	f.invite:SetScript("OnClick", function() ns.SafeCall("invite", Invite, Target()) end)
 	f.who:SetScript("OnClick", function() ns.SafeCall("who", Who, Target()) end)
@@ -1830,9 +2174,21 @@ end
 
 -- (1.1.5) Both cards in the Olympus window's metal without its portrait (ns.Window, Dialog.lua),
 -- "<guild name>" in the title bar; their X hides them, in combat too.
+-- A line of the person card: i-th down from the first (x, y), 15 apart.
+local PERSON_LINES, PERSON_LINE_H = 6, 15
+local function PersonLine(f, i)
+	local fs = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	fs:SetPoint("TOPLEFT", f.lineX, f.lineY - (i - 1) * PERSON_LINE_H)
+	fs:SetPoint("RIGHT", -f.lineX, 0)
+	fs:SetJustifyH("LEFT")
+	fs:SetWordWrap(false)
+	return fs
+end
+
 local function CreatePersonFrame()
 	local f = ns.Window("OlympusPersonFrame", UIParent, {})
 	f:SetSize(230, 210)
+	f.baseHeight = 210
 	f:SetFrameStrata("MEDIUM")
 	f:SetToplevel(true)
 	-- Guild window + our window + this card can run past the right edge (the Communities
@@ -1851,15 +2207,8 @@ local function CreatePersonFrame()
 		f.TitleText:SetWidth(ns.WindowTitleRoom(f))
 		f.TitleText:SetWordWrap(false)
 	end
-	f.lines = {}
-	for i = 1, 6 do
-		local fs = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-		fs:SetPoint("TOPLEFT", 14, -54 - (i - 1) * 15)
-		fs:SetPoint("RIGHT", -14, 0)
-		fs:SetJustifyH("LEFT")
-		fs:SetWordWrap(false)
-		f.lines[i] = fs
-	end
+	f.lines, f.lineX, f.lineY = {}, 14, -54
+	for i = 1, PERSON_LINES do f.lines[i] = PersonLine(f, i) end
 	local function Btn(label, x, y, w)
 		local b = Button(f, w, 22)
 		b:SetPoint("BOTTOMLEFT", x, y)
@@ -1902,6 +2251,7 @@ local function CreatePersonFrameHD()
 	end
 	f.hd = true
 	f:SetSize(214, 226)
+	f.baseHeight = 226
 	f:SetToplevel(true)
 	f:EnableMouse(true)
 	f:SetClampedToScreen(true)
@@ -1914,15 +2264,8 @@ local function CreatePersonFrameHD()
 	f.name:SetJustifyH("LEFT")
 	f.name:SetWordWrap(false)
 	f.nameRoom, f.nameFonts = 214 - 26, { "GameFontNormal", "GameFontNormalSmall" }
-	f.lines = {}
-	for i = 1, 6 do
-		local fs = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-		fs:SetPoint("TOPLEFT", 13, -50 - (i - 1) * 15)
-		fs:SetPoint("RIGHT", -13, 0)
-		fs:SetJustifyH("LEFT")
-		fs:SetWordWrap(false)
-		f.lines[i] = fs
-	end
+	f.lines, f.lineX, f.lineY = {}, 13, -50
+	for i = 1, PERSON_LINES do f.lines[i] = PersonLine(f, i) end
 	-- Blizzard's card buttons: 96 x 22, small font, 1 apart.
 	local function Btn(label)
 		local b = Button(f, 96, 22)
@@ -1960,12 +2303,11 @@ local function PersonFrame(style)
 	return personFrames[style]
 end
 
-function UI.ShowPerson(p)
-	if not p or not p.name then return end
-	-- The HD panel lives in the HD window: with no window open, the old one (at the centre).
-	local open = main and main:IsShown()
-	local f = PersonFrame(open and main.style or "old")
-	f.person = p
+-- The one privacy-aware model used by both the legacy side card (for a client updated without
+-- a restart) and the normal full-window profile. It contains only facts already known by the
+-- census, inspection and registered profile extensions; opening it never queries the client.
+function UI.BasePersonDetails(p)
+	if type(p) ~= "table" or type(p.name) ~= "string" or p.name == "" then return nil end
 	local file = p.class and ns.CLASS_FILES[p.class] or p.class
 	local color = file and RAID_CLASS_COLORS and RAID_CLASS_COLORS[file]
 	-- The name, guild and rank may come from other players' reports: plain text, whatever
@@ -1976,38 +2318,126 @@ function UI.ShowPerson(p)
 	-- King's screen while the councillors' names are hidden there (ns.CouncilMasked).
 	local full = ns.FullName(p.name, p.realm)
 	local councillor = ns.CouncilVisible() and not ns.CouncilMasked() and ns.IsHighCouncillor(full)
-	f.name:SetText((color and ("|c%s%s|r"):format(color.colorStr, name) or name) .. (councillor and (" " .. ns.CouncilMark(full)) or ""))
-	FitText(f.name, f.nameRoom or (f:GetWidth() - 28), f.nameFonts or { "GameFontNormalLarge", "GameFontNormal" })
-	-- "<guild>" in the title bar, fitted as the name is (1.1.5: the HD card had it on a line of its
-	-- own, 188 wide; its title bar is 160, where a long guild name did not fit in the normal font).
-	ns.SetWindowTitle(f, guild and ("<" .. guild .. ">") or L.TITLE)
-	if f.TitleText then FitText(f.TitleText, ns.WindowTitleRoom(f), { "GameFontNormal", "GameFontNormalSmall" }) end
 	local className = (file and LOCALIZED_CLASS_NAMES_MALE and LOCALIZED_CLASS_NAMES_MALE[file]) or ""
-	local rows = {}
-	if p.level or className ~= "" then rows[#rows + 1] = (p.level and (L.LEVEL_N:format(p.level) .. " ") or "") .. className end
-	if p.rank then rows[#rows + 1] = "|cffffd200" .. ns.Codec.Plain(p.rank) .. "|r" end
-	if ns.IsTreasurer(p.name, p.guild) then rows[#rows + 1] = "|cffffd200" .. ns.COIN .. L.TREASURER_TITLE .. "|r" end
+	local rows, rowMeta = {}, {}
+	local function Add(text, key, source, at, state)
+		if type(text) ~= "string" or text == "" then return end
+		rows[#rows + 1] = text
+		rowMeta[#rows] = { key = key, source = source, at = at, state = state }
+	end
+	local source = type(p.source) == "string" and p.source or nil
+	local at = tonumber(p.at or p.heard or p.profileAt or p.t)
+	if p.level or className ~= "" then
+		Add((p.level and (L.LEVEL_N:format(p.level) .. " ") or "") .. className, "identity", source, at)
+	end
+	if p.rank then Add("|cffffd200" .. ns.Codec.Plain(p.rank) .. "|r", "rank", source, at) end
+	-- 1.2: other files' rows after the rank (UI.personRows); on the player's own card, the editors'
+	-- rows and the one "Edit my profile" (UI.profileEditors). One that fails adds nothing.
+	for _, fn in ipairs(UI.personRows) do
+		local before, prior = #rows, {}
+		for i = 1, before do prior[i] = rows[i] end
+		ns.SafeCall("person rows", fn, p, rows)
+		-- The old row-only extension contract cannot attach provenance. If it rewrites an existing
+		-- fact (for example, adding an honour to a rank), do not retain the original fact's source.
+		for i = 1, math.min(before, #rows) do
+			if rows[i] ~= prior[i] then rowMeta[i] = { key = "extension", source = "unknown", at = at, state = "unknown" } end
+		end
+		for i = before + 1, #rows do
+			rowMeta[i] = rowMeta[i] or { key = "extension", source = "unknown", at = at, state = "unknown" }
+		end
+	end
+	local edit
+	if full == ns.me then
+		for _, fn in ipairs(UI.profileEditors) do
+			local okEdit, open = pcall(fn, p, rows)
+			if okEdit and type(open) == "function" and not edit then edit = open end
+		end
+	end
+	if ns.IsTreasurer(p.name, p.guild) then Add("|cffffd200" .. ns.COIN .. L.TREASURER_TITLE .. "|r", "treasurer", "derived", at, "derived") end
 	if councillor then
 		-- "High Councillor - <title> (<department>)", as the signed titles list gives them.
 		local t = ns.CouncilTitle(full) or {}
-		rows[#rows + 1] = ns.HIGH_COUNCIL_MARK .. " |c" .. ns.HIGH_COUNCIL_COLOR .. L.COUNCIL_PERSON
-			.. (t.title and (" - " .. ns.Codec.Plain(t.title)) or "") .. (t.dept and (" (" .. ns.Codec.Plain(t.dept) .. ")") or "") .. "|r"
+		Add(ns.HIGH_COUNCIL_MARK .. " |c" .. ns.HIGH_COUNCIL_COLOR .. L.COUNCIL_PERSON
+			.. (t.title and (" - " .. ns.Codec.Plain(t.title)) or "") .. (t.dept and (" (" .. ns.Codec.Plain(t.dept) .. ")") or "") .. "|r",
+			"council", "signed", at, "derived")
 	end
 	if p.online then
-		rows[#rows + 1] = "|cff40ff40" .. L.ONLINE_NOW .. "|r" .. (p.zone and ("  -  " .. ns.Zones.NameForKey(p.zone)) or "")
+		Add("|cff40ff40" .. L.ONLINE_NOW .. "|r" .. (p.zone and ("  -  " .. ns.Zones.NameForKey(p.zone)) or ""),
+			"status", source, at)
 	elseif p.online == false then
-		rows[#rows + 1] = "|cff9d9d9d" .. ((p.days or 0) >= 1 and L.OFFLINE_DAYS:format(math.floor(p.days)) or L.OFFLINE_TODAY) .. "|r"
+		Add("|cff9d9d9d" .. ((p.days or 0) >= 1 and L.OFFLINE_DAYS:format(math.floor(p.days)) or L.OFFLINE_TODAY) .. "|r",
+			"status", source, at)
 	end
 	-- 1.1.2: their Olympus version, when this client knows it (Versions.lua; the same line as the
 	-- right-click menu's). Nothing is asked by opening the card.
 	local version = ns.Versions and ns.Versions.CardLine and ns.Versions.CardLine(full)
-	if version then rows[#rows + 1] = "|cff9d9d9d" .. version .. "|r" end
-	if p.tabard then rows[#rows + 1] = L.TABARD .. ": " .. p.tabard end
-	if p.note then rows[#rows + 1] = '|cffff8080"' .. p.note .. '"|r' end
+	if version then Add("|cff9d9d9d" .. version .. "|r", "version", "addon", nil, "derived") end
+	if p.tabard then Add(L.TABARD .. ": " .. ns.Codec.Plain(tostring(p.tabard)), "tabard", "inspection", at) end
+	if p.note then Add('|cffff8080"' .. ns.Codec.Plain(tostring(p.note)) .. '"|r', "note", source, at) end
+	return {
+		person = p,
+		full = full,
+		name = name,
+		nameText = (color and ("|c%s%s|r"):format(color.colorStr, name) or name)
+			.. (councillor and (" " .. ns.CouncilMark(full)) or ""),
+		guild = guild,
+		rows = rows,
+		rowMeta = rowMeta,
+		edit = edit,
+		councillor = councillor,
+	}
+end
+
+-- PlayerProfile.lua owns the bounded canonical model on a normal load. Keep the base builder
+-- above for a client updated without restarting: the legacy card still works until the new file
+-- has loaded, and the canonical model calls this builder rather than duplicating its display.
+function UI.PersonDetails(p)
+	local profile = ns.PlayerProfile
+	if type(profile) == "table" and not profile.missing and type(profile.Model) == "function" then
+		return profile.Model(p)
+	end
+	return UI.BasePersonDetails(p)
+end
+
+-- The pre-1.2 side card remains as a safe fallback for clients whose new PlayerProfile.lua was
+-- not loaded yet. A normal load routes UI.ShowPerson to the in-window page below.
+function UI.ShowPersonCard(p)
+	local details = UI.PersonDetails(p)
+	if not details then return end
+	-- The HD panel lives in the HD window: with no window open, the old one (at the centre).
+	local open = main and main:IsShown()
+	local f = PersonFrame(open and main.style or "old")
+	f.person = p
+	f.name:SetText(details.nameText)
+	FitText(f.name, f.nameRoom or (f:GetWidth() - 28), f.nameFonts or { "GameFontNormalLarge", "GameFontNormal" })
+	-- "<guild>" in the title bar, fitted as the name is (1.1.5: the HD card had it on a line of its
+	-- own, 188 wide; its title bar is 160, where a long guild name did not fit in the normal font).
+	ns.SetWindowTitle(f, details.guild and ("<" .. details.guild .. ">") or L.TITLE)
+	if f.TitleText then FitText(f.TitleText, ns.WindowTitleRoom(f), { "GameFontNormal", "GameFontNormalSmall" }) end
+	local rows, edit = details.rows, details.edit
+	-- (1.2: more rows than its six lines, other files' rows with them: lines added, the card taller
+	-- by as much, so none of the rows above is ever cut. The buttons hang from its bottom.)
+	for i = #f.lines + 1, #rows do f.lines[i] = PersonLine(f, i) end
+	if f.baseHeight then f:SetHeight(f.baseHeight + math.max(0, #rows - PERSON_LINES) * PERSON_LINE_H) end
 	for i, fs in ipairs(f.lines) do fs:SetText(rows[i] or "") end
 	f.mark:SetShown(p.onMark ~= nil)
 	f.invite:SetEnabled(p.online ~= false)
 	f.whisper:SetEnabled(p.online ~= false)
+	-- (1.2: "Edit my profile" where the mark button sits, made the first time it shows.)
+	f.editOpen = edit
+	if edit and not f.editProfile then
+		local b = Button(f, f.mark:GetWidth() or 96, f.mark:GetHeight() or 22)
+		b.small = f.mark.small
+		if b.small then SetButtonFont(b, true) end
+		b:SetPoint("TOPLEFT", f.mark, "TOPLEFT", 0, 0)
+		b:SetText(L.PROFILE_EDIT_BTN)
+		FitLabel(b)
+		b:SetScript("OnClick", function()
+			if f.editOpen then ns.SafeCall("edit my profile", f.editOpen, f.person) end
+		end)
+		f.editProfile = b
+	end
+	if f.editProfile then f.editProfile:SetShown(edit ~= nil and p.onMark == nil) end
 	f:ClearAllPoints()
 	if open and f.hd then
 		-- Where the Guild & Communities window hangs its card (-8, -76), less its box's 4 px
@@ -2031,12 +2461,27 @@ function UI.ShowPerson(p)
 	ns.SafeCall("issue reporter", ClearOfIssueReporter, function() return StepAboveIssueReporter(f, { f }) end)
 end
 
+function UI.ShowPerson(p)
+	if ns.PlayerProfile and not ns.PlayerProfile.missing and ns.PlayerProfile.Open then
+		return ns.PlayerProfile.Open(p)
+	end
+	return UI.ShowPersonCard(p)
+end
+
 -- The King hides the councillors' names again (the eye in the Realm, Views.lua): a councillor's
 -- card left open from while they were shown closes, with the mark and title it carries.
 function UI.CloseCouncilCards()
 	for _, f in pairs(personFrames) do
 		local p = f.person
 		if p and p.name and f:IsShown() and ns.IsHighCouncillor(ns.FullName(p.name, p.realm)) then f:Hide() end
+	end
+	-- (1.2: and the councillors' pages on Back's way, so Back never brings one up again.)
+	for i = #playerTrail, 1, -1 do
+		local q = playerTrail[i].person
+		if ns.IsHighCouncillor(ns.FullName(q.name, q.realm)) then table.remove(playerTrail, i) end
+	end
+	if playerProfile and ns.IsHighCouncillor(ns.FullName(playerProfile.name, playerProfile.realm)) then
+		UI.BackFromPlayerProfile()
 	end
 end
 
@@ -2068,10 +2513,21 @@ end
 -- inspects a crowd): the window redraws at once for the first news and then at most once
 -- every REDRAW_GAP, so a busy channel never redraws it dozens of times a second.
 UI.REDRAW_GAP = 0.5
+-- 1.1.6 (the owner's game: a 1000-member guild, about two census reports a second, a laptop):
+-- the gap also grows with what the last redraw cost on this client (UI.lastCost, seconds, by the
+-- client's own clock), REDRAW_COST times it, up to REDRAW_MAX_GAP, so the window never takes
+-- much more than a tenth of the game's time however slow its page is to draw there. A click, a
+-- tab or a search still draws at once (UI.Refresh).
+UI.REDRAW_COST = 10
+UI.REDRAW_MAX_GAP = 15
+UI.lastCost = 0
+function UI.RedrawGap()
+	return math.min(UI.REDRAW_MAX_GAP, math.max(UI.REDRAW_GAP, (UI.lastCost or 0) * UI.REDRAW_COST))
+end
 local redrawQueued = false
 function UI.RefreshSoon()
 	if not main or not main:IsShown() or redrawQueued then return end
-	local wait = UI.REDRAW_GAP - (GetTime() - (UI.lastRedraw or 0))
+	local wait = UI.RedrawGap() - (GetTime() - (UI.lastRedraw or 0))
 	if wait <= 0 then return UI.Refresh() end
 	redrawQueued = true
 	ns.After(wait, "ui redraw", function()
@@ -2095,17 +2551,18 @@ end
 
 ns.On("DATA_CHANGED", function() UI.RefreshSoon() end)
 ns.On("MAP_TOGGLED", function() UI.Refresh() end)
-ns.On("INSPECT_CHANGED", function() if main and main.tab == "heraldry" then UI.RefreshSoon() end end)
+ns.On("INSPECT_CHANGED", function() if main and ViewOf(main.tab) == "heraldry" then UI.RefreshSoon() end end)
 -- Layers show in the Realm tab, and the King's layer line tops the Census and the Realm.
 ns.On("LAYERS_CHANGED", function()
 	if main and (main.tab == "decrees" or main.tab == "realm" or main.tab == "census") then UI.RefreshSoon() end
 end)
 ns.On("HOP_CHANGED", function() if main and (main.tab == "census" or main.tab == "realm") then UI.RefreshSoon() end end)
 ns.On("DECREES_CHANGED", function() UI.RefreshSoon() end)
--- The King's calls show on the Throne, the roll call in the Realm, the inspection in the Tabards;
--- since 1.1.5 the Agenda's current event shows in the King's week on top of the Decrees tab.
+-- The King's calls show on the Throne, the roll call in the Realm, the inspection in the Tabards
+-- (The Watch's, 1.2); since 1.1.5 the Agenda's current event shows in the King's week on top of
+-- the Decrees tab.
 ns.On("THRONE_CHANGED", function()
-	if main and (main.tab == "throne" or main.tab == "realm" or main.tab == "heraldry" or main.tab == "decrees") then UI.RefreshSoon() end
+	if main and (main.tab == "throne" or main.tab == "realm" or ViewOf(main.tab) == "heraldry" or main.tab == "decrees") then UI.RefreshSoon() end
 end)
 -- 1.1.5: the King's week (Week.lua, whose changes fire the Board's event) tops the Decrees tab too:
 -- an entry heard or taken off, a sheet's counts, our own signup. The Board redraws itself (Board.lua).
@@ -2115,8 +2572,9 @@ ns.On("VOX_CHANGED", function() if main and main.tab == "vox" then UI.RefreshSoo
 ns.On("TREASURY_CHANGED", function()
 	if main and (main.tab == "treasury" or main.tab == "throne" or main.tab == "realm") then UI.RefreshSoon() end
 end)
--- The court's line tops the Census and the Realm for the players in its zone.
-ns.On("COURT_CHANGED", function() if main and (main.tab == "census" or main.tab == "realm") then UI.RefreshSoon() end end)
+-- The court's public line tops the Census and Realm; its restricted queue lives in The Watch.
+ns.On("COURT_CHANGED", function() if main and (main.tab == "census" or main.tab == "realm" or main.tab == "watch") then UI.RefreshSoon() end end)
+ns.On("WATCH_CHANGED", function() if main and main.tab == "watch" then UI.RefreshSoon() end end)
 -- A page of the Realm tab changed (1.1: the loot notes), or the standalone Crafters board changed.
 ns.On("REALM_PAGE_CHANGED", function(key)
 	if not main then return end

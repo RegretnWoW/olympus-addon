@@ -510,6 +510,29 @@ end
 function Board.Mine() return own.flag end
 function Board.MineIn(slot) return own[slot] end
 
+-- The camp that character has up now (ours from own, anyone else's as the Board heard it), or nil:
+-- { zone, raisedAt }. Bones's place rule (FarkleTable.lua) reads it: a game between players is
+-- played at a tavern or at a camp.
+function Board.CampOf(name, now)
+	if type(name) ~= "string" or name == "" then return nil end
+	now = now or ns.Now()
+	local full = ns.FullName(name)
+	if ns.me and full:lower() == ns.FullName(ns.me):lower() then
+		local c = own.camp
+		if c and now - c.raisedAt < Board.CAMP_LIFE then return { zone = c.zone, raisedAt = c.raisedAt } end
+		return nil
+	end
+	Prune(now)
+	local e = posts[Key(full, "camp")]
+	if not e then
+		for key, p in pairs(posts) do
+			if p.flag == "C" and key:lower() == Key(full, "camp"):lower() then e = p break end
+		end
+	end
+	if not e then return nil end
+	return { zone = e.zone, raisedAt = e.raisedAt }
+end
+
 ---------------------------------------------------------------------------
 -- The ask of a client that opened the Board (GQ), and the whispered answers
 ---------------------------------------------------------------------------

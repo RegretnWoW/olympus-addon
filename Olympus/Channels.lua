@@ -123,8 +123,9 @@ function Channels.CanUse(tier)
 end
 
 -- The level a sender really has, and whether it was verified. Our own guild: from our
--- roster. Other guilds: from that guild's fresh report (leader or officer), and a sender
--- speaks for one guild only (Data.ClaimGuild). Returns 0 when the guild claim is false.
+-- roster. Other guilds keep the documented census rule until the author's signed enforcement
+-- boundary is activated; then only the expiring leadership manifest grants a tier. Returns 0
+-- when the legacy guild claim is false.
 -- Verified, the rank index it was read from too (0: the guild master; the King's Crown: 0).
 function Channels.VerifiedLevel(sender, guild)
 	local who = ns.FullName(sender)
@@ -144,8 +145,9 @@ function Channels.VerifiedLevel(sender, guild)
 		or (ns.King ~= nil and (ns.King.IsStewardName(who) or ns.King.IsHandName(who)))) then
 		return Channels.LevelOf(guild, 0), true, 0
 	end
-	if not ns.Data.ClaimGuild(who, guild) then return 0, false end
-	local known = ns.Data.KnownRank(who, guild)
+	local enforcing = ns.Authority and ns.Authority.Enforced and ns.Authority.Enforced()
+	if not enforcing and not ns.Data.ClaimGuild(who, guild) then return 0, false end
+	local known = ns.Data.AuthorizedRank(who, guild)
 	if known == nil then return 1, false end
 	return Channels.LevelOf(guild, known), true, known
 end
@@ -153,6 +155,49 @@ end
 ---------------------------------------------------------------------------
 -- Display and history
 ---------------------------------------------------------------------------
+
+-- 1.2: the marks shown before a sender's name on an Olympus line: each fn(name) of this list may
+-- return one (ChatMarks.lua, the chat marks part: the honour's chat mark; the councillor's own icon first). A
+-- mark is a texture or an atlas and nothing else ("|T...|t" or "|A...|a", one trailing space at
+-- most, 200 bytes at most): anything else, a link, colour, text or a "%" in it, is dropped, and a
+-- decorator that fails adds nothing. Worked out on this client from its own facts, never from the
+-- message.
+Channels.nameDecorators = {}
+local function Mark(s)
+	if type(s) ~= "string" or s == "" or #s > 200 or s:find("%", 1, true) then return nil end
+	local body = s:gsub(" $", "")
+	if body:match("^|T[^|]+|t$") or body:match("^|A[^|]+|a$") then return body .. " " end
+	return nil
+end
+function Channels.Decorations(sender)
+	local out = ""
+	for _, fn in ipairs(Channels.nameDecorators) do
+		local ok, mark = pcall(fn, sender)
+		mark = ok and Mark(mark) or nil
+		if mark then out = out .. mark end
+	end
+	return out
+end
+
+function Channels.RoleBadge(sender)
+	if issecretvalue then
+		local ok, secret = pcall(issecretvalue, sender)
+		if not ok or secret then return "" end
+	end
+	if type(sender) ~= "string" or sender == "" or type(ns.IsMember) ~= "function" then return "" end
+	local memberOK, member = pcall(ns.IsMember)
+	if not memberOK or not member then return "" end
+	local M = ns.Moderation
+	if M and type(M.Hides) == "function" then
+		local ok, hidden = pcall(M.Hides, sender, nil, true)
+		if not ok or hidden then return "" end
+	end
+	local T = ns.Treasury
+	if not (T and type(T.TreasurerPin) == "function") then return "" end
+	local ok, pin = pcall(T.TreasurerPin, sender)
+	if not ok or pin ~= 1 then return "" end
+	return (ns.COIN:gsub(" $", ""))
+end
 
 -- "[Captains] [Name] <Guild>: text". The name is a player link, like in any chat line, so a
 -- click opens the usual whisper and menu (to the name the server finds, ns.TellName). The
@@ -176,7 +221,10 @@ function Channels.FormatLine(tier, sender, guild, class, text, bare)
 	-- the game's own chat (Borders.ChatName). It was the Chat tab's mark (1.1.2), and the High
 	-- Council's mark and icon from 0.9.9. The Treasurer keeps the gold coin he carries in tooltips
 	-- and the census (0.9.9).
-	if ns.IsTreasurer(sender, guild) then name = (ns.COIN:gsub(" $", "")) .. name end
+	name = Channels.RoleBadge(sender) .. name
+	-- 1.2: the marks other files put before the name (Channels.nameDecorators: the honour's chat
+	-- mark, ChatMarks.lua), inside the link's brackets like the Treasurer's coin.
+	name = Channels.Decorations(sender) .. name
 	return (bare and "" or "[" .. Label(tier) .. "] ") .. "|Hplayer:" .. (ns.TellName(sender) or "?") .. "|h[" .. name .. "]|h <"
 		.. tostring(guild or "?"):gsub("|", "||") .. ">: " .. Codec.SanitizeChat(text)
 end
@@ -314,6 +362,9 @@ local function IsChatty(f) return f ~= nil and chattyTargets[f] == true end
 -- A Chattynator tab as the lines' target (Show, Say, Intro use it as a chat window): its own
 -- AddMessage. A line it fails to take (Chattynator broken, or not ready: its API may print the line
 -- first, then fail) goes to the main window, whole: nothing lost, no error.
+-- 1.1.6 (WatchChat.ReplacePrinted): a Chattynator tab's target is never asked to change a line.
+function Channels.IsChattyTarget(f) return IsChatty(f) end
+
 local function ChattyTarget(t)
 	local wi, ti = t.window, t.tab
 	local f = { AddMessage = function(_, text, r, g, b)
@@ -786,18 +837,38 @@ end
 -- Chattynator's public API for its tabs: nothing of Blizzard's is replaced or hooked. In the
 -- Olympus tab without the channel's name (1.1.1): the line's colour tells the channels apart, and
 -- the tab's first line gave the legend.
-local function Show(tier, sender, guild, class, text)
+-- 1.1.6: a deleted line as the game's chat window shows it in its place (WatchChat.ReplacePrinted):
+-- the name greyed (still a player link), "[deleted by a moderator]", no mark and no words.
+function Channels.FormatDeleted(tier, sender, guild, bare)
+	local name = "|cff9d9d9d" .. (ns.DisplayName(sender) or "?") .. "|r"
+	return (bare and "" or "[" .. Label(tier) .. "] ") .. "|Hplayer:" .. (ns.TellName(sender) or "?") .. "|h[" .. name .. "]|h <"
+		.. tostring(guild or "?"):gsub("|", "||") .. ">: |cff9d9d9d" .. L.WATCHCHAT_DELETED .. "|r"
+end
+
+local function Show(tier, sender, guild, class, text, id)
 	local f, wname = Channels.Frame(tier)
 	if not f then return end
 	local c = TIERS[tier].color
 	local bare = f ~= DEFAULT_CHAT_FRAME and Channels.IsTabName(wname)
-	f:AddMessage(Channels.FormatLine(tier, sender, guild, class, text, bare), c[1], c[2], c[3])
+	local line = Channels.FormatLine(tier, sender, guild, class, text, bare)
+	f:AddMessage(line, c[1], c[2], c[3])
+	-- 1.1.6: what was printed where, so a moderator's deletion can replace it (WatchChat.lua).
+	local WC = ns.WatchChat
+	if WC and WC.NotePrinted then WC.NotePrinted(tier, sender, guild, id, text, f, line, Channels.FormatDeleted(tier, sender, guild, bare)) end
 end
 
+-- 1.1.6: each line keeps its id (M1's, or ours for our echo), so a moderator's deletion names it
+-- (WatchChat.lua); lines kept before 1.1.6 have none and are found by their words alone.
 local function AddHistory(tier, e)
 	local list = Store(tier)
-	list[#list + 1] = { t = ns.Now(), sender = e.sender, guild = e.guild, class = e.class, text = e.text, mine = e.mine }
+	list[#list + 1] = { t = ns.Now(), sender = e.sender, guild = e.guild, class = e.class, text = e.text, mine = e.mine, id = e.id }
 	while #list > HISTORY do table.remove(list, 1) end
+end
+
+-- 1.1.6: the kept lines themselves, for WatchChat's deletions (none of the checks History makes).
+function Channels.RawHistory(tier)
+	if not TIERS[tier] or type(ns.rdb) ~= "table" then return {} end
+	return Store(tier)
 end
 
 -- Every line kept goes through here, whether it is then shown, muted or held back by the flood
@@ -805,16 +876,16 @@ end
 -- checked and sanitized, to a companion reading along (CHAT_LINE, for
 -- OlympusBridge.RegisterChatObserver). The mute and the flood guard only decide what this chat
 -- frame shows.
-local function Keep(tier, sender, guild, class, text, mine)
-	AddHistory(tier, { sender = sender, guild = guild, class = class, text = text, mine = mine or nil })
+local function Keep(tier, sender, guild, class, text, mine, id)
+	AddHistory(tier, { sender = sender, guild = guild, class = class, text = text, mine = mine or nil, id = tonumber(id) })
 	ns.Fire("CHAT_CHANGED", tier)
 	if not mine then ns.Fire("CHAT_LINE", tier, sender, text) end
 end
 
-local function Accept(tier, sender, guild, class, text, mine)
-	Keep(tier, sender, guild, class, text, mine)
+local function Accept(tier, sender, guild, class, text, mine, id)
+	Keep(tier, sender, guild, class, text, mine, id)
 	if Muted()[tier] then return false, "muted" end
-	Show(tier, sender, guild, class, text)
+	Show(tier, sender, guild, class, text, id)
 	stats.shown = stats.shown + 1
 	return true, "ok"
 end
@@ -872,11 +943,17 @@ function Channels.Send(tier, text, now, keepMute)
 		ns.Print(ns.Moderation.YouText(off))
 		return false, "netoff"
 	end
+	-- 1.1.6: a moderator's timeout (WatchChat.lua): refused, and told who (the role), until when, why.
+	local WC = ns.WatchChat
+	if WC and WC.RefuseSend and WC.RefuseSend() then return false, "timeout" end
 	text = Codec.SanitizeChat(text)
 	if text == "" then
 		ns.Print(L.CHAN_USAGE:format(t.slash, Label(tier)))
 		return false, "empty"
 	end
+	-- 1.1.6: a severe insult (WatchChat.SEVERE: empty until the author approves the list) is never
+	-- sent; it is counted on this client, never kept.
+	if WC and WC.RefuseSevere and WC.RefuseSevere(text) then return false, "severe" end
 	if Locked() then
 		ns.Print(L.CHAN_LOCKDOWN)
 		return false, "lockdown"
@@ -915,6 +992,13 @@ function Channels.Send(tier, text, now, keepMute)
 	lastSend = now
 	local failed, sentParts = false, 0
 	local line = {} -- (its parts in the lane, for Comm.DropLine)
+	-- A queued line can wait several seconds. Recheck the actual server roster, consent and
+	-- moderation immediately before every part leaves; a demoted/offline writer sends no tail.
+	local function SendGuard()
+		return guild == GetGuildInfo("player") and Channels.CanUse(tier) and Channels.ChatOn()
+			and not (ns.Moderation.SelfOff and ns.Moderation.SelfOff())
+			and not (WC and WC.SelfTimeout and WC.SelfTimeout()) -- (1.1.6: a part still queued when a timeout came)
+	end
 	for _, part in ipairs(parts) do
 		-- why (Comm.SendChat): "moved" the channel changed before it left (GitHub #34: it goes to
 		-- neither channel), "late", "failed" or "left". Told once per line, at its first part not
@@ -923,6 +1007,7 @@ function Channels.Send(tier, text, now, keepMute)
 		-- order, and those after the first not sent are dropped from the lane then (1.1.1: the
 		-- others would read the line without its start, and sentParts would not be the count of
 		-- what left).
+		local id = NextId()
 		local function done(sent, why)
 			if not sent then
 				if failed then return end
@@ -945,14 +1030,13 @@ function Channels.Send(tier, text, now, keepMute)
 			end
 			sentParts = sentParts + 1
 			stats.sent = stats.sent + 1
-			Accept(tier, ns.me, guild, class ~= "" and class or nil, part, true) -- our echo: exactly what the others see
+			Accept(tier, ns.me, guild, class ~= "" and class or nil, part, true, id) -- our echo: exactly what the others see
 		end
-		local id = NextId()
 		-- Kept a while: when this line comes back from the channel it is ours, whatever form
 		-- the server gave our name in (a line shown twice to its author otherwise).
 		mine[id .. "#" .. Codec.SanitizeChat(part)] = now
 		local msg = Codec.EncodeChat(tier, guild, id, class, part)
-		if not msg or ns.Comm.SendChat(msg, done, line) == false then
+		if not msg or ns.Comm.SendChat(msg, done, line, SendGuard) == false then
 			done(false)
 			break -- (the parts before it left the lane with it)
 		end
@@ -1074,6 +1158,120 @@ local function Held(tier, now)
 	Channels.FloodNotice(now)
 end
 
+local function Bump(t, key) t[key] = (t[key] or 0) + 1 end
+
+-- 1.2: the checks a line from another player passes before it may show, in Receive's order, one
+-- code shared with the Blood Arena's fight rooms (ArenaChat.lua, EC) rather than a copy:
+--   Channels.Admit(sender, guild, text, now, o) -> ok, reason
+-- sender: as the server stamps it ("Name-Realm"); guild: the Olympus guild the line speaks for
+-- (the caller checked it is one); text: the line, sanitized; now: GetTime() by default.
+-- o, each optional (an Olympus channel's line passes none of them but tier and id):
+--   tier     an Olympus channel ("A", "C", "L"): our own rank must reach it (reason "tier");
+--   id       the line's id: our own echo ("own") and a line heard twice ("dup");
+--   level    the verified level the sender needs (the tier's by default, else 1; 0: none);
+--   buckets, seen, mine, stats: a room's own rate buckets, lines heard, own lines and counters
+--            (the channels' by default);
+--   where    the log's label for a dropped line (the tier by default).
+--   chat, line (1.1.6) the chat's key and the line's id, for a deleted line's tombstone (WatchChat).
+-- A refusal's reason: "netoff", "timeout" (1.1.6, a moderator's), "tier", "ignored", "own", "dup",
+-- "deleted" (1.1.6, a late copy of a deleted line), "rate", "forged", "rank", "unverified", or
+-- "filtered" (a line the player's block terms hide: the caller keeps it or not).
+function Channels.Admit(sender, guild, text, now, o)
+	o = o or {}
+	now = now or GetTime()
+	sender = ns.FullName(sender)
+	local st = o.stats or stats
+	local m = { tier = o.where or o.tier or "?", guild = guild }
+	-- 1.1: a name the moderators took off (net-off, Moderation.lua): not shown, not kept.
+	if ns.Moderation.Hides and ns.Moderation.Hides(sender, guild) then
+		Bump(st, "netoff")
+		return false, "netoff"
+	end
+	-- 1.1.6: a moderator's timeout on this sender (WatchChat.lua): not shown, not kept, nothing to a
+	-- companion. Every chat that calls Admit takes it: the three channels, the rooms, the fight rooms.
+	local WC = ns.WatchChat
+	if WC and WC.Silenced and WC.Silenced(sender, guild) then
+		Bump(st, "timeout")
+		if WC.CountBlocked then WC.CountBlocked(sender, "timeout") end
+		return false, "timeout"
+	end
+	local level = o.level
+	if o.tier then
+		local t = TIERS[o.tier]
+		if not t then return false, "tier" end
+		level = level or t.level
+		-- Above our rank: not shown, not kept, not logged.
+		if Channels.MyLevel() < t.level then
+			Bump(st, "hidden")
+			return false, "tier"
+		end
+	end
+	level = level or 1
+	if Ignored(sender) then
+		Bump(st, "ignored")
+		return false, "ignored"
+	end
+	if o.id ~= nil then
+		-- The server stamps the sender, so this key can't be forged. The text is part of it: ids
+		-- start again at random after a /reload, and a reused id must not hide a new line.
+		local heard, own = o.seen or seen, o.mine or mine
+		local key = sender .. "#" .. o.id .. "#" .. text
+		-- Our own line coming back (already shown when sent): the same id and text, from a name
+		-- that is ours however it is written ("First-Surname", "First Surname", with a realm or not).
+		local was = own[o.id .. "#" .. text]
+		if was and now - was < DEDUPE_WINDOW and Channels.IsMe(sender) then
+			Bump(st, "dup")
+			return false, "own"
+		end
+		if heard[key] and now - heard[key] < DEDUPE_WINDOW then
+			Bump(st, "dup")
+			return false, "dup"
+		end
+		heard[key] = now
+	end
+	-- 1.1.6: a late copy of a line a moderator deleted (its tombstone), or a purged sender's line
+	-- still in flight: dropped (o.chat, o.line: the chat and the line's id, where the caller knows them).
+	if WC and WC.Tombstoned and WC.Tombstoned(o.chat or o.tier, sender, o.line, text) then
+		Bump(st, "deleted")
+		if WC.CountBlocked then WC.CountBlocked(sender, "deleted") end
+		return false, "deleted"
+	end
+	local list = o.buckets or buckets
+	local b = list[sender]
+	if not b then
+		b = { tokens = BUCKET_SIZE, t = now }
+		list[sender] = b
+	end
+	b.tokens = math.min(BUCKET_SIZE, b.tokens + (now - b.t) / BUCKET_REFILL)
+	b.t = now
+	if b.tokens + 1e-6 < 1 then -- (tolerance: a sender exactly on time must not lose to rounding)
+		Bump(st, "rate")
+		LogDrop(sender, m, "rate", now)
+		return false, "rate"
+	end
+	b.tokens = b.tokens - 1
+	if level > 0 then
+		local have, verified = Channels.VerifiedLevel(sender, guild)
+		if have < level then
+			local reason = have == 0 and "forged" or (verified and "rank" or "unverified")
+			Bump(st, reason)
+			LogDrop(sender, m, reason, now)
+			return false, reason
+		end
+	end
+	-- 1.1 (#31): a line the player's block terms hide (Filter.lua) stays off the chat frame. It is
+	-- kept, for the Chat tab's grey bubble and its "N lines hidden" (a click shows them), and a
+	-- companion reading the chats still gets it: the filter only decides what this player sees.
+	-- Nothing else happens to its sender (no ignore, no block): their next line shows.
+	local F = ns.Filter
+	if F and not F.missing and F.Hides(text) then
+		Bump(st, "filtered")
+		if WC and WC.CountBlocked then WC.CountBlocked(sender, "filtered") end
+		return false, "filtered"
+	end
+	return true, "ok"
+end
+
 -- Returns shown, reason.
 function Channels.Receive(dist, sender, text, now)
 	if dist ~= "CHANNEL" then return false, "dist" end
@@ -1093,76 +1291,22 @@ function Channels.Receive(dist, sender, text, now)
 		stats.bad = stats.bad + 1
 		return false, "bad"
 	end
-	-- 1.1: a name the moderators took off (net-off, Moderation.lua): not shown, not kept.
-	if ns.Moderation.Hides and ns.Moderation.Hides(sender, m.guild) then
-		stats.netoff = (stats.netoff or 0) + 1
-		return false, "netoff"
-	end
-	local level = TIERS[m.tier].level
-	-- Above our rank: not shown, not kept, not logged.
-	if Channels.MyLevel() < level then
-		stats.hidden = stats.hidden + 1
-		return false, "tier"
-	end
-	if Ignored(sender) then
-		stats.ignored = stats.ignored + 1
-		return false, "ignored"
-	end
-	-- The server stamps the sender, so this key can't be forged. The text is part of it: ids
-	-- start again at random after a /reload, and a reused id must not hide a new line.
-	local key = sender .. "#" .. m.id .. "#" .. m.text
-	-- Our own line coming back (already shown when sent): the same id and text, from a name
-	-- that is ours however it is written ("First-Surname", "First Surname", with a realm or not).
-	local own = mine[m.id .. "#" .. m.text]
-	if own and now - own < DEDUPE_WINDOW and Channels.IsMe(sender) then
-		stats.dup = stats.dup + 1
-		return false, "own"
-	end
-	if seen[key] and now - seen[key] < DEDUPE_WINDOW then
-		stats.dup = stats.dup + 1
-		return false, "dup"
-	end
-	seen[key] = now
-	local b = buckets[sender]
-	if not b then
-		b = { tokens = BUCKET_SIZE, t = now }
-		buckets[sender] = b
-	end
-	b.tokens = math.min(BUCKET_SIZE, b.tokens + (now - b.t) / BUCKET_REFILL)
-	b.t = now
-	if b.tokens + 1e-6 < 1 then -- (tolerance: a sender exactly on time must not lose to rounding)
-		stats.rate = stats.rate + 1
-		LogDrop(sender, m, "rate", now)
-		return false, "rate"
-	end
-	b.tokens = b.tokens - 1
-	local have, verified = Channels.VerifiedLevel(sender, m.guild)
-	if have < level then
-		local reason = have == 0 and "forged" or (verified and "rank" or "unverified")
-		stats[reason] = stats[reason] + 1
-		LogDrop(sender, m, reason, now)
+	local ok, reason = Channels.Admit(sender, m.guild, m.text, now, { tier = m.tier, id = m.id, chat = m.tier, line = m.id })
+	if not ok then
+		-- (A line the block terms hide is kept, see Admit.)
+		if reason == "filtered" then Keep(m.tier, sender, m.guild, m.class, m.text, false, m.id) end
 		return false, reason
-	end
-	-- 1.1 (#31): a line the player's block terms hide (Filter.lua) stays off the chat frame. It is
-	-- kept, for the Chat tab's grey bubble and its "N lines hidden" (a click shows them), and a
-	-- companion reading the chats still gets it: the filter only decides what this player sees.
-	-- Nothing else happens to its sender (no ignore, no block): their next line shows.
-	local F = ns.Filter
-	if F and not F.missing and F.Hides(m.text) then
-		stats.filtered = (stats.filtered or 0) + 1
-		Keep(m.tier, sender, m.guild, m.class, m.text, false)
-		return false, "filtered"
 	end
 	-- A muted channel only goes to history, so it takes nothing from the flood guard. A line
 	-- the guard keeps off the chat frame still goes to the history (the Chat tab's lines stay
 	-- whole for everyone, and a companion hears it), and the player is told (Channels.FloodNotice).
 	if not Muted()[m.tier] and Flooded(m.tier, sender, now) then
 		stats.flood = stats.flood + 1
-		Keep(m.tier, sender, m.guild, m.class, m.text, false)
+		Keep(m.tier, sender, m.guild, m.class, m.text, false, m.id)
 		Held(m.tier, now)
 		return false, "flood"
 	end
-	return Accept(m.tier, sender, m.guild, m.class, m.text, false)
+	return Accept(m.tier, sender, m.guild, m.class, m.text, false, m.id)
 end
 
 -- Our name however the server writes it: lower case, our realm left out (a namesake on a
@@ -1268,6 +1412,9 @@ end
 -- clients: he pins for the army as a Hand.
 function Channels.PinRank(sender, guild, dist)
 	if type(sender) ~= "string" or type(guild) ~= "string" or not ns.IsFederation(guild) then return nil end
+	-- 1.1.6: a sanctioned player has none of the powers Olympus gives (WatchChat.Barred).
+	local WC = ns.WatchChat
+	if WC and WC.Barred and WC.Barred("powers", sender) then return nil end
 	if dist == "GUILD" then
 		if guild ~= GetGuildInfo("player") then return nil end
 		return ns.Roster.RankOf(sender) == 0 and Channels.PIN_LORD or nil
@@ -1285,6 +1432,8 @@ end
 -- officers of <Olympus> (Lords on its own members' clients alone).
 local function MyPin()
 	local K = ns.King
+	local WC = ns.WatchChat
+	if WC and WC.Barred and WC.Barred("powers") then return nil end -- (1.1.6: sanctioned)
 	if K and K.IsKing and K.IsKing() and ns.IsKingCharacter(ns.me) then return Channels.PIN_KING, GetGuildInfo("player"), "CHANNEL" end
 	if K and ((K.IsSteward and K.IsSteward()) or (K.IsHand and K.IsHand())) then return Channels.PIN_CROWN, ns.KingGuildName(), "CHANNEL" end
 	if ns.IsMember() and ns.Roster.MyRank() == 0 and Channels.MyLevel() >= TIERS.L.level then return Channels.PIN_LORD, GetGuildInfo("player"), "GUILD" end

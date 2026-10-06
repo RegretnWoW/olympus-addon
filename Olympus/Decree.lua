@@ -224,22 +224,28 @@ ns.Comm.Handle("D1", function(dist, sender, text)
 	local king = kings and ns.IsKingCharacter(sender)
 	local steward = kings and not king and ns.King ~= nil and ns.King.IsStewardName(sender)
 	local hand = kings and not king and not steward and not ns.IsKingGuild(mine) and ns.King ~= nil and ns.King.IsHandName(sender)
-	local rank = (king or steward or hand) and 0 or ns.Data.KnownRank(sender, d.guild)
+	local rank, source
+	if king or steward or hand then
+		rank, source = 0, "crown"
+	else
+		rank, source = ns.Data.AuthorizedRank(sender, d.guild)
+	end
 	if not rank then
 		ns.Log("decree from %s ignored: rank in %s not verified", sender, d.guild)
 		return
 	end
 	d.rank = rank
 	if CROWN_ONLY[d.kind] then
-		if not ns.IsCrownRank(d.guild, rank) then return end
+		if not (king or steward or hand or ns.IsCrownRank(d.guild, rank)) then return end
 	elseif rank > ns.CAPTAIN_RANK then
 		return
 	end
-	-- The King, his Steward, his Hands and our own guild's officers (our roster: the server's
-	-- word) never wait behind the flood guard, which census ranks (anyone's votes) can fill.
-	-- Anyone else speaks for one guild only, as in the chats (Data.ClaimGuild).
-	local sure = king or steward or hand or (mine ~= nil and d.guild == mine and ns.Roster.RankOf(sender) ~= nil)
-	if not sure and not ns.Data.ClaimGuild(sender, d.guild) then
+	-- The King, his Steward, his Hands, signed identities and our own guild's officers (our
+	-- roster: the server's word) never wait behind the flood guard, which legacy census ranks
+	-- (anyone's votes) can fill. A legacy census sender still speaks for one guild only, exactly
+	-- as before the dormant signed-authority migration (Data.ClaimGuild).
+	local sure = king or steward or hand or source == "roster" or source == "signed" or source == "pinned"
+	if source == "census" and not ns.Data.ClaimGuild(sender, d.guild) then
 		ns.Log("decree from %s ignored: speaks for another guild than %s", sender, d.guild)
 		return
 	end

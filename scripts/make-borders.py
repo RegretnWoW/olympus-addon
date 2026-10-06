@@ -43,6 +43,7 @@ CANVAS = 256
 FRAMES = {
     "bronze-plain": (200, 200),
     "bronze-winged": (220, 180),
+    "treasurer-dragon": (200, 190),
 }
 
 
@@ -109,10 +110,15 @@ def build(name):
         return build_star()
     path = os.path.join(SOURCES, name + ".png")
     with Image.open(path) as source:
-        if source.size != FRAMES[name]:
+        if name == "treasurer-dragon":
+            # Supplied transparent artwork, proportionally fitted without cropping/redrawing.
+            art = source.convert("RGBA")
+            art.thumbnail(FRAMES[name], Image.Resampling.LANCZOS)
+        elif source.size != FRAMES[name]:
             raise SystemExit("%s is %dx%d, expected %dx%d (the game's frame it was drawn over)"
                              % (path, source.size[0], source.size[1], FRAMES[name][0], FRAMES[name][1]))
-        art = source.convert("RGBA")
+        else:
+            art = source.convert("RGBA")
     canvas = Image.new("RGBA", (CANVAS, CANVAS), (0, 0, 0, 0))
     canvas.paste(art, (0, 0))
     pixels = canvas.tobytes("raw", "RGBA")

@@ -3,7 +3,7 @@ local L = ns.L
 
 -- Hold Court: the King opens his court where he stands. Every Olympus member with the addon
 -- in that zone gets a line on top of the Census and the Realm: one click asks him for an
--- audience. The requests line up on his Throne (the court page); a click on one calls that
+-- audience. The requests line up in The Watch's Judgment section; a click on one calls that
 -- player, who gets a popup and a raid warning. His alone (not a Hand's), off until he opens it.
 --   T1~C~<id>~<guild>~<zone mapID>~<zone name>   court open here (resent every 2 minutes)
 --   T1~Z~<id>~<guild>                            court closed
@@ -67,7 +67,7 @@ function Court.Toggle()
 		Send()
 		ns.Print(L.COURT_OPENED:format(zone ~= "" and zone or "?"))
 	end
-	ns.King.Show("home")
+	ns.Fire("COURT_CHANGED")
 end
 
 -- Where he stands now: the court moves with him (a new zone, a new line for its players).
@@ -78,6 +78,7 @@ local function Moved()
 	holding.mapID, holding.zone = mapID, zone
 	Send()
 	ns.King.Changed()
+	ns.Fire("COURT_CHANGED")
 end
 
 -- A request (T4), or one made on the King's own client (the preview, tests). What the
@@ -106,6 +107,7 @@ function Court.Request(sender, id, guild)
 	end
 	ns.PlayAlert("soft", "court")
 	ns.King.Changed()
+	ns.Fire("COURT_CHANGED")
 end
 
 function Court.HandleRequest(dist, sender, text)
@@ -127,12 +129,15 @@ function Court.Call(name)
 		end
 		holding.by[name] = nil
 		holding.dismissed[name] = now
-		return ns.King.Changed()
+		ns.King.Changed()
+		ns.Fire("COURT_CHANGED")
+		return
 	end
 	entry.calledAt = now
 	if not holding.preview then ns.Comm.Whisper(name, ("T5~%d"):format(holding.id), "court call " .. name) end
 	ns.Print(L.COURT_CALLING:format(ns.DisplayName(name)))
 	ns.King.Changed()
+	ns.Fire("COURT_CHANGED")
 end
 
 ---------------------------------------------------------------------------
@@ -246,7 +251,7 @@ function Court.Line()
 end
 
 ---------------------------------------------------------------------------
--- The court on the Throne Room (the King's), while it is open: the queue, a click calls
+-- The court inside The Watch (the King's), while it is open: the queue, a click calls
 ---------------------------------------------------------------------------
 
 function Court.HomeLines()

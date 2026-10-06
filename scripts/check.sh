@@ -13,7 +13,9 @@ printf 'Checking Lua syntax...\n'
 check_tmp=$(mktemp -d)
 trap 'rm -rf "$check_tmp"' EXIT
 lua_files="$check_tmp/lua-files"
-find Olympus tests -type f -name '*.lua' -print0 > "$lua_files"
+lua_dirs="Olympus tests"
+[ -d Olympus_Arena ] && lua_dirs="Olympus Olympus_Arena tests" # (1.2: the Blood Arena's companion)
+find $lua_dirs -type f -name '*.lua' -print0 > "$lua_files"
 while IFS= read -r -d '' file; do
 	# Compile to a listing without executing addon code or writing bytecode files.
 	luajit -bl "$file" >/dev/null
@@ -33,22 +35,31 @@ fi
 
 printf 'Checking files listed in Olympus/Olympus.toc...\n'
 luajit - <<'LUA'
-local toc = assert(io.open("Olympus/Olympus.toc", "r"))
 local failed = false
-for line in toc:lines() do
-	local entry = line:match("^%s*(.-)%s*$")
-	if entry ~= "" and entry:sub(1, 1) ~= "#" then
-		local path = "Olympus/" .. entry:gsub("\\", "/")
-		local file = io.open(path, "rb")
-		local contents = file and file:read("*a")
-		if file then file:close() end
-		if not contents then
-			io.stderr:write("Cannot read TOC entry: " .. path .. "\n")
-			failed = true
+-- (1.2: the Blood Arena's companion, Olympus_Arena/Olympus_Arena.toc, when the folder is there.)
+for _, pair in ipairs({ { "Olympus", "Olympus/Olympus.toc" }, { "Olympus_Arena", "Olympus_Arena/Olympus_Arena.toc" } }) do
+	local toc = io.open(pair[2], "r")
+	if not toc and pair[1] == "Olympus" then
+		io.stderr:write("Cannot read " .. pair[2] .. "\n")
+		os.exit(1)
+	end
+	if toc then
+		for line in toc:lines() do
+			local entry = line:match("^%s*(.-)%s*$")
+			if entry ~= "" and entry:sub(1, 1) ~= "#" then
+				local path = pair[1] .. "/" .. entry:gsub("\\", "/")
+				local file = io.open(path, "rb")
+				local contents = file and file:read("*a")
+				if file then file:close() end
+				if not contents then
+					io.stderr:write("Cannot read TOC entry: " .. path .. "\n")
+					failed = true
+				end
+			end
 		end
+		toc:close()
 	end
 end
-toc:close()
 if failed then os.exit(1) end
 LUA
 
@@ -92,6 +103,17 @@ if [ -f scripts/make-borders.py ]; then
 		PYTHONDONTWRITEBYTECODE=1 python3 scripts/make-borders.py --check
 	else
 		printf 'python3 with Pillow not found: the border textures check skipped.\n'
+	fi
+fi
+
+# Bone Throw's textures (Olympus_Arena/media/farkle, 1.2): what scripts/make-farkle-art.py builds
+# from the PNGs in media/farkle/src (the script changes nothing with --check).
+if [ -f scripts/make-farkle-art.py ]; then
+	printf "Checking Bone Throw's textures against their PNG sources...\n"
+	if command -v python3 >/dev/null 2>&1 && python3 -c 'import PIL' >/dev/null 2>&1; then
+		PYTHONDONTWRITEBYTECODE=1 python3 scripts/make-farkle-art.py --check
+	else
+		printf 'python3 with Pillow not found: the Bone Throw textures check skipped.\n'
 	fi
 fi
 

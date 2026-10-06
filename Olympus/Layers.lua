@@ -104,6 +104,7 @@ function Layers.SentAt() return announced and sentAt or nil end
 -- creatures show it and none of ours has been seen for HOLD seconds; at once when we have none
 -- or entered another zone, and when it is the layer a hop is taking us to.
 Layers.HOLD = 6
+Layers.EVIDENCE_WINDOW = 15 -- two distinct NPCs within this window before an automatic hop departure
 local pending        -- another layer seen meanwhile: { zoneUID, guids = { [guid] = true }, n }
 local function Observe(unit)
 	if IsInInstance() then return end
@@ -113,6 +114,11 @@ local function Observe(unit)
 	if not zoneUID or not mapID then return end
 	local now = ns.Now()
 	if mine and mine.mapID == mapID and mine.zoneUID == zoneUID then
+		if not mine.firstAt or now - mine.firstAt > Layers.EVIDENCE_WINDOW then
+			mine.firstGUID, mine.firstAt, mine.confirmedAt = guid, now, nil
+		elseif mine.firstGUID ~= guid then
+			mine.confirmedAt = now
+		end
 		mine.t, mine.seenAt, pending = now, now, nil
 		return
 	end
@@ -120,13 +126,18 @@ local function Observe(unit)
 		local expMap, expUID
 		if ns.Hop and ns.Hop.ExpectedLayer then expMap, expUID = ns.Hop.ExpectedLayer() end
 		if not (expMap == mapID and expUID == zoneUID) then
-			if not pending or pending.zoneUID ~= zoneUID then pending = { zoneUID = zoneUID, guids = {}, n = 0 } end
+			if not pending or pending.zoneUID ~= zoneUID or now - pending.t > Layers.EVIDENCE_WINDOW then
+				pending = { zoneUID = zoneUID, guids = {}, n = 0, t = now }
+			end
 			if not pending.guids[guid] then pending.guids[guid], pending.n = true, pending.n + 1 end
 			if pending.n < 2 or now - (mine.seenAt or 0) < Layers.HOLD then return end
 		end
 	end
+	local confirmed = pending and pending.zoneUID == zoneUID and pending.n >= 2
+		and now - pending.t <= Layers.EVIDENCE_WINDOW
 	pending = nil
-	mine = { mapID = mapID, zoneUID = zoneUID, t = now, seenAt = now }
+	mine = { mapID = mapID, zoneUID = zoneUID, t = now, seenAt = now,
+		firstGUID = guid, firstAt = now, confirmedAt = confirmed and now or nil }
 	ns.Log("layer: map %d zoneUID %d (%s)", mapID, zoneUID, tostring(unit))
 	Announce(true)
 	ns.Fire("LAYERS_CHANGED")
@@ -149,6 +160,7 @@ function Layers.SetSharing(on)
 	if on then Announce(true) else Layers.Withdraw() end
 	-- Taking donations (1.1): the zone in it follows the answer at once.
 	if ns.Treasury and ns.Treasury.DonationsMoved then ns.Treasury.DonationsMoved() end
+	ns.Fire("LAYER_SHARING_CHANGED", on and true or false)
 end
 
 function Layers.SharingState()
@@ -300,11 +312,12 @@ function Layers.ForMap(mapID)
 	for _, e in ipairs(ns.Data.Summary().guilds) do sizes[e.name] = e.g.total or 0 end
 	local now, out = ns.Now(), {}
 	for zoneUID, members in pairs(source[mapID] or {}) do
-		local best, count = nil, 0
+		local best, count, lastSeen = nil, 0, 0
 		for name, m in pairs(members) do
 			-- (1.1: never a name the moderators took off since, Moderation.lua.)
 			if now - m.t <= EXPIRE and not (ns.Moderation.Hides and ns.Moderation.Hides(name, m.guild)) then
 				count = count + 1
+				lastSeen = math.max(lastSeen, m.t)
 				local cand = { name = ns.DisplayName(name), rank = m.rank, guild = m.guild }
 				if not best or Better(cand, best, sizes) then best = cand end
 			end
@@ -312,16 +325,17 @@ function Layers.ForMap(mapID)
 		local isMine = mine and mine.mapID == mapID and mine.zoneUID == zoneUID
 		if isMine then
 			count = count + 1
+			lastSeen = math.max(lastSeen, mine.t or 0)
 			local me = { name = ns.DisplayName(ns.me), rank = ns.Roster.MyRank(), guild = GetGuildInfo("player") or "" }
 			if not best or Better(me, best, sizes) then best = me end
 		end
 		if count > 0 then
-			out[#out + 1] = { zoneUID = zoneUID, count = count, head = best, mine = isMine }
+			out[#out + 1] = { zoneUID = zoneUID, count = count, head = best, mine = isMine, lastSeen = lastSeen }
 		end
 	end
 	if mine and mine.mapID == mapID and not (source[mapID] and source[mapID][mine.zoneUID]) then
 		out[#out + 1] = {
-			zoneUID = mine.zoneUID, count = 1, mine = true,
+			zoneUID = mine.zoneUID, count = 1, mine = true, lastSeen = mine.t,
 			head = { name = ns.DisplayName(ns.me), rank = ns.Roster.MyRank(), guild = GetGuildInfo("player") or "" },
 		}
 	end
@@ -376,4 +390,3 @@ ns.On("LOGIN", function()
 	-- the question names the channel's state); then on the minute until it could be asked.
 	ns.After(45, "location choice", Layers.AskChoice)
 end)
-

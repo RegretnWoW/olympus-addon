@@ -29,7 +29,9 @@ local L = ns.L
 -- and added only on its yes (a text with 2000 names could silence a guild's officers unseen).
 -- Never a yes to sharing (the location, a keeper's book, a sister guild's bank, the roll call, the
 -- inspection, layer help): a text someone else made must never turn sharing on. The addon asks
--- those again. Nothing restores before the player reads what changes and says yes.
+-- those again. A No to a line that is on until its No (Backup.NOES: 1.2's Most Wanted sightings)
+-- is carried and comes back, the No alone: a wipe would otherwise turn it on again unasked.
+-- Nothing restores before the player reads what changes and says yes.
 
 local Backup = {}
 ns.Backup = Backup
@@ -48,7 +50,30 @@ Backup.SETTINGS = {
 	hideIssueReporter = "boolean",
 	-- (the other parts of 1.1: alerts held or not, camps on the map, the shared block terms, do not contact)
 	alertsAlways = "boolean", showCamps = "boolean", filterSharedOff = "boolean", recruitsOff = "boolean",
+	arenaOff = "boolean", -- (1.2: the Blood Arena turned off on this account)
 }
+-- 1.2: lines on until their No (nil is on): only their No (false) goes in a backup, and only a No
+-- comes back, so a restore turns sharing off, never on. [key] = the module's own switch, called
+-- quietly on a restore (Wanted.SetSightings: what waits is cancelled at once).
+Backup.NOES = { wantedSightings = { module = "Wanted", set = "SetSightings" } }
+
+-- 1.2, the Blood Arena (the design). Settings: arenaUI, arenaFollow and each character's
+-- arenaProfile without its "pub" (a text someone else made never turns sharing on). Data: the
+-- bank's ledger on a bank's character (its secret and blinding key with it), the account's key
+-- (arenaKey), every copper-mode gold line (arenaCopper), and this character's wallet view (mine),
+-- tickets and arbiter's stake book. Never the rehearsal store, the rules' yes, the Director's
+-- checklist or the persistence sentinel (arenaTest, arenaRules, arenaChecklist, arenaSaved). A
+-- restored "mine" never raises a direct cap: those come only from a bank-signed token. Each part is
+-- plain data here (Backup.Plain), each with a budget of its own (a bank at the design's caps, 5,000
+-- accounts and 5,000 entries, never leaves the key or the copper lines out); its owner may set
+-- Backup.arenaChecks[part] = fn(v) -> v or nil for a closer look. The key and the copper lines are
+-- the account's: they come back on any realm; the others are the realm's the backup was made on.
+-- A part the text holds that fails is named in the confirm.
+Backup.ARENA_PARTS = { "key", "copper", "bank", "mine", "stakes", "tickets" }
+Backup.ARENA_ACCOUNT = { key = true, copper = true }
+Backup.arenaChecks = {}
+Backup.PLAIN_STRING = 600 -- bytes of one string in an arena part
+Backup.PLAIN_ENTRIES = Backup.MAX_ENTRIES -- values in one arena part (a text holds no more in all)
 
 ---------------------------------------------------------------------------
 -- The text: written and read here alone
@@ -168,6 +193,87 @@ local function Copy(v, depth)
 	return out
 end
 
+-- 1.2: plain data, checked: strings without "|" or control bytes (PLAIN_STRING bytes at most),
+-- finite numbers, booleans, and tables of them (MAX_DEPTH deep, keys strings or numbers); budget
+-- = { n = values left }. Returns the copy, or nil when anything is not that.
+function Backup.Plain(v, budget, depth)
+	depth = depth or 0
+	budget.n = budget.n - 1
+	if budget.n < 0 then return nil end
+	local t = type(v)
+	if t == "string" then
+		if #v > Backup.PLAIN_STRING or v:find("[|%c]") then return nil end
+		return v
+	elseif t == "number" then
+		if v ~= v or v == math.huge or v == -math.huge then return nil end
+		return v
+	elseif t == "boolean" then
+		return v
+	elseif t == "table" and depth < Backup.MAX_DEPTH then
+		local out = {}
+		for k, x in pairs(v) do
+			if type(k) ~= "string" and type(k) ~= "number" then return nil end
+			local ck = Backup.Plain(k, budget, depth + 1)
+			local cx = Backup.Plain(x, budget, depth + 1)
+			if ck == nil or cx == nil then return nil end
+			out[ck] = cx
+		end
+		return out
+	end
+	return nil
+end
+
+-- The live arena store of this character's realm (ArenaNet.lua: Arena.Store("L")), read as it is
+-- saved (never the simulation's memory), or nil.
+local function ArenaRealm()
+	local a = ns.rdb and ns.rdb.arena
+	local realms = type(a) == "table" and a.realms
+	local r = type(realms) == "table" and realms[ns.realm]
+	return type(r) == "table" and r or nil
+end
+
+-- The arena's parts of this character's backup, or nil when it holds none.
+local function ArenaData()
+	local r, db, me = ArenaRealm(), ns.db or {}, ns.me
+	local out = {}
+	if r and type(r.bank) == "table" then out.bank = Copy(r.bank) end
+	if type(db.arenaKey) == "table" then out.key = Copy(db.arenaKey) end
+	if type(db.arenaCopper) == "table" and next(db.arenaCopper) then out.copper = Copy(db.arenaCopper) end
+	if r and me and type(r.mine) == "table" and type(r.mine[me]) == "table" then out.mine = Copy(r.mine[me]) end
+	if r and type(r.stakes) == "table" then out.stakes = Copy(r.stakes) end
+	if r and me and type(r.tickets) == "table" and type(r.tickets[me]) == "table" then out.tickets = Copy(r.tickets[me]) end
+	if not next(out) then return nil end
+	out.realm = ns.realm
+	return out
+end
+
+-- The arena's settings: arenaUI, arenaFollow, and each character's profile without "pub".
+local function ArenaSettings()
+	local db, out = ns.db or {}, {}
+	if type(db.arenaUI) == "table" then out.ui = Copy(db.arenaUI) end
+	if type(db.arenaFollow) == "table" and next(db.arenaFollow) then out.follow = Copy(db.arenaFollow) end
+	if type(db.arenaProfile) == "table" then
+		local profiles = {}
+		for name, p in pairs(db.arenaProfile) do
+			if type(name) == "string" and type(p) == "table" then
+				local c = Copy(p)
+				c.pub = nil
+				profiles[name] = c
+			end
+		end
+		if next(profiles) then out.profile = profiles end
+	end
+	return next(out) and out or nil
+end
+
+-- A backup that holds a bank's secret or the account's key: its copy box says never to paste it
+-- anywhere (it is the key).
+function Backup.HoldsKey(d)
+	local a = type(d) == "table" and d.arena
+	if type(a) ~= "table" then return false end
+	return type(a.key) == "table" or (type(a.bank) == "table" and (a.bank.secret ~= nil or a.bank.kb ~= nil))
+end
+
 -- The backup of this character, as a table.
 function Backup.Data()
 	local d = { v = 1, t = ns.Now(), char = ns.me, group = ns.group, faction = ns.faction, version = ns.VERSION, settings = {} }
@@ -187,19 +293,24 @@ function Backup.Data()
 		local v = ns.db and ns.db[key]
 		if type(v) == kind then d.settings[key] = v end
 	end
+	for key in pairs(Backup.NOES) do
+		if ns.db and ns.db[key] == false then d.settings[key] = false end
+	end
 	local windows = ns.db and type(ns.db.chatWindows) == "table" and ns.db.chatWindows[ns.me]
 	if type(windows) == "table" then d.chatWindows = Copy(windows) end
 	if ns.db and type(ns.db.chatMute) == "table" then d.chatMute = Copy(ns.db.chatMute) end
 	if ns.db and type(ns.db.soundOff) == "table" then d.soundOff = Copy(ns.db.soundOff) end -- (1.1: the kinds silenced)
 	if ns.db and type(ns.db.blocked) == "table" then d.blocked = Copy(ns.db.blocked) end
+	d.arena, d.arenaSettings = ArenaData(), ArenaSettings() -- (1.2)
 	return d
 end
 
--- The backup as it is copied out.
-function Backup.Export()
-	local payload = Backup.Write(Backup.Data())
+-- The backup as it is copied out (d: Backup.Data(), the one it is made of).
+local function ExportText(d)
+	local payload = Backup.Write(d)
 	return ("%s:%d:%s:%s"):format(Backup.VERSION, #payload, Backup.Sum(payload), payload)
 end
+function Backup.Export() return ExportText(Backup.Data()) end
 
 -- A book as a backup holds it, checked field by field: what can't be one is left out (a line) or
 -- dropped (its sums, rebuilt from its lines then); nil when it is no book.
@@ -333,6 +444,10 @@ function Backup.Read(text)
 		local v = type(d.settings) == "table" and d.settings[key]
 		if type(v) == kind and (kind ~= "number" or (v >= -100000 and v <= 100000)) then out.settings[key] = v end
 	end
+	-- (A No alone: a yes in a text, made or not, is left out.)
+	for key in pairs(Backup.NOES) do
+		if type(d.settings) == "table" and d.settings[key] == false then out.settings[key] = false end
+	end
 	local function Names(t, max)
 		local o, n = {}, 0
 		for k, v in pairs(type(t) == "table" and t or {}) do
@@ -368,6 +483,56 @@ function Backup.Read(text)
 		out.blocked = {}
 		for i = 1, math.min(#names, Backup.BLOCKED_MAX) do out.blocked[names[i]] = true end
 		if #names > Backup.BLOCKED_MAX then out.blockedLeft = #names - Backup.BLOCKED_MAX end
+	end
+	-- 1.2: the Blood Arena's parts: the account's (the key, the copper lines) on any realm, the
+	-- others of this character's realm alone; plain data each, then its owner's own check
+	-- (Backup.arenaChecks). What fails is left out and named (arenaFailed); the realm's parts of
+	-- another realm are left out and that realm named (arenaElsewhere).
+	if type(d.arena) == "table" then
+		local here = d.arena.realm == ns.realm
+		local a, failed = {}, {}
+		for _, part in ipairs(Backup.ARENA_PARTS) do
+			local src = d.arena[part]
+			if src ~= nil and (here or Backup.ARENA_ACCOUNT[part]) then
+				local v = type(src) == "table" and Backup.Plain(src, { n = Backup.PLAIN_ENTRIES }) or nil
+				local check = Backup.arenaChecks[part]
+				if v ~= nil and type(check) == "function" then
+					local ok, res = pcall(check, v)
+					v = ok and res or nil
+				end
+				if type(v) == "table" then a[part] = v else failed[#failed + 1] = part end
+			elseif src ~= nil and type(d.arena.realm) == "string" and #d.arena.realm <= 40 and not d.arena.realm:find("[|%c]") then
+				out.arenaElsewhere = d.arena.realm
+			end
+		end
+		if next(a) then out.arena = a end
+		if failed[1] then out.arenaFailed = failed end
+	end
+	if type(d.arenaSettings) == "table" then
+		local budget, s = { n = 5000 }, {}
+		local src = d.arenaSettings
+		if type(src.ui) == "table" then s.ui = Backup.Plain(src.ui, budget) end
+		if type(src.follow) == "table" then
+			local follow, n = {}, 0
+			for gk, name in pairs(src.follow) do
+				if n < 50 and type(gk) == "string" and #gk <= 40 and not gk:find("[|%c]") and type(name) == "string" and #name <= 80 and not name:find("[|%c]") then
+					follow[gk], n = name, n + 1
+				end
+			end
+			if next(follow) then s.follow = follow end
+		end
+		if type(src.profile) == "table" then
+			local profile, n = {}, 0
+			for name, p in pairs(src.profile) do
+				local c = n < 50 and type(name) == "string" and #name <= 80 and not name:find("[|%c]") and type(p) == "table" and Backup.Plain(p, budget) or nil
+				if type(c) == "table" then
+					c.pub = nil -- (never sharing turned on by a text)
+					profile[name], n = c, n + 1
+				end
+			end
+			if next(profile) then s.profile = profile end
+		end
+		if next(s) then out.arenaSettings = s end
 	end
 	return out
 end
@@ -410,8 +575,25 @@ function Backup.Summary(d)
 		if ns.Keys and ns.Keys.IsRetired and ns.Keys.IsRetired(d.key) then lines[#lines + 1] = L.BACKUP_KEY_RETIRED
 		else lines[#lines + 1] = (ns.IsMember() and ns.Roster.IsOfficer()) and L.BACKUP_KEY or L.BACKUP_KEY_NOT_OFFICER end
 	end
+	-- 1.2: the Blood Arena's parts: each goes back only where this client holds none (a key, a
+	-- ledger or a wallet view held here is never replaced); copper lines are added, never dropped.
+	if d.arena then
+		local parts = {}
+		for _, part in ipairs(Backup.ARENA_PARTS) do
+			if d.arena[part] then parts[#parts + 1] = L["BACKUP_ARENA_" .. part:upper()] end
+		end
+		lines[#lines + 1] = L.BACKUP_ARENA:format(table.concat(parts, ", "))
+		if d.arena.key or d.arena.bank then lines[#lines + 1] = L.BACKUP_ARENA_KEY_WARNING end
+	end
+	if d.arenaFailed then
+		local parts = {}
+		for _, part in ipairs(d.arenaFailed) do parts[#parts + 1] = L["BACKUP_ARENA_" .. part:upper()] end
+		lines[#lines + 1] = L.BACKUP_ARENA_FAILED:format(table.concat(parts, ", "))
+	end
+	if d.arenaElsewhere then lines[#lines + 1] = L.BACKUP_ARENA_ELSEWHERE:format(d.arenaElsewhere) end
 	local n = 0
 	for _ in pairs(d.settings) do n = n + 1 end
+	for _ in pairs(d.arenaSettings or {}) do n = n + 1 end
 	if d.chatWindows then n = n + 1 end
 	if d.chatMute then n = n + 1 end
 	if d.soundOff then n = n + 1 end
@@ -458,11 +640,19 @@ function Backup.Apply(d)
 		ns.db.blocked = type(ns.db.blocked) == "table" and ns.db.blocked or {}
 		for k in pairs(d.blocked) do ns.db.blocked[k] = true end
 	end
+	if d.arena then Backup.ApplyArena(d.arena) end
+	if d.arenaSettings then Backup.ApplyArenaSettings(d.arenaSettings) end
 	-- What shows the settings at once (the rest reads them where it needs them).
 	if ns.UI and ns.UI.UpdateMinimapButton then ns.SafeCall("backup", ns.UI.UpdateMinimapButton) end
 	if shown.borders and ns.Borders and ns.Borders.SetEnabled then ns.SafeCall("backup", ns.Borders.SetEnabled, ns.db.borders ~= false) end
 	if shown.nameplates and ns.Nameplates and ns.Nameplates.SetEnabled then ns.SafeCall("backup", ns.Nameplates.SetEnabled, ns.db.nameplates ~= false) end
 	if shown.showMap and ns.Map and ns.Map.Refresh then ns.SafeCall("backup", ns.Map.Refresh) end
+	for key, switch in pairs(Backup.NOES) do
+		local m = ns[switch.module]
+		if shown[key] and ns.db[key] == false and type(m) == "table" and not m.missing and type(m[switch.set]) == "function" then
+			ns.SafeCall("backup", m[switch.set], false, true)
+		end
+	end
 	if books > 0 and T.CanSend and T.CanSend() then T.Share(true) end
 	ns.Print(L.BACKUP_DONE)
 	ns.Fire("TREASURY_CHANGED")
@@ -470,15 +660,71 @@ function Backup.Apply(d)
 	return true
 end
 
+-- 1.2: the Blood Arena's parts back (Backup.Read checked them), into this realm's live store and
+-- the account: each only where none is held here, copper lines added by id (never one dropped or
+-- changed). Returns the parts restored.
+function Backup.ApplyArena(a)
+	local db, me = ns.db, ns.me
+	if type(a) ~= "table" or not db or not me or not ns.rdb then return {} end
+	if type(ns.rdb.arena) ~= "table" then ns.rdb.arena = {} end
+	if type(ns.rdb.arena.realms) ~= "table" then ns.rdb.arena.realms = {} end
+	local r = ns.rdb.arena.realms[ns.realm]
+	if type(r) ~= "table" then r = { v = 1 } ns.rdb.arena.realms[ns.realm] = r end
+	local done = {}
+	if type(a.bank) == "table" and type(r.bank) ~= "table" then r.bank, done[#done + 1] = a.bank, "bank" end
+	if type(a.key) == "table" and type(db.arenaKey) ~= "table" then db.arenaKey, done[#done + 1] = a.key, "key" end
+	if type(a.copper) == "table" then
+		db.arenaCopper = type(db.arenaCopper) == "table" and db.arenaCopper or {}
+		local added = 0
+		for id, line in pairs(a.copper) do
+			if db.arenaCopper[id] == nil and type(line) == "table" then db.arenaCopper[id], added = line, added + 1 end
+		end
+		if added > 0 then done[#done + 1] = "copper" end
+	end
+	if type(a.stakes) == "table" and type(r.stakes) ~= "table" then r.stakes, done[#done + 1] = a.stakes, "stakes" end
+	for _, part in ipairs({ "mine", "tickets" }) do
+		if type(a[part]) == "table" then
+			r[part] = type(r[part]) == "table" and r[part] or {}
+			if type(r[part][me]) ~= "table" then r[part][me], done[#done + 1] = a[part], part end
+		end
+	end
+	return done
+end
+
+-- 1.2: the arena's settings back: arenaUI, the follows added, each character's profile (its own
+-- "pub" kept as it is here: a text never turns sharing on).
+function Backup.ApplyArenaSettings(s)
+	local db = ns.db
+	if type(s) ~= "table" or not db then return end
+	if type(s.ui) == "table" then db.arenaUI = s.ui end
+	if type(s.follow) == "table" then
+		db.arenaFollow = type(db.arenaFollow) == "table" and db.arenaFollow or {}
+		for gk, name in pairs(s.follow) do db.arenaFollow[gk] = name end
+	end
+	if type(s.profile) == "table" then
+		db.arenaProfile = type(db.arenaProfile) == "table" and db.arenaProfile or {}
+		for name, p in pairs(s.profile) do
+			local was = db.arenaProfile[name]
+			p.pub = type(was) == "table" and was.pub or nil
+			db.arenaProfile[name] = p
+		end
+	end
+end
+
 ---------------------------------------------------------------------------
 -- The windows: the copy box (UI.ShowCopy) out, a paste box in
 ---------------------------------------------------------------------------
 
--- /oly backup: the text in the copy box, its button the way back in.
+-- /oly backup: the text in the copy box, its button the way back in. 1.2: a text holding a bank's
+-- secret or the account's key says, in its title and in the chat, never to paste it anywhere.
 function Backup.ShowExport()
-	local text = Backup.Export()
-	ns.UI.ShowCopy(L.BACKUP_TITLE, text, { label = L.BACKUP_RESTORE_BTN, fn = function() Backup.ShowRestore() end })
+	local d = Backup.Data()
+	local text = ExportText(d)
+	local key = Backup.HoldsKey(d)
+	ns.UI.ShowCopy(key and (L.BACKUP_TITLE .. " - " .. L.BACKUP_ARENA_KEY_WARNING) or L.BACKUP_TITLE, text,
+		{ label = L.BACKUP_RESTORE_BTN, fn = function() Backup.ShowRestore() end })
 	ns.Print(L.BACKUP_COPIED:format(#text))
+	if key then ns.Print(L.BACKUP_ARENA_KEY_WARNING) end
 end
 
 StaticPopupDialogs["OLYMPUS_BACKUP_RESTORE"] = {

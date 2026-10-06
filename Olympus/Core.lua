@@ -2,7 +2,7 @@ local ADDON, ns = ...
 local L = ns.L
 
 ns.NAME = "Olympus"
-ns.VERSION = "1.1.5"
+ns.VERSION = "1.1.6"
 ns.PREFIX = "OLYMPUS"        -- addon message prefix (max 16 chars)
 ns.CHANNEL = "OlympusNet"    -- hidden chat channel shared by every Olympus guild (Alliance)
 ns.CHANNEL_HORDE = "OlympusNetH" -- the Horde's: the two factions never see each other's guilds
@@ -526,7 +526,8 @@ end
 --   help                  a High Councillor's help requests, the author's bug reports
 --   hop, treasury, patrol a layer hop, a donation, a patrol's player without the tabard
 --   update                the author's update notice
-ns.SOUND_KINDS = { "arms", "muster", "royal", "court", "vox", "agenda", "throne", "help", "hop", "treasury", "patrol", "update" }
+--   arena, watch, craft   1.2's Blood Arena, private guild moderation notices, crafting requests
+ns.SOUND_KINDS = { "arms", "muster", "royal", "court", "vox", "agenda", "throne", "help", "hop", "treasury", "patrol", "update", "arena", "watch", "craft" }
 local SOUND_KIND = {}
 for _, k in ipairs(ns.SOUND_KINDS) do SOUND_KIND[k] = true end
 
@@ -856,6 +857,18 @@ function ns.IsTreasurerMail(name)
 	end
 	return false
 end
+-- 1.2 (the Blood Arena): one of the Treasurer's pinned characters, the Treasurer himself or his mail
+-- character, by its exact name on his realm group, in any guild or none, as ns.IsTreasurerMail
+-- takes his mail's. A whisper carries no guild, so ns.IsTreasurer (which needs one) is false for
+-- every whisper: the arena's fee receipts (ZF) and donor holders (ID) are checked with this.
+function ns.IsTreasurerCharacter(name)
+	if type(name) ~= "string" or name == "" then return false end
+	local short = ns.ShortName(name)
+	for _, pin in ipairs(ns.TREASURER_CHARACTERS or {}) do
+		if short == pin then return OfGroup(name, ns.TREASURER_REALM) end
+	end
+	return false
+end
 -- The King's name on the lines and the crown: the army's name for him on the Alliance side,
 -- his character's on the Horde (whose <Olympus> has a guild master of its own).
 function ns.KingName(leader)
@@ -1084,6 +1097,67 @@ function ns.Stewards()
 	end
 	local list = t.stewards[ns.faction or "Alliance"]
 	return type(list) == "table" and list or {}
+end
+
+-- 1.2 (the Blood Arena): the signed arbiters, the author's entry in the titles list, like the
+-- Steward's, one per faction, the author's own character among them (no arena file names him):
+--   ^arbiter^<Alliance|Horde>^<First Surname-Realm>[+a],...
+-- "+a" marks an auditor too (ns.IsSignedAuditor): he receives the arena's ledgers. At most
+-- ns.ARBITERS_MAX a faction. Three "^": 1.1 clients leave it out unread, as the Steward's.
+-- Returns { Alliance = { { name, audit }, ... }, Horde = ... }, a faction left out when it names none.
+ns.ARBITERS_MAX = 5
+function ns.ReadArbiters(text)
+	local out = {}
+	for entry in tostring(text or ""):gmatch("[^;]+") do
+		local faction, list = entry:match("^%^arbiter%^(%a+)%^([^%^]*)$")
+		if faction and STEWARD_FACTIONS[faction] then
+			local names = out[faction] or {}
+			for n in list:gmatch("[^,]+") do
+				local raw, flag = n:match("^(.-)%+(%a)%s*$")
+				local name = StewardName(raw or n)
+				if name and (flag == nil or flag == "a") and #names < ns.ARBITERS_MAX then
+					names[#names + 1] = { name = name, audit = flag == "a" or nil }
+				end
+			end
+			out[faction] = names
+		end
+	end
+	return out
+end
+
+-- The signed arbiters of the titles list we hold, for our faction: { { name, audit }, ... }. A list
+-- taken by a version before 1.2 (which left the entry out) is read again from its signed text.
+function ns.SignedArbiters()
+	local t = ns.CouncilTitles()
+	if not t then return {} end
+	if type(t.arbiters) ~= "table" then
+		t.arbiters = ns.ReadArbiters(type(t.blob) == "string" and t.blob:match("^HT1~%d+~[^~]*~[01]~([^~]*)~%x+$") or "")
+	end
+	local list = t.arbiters[ns.faction or "Alliance"]
+	return type(list) == "table" and list or {}
+end
+
+-- A sender's entry (the server stamps the name) among the signed arbiters, or nil: matched as
+-- ns.IsSteward matches a Steward, by name on the list's realm group and the entry's realm.
+local function SignedArbiterEntry(name)
+	if type(name) ~= "string" or name == "" then return nil end
+	local t = ns.CouncilTitles()
+	if not t then return nil end
+	local full = ns.FullName(name)
+	if not OfListGroup(full, t.realm) then return nil end
+	local short = ns.ShortName(full):lower()
+	for _, e in ipairs(ns.SignedArbiters()) do
+		if type(e) == "table" and type(e.name) == "string" and ns.ShortName(e.name):lower() == short then
+			local realm = ns.RealmOf(e.name)
+			if realm == nil or OfGroup(full, realm) then return e end
+		end
+	end
+	return nil
+end
+function ns.IsSignedArbiter(name) return SignedArbiterEntry(name) ~= nil end
+function ns.IsSignedAuditor(name)
+	local e = SignedArbiterEntry(name)
+	return e ~= nil and e.audit == true
 end
 
 -- The approved guilds (1.1, the author's): guilds of Asmon's Olympus whose names the name rule
@@ -1645,9 +1719,16 @@ StandIn("Borders", { "SetEnabled", "Report" })
 StandIn("Nameplates", { "SetEnabled", "Report" })
 StandIn("Members", { "Show", "SetWarnDays" }) -- (1.1)
 StandIn("Consent", { "Show" }) -- 1.1: the first-open page (Consent.lua)
+StandIn("ViewAs", {}) -- 1.2: the author's local role preview
+StandIn("TabardsV2", {}) -- 1.2: versioned tabard reports and publication lease
 StandIn("Letters", { "Slash", "ShowHistory", "Show" }) -- 1.1.5: the version letters (Letters.lua)
 StandIn("Chronicle", { "Slash" }) -- 1.1: the log of acts this client saw (Chronicle.lua)
 StandIn("Filter", { "Slash" }) -- 1.1: block terms (Filter.lua)
+StandIn("Watch", { "Slash" }) -- 1.2: the guild-local moderation desk
+StandIn("Judgment", {}) -- 1.2: a case to the King, the High Council's votes, his final word
+StandIn("Church", { "Slash" }) -- 1.1.6: the Missionary Church of Olympus (Church.lua)
+StandIn("WatchChat", {}) -- 1.1.6: chat moderation (deleted lines, timeouts, sanctions' bars)
+StandIn("Wanted", { "SightingsSlash" }) -- 1.2: the Horde Most Wanted ledger and its sightings
 StandIn("Board", { "Slash" }) -- (1.1: the Board)
 StandIn("Week", {}) -- (1.1: the King's week)
 -- 1.1: net-off (Moderation.lua), alt links (Alts.lua), the King's key rotation (Keys.lua).
@@ -1655,8 +1736,10 @@ StandIn("Moderation", { "Slash" })
 StandIn("Alts", { "Slash" })
 StandIn("Keys", { "RotatePrompt" })
 StandIn("Loot", { "Show" }) -- (1.1)
+StandIn("War", { "Show", "Slash" }) -- 1.2: the own-guild Department of War room
 StandIn("Crafters", { "Ask", "Slash" }) -- (1.1)
 StandIn("ChatWindow", { "Open", "Toggle" }) -- 1.1.1: the Chat tab of the Olympus window (ChatWindow.lua)
+StandIn("Arena", { "RunSlash" }) -- 1.2: the Blood Arena's core (ArenaNet.lua)
 -- 1.1.2: the right-click menus' lines (PlayerMenu.lua), a player's version (Versions.lua), the
 -- answer bank's Answers and explanations (Answers.lua).
 StandIn("PlayerMenu", {})
@@ -1780,6 +1863,27 @@ function ns.Focus(eb, setFocus) -- gp:popup-focus
 	return true
 end
 
+-- A whisper Olympus sends (1.2, the design): the player's own words, or a fixed line of
+-- the arena's matchmaking, always inside the player's click (the game restricts SendChatMessage
+-- to one, ChatInfoDocumentation.lua's HasRestrictions). C_ChatInfo.SendChatMessage where the
+-- client has it, else the global SendChatMessage (there only while the loadDeprecationFallbacks
+-- setting is on, Deprecated_ChatInfo.lua). At most 255 bytes, never half a letter. name: the one
+-- the server finds (ns.TellName). True when it was handed to the game.
+function ns.SayTo(name, text) -- gp:arena-clicks
+	if type(name) ~= "string" or name == "" or type(text) ~= "string" or text == "" then return false end
+	text = ns.Cut(text, 255)
+	local C = C_ChatInfo
+	if type(C) == "table" and type(C.SendChatMessage) == "function" then
+		C.SendChatMessage(text, "WHISPER", nil, name)
+		return true
+	end
+	if type(SendChatMessage) == "function" then
+		SendChatMessage(text, "WHISPER", nil, name)
+		return true
+	end
+	return false
+end
+
 -- The faction may not be known yet at ADDON_LOADED: if it turns out to be the other one,
 -- switch to that faction's store before anything is received.
 function ns.CheckFaction()
@@ -1797,8 +1901,10 @@ end
 ns.RegisterEvent("PLAYER_LOGIN", function()
 	ns.CheckFaction()
 	local missing = {}
-	for _, key in ipairs({ "Who", "Channels", "King", "Hop", "Workshop", "Vox", "Court", "Treasury", "Dues", "Acts", "Dialog", "Bank", "Link", "Borders", "Nameplates", "Backup", "Loot", "Crafters", "Board", "Week", "Consent", "Chronicle", "Filter", "Members", "Moderation", "Alts", "Keys", "ChatWindow", "PlayerMenu", "Versions", "Answers", "Letters", "Nominees" }) do
-		if ns[key].missing then missing[#missing + 1] = key .. ".lua" end
+	-- (1.2: the file of a key named otherwise: the Blood Arena's core is ArenaNet.lua.)
+	local FILES = { Arena = "ArenaNet.lua" }
+	for _, key in ipairs({ "Who", "Channels", "King", "Hop", "Workshop", "Vox", "Court", "Treasury", "Dues", "Acts", "Dialog", "Bank", "Link", "Borders", "Nameplates", "Backup", "Loot", "War", "Crafters", "Board", "Week", "Consent", "ViewAs", "TabardsV2", "Chronicle", "Filter", "Watch", "Judgment", "WatchChat", "Wanted", "Members", "Moderation", "Alts", "Keys", "ChatWindow", "Arena", "PlayerMenu", "Versions", "Answers", "Letters", "Nominees" }) do
+		if ns[key].missing then missing[#missing + 1] = FILES[key] or (key .. ".lua") end
 	end
 	if ns.Gate.missing then missing[#missing + 1] = "Gamepad.lua" end -- (1.1.5, the gamepad gate)
 	if #missing > 0 then
@@ -1868,6 +1974,8 @@ local function Help()
 	print(L.HELP_PATROLSHARE)
 	print(L.HELP_APPROVED)
 	print(L.HELP_LOOT)
+	print(L.HELP_WAR)
+	print(L.HELP_WATCH)
 	print(L.HELP_CRAFT)
 	print(L.HELP_CMD_MAP)
 	print(L.HELP_CMD_REALM)
@@ -1881,8 +1989,10 @@ local function Help()
 	print(L.HELP_LAYERHELP)
 	print(L.HELP_LAYERAUTO)
 	print(L.HELP_LOCATION)
+	print(L.HELP_SIGHTINGS) -- (1.2)
 	print(L.HELP_ROLLCALL)
 	print(L.HELP_PRIVACY_PAGE)
+	print(L.HELP_PROFILE)
 	print(L.HELP_CHAT)
 	print(L.HELP_LOG)
 	print(L.HELP_FILTER)
@@ -1925,6 +2035,7 @@ local function Help()
 	print(L.HELP_CMD_MINIMAP)
 	print(L.HELP_CMD_DEBUG)
 	print(L.HELP_CMD_RESET)
+	print(L.HELP_ARENA) -- (1.2)
 end
 
 -- What an error report names as the command: the command itself, with what followed it for
@@ -1953,7 +2064,7 @@ local function Slash(input)
 		if cmd == "" then
 			ns.UI.Toggle()
 		elseif cmd == "inspect" or cmd == "tabard" or cmd == "heraldry" then
-			ns.UI.SelectTab("heraldry")
+			ns.Watch.Slash("tabards") -- (1.2: the Tabards are The Watch's)
 		elseif cmd == "sound" then
 			ns.SoundSlash(rest)
 		elseif cmd == "alerts" then
@@ -1969,6 +2080,9 @@ local function Slash(input)
 			-- 1.1 (Fern's #22): the guild's loot notes and points, on the Realm tab.
 			ns.UI.SelectTab("realm")
 			ns.Loot.Show(true)
+		elseif cmd == "war" then
+			-- 1.2: own-guild operations, LFG, Centuries and readiness. No federal writer exists.
+			ns.War.Slash(rest)
 		elseif cmd == "craft" then
 			-- 1.1 (Fern's #24): who can make this item (a shift-clicked link) or these words.
 			if rest == "" then
@@ -2100,15 +2214,30 @@ local function Slash(input)
 			else
 				ns.Print(ns.Layers.Sharing() and L.LOCATION_ON or L.LOCATION_OFF)
 			end
+		elseif cmd == "sightings" or cmd == "avistamentos" then
+			-- 1.2 (Wanted.lua): this client's Most Wanted sightings, on until a No; alone, says which.
+			ns.Wanted.SightingsSlash(rest)
+		elseif cmd == "kingarrow" or cmd == "setarei" then
+			if ns.KingArrow then ns.KingArrow.Slash(rest) else ns.Print(L.KING_ARROW_STATUS:format(L.KING_ARROW_OFF)) end
 		elseif cmd == "filter" or cmd == "filtro" then
 			-- 1.1 (Fern's #31): block terms, the player's own and the shared list (Filter.lua).
 			ns.Filter.Slash(rest)
+		elseif cmd == "watch" or cmd == "vigia" then
+			ns.Watch.Slash(rest)
+		elseif cmd == "church" or cmd == "igreja" then
+			ns.Church.Slash(rest) -- 1.1.6
 		elseif cmd == "log" then
 			-- 1.1 (Fern's #12): the acts this client saw (Chronicle.lua): [n], a word, copy, clear.
 			ns.Chronicle.Slash(rest)
 		elseif cmd == "privacy" or cmd == "privacidade" then
 			-- 1.1 (Fern's #11): the page of what this addon shares, each answer to change (Consent.lua).
 			ns.Consent.Show()
+		elseif cmd == "profile" or cmd == "perfil" then
+			-- 1.2: a player's profile in the Olympus window (PlayerProfile.OpenName), your own with no name.
+			local P = ns.PlayerProfile
+			local ok, why
+			if P and not P.missing and P.OpenName then ok, why = P.OpenName(rest ~= "" and rest or ns.me) end
+			if not ok then ns.Print(why == "member" and L.MEMBERS_ONLY or L.PLAYER_PROFILE_USAGE) end
 		elseif cmd == "letters" or cmd == "letter" or cmd == "cartas" then
 			-- 1.1.5: the version letters (Letters.lua): every one, or one version's.
 			ns.Letters.Slash(rest)
@@ -2128,6 +2257,8 @@ local function Slash(input)
 		elseif cmd == "bug" then
 			ns.UI.ShowBugReport()
 		elseif cmd == "status" then
+			-- (1.2: the memory figures in it are measured now, on the command alone: Diagnostics' arena lines.)
+			if UpdateAddOnMemoryUsage then pcall(UpdateAddOnMemoryUsage) end
 			-- 1.1.2: the author's in a copy window (he copies it; a chat line can't be), everyone
 			-- else's in chat as before.
 			if ns.Workshop.IsAuthor and ns.Workshop.IsAuthor() == true and ns.UI.ShowCopy then
@@ -2163,7 +2294,7 @@ local function Slash(input)
 		elseif cmd == "layer" then
 			ns.PrintLayer()
 		elseif cmd == "hop" then
-			ns.Hop.AskKing()
+			ns.Hop.Command(rest)
 		elseif cmd == "layerhelp" or cmd == "layerauto" then
 			local on = rest:lower()
 			if on ~= "on" and on ~= "off" then
@@ -2232,6 +2363,14 @@ local function Slash(input)
 			-- 1.1: a keeper tells the army he is taking donations, until he logs out (Treasury.lua).
 			local on = rest:lower()
 			if on == "on" or on == "off" then ns.Treasury.SetDonations(on == "on") else ns.Print(L.HELP_DONATIONS) end
+		elseif cmd == "arena" then
+			-- 1.2: the Blood Arena (ArenaNet.lua routes the rest: Arena.Slash); everything also by a click.
+			ns.Arena.RunSlash(rest)
+		elseif cmd == "farkle" then
+			ns.Arena.RunSlash("farkle " .. rest)
+		elseif cmd == "bones" or cmd == "lottery" or cmd == "games" then
+			-- 1.2 test build: the practice games (Olympus_Arena/Games), as /oly arena bones | lottery | games.
+			ns.Arena.RunSlash(cmd .. " " .. rest)
 		else
 			Help()
 		end
@@ -2244,6 +2383,12 @@ ns.Gate.Hooks("slash", { key = "core", leftover = function() return slashDone en
 	slashDone = true
 	SLASH_OLYMPUS1, SLASH_OLYMPUS2 = "/olympus", "/oly"
 	SlashCmdList.OLYMPUS = Slash
+	-- 1.2: /ola <text> says a line in the fight room open here (ArenaChat.lua, through Arena.RunSlash),
+	-- as /ol says one on the Olympus channel. The room's own box needs no command (the gamepad UI).
+	SLASH_OLYMPUSARENA1 = "/ola"
+	SlashCmdList.OLYMPUSARENA = function(input)
+		ns.SafeCall("slash ola", function() ns.Arena.RunSlash("say " .. tostring(input or "")) end)
+	end
 end })
 -- (Channels.lua's /ol, /olc and /oll with them: the same id.)
 ns.On("LOGIN", function() ns.Gate.Install("slash") end)

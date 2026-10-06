@@ -178,6 +178,9 @@ end
 function Filter.IsEditorName(name)
 	if type(name) ~= "string" or name == "" then return false end
 	if ns.IsKingCharacter(name) then return true end
+	-- (1.1.6: a sanctioned editor, WatchChat.Barred "powers", edits nothing while it lasts.)
+	local WC = ns.WatchChat
+	if WC and not WC.missing and WC.Barred and WC.Barred("powers", name) then return false end
 	local K = ns.King
 	if K and not K.missing and (K.IsStewardName(name) or K.IsHandName(name)) then return true end
 	return ns.IsHighCouncillor(name)
@@ -185,6 +188,8 @@ end
 
 function Filter.CanEdit()
 	if not ns.me or not ns.IsMember() then return false end
+	local WC = ns.WatchChat
+	if WC and not WC.missing and WC.Barred and WC.Barred("powers") and not ns.IsKingCharacter(ns.me) then return false end
 	local K = ns.King
 	if K and not K.missing and (K.IsKing() or K.IsSteward() or K.IsHand()) then return true end
 	return ns.IsHighCouncillor(ns.me)

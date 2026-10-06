@@ -37,7 +37,7 @@ end
 
 local Source = Store
 
--- Every player a patrol ever checked stays in the saved variables, and the Tabards tab draws a
+-- Every player a patrol ever checked stays in the saved variables, and The Watch's Tabards draw a
 -- line for each: after a few weeks of patrols in a crowded capital that is thousands. Kept:
 -- the last MAX_AGE, and at most MAX_PLAYERS of them, the ones that matter first (marked by
 -- hand, then caught without the colors), then the newest. A mark by hand stays past MAX_AGE.
@@ -142,7 +142,9 @@ function Inspect.Record(name, guild, classFile, level, tabardID, anyGear)
 	p.t = ns.Now()
 	-- Seen with our own eyes now: no longer another officer's word (1.1).
 	local wasShared = p.shared
-	p.shared, p.by = nil, nil
+	-- This completed inspection replaces every second-hand provenance flag.  AddReported keeps
+	-- reported=true until this point so it can never be mistaken for a direct observation.
+	p.shared, p.by, p.reported = nil, nil, nil
 	s.players[name] = p
 	if QueueShare then QueueShare(p, previous, wasShared) end
 	ns.Log("inspect %s <%s>: %s (%s)", name, tostring(guild), p.status, tostring(tabardID))
@@ -272,6 +274,9 @@ local function OnInspectReady(guid)
 		local name = ns.UnitFullName(unit)
 		local p = Inspect.Record(name, GetGuildInfo(unit), classFile, UnitLevel(unit),
 			GetInventoryItemID(unit, TABARD_SLOT), anyGear)
+		-- 1.2: reuse this exact successful inspection for the separately consented nearby
+		-- report. TabardsV2 never asks for, queues or triggers another NotifyInspect.
+		if p and ns.TabardsV2 and ns.TabardsV2.Observe then ns.TabardsV2.Observe(p, true) end
 		-- An officer's click (Inspect.InspectGear): the gear kept with the inspection.
 		if gear and p then
 			local items, n = ReadGear(unit)
@@ -697,7 +702,7 @@ function Inspect.SetSharing(on)
 	if on and Officer() then Inspect.AskShared() end
 end
 
--- How many on our list are another officer's word (the Tabards tab's detail box).
+-- How many on our list are another officer's word (The Watch's Tabards' detail box).
 function Inspect.SharedCount()
 	local n = 0
 	for _, p in pairs(Store().players) do
@@ -716,7 +721,7 @@ end
 ---------------------------------------------------------------------------
 -- Untabarded (0.9.2; the "Wall of Shame" before): the players the Royal Inspection found
 -- without the colors. The King's alone: his page lists them, and only he can let the army see
--- the list (King.lua, a switch like the Treasury's), in the Tabards tab and nowhere else. No
+-- the list (King.lua, a switch like the Treasury's), in The Watch's Tabards and nowhere else. No
 -- raid warning, no chat line, no sound, for anyone; turned off, it leaves every screen.
 -- Nobody else publishes one any more: walls from older versions (S1) are ignored.
 -- Closed until the tabard rule is in force, midnight in Texas (where Asmongold is) between
@@ -735,6 +740,12 @@ local function Pardoned(name) return ns.Acts and ns.Acts.Pardoned and ns.Acts.Pa
 -- marked by hand. Never another officer's word (1.1: an officer's shared findings stay on the
 -- Tabards page).
 function Inspect.ShameList()
+	-- 1.2: a negative v2 conclusion is publishable only after the collector's provenance rule
+	-- (the King's direct observation, or two independent fresh direct observers). Legacy Royal
+	-- Inspection totals and officer-sharing rows remain visible locally but cannot bypass it.
+	if ns.TabardsV2 and ns.TabardsV2.Active and ns.TabardsV2.Active() and ns.TabardsV2.PublicationList then
+		return ns.TabardsV2.PublicationList()
+	end
 	local out = {}
 	for _, p in ipairs(Inspect.Summary().players) do
 		if (p.marked or (not p.shared and (p.status == "NONE" or p.status == "OTHER"))) and not Pardoned(p.name) then
@@ -745,9 +756,9 @@ function Inspect.ShameList()
 end
 
 -- A list the King shares lasts while he keeps repeating it (King.UNTABARDED_EVERY).
-Inspect.SHARED_FRESH = 20 * 60
+Inspect.SHARED_FRESH = 10 * 60
 
--- The list the King lets the army see, or nil to take it off. Quietly: the Tabards tab only.
+-- The list the King lets the army see, or nil to take it off. Quietly: The Watch's Tabards only.
 -- false when it names the same players as the one shown (nothing to redraw).
 local function SameList(a, b)
 	if not a or not b or #a.list ~= #b.list then return false end
@@ -903,4 +914,3 @@ ns.Gate.Hooks("tooltip-unit", { install = function() -- gp:tooltip-unit
 	end
 	ns.Log("tooltip hook: %s", hooked and "TooltipDataProcessor" or "OnTooltipSetUnit")
 end })
-

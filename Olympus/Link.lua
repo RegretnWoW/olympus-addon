@@ -531,11 +531,19 @@ local function CheckOwnCert(done)
 	return queued
 end
 
+-- 1.1.6: a councillor under a moderator's sanction (WatchChat.PowersBarred: a timeout, a hold, a
+-- net-off word) confirms no link and watches for none while it lasts; other clients count none of
+-- his council confirmations then.
+local function CouncilBarred(name)
+	local WC = ns.WatchChat
+	return type(WC) == "table" and not WC.missing and type(WC.PowersBarred) == "function" and WC.PowersBarred(name) ~= nil
+end
+
 -- Our certificate, when it lets us confirm now: a councillor's (tier c) only while the signed
 -- list names us.
 local function UsableCert(k)
 	local c = MyCert(k)
-	if c and c.tier == "c" and not ns.IsHighCouncillor(ns.me) then return nil end
+	if c and c.tier == "c" and (not ns.IsHighCouncillor(ns.me) or CouncilBarred(ns.me)) then return nil end
 	return c
 end
 
@@ -567,6 +575,7 @@ end
 function Link.Watching()
 	local d = ns.db and ns.db.discord
 	return type(d) == "table" and type(d.watch) == "table" and d.watch[ns.me] == true and ns.IsHighCouncillor(ns.me)
+		and not CouncilBarred(ns.me)
 end
 
 function Link.AnnounceWatcher(force)
@@ -602,7 +611,7 @@ local function Prune(now)
 end
 
 -- A "c" counts only from a councillor of the signed list whose certificate says c.
-local function IsCouncillor(name, a) return a.tier == "c" and ns.IsHighCouncillor(name) end
+local function IsCouncillor(name, a) return a.tier == "c" and ns.IsHighCouncillor(name) and not CouncilBarred(name) end
 
 -- A confirmer's certificate checked against the bot's keys, once (in a job, a few at a time);
 -- the request steps on once it is.
@@ -723,7 +732,7 @@ Link.Online = Online
 local function OnlineWatchers(now)
 	local out = {}
 	for name, t in pairs(watchers) do
-		if now - t <= Link.ANNOUNCE_FRESH and name ~= ns.me and ns.IsHighCouncillor(name) then out[#out + 1] = { name = name, t = t } end
+		if now - t <= Link.ANNOUNCE_FRESH and name ~= ns.me and ns.IsHighCouncillor(name) and not CouncilBarred(name) then out[#out + 1] = { name = name, t = t } end
 	end
 	table.sort(out, function(x, y) return x.t > y.t end) -- the one heard last first
 	return out
@@ -1168,6 +1177,7 @@ end
 function Link.HandleWatcher(dist, sender, text)
 	if dist ~= "CHANNEL" or not ns.IsHighCouncillor(sender) then return end
 	local name, now = ns.FullName(sender), ns.Now()
+	if text ~= "DW~0" and CouncilBarred(name) then return end -- (1.1.6: sanctioned, he watches for nobody)
 	if text == "DW~0" then
 		watchers[name] = nil
 		return

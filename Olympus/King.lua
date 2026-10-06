@@ -74,11 +74,13 @@ local function CleanGuild(s)
 	return s
 end
 
--- Someone we can place: our own guild (the server's roster) or a Lord or Captain the census
--- confirms (Data.KnownRank). Only they may put names on the King's page.
+-- Someone we can place: our own guild (the server's roster) or a Lord or Captain. Before signed
+-- enforcement this keeps the old roster/census decision exactly; afterwards a local roster role
+-- is valid only for its actual guild and each cross-guild role comes from the manifest.
 local function Verified(sender, guild)
-	if ns.Roster.RankOf(sender) then return true end
-	local rank = guild and ns.Data.KnownRank(sender, guild)
+	local enforcing = ns.Authority and ns.Authority.Enforced and ns.Authority.Enforced()
+	if not enforcing and ns.Roster.RankOf(sender) then return true end
+	local rank = guild and ns.Data.AuthorizedRank(sender, guild)
 	return rank ~= nil and rank <= ns.CAPTAIN_RANK
 end
 
@@ -100,6 +102,8 @@ end
 -- Workshop (ns.db.devKingView).
 function King.Preview()
 	if King.IsKing() then return false end
+	if ns.ViewAs and ns.ViewAs.Is and ns.ViewAs.Is("king") then return true end
+	if ns.ViewAs and ns.ViewAs.Previewing and ns.ViewAs.Previewing() then return false end
 	local view = ns.db and ns.db.devKingView
 	if view ~= nil and ns.Workshop and ns.Workshop.Visible and ns.Workshop.Visible() then return view == true end
 	local dev = ns.devThrone
@@ -116,10 +120,15 @@ function King.Visible() return King.IsKing() or King.IsSteward() or King.IsHand(
 function King.ThroneShown()
 	local N = ns.Nominees
 	if N and N.DevView and N.DevView() then return false end
+	-- (1.2: the author's High Council preview, ViewAs.lua, is the council's Throne Room, as Asmon's
+	-- view is the King's through King.Preview.)
+	local V = ns.ViewAs
+	if type(V) == "table" and type(V.Is) == "function" and V.Is("councillor") then return true end
 	return King.Visible() or (ns.IsMember() == true and ns.IsHighCouncillor(ns.me) == true)
 end
 function King.GuildShown()
 	local N = ns.Nominees
+	if N and not N.missing and N.GuildAccess then return N.GuildAccess() == true end
 	return N ~= nil and not N.missing and N.IsMaster ~= nil and N.IsMaster() == true
 end
 function King.TabVisible() return King.ThroneShown() or King.GuildShown() end
@@ -313,7 +322,13 @@ function King.Authorized(kind, sender, guild)
 end
 
 -- The King, his Steward, or a Hand: the tools of the Throne.
-function King.CanCommand() return King.IsKing() or King.IsSteward() or King.IsHand() end
+function King.CanCommand()
+	if King.IsKing() then return true end
+	-- (1.1.6: a sanctioned Steward or Hand has none of the Throne's tools while it lasts.)
+	local WC = ns.WatchChat
+	if WC and not WC.missing and WC.Barred and WC.Barred("powers") then return false end
+	return King.IsSteward() or King.IsHand()
+end
 
 -- The King himself sent it (not a Hand): for how it is shown.
 function King.FromKing(sender, guild) return KingSender(sender, guild, true) end
@@ -795,7 +810,7 @@ ns.Comm.Handle("T3", function(...) King.HandleReport(...) end)
 --   T1~U~<id>~<guild>~1~<name>:<guild>,...   the list, repeated while it is on
 --   T1~U~<id>~<guild>~0                      off: it leaves every screen
 -- Only the King (not a Hand: "U" is not in HAND_MAY). Older versions ignore the kind.
-King.UNTABARDED_EVERY = 300
+King.UNTABARDED_EVERY = 8 * 60 -- shorter than the 10-minute publication lease
 local lastUntabardedSent = -math.huge
 
 function King.SharingUntabarded() return ns.db and ns.db.kingUntabarded == true end
@@ -990,7 +1005,7 @@ King.LOCATION_EVERY = 5      -- seconds between sends while moving
 King.LOCATION_STILL = 20     -- standing still, repeated this often (for late logins)
 King.LOCATION_EXPIRE = 45    -- a crown with no news this long is removed
 
-local kingAt                 -- where the King is, for everyone: { name, mapID, x, y, t }
+local kingAt                 -- where the King is, for everyone: { name, id, mapID, x, y, t }
 local locationId = NewId()
 local lastLocation = { t = -math.huge }
 local Pins = ns.Pins()
@@ -1021,6 +1036,9 @@ function King.ToggleLocation()
 	if not King.IsKing() then return end
 	ns.db.throneLocation = not King.SharingLocation()
 	if King.SharingLocation() then
+		-- Each explicit on period is a new lease. A sighting from before an opt-out must not
+		-- become usable again if the crown is shown moments later.
+		locationId = locationId % 99999 + 1
 		ns.Print(L.THRONE_LOCATION_SHOWN)
 		-- His crown is his yes for his layer too (Layers.lua): the army asks to join him there.
 		-- Both go out now (1.0.0: his layer waited for its next announcement, up to ten minutes).
@@ -1035,6 +1053,7 @@ function King.ToggleLocation()
 		ns.Layers.Withdraw()
 		ns.Comm.Hello(true)
 	end
+	ns.Fire("KING_LOCATION_CHANGED", King.SharingLocation() and "show" or "hide", ns.FullName(ns.me), locationId)
 	-- Taking donations (1.1): his zone in it follows his crown at once.
 	if ns.Treasury and ns.Treasury.DonationsMoved then ns.Treasury.DonationsMoved() end
 	Changed()
@@ -1069,11 +1088,16 @@ end
 
 -- Draws (or removes) the crown on the world map and the minimap. The world map's only with
 -- mouse and keyboard (ns.WorldMapIcons); drawn again when that changes, even where he stands still.
+-- 1.1.6: never for a sanctioned player (WatchChat.Barred "locations", as King.Location): one drawn
+-- before is taken off (every LOCATION_EVERY and at once on WATCHCHAT_CHANGED), and drawn again
+-- once the sanction ends while the King still shares his position.
 function King.RefreshCrown()
 	if not Pins then return end
 	local world = ns.WorldMapIcons(Pins, King) -- gp:worldmap-icons
 	if kingAt and ns.Now() - kingAt.t > King.LOCATION_EXPIRE then kingAt = nil end
-	if not kingAt then
+	local WC = ns.WatchChat
+	local barred = WC and not WC.missing and WC.Barred and WC.Barred("locations")
+	if not kingAt or barred then
 		if crowns and crownAt then
 			if world then Pins:RemoveWorldMapIcon(King, crowns.world) end
 			Pins:RemoveMinimapIcon(King, crowns.mini)
@@ -1095,18 +1119,23 @@ function King.RefreshCrown()
 	Pins:AddMinimapIconMap(King, crowns.mini, kingAt.mapID, kingAt.x, kingAt.y, true, true) -- gp:minimap
 end
 
-local function OnLocation(king, rest)
+local function OnLocation(king, id, rest)
 	local mapID, x, y = rest:match("^(%d+)~(%d+)~(%d+)$")
 	mapID, x, y = tonumber(mapID), tonumber(x), tonumber(y)
 	if not mapID or x > 1000 or y > 1000 then return end
-	kingAt = { from = ns.FullName(king), name = ns.KingName(king), mapID = mapID, x = x / 1000, y = y / 1000, t = ns.Now() }
+	kingAt = { from = ns.FullName(king), name = ns.KingName(king), id = id, mapID = mapID, x = x / 1000, y = y / 1000, t = ns.Now() }
 	ns.SafeCall("king crown", King.RefreshCrown)
+	ns.Fire("KING_LOCATION_CHANGED", "show", kingAt.from, kingAt.id)
 	Changed()
 end
 
--- Where the King is, while he shares it: { name, mapID, x, y, t } or nil.
+-- Where the King is, while he shares it: { name, id, mapID, x, y, t } or nil.
 function King.Location()
 	if kingAt and ns.Now() - kingAt.t > King.LOCATION_EXPIRE then return nil end
+	-- 1.1.6: a sanctioned player (WatchChat.Barred "locations") sees neither the King's crown nor
+	-- his arrow, and asks for no layer of his, while it lasts.
+	local WC = ns.WatchChat
+	if kingAt and WC and not WC.missing and WC.Barred and WC.Barred("locations") then return nil end
 	return kingAt
 end
 
@@ -1130,6 +1159,13 @@ function King.HandleCommand(dist, sender, text)
 	if King.HIDDEN_CALLS[kind] and ns.Moderation.Hides and ns.Moderation.Hides(sender, guild) and not (kind == "D" and rest:find("^0~")) then
 		return ns.Log("throne %s from %s ignored: net-off", kind, sender)
 	end
+	-- 1.1.6: a Hand or a Steward under a moderator's timeout or hold (WatchChat.Barred "powers")
+	-- calls nobody while it lasts. (Never the King: nobody times him out.)
+	local WC = ns.WatchChat
+	if King.HIDDEN_CALLS[kind] and WC and not WC.missing and WC.Barred and not (kind == "D" and rest:find("^0~"))
+		and not KingSender(sender, guild) and WC.Barred("powers", sender) then
+		return ns.Log("throne %s from %s ignored: sanctioned", kind, sender)
+	end
 	-- The King's own client takes his Hands' news (the agenda, the gates, a cancel), not
 	-- their calls to the army: no roll call popup, patrol or poll window for him.
 	if King.IsKing() and (kind == "S" or kind == "I" or kind == "V") and not KingSender(sender, guild) then return end
@@ -1140,12 +1176,17 @@ function King.HandleCommand(dist, sender, text)
 	elseif kind == "I" then OnInspect(sender, id)
 	elseif kind == "U" then OnUntabarded(sender, rest)
 	elseif kind == "A" then OnAgenda(sender, id, rest, guild)
-	elseif kind == "P" then OnLocation(sender, rest)
+	elseif kind == "P" then OnLocation(sender, id, rest)
 	elseif kind == "Q" then
 		-- Only whoever put the crown there takes it off.
-		if kingAt and kingAt.from ~= ns.FullName(sender) then return end
+		if kingAt and (kingAt.from ~= ns.FullName(sender) or kingAt.id ~= id) then
+			-- The Q must not hide a newer crown, but its own old lease is still explicitly revoked.
+			ns.Fire("KING_LOCATION_CHANGED", "revoke", ns.FullName(sender), id)
+			return
+		end
 		kingAt = nil
 		ns.SafeCall("king crown", King.RefreshCrown)
+		ns.Fire("KING_LOCATION_CHANGED", "hide", ns.FullName(sender), id)
 		Changed()
 	elseif kind == "X" then
 		if agenda and agenda.id == id then
@@ -1157,6 +1198,9 @@ function King.HandleCommand(dist, sender, text)
 	end
 end
 ns.Comm.Handle("T1", function(...) King.HandleCommand(...) end)
+
+-- 1.1.6: a sanction given or lifted (WatchChat.lua): the crown taken off or drawn again at once.
+ns.On("WATCHCHAT_CHANGED", function() ns.SafeCall("king crown", King.RefreshCrown) end)
 
 ns.On("LOGIN", function()
 	-- The King's position, while he shares it; everyone's crown expires on its own.
@@ -1264,7 +1308,7 @@ King.Para = Para
 
 ---------------------------------------------------------------------------
 -- Where the King's calls show: the roll call in the Realm tab (next to the Lords it calls),
--- the Royal Inspection in the Tabards tab. Plain rows (not the parchment), for the King and
+-- the Royal Inspection in The Watch's Tabards. Plain rows (not the parchment), for the King and
 -- his Hands (and the author's Asmon's view).
 ---------------------------------------------------------------------------
 
@@ -1358,7 +1402,7 @@ function King.RollCallLines()
 	return lines
 end
 
--- The Royal Inspection on top of the Tabards tab: call one, then what the patrols reported.
+-- The Royal Inspection on top of The Watch's Tabards: call one, then what the patrols reported.
 function King.InspectionLines()
 	if not King.CanCall() then return {} end
 	local lines = {}
@@ -1446,15 +1490,15 @@ King.Line, King.INK, King.TITLE = Line, INK, TITLE
 
 local function Go(mode) return function() King.Show(mode) end end
 
--- The Throne Room: what is the King's alone. Each tool lives where it belongs (the agenda and
--- the court on the buttons below, the Hands and his crown on the map on the buttons beside, the
--- roll call in the Realm, the inspection in the Tabards, Vox Populi on its own tab): here, the
--- court's queue while it is open and the army's key. A Hand's: where their tools are. His
--- Steward's (1.0.0): the King's, with what is his to do in the King's name (he holds no court: no
--- queue). 1.1.5 (the author's calls): no treasury here any more (its own tab has it all), and
--- under it all, the King's guild's centurions (Nominees.lua: the King's and the High Council's to
--- name, the others' to read); a High Councillor who is none of them has the Throne for them alone.
--- One who also leads another Olympus guild has his Guild tab's section after it.
+-- The Throne Room: what is the King's alone. Each tool lives where it belongs (the agenda here,
+-- Judgment and the court in The Watch (1.2), the Hands and his crown on the map on the buttons
+-- beside, the roll call in the Realm, the inspection in the Tabards, Vox Populi and the treasury
+-- on their own tabs): here, the army's key. A Hand's: where their tools are. His Steward's
+-- (1.0.0): the King's, with what is his to do in the King's name (he holds no court). 1.1.5 (the
+-- author's calls): no treasury here any more (its own tab has it all), and under it all, the
+-- King's guild's centurions (Nominees.lua: the King's and the High Council's to name, the
+-- others' to read); a High Councillor who is none of them has the Throne for them alone. One who
+-- also leads another Olympus guild has his Guild tab's section after it.
 local function HomeLines()
 	local mine = King.IsKing() or King.Preview()
 	local steward = not mine and King.IsSteward()
@@ -1469,8 +1513,8 @@ local function HomeLines()
 	elseif not mine then
 		Para(lines, L.THRONE_COUNCIL_HINT, INK, { gapAfter = true })
 	end
+	-- (1.2: the court's queue is in The Watch, with Judgment.)
 	if mine or steward then
-		for _, l in ipairs(ns.Court and ns.Court.HomeLines and ns.Court.HomeLines() or {}) do lines[#lines + 1] = l end
 		-- 1.1: the army's key, the King's to rotate, or his Steward's for him (Keys.lua).
 		for _, l in ipairs(ns.Keys.ThroneLines and ns.Keys.ThroneLines() or {}) do lines[#lines + 1] = l end
 	end
@@ -1490,15 +1534,20 @@ end
 King.KING_PAGES = { hands = true }
 
 -- For Views.Build("throne"): lines, detail title, detail text.
--- The Throne opens on the Throne Room (the King's: his court's queue while it is open, the
--- treasury; a Hand's: where their tools are), and holding court takes him there. (1.0.0: no
+-- The Throne opens on the Throne Room (the King's administration; a Hand's: where their tools
+-- are). Judgment and the court's queue are in The Watch. (1.0.0: no
 -- letter before it any more.) His Steward's says on top, on every page, that he acts for the King.
 function King.Build(s)
-	-- 1.1.5: a guild master's Guild tab, in the Throne's place (Nominees.lua).
-	if not King.ThroneShown() then
+	-- 1.1.5: a guild master's Guild tab, in the Throne's place (Nominees.lua). (1.2: the author sees
+	-- every tab in his own view, ViewAs.lua: without a role of his own here, the Throne as it is.)
+	local V = ns.ViewAs
+	local authorsOwn = type(V) == "table" and not V.missing and type(V.Available) == "function" and V.Available() == true
+		and V.Role() == "my" and not King.GuildShown()
+	if not King.ThroneShown() and not authorsOwn then
 		local N = ns.Nominees
-		local master, guild = King.GuildShown(), N and N.IsMaster and select(2, N.IsMaster())
-		return master and N.GuildLines() or {}, L.TAB_GUILD, master and L.GUILD_TAB_DETAIL:format(tostring(guild)) or nil
+		local master, guild = King.GuildShown(), N and N.GuildAccess and select(2, N.GuildAccess())
+		local detail = N and N.IsMaster and N.IsMaster() and L.GUILD_TAB_DETAIL or L.GUILD_DEPARTMENT_SCOPE
+		return master and N.GuildLines() or {}, L.TAB_GUILD, master and detail:format(tostring(guild)) or nil
 	end
 	local lines, home
 	if not King.mode then King.mode = "home" end
@@ -1514,9 +1563,12 @@ function King.Build(s)
 	end
 	local steward = King.IsSteward()
 	if steward then table.insert(lines, 1, Line("|T" .. ns.CROWN_ICON .. ":0|t " .. L.STEWARD_ACTING, TITLE, { gapAfter = true })) end
+	-- (1.2: the author sees every tab, the Throne too, without a role here: ViewAs.lua.)
 	local detail = steward and L.THRONE_YOU_ARE_STEWARD:format(ns.KingName(ns.KingCharacter()))
 		or King.IsHand() and L.THRONE_YOU_ARE_HAND:format(ns.KingName(handsKing or ns.KingCharacter()))
-		or (King.IsKing() or King.Preview()) and L.THRONE_YOU_ARE_KING or L.THRONE_YOU_ARE_COUNCILLOR
+		or (King.IsKing() or King.Preview()) and L.THRONE_YOU_ARE_KING
+		or (ns.IsHighCouncillor(ns.me) == true or ns.ViewAs and ns.ViewAs.Is and ns.ViewAs.Is("councillor")) and L.THRONE_YOU_ARE_COUNCILLOR
+		or L.THRONE_NOT_YOURS
 	return lines, L.TAB_THRONE, detail
 end
 

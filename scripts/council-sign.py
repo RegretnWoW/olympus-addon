@@ -8,6 +8,10 @@
   python3 scripts/council-sign.py steward --remove "<Name-Realm>"         # end it: sign again without him
   python3 scripts/council-sign.py guild "<Guild Name>" [Alliance|Horde]  # approve a guild of Olympus, then sign as "council"
   python3 scripts/council-sign.py guild --remove "<Guild Name>"          # take it off: sign again without it
+  python3 scripts/council-sign.py arbiter [--audit] "<Name-Realm>" [Alliance|Horde] # a signed arena arbiter (1.2), then sign as "council"
+  python3 scripts/council-sign.py arbiter --remove "<Name-Realm>"        # end it: sign again without him
+  python3 scripts/council-sign.py apostle "<Name-Realm>" [Alliance|Horde] # one of the Church's Twelve Apostles (1.1.6), then sign as "council"
+  python3 scripts/council-sign.py apostle --remove "<Name-Realm>"        # end it: sign again without him
   python3 scripts/council-sign.py check [CouncilList.lua]                 # (or --check) read back what was signed
 
 The private key never leaves ~/.olympus. The addon carries only the public key (Sign.lua) and
@@ -61,6 +65,54 @@ allows; each once. "guild" adds one to the council file and signs the council at
 game with /oly approved paste: the first member of such a guild has no other way to get it (its
 addon hears nothing of Olympus until it holds it); his addon then passes it to his guild.
 
+The Blood Arena's signed arbiters (1.2): an optional "arbiters" list in the same file names the
+characters who may arbitrate public fights and direct rehearsals on test builds, whatever the
+King's own list says, one faction's at most MAX_ARBITERS; "audit": true also makes one an auditor
+(he receives the arena's ledgers):
+
+  "arbiters": ["First Surname-Realm", {"name": "First Surname-Realm", "faction": "Horde", "audit": true}]
+
+The titles list carries them after the approved guilds, one entry per faction
+("^arbiter^<faction>^<First Surname-Realm>[+a],..."), three "^" again, so clients before 1.2 leave
+it out unread. A name as a Steward's (a realm of the list's group). "arbiter" adds one (with
+--audit: an auditor too) and signs the council at once; "arbiter --remove" takes him off and signs
+again. No arena file names the author: this entry is how his own character arbitrates too.
+
+The Missionary Church of Olympus's Twelve Apostles (1.1.6): an optional "apostles" list in the same
+file names them, at most MAX_APOSTLES per faction, set once here so they hold on every client with
+nobody online (the Head of the Church, the King or the author may change them in game later, until
+a newer list):
+
+  "apostles": ["First Surname-Realm", {"name": "First Surname-Realm", "faction": "Horde"}]
+
+The titles list carries them after the arbiters, one entry per faction
+("^apostles^<faction>^<First Surname-Realm>,..."), three "^" again, so clients before 1.1.6 leave it
+out unread. A name as a Steward's (a realm of the list's group). "apostle" adds one and signs the
+council at once; "apostle --remove" takes him off and signs again. Asmongold is the immutable
+Head of the Church, using the addon's canonical King identity. It is not an assignable Apostle
+position. Remove legacy "head": true flags before signing a new list; old signed starred lists
+remain readable by the addon but confer no Head authority.
+
+Cross-guild leadership migration (1.2): absent by default, so the documented census behaviour is
+unchanged. It is activated only by the deliberately explicit "leadership" object below:
+
+  "leadership": {"mode": "enforce", "epoch": 1, "factions": ["Alliance"],
+    "guilds": [{"guild": "Olympus II", "leader": "Lord Name-ClassicBetaPvP",
+                "officers": ["Captain One-ClassicBetaPvP2"], "faction": "Alliance"}]}
+
+Every character must carry an exact realm from the signed realm group. Each enforced faction gets
+an entry even when its guilds list is empty (the signed empty tombstone). Once a client accepts an
+enforcing entry, it remembers that one-way boundary locally: an expired, malformed, lower-epoch or
+newer absent entry grants nobody and never reopens census authority. Increase "epoch" for a new
+authority generation; ordinary additions/removals may keep it. The manifest lasts 14 days.
+
+Leadership is signed separately from HT1 as one or more HA1 parts in
+`ns.COUNCIL_AUTHORITY`. Each part binds the SHA-256 of the complete canonical manifest and is
+independently signed. Receivers activate the one-way fail-closed boundary on the first valid part,
+but grant roles only after every part of that exact set verifies and the joined digest matches.
+Parts split only between guild entries. Older addon versions ignore H2/H3. The set is deliberately
+bounded; the signer refuses anything beyond the addon's guild, person, part and byte limits.
+
 Every list gets a newer time than the last one signed with the key (kept in the key file as
 "last_at"): clients keep a list only if it is newer than theirs, so two lists signed in the
 same second both reach them. Anything the addon would not take is refused here, before anything
@@ -83,6 +135,12 @@ MAX_NAMES, MAX_NAME, MAX_BLOB = 30, 48, 2000 # what the addon takes (Workshop.Ta
 MAX_TITLE, MAX_DEPT, MAX_DEPTS, MAX_TITLES_BLOB = 48, 40, 8, 3000 # and of the titles (Workshop.TakeTitles)
 MAX_STEWARDS, MAX_REALM, FACTIONS = 3, 40, ("Alliance", "Horde") # the King's Steward (Core.lua: ns.ReadStewards)
 MAX_GUILDS, MAX_GUILD_CHARS, MAX_GUILD_BYTES = 20, 24, 72 # the approved guilds (Core.lua: ns.ReadApprovedGuilds)
+MAX_ARBITERS = 5 # the arena's signed arbiters per faction (Core.lua: ns.ReadArbiters, 1.2)
+MAX_APOSTLES = 12 # the Church's Twelve Apostles per faction (Church.lua: Church.ReadApostles, 1.1.6)
+MAX_LEADER_GUILDS, MAX_LEADERS_EACH, MAX_LEADERS_TOTAL = 128, 25, 512 # Authority.lua
+MAX_LEADERS_EPOCH = 2 ** 31 - 1
+LEADERS_DAYS = 14
+MAX_AUTH_PARTS, MAX_AUTH_BODY = 8, 5000
 SIG_LEN = 512 # hex digits of a signature, always (Sign.Verify)
 
 def is_prime(n, rounds=40):
@@ -281,8 +339,115 @@ def read_guilds(v):
         if len(out[faction]) > MAX_GUILDS: sys.exit("more than %d approved guilds for the %s" % (MAX_GUILDS, faction))
     return out
 
+# The council file's "arbiters" (1.2): each a name (an Alliance arbiter) or {"name", "faction",
+# "audit"}. Returns {faction: ["Name-Realm" or "Name-Realm+a"]}, each faction MAX_ARBITERS at most,
+# nobody twice, each realm one of the list's realm group.
+def read_arbiters(v, realm):
+    if v is None: return {}
+    if not isinstance(v, list): sys.exit("arbiters is not a list")
+    out, seen = {}, set()
+    for a in v:
+        if isinstance(a, dict):
+            fields(a, "an arbiter", ("name", "faction", "audit"))
+            name, faction, audit = a.get("name"), a.get("faction", "Alliance"), a.get("audit", False)
+        else:
+            name, faction, audit = a, "Alliance", False
+        if not isinstance(name, str): sys.exit("an arbiter is a name, not %r" % (name,))
+        name = steward_name(name)
+        if faction not in FACTIONS: sys.exit("an arbiter's faction is Alliance or Horde, not %r" % (faction,))
+        if not isinstance(audit, bool): sys.exit("audit is true or false, not %r" % (audit,))
+        home = name.partition("-")[2]
+        if home and realm and home not in realm.split("+"):
+            sys.exit("%r is not of the list's realm group (%s)" % (name, realm))
+        if name.lower() in seen: sys.exit("an arbiter twice: %r" % name)
+        seen.add(name.lower())
+        out.setdefault(faction, []).append(name + ("+a" if audit else ""))
+        if len(out[faction]) > MAX_ARBITERS: sys.exit("more than %d arbiters for the %s" % (MAX_ARBITERS, faction))
+    return out
+
+# The council file's "apostles" (1.1.6): each a name (an Alliance Apostle) or {"name", "faction",
+# "head"}. Returns {faction: ["Name-Realm"]}; legacy head flags are refused, not a nomination.
+# Each faction MAX_APOSTLES at most, nobody twice, each realm one of the list's realm
+# group. A name of the Church's (Church.lua's WireName): 30 bytes at most.
+def read_apostles(v, realm):
+    if v is None: return {}
+    if not isinstance(v, list): sys.exit("apostles is not a list")
+    out, seen = {}, set()
+    for a in v:
+        head = False
+        if isinstance(a, dict):
+            fields(a, "an apostle", ("name", "faction", "head"))
+            name, faction, head = a.get("name"), a.get("faction", "Alliance"), a.get("head", False)
+            if not isinstance(head, bool): sys.exit("an apostle's head is true or false, not %r" % (head,))
+        else:
+            name, faction = a, "Alliance"
+        if not isinstance(name, str): sys.exit("an apostle is a name, not %r" % (name,))
+        name = steward_name(name)
+        if len(name.partition("-")[0].encode()) > 30: sys.exit("an apostle's name is 30 bytes at most: %r" % name)
+        if faction not in FACTIONS: sys.exit("an apostle's faction is Alliance or Horde, not %r" % (faction,))
+        home = name.partition("-")[2]
+        if home and realm and home not in realm.split("+"):
+            sys.exit("%r is not of the list's realm group (%s)" % (name, realm))
+        if name.partition("-")[0].lower() in seen: sys.exit("an apostle twice: %r" % name)
+        seen.add(name.partition("-")[0].lower())
+        if head: sys.exit("Asmongold is Head of the Church; remove legacy head flags before signing")
+        out.setdefault(faction, []).append(name)
+        if len(out[faction]) > MAX_APOSTLES: sys.exit("more than %d apostles for the %s" % (MAX_APOSTLES, faction))
+    return out
+
+# The dormant signed leadership migration. Absence means legacy census behaviour; only the
+# explicit mode "enforce" activates the one-way client boundary. Its first character is the guild
+# master (rank 0), followed by officers (rank 1). Every identity has an exact realm; nobody may
+# occur twice in a faction, including under another guild. issued/expires use the wall clock, not
+# HT1's monotonic ordering time (last_at can intentionally be ahead after a clock correction).
+def read_leadership(v, realm):
+    if v is None: return None, None, {}, None, None
+    fields(v, "leadership", ("mode", "epoch", "factions", "guilds"))
+    if v.get("mode") != "enforce": sys.exit("leadership mode is 'enforce'")
+    epoch = v.get("epoch")
+    if isinstance(epoch, bool) or not isinstance(epoch, int) or not 1 <= epoch <= MAX_LEADERS_EPOCH:
+        sys.exit("leadership epoch is an integer from 1 to %d" % MAX_LEADERS_EPOCH)
+    factions = v.get("factions")
+    if not isinstance(factions, list) or not factions: sys.exit("leadership factions is a non-empty list")
+    if any(f not in FACTIONS for f in factions): sys.exit("leadership factions contain only Alliance or Horde")
+    if len(set(factions)) != len(factions): sys.exit("a leadership faction is named twice")
+    listed = v.get("guilds")
+    if not isinstance(listed, list): sys.exit("leadership guilds is not a list")
+    realms = set(realm.split("+")) if realm else set()
+    if not realms: sys.exit("signed leadership requires a realm group")
+    out, guild_seen, people_seen, total = {}, set(), set(), 0
+    for e in listed:
+        fields(e, "a guild's leaders", ("guild", "leader", "officers", "faction"))
+        guild = guild_name(e.get("guild"))
+        faction = e.get("faction", "Alliance")
+        if faction not in FACTIONS: sys.exit("a guild's leaders faction is Alliance or Horde, not %r" % (faction,))
+        if faction not in factions: sys.exit("%r has leadership but its faction is not enforced" % guild)
+        gkey = (faction, guild.casefold())
+        if gkey in guild_seen: sys.exit("a guild's leaders twice: %r" % guild)
+        guild_seen.add(gkey)
+        officers = e.get("officers") or []
+        if not isinstance(officers, list): sys.exit("officers of %r is not a list" % guild)
+        if len(officers) + 1 > MAX_LEADERS_EACH: sys.exit("more than %d signed leaders of %r" % (MAX_LEADERS_EACH, guild))
+        raw = [e.get("leader")] + officers
+        names = []
+        for value in raw:
+            name = steward_name(value)
+            home = name.partition("-")[2]
+            if not home: sys.exit("a signed leader needs an exact realm: %r" % name)
+            if home not in realms: sys.exit("%r is not of the list's realm group (%s)" % (name, realm))
+            pkey = (faction, name.casefold())
+            if pkey in people_seen: sys.exit("a signed leader twice: %r" % name)
+            people_seen.add(pkey)
+            names.append(name)
+            total += 1
+            if total > MAX_LEADERS_TOTAL: sys.exit("more than %d signed leaders" % MAX_LEADERS_TOTAL)
+        out.setdefault(faction, []).append((guild, names))
+        if len(out[faction]) > MAX_LEADER_GUILDS: sys.exit("more than %d guild leadership entries for the %s" % (MAX_LEADER_GUILDS, faction))
+    issued = int(time.time())
+    return epoch, factions, out, issued, issued + LEADERS_DAYS * 86400
+
 def read_council(data):
-    fields(data, "the council", ("realm", "public", "departments", "members", "stewards", "guilds"))
+    fields(data, "the council", ("realm", "public", "departments", "members", "stewards", "guilds", "arbiters", "apostles", "leadership"))
     realm = data.get("realm", REALM)
     if not isinstance(realm, str): sys.exit("not a realm group the addon takes: %r" % (realm,))
     public = data.get("public", False)
@@ -298,7 +463,10 @@ def read_council(data):
         if name.lower() in seen: sys.exit("a department twice: %r" % name)
         seen.add(name.lower())
         depts.append((name, icon_field(d.get("icon"), name), people(d.get("members"), name)))
-    return realm, public, loose, depts, read_stewards(data.get("stewards"), realm), read_guilds(data.get("guilds"))
+    leaders_epoch, leaders_factions, leaders, issued, expires = read_leadership(data.get("leadership"), realm)
+    return (realm, public, loose, depts, read_stewards(data.get("stewards"), realm), read_guilds(data.get("guilds")),
+        read_arbiters(data.get("arbiters"), realm), leaders_epoch, leaders_factions, leaders, issued, expires,
+        read_apostles(data.get("apostles"), realm))
 
 def load_council(path):
     try:
@@ -310,8 +478,39 @@ def load_council(path):
 def sign_council(path):
     return sign_council_data(load_council(path))
 
+def sign_authority(at, realm, epoch, factions, leaders, issued, expires, key):
+    """Return independently signed HA1 parts, split only between complete guild entries."""
+    out = []
+    for faction in factions or []:
+        entries = ["%s=%s" % (guild, ",".join(names)) for guild, names in leaders.get(faction, [])]
+        full = "!".join(entries) or "-"
+        root = hashlib.sha256(full.encode()).hexdigest()
+        bodies = []
+        if full == "-":
+            bodies = [full]
+        else:
+            current = []
+            for entry in entries:
+                candidate = "!".join(current + [entry])
+                if len(candidate.encode()) > MAX_AUTH_BODY:
+                    if not current: sys.exit("one leadership guild entry exceeds %d bytes" % MAX_AUTH_BODY)
+                    bodies.append("!".join(current)); current = [entry]
+                else:
+                    current.append(entry)
+            if current: bodies.append("!".join(current))
+        if len(bodies) > MAX_AUTH_PARTS:
+            sys.exit("leadership needs %d signed parts; the addon takes %d" % (len(bodies), MAX_AUTH_PARTS))
+        for index, body in enumerate(bodies, 1):
+            text = "HA1~%d~%s~%s~enforce~%d~%d~%d~%s~%d~%d~%s" % (
+                at, realm, faction, epoch, issued, expires, root, index, len(bodies), body)
+            # H2~ plus chunk headers must stay under Codec's 30 * 220 logical payload bound.
+            if len(text.encode()) + 1 + SIG_LEN > 6200:
+                sys.exit("a signed authority part exceeds 6200 bytes")
+            out.append(text + "~" + signature(text, key))
+    return out
+
 def sign_council_data(data):
-    realm, public, loose, depts, stewards, guilds = read_council(data)
+    realm, public, loose, depts, stewards, guilds, arbiters, leaders_epoch, leaders_factions, leaders, leaders_issued, leaders_expires, apostles = read_council(data)
     names = [m[0] for m in loose] + [m[0] for d in depts for m in d[2]]
     check(names, realm)
     with open(KEY) as f: key = json.load(f)
@@ -323,11 +522,16 @@ def sign_council_data(data):
     entries += ["^steward^%s^%s" % (faction, ",".join(stewards[faction])) for faction in FACTIONS if stewards.get(faction)]
     # The approved guilds (1.1) after them, the same way.
     entries += ["^guilds^%s^%s" % (faction, ",".join(guilds[faction])) for faction in FACTIONS if guilds.get(faction)]
+    # The arena's signed arbiters (1.2) after them, the same way.
+    entries += ["^arbiter^%s^%s" % (faction, ",".join(arbiters[faction])) for faction in FACTIONS if arbiters.get(faction)]
+    # The Church's Twelve Apostles (1.1.6) after them, the same way.
+    entries += ["^apostles^%s^%s" % (faction, ",".join(apostles[faction])) for faction in FACTIONS if apostles.get(faction)]
     titles_text = "HT1~%d~%s~%d~%s" % (at + 1, realm, 1 if public else 0, ";".join(entries))
     fits(names_text, MAX_BLOB, "the name list")
     fits(titles_text, MAX_TITLES_BLOB, "the titles list")
-    signed = names_text + "~" + signature(names_text, key), titles_text + "~" + signature(titles_text, key)
-    key["last_at"] = at + 1
+    authority = sign_authority(at + 2, realm, leaders_epoch, leaders_factions, leaders, leaders_issued, leaders_expires, key) if leaders_factions else []
+    signed = names_text + "~" + signature(names_text, key), titles_text + "~" + signature(titles_text, key), authority
+    key["last_at"] = at + (2 if authority else 1)
     save_key(key)
     return signed
 
@@ -336,12 +540,16 @@ def sign_council_data(data):
 def lua_string(s):
     return '"' + "".join(chr(b) if 32 <= b < 127 and chr(b) not in '"\\' else "\\%03d" % b for b in s.encode()) + '"'
 
-def write_out(names, titles=None):
+def write_out(names, titles=None, authority=None):
     if os.path.dirname(OUT): os.makedirs(os.path.dirname(OUT), exist_ok=True)
     with open(OUT, "w") as f:
         f.write("-- Local only: the High Council's lists, signed. Never commit or publish this file.\n")
         f.write("local _, ns = ...\nns.COUNCIL_SIGNED = %s\n" % lua_string(names))
         if titles: f.write("ns.COUNCIL_TITLES = %s\n" % lua_string(titles))
+        if authority:
+            f.write("ns.COUNCIL_AUTHORITY = {\n")
+            for blob in authority: f.write(" %s,\n" % lua_string(blob))
+            f.write("}\n")
 
 # The council file rewritten whole or not at all, readable by its owner as before.
 def save_council(path, data):
@@ -402,6 +610,63 @@ def guild(args, path=COUNCIL):
     save_council(path, data)
     return signed
 
+# arbiter [--audit] <Name-Realm> [faction] | arbiter --remove <Name-Realm>: the council file's
+# "arbiters" changed (1.2), the council signed from it at once (nothing written if refused).
+def arbiter(args, path=COUNCIL):
+    remove = bool(args) and args[0] == "--remove"
+    if remove: args = args[1:]
+    audit = not remove and bool(args) and args[0] == "--audit"
+    if audit: args = args[1:]
+    if len(args) not in (1, 2) or (remove and len(args) != 1): sys.exit(__doc__)
+    name, faction = steward_name(args[0]), args[1] if len(args) == 2 else "Alliance"
+    if faction not in FACTIONS: sys.exit("an arbiter's faction is Alliance or Horde, not %r" % faction)
+    data = load_council(path)
+    listed = data.get("arbiters") or []
+    if not isinstance(listed, list): sys.exit("arbiters is not a list")
+    def who(a): return (a.get("name") if isinstance(a, dict) else a) or ""
+    kept = [a for a in listed if not (isinstance(who(a), str) and who(a).strip().lower() == name.lower())]
+    if remove and len(kept) == len(listed): sys.exit("not an arbiter in %s: %r" % (path, name))
+    if not remove:
+        if len(kept) != len(listed): sys.exit("already an arbiter: %r" % name)
+        if faction == "Alliance" and not audit: kept.append(name)
+        else:
+            entry = {"name": name}
+            if faction != "Alliance": entry["faction"] = faction
+            if audit: entry["audit"] = True
+            kept.append(entry)
+    data["arbiters"] = kept
+    signed = sign_council_data(data)
+    write_out(*signed)
+    save_council(path, data)
+    return signed
+
+# apostle <Name-Realm> [faction] | apostle --remove <Name-Realm>:
+# the council file's "apostles" changed (1.1.6), the council signed from it at once (nothing written
+# if anything is refused). The Head is canonical and cannot be nominated.
+def apostle(args, path=COUNCIL):
+    if args and args[0] == "--head": sys.exit("Asmongold is Head of the Church; this position cannot be nominated")
+    remove = bool(args) and args[0] == "--remove"
+    if remove: args = args[1:]
+    if len(args) not in (1, 2) or (remove and len(args) != 1): sys.exit(__doc__)
+    name, faction = steward_name(args[0]), args[1] if len(args) == 2 else "Alliance"
+    if faction not in FACTIONS: sys.exit("an apostle's faction is Alliance or Horde, not %r" % faction)
+    data = load_council(path)
+    listed = data.get("apostles") or []
+    if not isinstance(listed, list): sys.exit("apostles is not a list")
+    def who(a): return (a.get("name") if isinstance(a, dict) else a) or ""
+    short = name.partition("-")[0].lower()
+    kept = [a for a in listed if not (isinstance(who(a), str) and who(a).strip().partition("-")[0].lower() == short)]
+    if remove and len(kept) == len(listed): sys.exit("not an apostle in %s: %r" % (path, name))
+    entry = name if faction == "Alliance" else {"name": name, "faction": faction}
+    if not remove:
+        if len(kept) != len(listed): sys.exit("already an apostle: %r" % name)
+        kept.append(entry)
+    data["apostles"] = kept
+    signed = sign_council_data(data)
+    write_out(*signed)
+    save_council(path, data)
+    return signed
+
 # A Lua string literal as lua_string writes it (plain bytes and \ddd), back to its text.
 def lua_unstring(s):
     out, i = bytearray(), 0
@@ -413,9 +678,11 @@ def lua_unstring(s):
     return out.decode()
 
 def verified(text, sig, n):
+    if len(sig) != SIG_LEN or re.fullmatch(r"[0-9a-fA-F]+", sig) is None:
+        return False
     h = hashlib.sha256(text.encode()).digest()
     em = b"\x00\x01" + b"\xff" * (256 - 3 - len(PREFIX) - len(h)) + b"\x00" + PREFIX + h
-    return len(sig) == SIG_LEN and pow(int(sig, 16), 3, n) == int.from_bytes(em, "big")
+    return pow(int(sig, 16), 3, n) == int.from_bytes(em, "big")
 
 # check [CouncilList.lua]: what a written file holds, each list's signature checked with the key.
 def check_out(path=OUT):
@@ -424,6 +691,16 @@ def check_out(path=OUT):
     except OSError as e: sys.exit("cannot read %s: %s" % (path, e))
     with open(KEY) as f: n = int(json.load(f)["n"], 16)
     lists = {k: lua_unstring(v) for k, v in re.findall(r'^ns\.(COUNCIL_SIGNED|COUNCIL_TITLES) = "((?:[^"\\]|\\[0-9]{3})*)"$', lua, re.M)}
+    authority = []
+    authority_declared = re.search(r'^ns\.COUNCIL_AUTHORITY\s*=', lua, re.M) is not None
+    authority_block = re.search(r'^ns\.COUNCIL_AUTHORITY = \{\n(.*?)^\}$', lua, re.M | re.S)
+    if authority_block:
+        authority = [lua_unstring(v) for v in re.findall(r'^ "((?:[^"\\]|\\[0-9]{3})*)",$', authority_block.group(1), re.M)]
+        written = [line for line in authority_block.group(1).splitlines() if line.strip()]
+        if len(written) != len(authority):
+            sys.exit("%s holds a malformed signed authority table" % path)
+    elif authority_declared:
+        sys.exit("%s holds a malformed signed authority table" % path)
     if "COUNCIL_SIGNED" not in lists: sys.exit("%s holds no name list" % path)
     bad = False
     for kind in ("COUNCIL_SIGNED", "COUNCIL_TITLES"):
@@ -439,7 +716,7 @@ def check_out(path=OUT):
             print("  names:", parts[3] or "-")
             continue
         print("  public:", parts[3] == "1")
-        stewards, guilds = {}, {}
+        stewards, guilds, arbiters, leaders, apostles = {}, {}, {}, {}, {}
         for entry in parts[4].split(";"):
             if entry.startswith("^steward^"):
                 _, _, faction, names = entry.split("^", 3)
@@ -447,6 +724,15 @@ def check_out(path=OUT):
             elif entry.startswith("^guilds^"):
                 _, _, faction, names = entry.split("^", 3)
                 guilds[faction] = names
+            elif entry.startswith("^arbiter^"):
+                _, _, faction, names = entry.split("^", 3)
+                arbiters[faction] = names
+            elif entry.startswith("^apostles^"):
+                _, _, faction, names = entry.split("^", 3)
+                apostles[faction] = names
+            elif entry.startswith("^leaders^"):
+                _, _, faction, mode, epoch, issued, expires, names = entry.split("^", 7)
+                leaders[faction] = "%s (mode %s, epoch %s, issued %s, expires %s)" % (names, mode, epoch, issued, expires)
             elif entry:
                 part = entry.split("^")
                 print("  %s: %s" % (part[0] or "(outside any department)", part[-1] or "-"))
@@ -454,6 +740,52 @@ def check_out(path=OUT):
             print("  the %s King's Steward: %s" % (faction, stewards.get(faction) or "none"))
         for faction in FACTIONS:
             print("  the %s's approved guilds: %s" % (faction, guilds.get(faction) or "none"))
+        for faction in FACTIONS:
+            print("  the %s's arena arbiters (+a: auditor): %s" % (faction, arbiters.get(faction) or "none"))
+        for faction in FACTIONS:
+            print("  the %s's signed leadership: %s" % (faction, leaders.get(faction) or "none"))
+        for faction in FACTIONS:
+            print("  the %s's Church Apostles (* the Head): %s" % (faction, apostles.get(faction) or "none"))
+    sets = {}
+    for blob in authority:
+        text, _, sig = blob.rpartition("~")
+        good = verified(text, sig, n)
+        bad = bad or not good
+        parts = text.split("~", 11)
+        if len(parts) != 12 or parts[0] != "HA1":
+            print("authority: malformed"); bad = True; continue
+        _, at, realm, faction, mode, epoch, issued, expires, root, index, count, body = parts
+        try:
+            at_n, epoch_n, issued_n, expires_n, index_n, count_n = map(
+                int, (at, epoch, issued, expires, index, count))
+        except ValueError:
+            print("authority: malformed numbers"); bad = True; continue
+        shape = (mode == "enforce" and faction in FACTIONS and at_n >= 1577836800
+            and 1 <= epoch_n <= MAX_LEADERS_EPOCH and issued_n >= 1577836800
+            and issued_n < expires_n and expires_n - issued_n <= 31 * 86400
+            and re.fullmatch(r"[0-9a-f]{64}", root) is not None
+            and 1 <= count_n <= MAX_AUTH_PARTS and 1 <= index_n <= count_n
+            and 0 < len(body.encode()) <= MAX_AUTH_BODY
+            and (body != "-" or (index_n == 1 and count_n == 1)))
+        if not shape:
+            print("authority %s: malformed" % (faction or "?")); bad = True; continue
+        key = (at, realm, faction, epoch, issued, expires, root, count)
+        bodies = sets.setdefault(key, {})
+        if index_n in bodies:
+            print("authority %s: duplicate part %d" % (faction, index_n)); bad = True; continue
+        bodies[index_n] = body
+        print("authority %s %s/%s: %s" % (faction, index, count, "signature good" if good else "SIGNATURE BAD"))
+    for key, bodies in sets.items():
+        at, realm, faction, epoch, issued, expires, root, count = key
+        count = int(count)
+        if len(bodies) != count or any(i not in bodies for i in range(1, count + 1)):
+            print("authority %s: PARTIAL" % faction); bad = True; continue
+        full = bodies[1] if count == 1 and bodies[1] == "-" else "!".join(bodies[i] for i in range(1, count + 1))
+        digest = hashlib.sha256(full.encode()).hexdigest()
+        good = digest == root
+        bad = bad or not good
+        print("authority %s: %d part(s), epoch %s, digest %s, %d bytes" % (
+            faction, count, epoch, "good" if good else "BAD", len(full.encode())))
     if bad: sys.exit("a signature does not hold with %s" % KEY)
 
 if __name__ == "__main__":
@@ -463,21 +795,30 @@ if __name__ == "__main__":
         write_out(text + "~" + sig)
         print(OUT, "written:", text)
     elif len(sys.argv) in (2, 3) and sys.argv[1] == "council":
-        names, titles = sign_council(sys.argv[2] if len(sys.argv) == 3 else COUNCIL)
-        write_out(names, titles)
+        names, titles, authority = sign_council(sys.argv[2] if len(sys.argv) == 3 else COUNCIL)
+        write_out(names, titles, authority)
         print(OUT, "written:", names[:-SIG_LEN - 1])
         print("and:", titles[:-SIG_LEN - 1])
+        if authority: print("and %d signed authority part(s)" % len(authority))
     elif len(sys.argv) >= 3 and sys.argv[1] == "steward":
-        names, titles = steward(sys.argv[2:])
+        signed = steward(sys.argv[2:]); names, titles = signed[:2]
         print(COUNCIL, "updated;", OUT, "written:", names[:-SIG_LEN - 1])
         print("and:", titles[:-SIG_LEN - 1])
     elif len(sys.argv) >= 3 and sys.argv[1] == "guild":
-        names, titles = guild(sys.argv[2:])
+        signed = guild(sys.argv[2:]); names, titles = signed[:2]
         print(COUNCIL, "updated;", OUT, "written:", names[:-SIG_LEN - 1])
         print("and:", titles[:-SIG_LEN - 1])
         # Whole, for the first member of an approved guild to paste in game (/oly approved paste).
         print("to paste in game with /oly approved paste:")
         print(titles)
+    elif len(sys.argv) >= 3 and sys.argv[1] == "arbiter":
+        signed = arbiter(sys.argv[2:]); names, titles = signed[:2]
+        print(COUNCIL, "updated;", OUT, "written:", names[:-SIG_LEN - 1])
+        print("and:", titles[:-SIG_LEN - 1])
+    elif len(sys.argv) >= 3 and sys.argv[1] == "apostle":
+        signed = apostle(sys.argv[2:]); names, titles = signed[:2]
+        print(COUNCIL, "updated;", OUT, "written:", names[:-SIG_LEN - 1])
+        print("and:", titles[:-SIG_LEN - 1])
     elif len(sys.argv) in (2, 3) and sys.argv[1] in ("check", "--check"):
         check_out(sys.argv[2] if len(sys.argv) == 3 else OUT)
     else: sys.exit(__doc__)
