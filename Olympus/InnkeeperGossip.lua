@@ -30,6 +30,7 @@ local function Native() -- gp:innkeeper-gossip
 	local panel = f and f.GreetingPanel
 	local scroll, bar = panel and panel.ScrollBox, panel and panel.ScrollBar
 	if not Method(f, "IsShown") or not f:IsShown() or not Method(f, "HookScript")
+		or not Method(f, "RegisterFontStrings") or not Method(f, "UpdateFontStrings")
 		or not Method(f, "IsProtected") or not Method(f, "Hide")
 		or not panel or not Method(scroll, "GetHeight") or not Method(scroll, "SetHeight")
 		or not Method(scroll, "GetDerivedExtent")
@@ -115,6 +116,9 @@ local function Build(f, panel, scroll) -- gp:innkeeper-gossip
 	end)
 	if not nextDialog.cancel then return false end
 	nextDialog.cancel:SetPoint("TOPLEFT", nextDialog.confirm, "BOTTOMLEFT", 0, 0)
+	-- Native choices register with the host's quest contrast theme before it colors them.
+	f:RegisterFontStrings(nextRow.label, nextDialog.text, nextDialog.confirm.label, nextDialog.cancel.label)
+	f:UpdateFontStrings()
 	host, row, dialog = f, nextRow, nextDialog
 	return true
 end

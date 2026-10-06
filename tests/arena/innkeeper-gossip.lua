@@ -26,7 +26,8 @@ local function Frame(parent)
 		self.scripts[k] = function(...) if before then before(...) end; call(...) end
 	end
 	function f:SetText(v) self.text = v; if self.fontString then self.fontString:SetText(v) end end
-	function f:SetTextColor() end
+	function f:SetTextColor(...) self.textColor = { ... } end
+	function f:SetFixedColor(v) self.fixedColor = v end
 	function f:SetJustifyH() end
 	function f:SetJustifyV() end
 	function f:SetTexture(v) self.texture = v end
@@ -44,6 +45,17 @@ local function WithGossip(fn)
 	w:Stand(a.name, FW.INN, true)
 	local f, panel = Frame(), Frame()
 	f.GreetingPanel = panel
+	-- Native UIThemeContainerMixin registers fonts before applying quest contrast colors.
+	f.fontStrings = {}
+	function f:RegisterFontStrings(...)
+		for i = 1, select("#", ...) do self.fontStrings[select(i, ...)] = true end
+	end
+	function f:UpdateFontStrings()
+		for fs in pairs(self.fontStrings) do
+			fs:SetFixedColor(self.darkMode == true)
+			fs:SetTextColor(unpack(self.darkMode and { 1, 1, 1 } or { 0.18, 0.12, 0.06 }))
+		end
+	end
 	panel.ScrollBox, panel.ScrollBar = Frame(panel), Frame(panel)
 	panel.ScrollBox.contentHeight = 96
 	function panel.ScrollBox:GetDerivedExtent() return self.contentHeight end
@@ -156,6 +168,23 @@ test("Innkeeper gossip: all local choices use native gossip font, icons, hover a
 		state.dialog.cancel.scripts.OnClick(); eq(g.State().mode, "row")
 		eq(t.f.gossipOptions[1], t.goods); eq(t.f.gossipOptions[2], t.home); eq(#t.f.gossipOptions, 2)
 		eq(t.closed(), 0); eq(#t.starts, 0, "local Cancel never selects a native server option")
+	end)
+end)
+
+test("Innkeeper gossip: local dialogue follows the native quest contrast theme", function()
+	WithGossip(function(g, t)
+		eq(g.ShowRow(), true); eq(g.Open(), true)
+		local s = g.State()
+		for _, fs in ipairs({ s.row.label, s.dialog.text, s.dialog.confirm.label, s.dialog.cancel.label }) do
+			eq(t.f.fontStrings[fs], true, "native theme owns every local dialogue font")
+			eq(fs.textColor[1], 0.18, "parchment brown is applied immediately")
+			eq(fs.fixedColor, false)
+		end
+		t.f.darkMode = true; t.f:UpdateFontStrings()
+		for _, fs in ipairs({ s.row.label, s.dialog.text, s.dialog.confirm.label, s.dialog.cancel.label }) do
+			eq(fs.textColor[1], 1, "native contrast updates reach existing local dialogue")
+			eq(fs.fixedColor, true)
+		end
 	end)
 end)
 
