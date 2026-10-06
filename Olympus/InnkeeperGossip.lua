@@ -1,14 +1,14 @@
 local ADDON, ns = ...
 
 -- An opt-in, addon-owned row and dialogue inside the NPC panel. Never add/select a server
--- gossip option or replace the native provider. The guarded shape follows Blizzard's
--- UIPanels_Game/Classic/GossipFrame.xml (Blizzard's wow-ui-source/classic mirror).
--- The exact Forever shape is unverified: optional capability/geometry checks fail closed and
--- preserve the Olympus offer. Source-backed gamepad fixtures never pretend these APIs exist.
+-- gossip option or replace the native provider. The optional native shape, base choice template
+-- and extent API are verified in Forever 1.60.1.70235's UI source (wow-ui-source a84e2b1):
+-- UIPanels_Game/Mainline/GossipFrame.xml, Shared/GossipFrameShared.lua and SharedXML/Shared/Scroll/ScrollBox.lua.
+-- Capability/geometry checks fail closed and preserve the Olympus offer on other clients.
 local G = {}; ns.InnkeeperGossip = G
 local GATE = "innkeeper-gossip"
 G.DICE_TEXTURE = "Interface\\Buttons\\UI-GroupLoot-Dice-Up"
-G.ROW_HEIGHT = 24
+G.ROW_GAP = 4
 local host, row, dialog, saved, keeper, innID
 local generation, mode = 0, "inactive"
 local hooked = setmetatable({}, { __mode = "k" })
@@ -32,6 +32,7 @@ local function Native() -- gp:innkeeper-gossip
 	if not Method(f, "IsShown") or not f:IsShown() or not Method(f, "HookScript")
 		or not Method(f, "IsProtected") or not Method(f, "Hide")
 		or not panel or not Method(scroll, "GetHeight") or not Method(scroll, "SetHeight")
+		or not Method(scroll, "GetDerivedExtent")
 		or not Method(scroll, "GetNumPoints") or scroll:GetNumPoints() ~= 1
 		or not Method(scroll, "IsProtected")
 		or not Method(scroll, "GetWidth") or not Method(scroll, "IsShown")
@@ -63,13 +64,22 @@ end
 
 local function Button(parent, width, caption, click) -- gp:innkeeper-gossip
 	if not ns.Gate.Allowed(GATE) then return nil end
-	local b = CreateFrame("Button", nil, parent)
-	b:SetSize(width, 24)
-	b.label = b:CreateFontString(nil, "ARTWORK", "GameFontNormal")
-	b.label:SetPoint("LEFT", 22, 0); b.label:SetWidth(width - 24)
-	b.label:SetJustifyH("LEFT"); b.label:SetTextColor(0.15, 0.08, 0)
-	b.label:SetText(caption)
+	-- The base template supplies the game's quest font, icon and ADD hover. Its Option
+	-- derivative also selects a server choice: use only the base, with our own local click.
+	local b = CreateFrame("Button", nil, parent, "GossipTitleButtonTemplate")
+	b:Hide()
+	if not Method(b, "GetFontString") or not Method(b, "SetTextAndResize")
+		or not Method(b.Icon, "SetTexture") then return nil end
+	b.label, b.icon = b:GetFontString(), b.Icon
+	if not Method(b.label, "SetWidth") then return nil end
+	b:SetWidth(width); b.label:SetWidth(width - 25)
+	b:SetTextAndResize(caption)
 	b:SetScript("OnClick", click)
+	-- Native spell tooltips are irrelevant to these choices; keep template callbacks gated too.
+	local function Hover() -- gp:innkeeper-gossip
+		if not ns.Gate.Allowed(GATE) then return end
+	end
+	b:SetScript("OnEnter", Hover); b:SetScript("OnLeave", Hover)
 	return b
 end
 
@@ -78,32 +88,34 @@ local function Build(f, panel, scroll) -- gp:innkeeper-gossip
 	if host == f and row and dialog then return true end
 	G.Park()
 	if not CreateFrame then return false end
-	host = f
-	row = Button(panel, scroll:GetWidth(), "", function() -- gp:innkeeper-gossip
+	local nextRow = Button(panel, scroll:GetWidth(), "", function() -- gp:innkeeper-gossip
 		if not ns.Gate.Allowed(GATE) then return end
 		G.Open()
 	end)
-	row:SetPoint("TOPLEFT", scroll, "BOTTOMLEFT", 0, -2)
-	row.icon = row:CreateTexture(nil, "ARTWORK")
-	row.icon:SetSize(18, 18); row.icon:SetPoint("LEFT", 2, 0); row.icon:SetTexture(G.DICE_TEXTURE)
-	row:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight")
-	dialog = CreateFrame("Frame", nil, panel)
-	dialog:SetPoint("TOPLEFT", scroll, "TOPLEFT", 8, -8)
-	dialog:SetSize(scroll:GetWidth() - 16, scroll:GetHeight() - G.ROW_HEIGHT - 16)
-	dialog.text = dialog:CreateFontString(nil, "ARTWORK", "GameFontNormal")
-	dialog.text:SetPoint("TOPLEFT", 0, 0); dialog.text:SetWidth(scroll:GetWidth() - 20)
-	dialog.text:SetJustifyH("LEFT"); dialog.text:SetJustifyV("TOP"); dialog.text:SetTextColor(0.15, 0.08, 0)
-	dialog.confirm = Button(dialog, scroll:GetWidth() - 24, "", function() -- gp:innkeeper-gossip
+	if not nextRow then return false end
+	nextRow.icon:SetTexture(G.DICE_TEXTURE)
+	local nextDialog = CreateFrame("Frame", nil, panel)
+	nextDialog:Hide()
+	nextDialog:SetPoint("TOPLEFT", scroll, "TOPLEFT", 0, 0)
+	nextDialog:SetSize(scroll:GetWidth(), scroll:GetHeight())
+	nextDialog.text = nextDialog:CreateFontString(nil, "ARTWORK", "QuestFont")
+	nextDialog.text:SetPoint("TOPLEFT", 10, -10); nextDialog.text:SetWidth(scroll:GetWidth() - 30)
+	nextDialog.text:SetJustifyH("LEFT"); nextDialog.text:SetJustifyV("TOP")
+	nextDialog.confirm = Button(nextDialog, scroll:GetWidth(), "", function() -- gp:innkeeper-gossip
 		if not ns.Gate.Allowed(GATE) then return end
 		G.Confirm()
 	end)
-	dialog.confirm:SetPoint("TOPLEFT", dialog.text, "BOTTOMLEFT", 0, -20)
-	dialog.cancel = Button(dialog, scroll:GetWidth() - 24, "", function() -- gp:innkeeper-gossip
+	if not nextDialog.confirm then return false end
+	nextDialog.confirm.icon:SetTexture(G.DICE_TEXTURE)
+	-- Blizzard leaves two 16px gossip spacers between greeting and choices.
+	nextDialog.confirm:SetPoint("TOPLEFT", nextDialog.text, "BOTTOMLEFT", -10, -32)
+	nextDialog.cancel = Button(nextDialog, scroll:GetWidth(), "", function() -- gp:innkeeper-gossip
 		if not ns.Gate.Allowed(GATE) then return end
 		G.Cancel()
 	end)
-	dialog.cancel:SetPoint("TOPLEFT", dialog.confirm, "BOTTOMLEFT", 0, -8)
-	row:Hide(); dialog:Hide()
+	if not nextDialog.cancel then return false end
+	nextDialog.cancel:SetPoint("TOPLEFT", nextDialog.confirm, "BOTTOMLEFT", 0, 0)
+	host, row, dialog = f, nextRow, nextDialog
 	return true
 end
 
@@ -116,12 +128,18 @@ function G.ShowRow() -- gp:innkeeper-gossip
 	G.Park()
 	local ok, built = pcall(Build, f, panel, scroll)
 	if not ok or not built then G.Park(); return false, "frame-api" end
-	local height = scroll:GetHeight()
-	if type(height) ~= "number" or height ~= height or height <= 2 * G.ROW_HEIGHT then return false, "geometry" end
+	row:SetTextAndResize(ns.L.FARKLE_NAME .. ": " .. (ns.FarkleTable.TrainingComplete() and ns.L.FARKLE_KEEPER_AGAIN or ns.L.FARKLE_KEEPER_LEARN))
+	local height, rowHeight = scroll:GetHeight(), row:GetHeight()
+	local measured, extent = pcall(scroll.GetDerivedExtent, scroll)
+	if not measured or type(extent) ~= "number" or extent ~= extent or extent <= 0 or extent == math.huge
+		or type(height) ~= "number" or height ~= height or height == math.huge
+		or type(rowHeight) ~= "number" or rowHeight ~= rowHeight or rowHeight <= 0
+		or height <= 2 * (rowHeight + G.ROW_GAP) then return false, "geometry" end
 	saved = { scroll = scroll, bar = bar, height = height, scrollShown = scroll:IsShown(), barShown = bar:IsShown() }
 	keeper, innID, mode = name, id, "row"
-	scroll:SetHeight(height - G.ROW_HEIGHT)
-	row.label:SetText(ns.L.FARKLE_NAME .. ": " .. (ns.FarkleTable.TrainingComplete() and ns.L.FARKLE_KEEPER_AGAIN or ns.L.FARKLE_KEEPER_LEARN))
+	local rowTop = math.min(extent, height - rowHeight - G.ROW_GAP)
+	if extent > rowTop then scroll:SetHeight(rowTop) end
+	row:ClearAllPoints(); row:SetPoint("TOPLEFT", scroll, "TOPLEFT", 0, -(rowTop + G.ROW_GAP))
 	row:Show()
 	if not hooked[f] then
 		hooked[f] = true
@@ -142,8 +160,9 @@ function G.Open() -- gp:innkeeper-gossip
 	local voice = FT.InnkeeperVoice and FT.InnkeeperVoice()
 	local flavor = voice and rawget(L, "FARKLE_KEEPER_FLAVOR_" .. voice:upper()) or nil
 	dialog.text:SetText(complete and L.FARKLE_KEEPER_DONE:format(name) or L.FARKLE_KEEPER_HELLO:format(name, flavor or L.FARKLE_KEEPER_FLAVOR))
-	dialog.confirm.label:SetText(complete and L.FARKLE_KEEPER_AGAIN or L.FARKLE_KEEPER_LEARN)
-	dialog.cancel.label:SetText(L.FARKLE_KEEPER_NOT_NOW)
+	dialog.confirm:SetTextAndResize(complete and L.FARKLE_KEEPER_AGAIN or L.FARKLE_KEEPER_LEARN)
+	dialog.cancel:SetTextAndResize(L.FARKLE_KEEPER_NOT_NOW)
+	dialog.confirm:Show(); dialog.cancel:Show()
 	saved.scroll:Hide(); saved.bar:Hide(); row:Hide(); dialog:Show(); mode = "dialog"
 	return true
 end
