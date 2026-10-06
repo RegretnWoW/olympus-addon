@@ -118,8 +118,9 @@ test("Player UI polish: Practice keeps its name and invokes innkeeper guidance",
 			Target = function() return nil, "inactive" end,
 			Start = function() starts = starts + 1; return true, { innkeeper = "Innkeeper" } end }
 		local buttons = UI.Pane("bone.play").buttons()
-		eq(buttons[3][1], a.ns.L.ARENA_BONE_PRACTICE)
-		buttons[3][2](); eq(starts, 1)
+		-- (1.2.0, the owner's call: no Practice button; practice is the innkeeper's.)
+		for _, b in ipairs(buttons) do assert(b[1] ~= a.ns.L.ARENA_BONE_PRACTICE, "no Practice button") end
+		eq(starts, 0)
 	end)
 	eq(#a.errors, 0)
 end)

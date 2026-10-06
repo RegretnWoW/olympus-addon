@@ -721,6 +721,8 @@ local function Load(w, c)
 		for _, f in ipairs(World.LOCALES) do assert(loadfile(H.ADDON_DIR .. "Locales/" .. f .. ".lua"))("Olympus", cns) end
 		-- (opts.arenaFiles: another list of the core's arena files, a package profile's TOC.)
 		for _, f in ipairs(w.arenaFiles or World.ARENA_FILES) do assert(loadfile(H.ADDON_DIR .. f .. ".lua"))("Olympus", cns) end
+		-- (Every family's honour frame in the machinery's worlds; a shipped-release world wears the donors' alone.)
+		if (c.compliance or w.compliance) ~= "shipped" and type(rawget(cns, "Honors")) == "table" then cns.Honors.FRAMES_SHIPPED = nil end
 		if (c.compliance or w.compliance) ~= "shipped" and type(rawget(cns, "Compliance")) == "table" then
 			-- Future account scenarios opt in explicitly; shipped-release tests keep it hidden.
 			cns.Compliance.WALLET_ENABLED = true

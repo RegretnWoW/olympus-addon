@@ -5,6 +5,8 @@ local test, eq = H.test, H.eq
 
 local ns = {}
 assert(loadfile(H.ADDON_DIR .. "Honors.lua"))("Olympus", ns)
+local SHIPPED = ns.Honors.FRAMES_SHIPPED -- (as Honors.lua ships it: the test of 1.2.0's frames below)
+ns.Honors.FRAMES_SHIPPED = nil -- (every family's frame: the machinery's tests; 1.2.0 wears the donors' alone)
 local Honors = ns.Honors
 
 local GOLD = 10000
@@ -566,6 +568,27 @@ local function Everything()
 		guild = Honors.GuildTop({ { guild = "Olympus Aurora", leader = "Aldric", members = 100, avgLevel = 40 } }),
 	}
 end
+
+test("1.2.0 honours: the release wears the all-time donors' frames alone; the level race's comet, the month's, the arena's and the rest wait (the owner's call)", function()
+	local saved = Honors.FRAMES_SHIPPED
+	local families = {}
+	for family in pairs(SHIPPED or {}) do families[#families + 1] = family end
+	eq(table.concat(families, ","), "donor-top", "Honors.lua ships the all-time donors' frames alone")
+	Honors.FRAMES_SHIPPED = SHIPPED
+	local ok, err = pcall(function()
+		local held = Honors.Holdings(ME, Everything())
+		-- Held as before: the honours themselves are untouched, only the frames worn.
+		assert(Keys(held):find("level-race-60", 1, true) and Keys(held):find("donor-top-1", 1, true), Keys(held))
+		eq((Honors.Shown({ frame = "donor-top-1" }, held)), "donor-top-1", "the all-time donors' frame is worn")
+		for _, key in ipairs({ "level-race-60", "donor-month-1", "arena-champion", "arena-class-mage", "guild-top-leader" }) do
+			eq((Honors.Shown({ frame = key }, held)), "rank", key .. ": his rank's frame instead")
+			eq(select(2, Honors.Choose({}, held, key)), "frame", key .. ": not offered to pick")
+		end
+		assert(Honors.Choose({}, held, "donor-top-1"), "the donors' frame can be picked")
+	end)
+	Honors.FRAMES_SHIPPED = saved
+	if not ok then error(err, 0) end
+end)
 
 test("honours: a player's holdings, each with its frame, mark and title, in ORDER", function()
 	local held = Honors.Holdings(ME, Everything())

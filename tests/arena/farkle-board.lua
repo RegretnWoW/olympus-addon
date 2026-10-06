@@ -1945,6 +1945,20 @@ local function SheetClear(c, find, what)
 	return words
 end
 
+test("1.2.0 Find: no Duels, Bones or Staked choice under Let others find me (the owner's call): the sheet is its own game's, findable for it alone, never staked", function()
+	local w, a = Finders({ sharing = false })
+	local p = LabParts(a)
+	Click(w, a, p.intro.start)
+	local find = a.ns.Arena.ui.FindFrame()
+	eq(find.opts.game, "b", "the Bones window's sheet")
+	check(find.findable:IsShown(), "Let others find me stays")
+	for _, cb in ipairs(find.prefs) do
+		check(not cb:IsShown() and not cb.text:IsShown(), "%s: hidden", tostring(cb.key))
+		eq(cb:GetChecked() and true or false, cb.key == "b", tostring(cb.key) .. ": findable for Bones alone, never staked")
+	end
+	NoErrors(w)
+end)
+
 test("1.2 Bones window (test 32): the Find sheet in the window is shorter and wider than on its own, its words in a column beside its rows, clear of every row and button: casual, staked and either, the first search with location sharing off", function()
 	-- (a first search, location sharing off: the privacy line, the rehearsal's, then why the zone is
 	-- needed, with Share while searching and Turn sharing on under them; staked, also why stakes are

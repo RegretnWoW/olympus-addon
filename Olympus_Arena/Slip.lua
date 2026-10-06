@@ -751,6 +751,13 @@ function ArenaUI.FindRefresh()
 	local AM = Match()
 	local view = AM and AM.View and select(2, pcall(AM.View)) or nil
 	if type(view) ~= "table" then view = {} end
+	-- 1.2.0: no Casual/Staked/Either row while stakes wait for the compliance review: every search
+	-- is casual.
+	local C = ns.Compliance
+	local stakes = type(C) == "table" and type(C.Allows) == "function" and C.Allows("stake") == true
+	if not stakes then f.opts.kind = "c" end
+	f.kind:SetShown(stakes)
+	if f.kind.label then f.kind.label:SetShown(stakes) end
 	local o = ArenaUI.FindOpts()
 	f.kind:Select(o.kind)
 	f.level:Select(o.level)
@@ -790,6 +797,14 @@ function ArenaUI.FindRefresh()
 	f.findable:SetChecked(fs.on == true)
 	for _, cb in ipairs(f.prefs) do
 		if cb.key == "staked" then cb:SetChecked(fs.staked == true) else cb:SetChecked(not (type(fs.games) == "table" and fs.games[cb.key] == false)) end
+	end
+	-- 1.2.0 (the owner's call): no Duels, Bones or Staked choice under "Let others find me". This
+	-- window is its own game's (a duel's, or Bones'), so being findable is for that game alone, and
+	-- stakes wait for 2.0.
+	for _, cb in ipairs(f.prefs) do
+		cb:SetChecked(cb.key ~= "staked" and (o.game == "e" or cb.key == o.game))
+		cb:Hide()
+		cb.text:Hide()
 	end
 	local lines = {}
 	if view.firstTime and view.firstLine then lines[#lines + 1] = ns.Codec.Plain(view.firstLine) end

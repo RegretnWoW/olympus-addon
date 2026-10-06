@@ -21094,11 +21094,21 @@ do
 				-- (Reviewer, 2026-10-05: it showed the desk, which a councillor who is no officer never
 				-- sees.) The Watch for its Judgments and My Watch, the council's side of them: no Desk, Reports
 				-- or Cases, none of their buttons (a councillor who is an officer: the officer's preview).
+				-- (1.1.6: the High Council shares the King's desk layout, ViewAs.GRANTS.councillor.watch;
+				-- reports, cases and audit records still need a real officer's authority.) The desk first,
+				-- then its Judgments, the council's side of them.
 				Tab(main, "watch"):Click()
-				eq(UI.PageId(), "watch/judgments"); eq(Texts(main.buttons), "")
-				local navTexts = {}
-				for _, item in ipairs(main.pageNavLines[1].nav or {}) do navTexts[#navTexts + 1] = item.text end
-				eq(table.concat(navTexts, ","), table.concat({ L.WATCH_NAV_JUDGMENTS:format(0), L.WATCH_MEMBER_NAV }, ","), "Judgments and My Watch (nothing published: no Tabards)")
+				eq(UI.PageId(), "watch/desk")
+				local navTexts, judgments = {}, nil
+				for _, item in ipairs(main.pageNavLines[1].nav or {}) do
+					navTexts[#navTexts + 1] = item.text
+					if item.text == L.WATCH_NAV_JUDGMENTS:format(0) then judgments = item end
+				end
+				local joined = table.concat(navTexts, ",")
+				assert(judgments and joined:find(L.WATCH_MEMBER_NAV, 1, true), "Judgments and My Watch in the council's row: " .. joined)
+				judgments.onClick()
+				UI.Refresh()
+				eq(UI.PageId(), "watch/judgments")
 				assert(RowWith(main, L.JUDGMENT_COUNCIL_TITLE), "the council's vote")
 				eq(RowWith(main, L.JUDGMENT_SCOPE_KING), nil, "not the King's side")
 				-- (Reviewer, the 1.1.6 base: 1.1.5's Guild tab rule left this preview's Throne a blank
@@ -24132,7 +24142,8 @@ local function WithBorders(fn, setup)
 				if tex.file then
 					if t.file == tex.file then return t.name end
 				elseif tex.desaturated then
-					if t.fallback ~= nil and t.fallback == tex.atlas then return t.name end
+					-- (a file that failed to load: two tiers may share a fallback, 1.2.0's Treasurer and the bronze)
+					if t.fallback ~= nil and t.fallback == tex.atlas and (not t.file or not w.noFile or w.noFile[t.file]) then return t.name end
 				elseif t.atlas ~= nil and t.atlas == tex.atlas then
 					return t.name
 				end
@@ -24417,7 +24428,7 @@ test("1.0.1 borders: each tier's art (the game's atlases, Max's files) at its si
 		-- Then the plain silver (the dev's) and Max's plain bronze (the people a guild master names)
 		-- came back as tiers: five borders; the plain gold alone is kept for later. 1.2: and one
 		-- plain metal underlay per frame.)
-		eq(#w.textures, 18, "five borders and one underlay on three frames")
+		eq(#w.textures, 21, "six borders (1.1.6: the primary Treasurer's dragon) and one underlay on three frames")
 		for _, t in ipairs(w.B.RESERVED) do
 			for _, tex in ipairs(w.textures) do
 				-- (The underlay's plain metal is the plain gold's atlas: no border of its own.)
@@ -24465,6 +24476,7 @@ test("1.0.1 borders: each tier's art (the game's atlases, Max's files) at its si
 		local want = {
 			-- tier, art, size (nil: the atlas's own), target: coords, x y; your own: coords, x y
 			{ "gold-elite", "atlas UI-HUD-UnitFrame-Target-PortraitOn-Boss-Gold-Winged", nil, nil, "11 -4", "1 0 0 1", "-13 -4" },
+			{ "treasurer-dragon", "file " .. MEDIA .. "treasurer-dragon", "100 95", "0 0.78125 0 0.7421875", "0 1", "0.78125 0 0 0.7421875", "-2 1" },
 			{ "silver-elite", "atlas UI-HUD-UnitFrame-Target-PortraitOn-Boss-Rare-Silver-Winged", nil, nil, "8 -7", "1 0 0 1", "-10 -7" },
 			{ "bronze-elite", "file " .. MEDIA .. "bronze-winged", "110 90", "0 0.859375 0 0.703125", "11 -4", "0.859375 0 0 0.703125", "-13 -4" },
 			-- (1.1.5, without wings: the plain gold's size and offsets, as 1.0.0's Captains and Veterans had them.)
@@ -24630,7 +24642,7 @@ test("1.2 borders: an Olympus portrait (the Arena's) is your own frame's portrai
 			end
 			local n = 0
 			for _ in pairs(own) do n = n + 1 end
-			eq(n, 6, "the underlay and the five tiers (1.1.5), as on your frame")
+			eq(n, 7, "the underlay and the six tiers (1.1.6), as on your frame")
 			eq(own["gold-elite"].point, "TOPLEFT " .. container.label .. " TOPLEFT -13 -4", "the gold wings 37 left and 15 above the portrait")
 			-- A tier shown: its art alone, over its metal turned round, as round your own portrait (1.1.5:
 			-- a Captain has no border of his rank any more; a High Councillor's silver wings, yours here).
@@ -24732,8 +24744,8 @@ test("1.0.1 borders: applied through the hooked CheckClassification after the ga
 			made[entry] = (made[entry] or 0) + 1
 		end
 		-- (1.1.5: one per tier, five with the two without wings; 1.2: and the metal underlay.)
-		eq(made["TargetFrame.TargetFrameContainer:CreateTexture"], 6); eq(made["FocusFrame.TargetFrameContainer:CreateTexture"], 6)
-		eq(made["PlayerFrame.PlayerFrameContainer:CreateTexture"], 6)
+		eq(made["TargetFrame.TargetFrameContainer:CreateTexture"], 7); eq(made["FocusFrame.TargetFrameContainer:CreateTexture"], 7)
+		eq(made["PlayerFrame.PlayerFrameContainer:CreateTexture"], 7)
 		eq(table.concat(w.hooks, " "), "TargetFrame.CheckClassification FocusFrame.CheckClassification")
 		-- The game updates the target frame (no event of ours): its CheckClassification first, then the
 		-- King's border, shown from the hook; the game's return value kept.
@@ -24778,7 +24790,7 @@ test("1.0.1 borders: applied through the hooked CheckClassification after the ga
 		eq(#w.log, 0, "still in combat")
 		w.combat = false
 		w.fire("PLAYER_REGEN_ENABLED")
-		eq(#w.textures, 18); eq(w.shown("target"), "gold-elite", "made, and the target's border shown")
+		eq(#w.textures, 21); eq(w.shown("target"), "gold-elite", "made, and the target's border shown")
 	end)
 end)
 
@@ -24847,7 +24859,7 @@ test("1.0.1 borders: off with the gamepad UI (no hook, no texture), hidden at a 
 		-- To mouse and keyboard: made and shown.
 		w.style = 0
 		w.fire("INPUT_DEVICE_INTERFACE_TRANSITION", 0, 1)
-		eq(#w.textures, 18); eq(#w.hooks, 2); eq(w.shown("target"), "gold-elite")
+		eq(#w.textures, 21); eq(#w.hooks, 2); eq(w.shown("target"), "gold-elite")
 		-- Back to the gamepad UI: hidden at once; the hook and the events may repeat Hide on the
 		-- existing underlay, but never touch tier art or style/show anything.
 		w.style = 1
@@ -24897,7 +24909,7 @@ test("1.0.1 borders: nothing outside an Olympus guild, on clients without Foreve
 	WithBorders(function(w)
 		w.noAtlas["UI-HUD-UnitFrame-Target-PortraitOn-Boss-Rare-Silver-Winged"] = true
 		w.internal("LOGIN")
-		eq(#w.textures, 15, "four borders and one underlay on three frames (1.1.5: five tiers)")
+		eq(#w.textures, 18, "five borders and one underlay on three frames (1.1.6: six tiers)")
 		w.target(BorderUnit("Sage Owl", "Wanderers", "Member", 3))
 		eq(w.shown("target"), nil, "no silver wings for a High Councillor")
 		w.target(BorderUnit("Zeusy", "Olympus Zeus", "Zeus", 0))
@@ -24913,7 +24925,7 @@ test("1.0.1 borders: nothing outside an Olympus guild, on clients without Foreve
 		WithBorders(function(w)
 			w.noFile[MEDIA .. "bronze-winged"] = how
 			w.internal("LOGIN")
-			eq(#w.textures, 18)
+			eq(#w.textures, 21)
 			w.target(BorderUnit("Zeusy", "Olympus Zeus", "Zeus", 0))
 			eq(w.shown("target"), "bronze-elite", "a guild master keeps a border")
 			local tex = w.shownTexture("target")
@@ -25061,7 +25073,7 @@ do
 	local AUTHOR_UNIT = BorderUnit("Faladoriel Skylance", "Olympus II", "Member", 3, { realm = "ClassicBetaPvP" })
 	local function AsAuthor(w) w.units.player = AUTHOR_UNIT; ns.me = "Faladoriel Skylance-ClassicBetaPvP" end
 	local MEDIA = "Interface\\AddOns\\Olympus\\media\\borders\\"
-	local TIER_LIST = "gold-elite, silver-elite, silver, bronze-elite, bronze"
+	local TIER_LIST = "gold-elite, treasurer-dragon, silver-elite, silver, bronze-elite, bronze"
 
 	-- Everything the addon could send while fn runs (an addon message by either API, a chat line,
 	-- Comm's own queues), recorded in `sent`.
@@ -25142,7 +25154,7 @@ do
 			eq(w.shown("target"), "silver", "targeting himself: his own again")
 			assert(not ns.StatusText():find("preview", 1, true), "gone from /oly status")
 			-- The borders' own machinery unchanged: the same textures, the same hooks.
-			eq(#w.textures, 18); eq(table.concat(w.hooks, " "), "TargetFrame.CheckClassification FocusFrame.CheckClassification")
+			eq(#w.textures, 21); eq(table.concat(w.hooks, " "), "TargetFrame.CheckClassification FocusFrame.CheckClassification")
 			for _, entry in ipairs(w.log) do assert(entry:find(":CreateTexture$"), entry) end
 		end, AsAuthor)
 		-- An author who does hold a rank: the preview in its place while on, his own again after.
@@ -25178,33 +25190,33 @@ do
 			-- (1.0.0, the nameplate marks: a row for the marks' own member star, after the borders; it was
 			-- one row per border tier. 1.1.5: five tiers. 1.2: honours add five representative Workshop
 			-- previews between the rank borders and the member star.)
-			eq(#rows, 11, "rank and honour previews, then the member star at the foot of the tab")
+			eq(#rows, 12, "rank and honour previews, then the member star at the foot of the tab")
 			assert(head.right:find(ns.L.BORDERS_PREVIEW_NONE, 1, true), "off")
 			for i, t in ipairs(w.B.TIERS) do
 				assert(rows[i].text:find(t.name, 1, true), t.name)
 				assert(rows[i].text:find(ns.L["BORDERS_WHO_" .. t.name:upper():gsub("%-", "_")], 1, true), t.name .. ": who holds it")
 				eq(type(rows[i].onClick), "function"); eq(type(rows[i].tooltip), "function"); eq(rows[i].right, nil)
 			end
-			assert(rows[11].text:find("member", 1, true) and rows[11].text:find(ns.L.BORDERS_WHO_MEMBER, 1, true), rows[11].text)
+			assert(rows[12].text:find("member", 1, true) and rows[12].text:find(ns.L.BORDERS_WHO_MEMBER, 1, true), rows[12].text)
 			local tip = {}
-			rows[11].tooltip({ AddLine = function(_, text) tip[#tip + 1] = text end })
+			rows[12].tooltip({ AddLine = function(_, text) tip[#tip + 1] = text end })
 			eq(tip[2], ns.L.BORDERS_PREVIEW_TIP_MEMBER, "the star's own tooltip")
-			rows[11].onClick()
+			rows[12].onClick()
 			eq(w.B.Preview(), "member"); eq(w.shown("player"), nil, "the star: no border round his portrait")
 			eq(w.printed[#w.printed], ns.L.BORDERS_PREVIEW_ON_MEMBER)
-			rows[11].onClick()
+			rows[12].onClick()
 			eq(w.B.Preview(), "member", "the lines were built before the click: a fresh click shows it again")
 			head, rows = Section()
-			assert(rows[11].right and rows[11].right:find(ns.L.BORDERS_PREVIEW_SHOWN, 1, true), "marked shown")
-			rows[11].onClick()
+			assert(rows[12].right and rows[12].right:find(ns.L.BORDERS_PREVIEW_SHOWN, 1, true), "marked shown")
+			rows[12].onClick()
 			eq(w.B.Preview(), nil, "clicked again: off")
 			head, rows = Section()
-			rows[4].onClick()
+			rows[5].onClick()
 			eq(w.B.Preview(), "bronze-elite"); eq(w.shown("player"), "bronze-elite", "clicked: shown")
 			eq(w.printed[#w.printed], ns.L.BORDERS_PREVIEW_ON:format("bronze-elite"))
 			head, rows = Section()
 			assert(head.right:find(ns.L.BORDERS_PREVIEW_NOW:format("bronze-elite"), 1, true), head.right)
-			assert(rows[4].right and rows[4].right:find(ns.L.BORDERS_PREVIEW_SHOWN, 1, true), "marked shown")
+			assert(rows[5].right and rows[5].right:find(ns.L.BORDERS_PREVIEW_SHOWN, 1, true), "marked shown")
 			eq(rows[1].right, nil)
 			rows[1].onClick()
 			eq(w.shown("player"), "gold-elite", "another tier")
@@ -25329,7 +25341,7 @@ do
 				local lines = {}
 				w.B.PreviewLines(lines)
 				lines[3].onClick()
-				eq(w.shown("player"), "silver-elite")
+				eq(w.shown("player"), w.B.TIERS[2].name, "the second line's tier")
 				eq(#sent, 0, "nothing sent: " .. table.concat(sent, ", "))
 				eq(Dump(ns.db), before, "nothing saved")
 			end, AsAuthor)
@@ -25363,7 +25375,7 @@ do
 			-- To mouse and keyboard: made, and shown.
 			w.style = 0
 			w.fire("INPUT_DEVICE_INTERFACE_TRANSITION", 0, 1)
-			eq(#w.textures, 18); eq(w.shown("player"), "gold-elite"); eq(w.shown("target"), "gold-elite")
+			eq(#w.textures, 21); eq(w.shown("player"), "gold-elite"); eq(w.shown("target"), "gold-elite")
 			-- Back to the gamepad UI: hidden at once; a new tier, the hook and the events may
 			-- repeat Hide on the underlay, but never touch tier art or style/show anything.
 			w.style = 1
@@ -25412,7 +25424,7 @@ do
 			eq(#w.textures, 0, "still in combat")
 			w.combat = false
 			w.fire("PLAYER_REGEN_ENABLED")
-			eq(#w.textures, 18); eq(#w.hooks, 2)
+			eq(#w.textures, 21); eq(#w.hooks, 2)
 			eq(w.shown("player"), "bronze-elite", "made once combat ended, and shown"); eq(w.shown("target"), "bronze-elite")
 			-- In combat again: tier after tier, tier art only switches visibility; the existing
 			-- underlay may be restyled, but nothing is made, sized or re-anchored.
@@ -25427,7 +25439,7 @@ do
 			SlashCmdList.OLYMPUS("borders test off")
 			eq(w.shown("player"), "silver"); eq(w.shown("target"), "silver") -- (1.1.5: his own, the dev's silver)
 			w.assertCombatCalls(12) -- (1.1.5: three tiers, 20 of six; then five)
-			eq(#w.textures, 18, "nothing more made")
+			eq(#w.textures, 21, "nothing more made")
 			for _, entry in ipairs(w.log) do assert(entry:find(":CreateTexture$"), entry) end
 		end, AsAuthor)
 	end)
@@ -25472,7 +25484,7 @@ do
 			"BORDERS_PREVIEW_NOT_MEMBER", "BORDERS_PREVIEW_COMBAT", "BORDERS_PREVIEW_MISSING", "BORDERS_PREVIEW_TITLE",
 			"BORDERS_PREVIEW_NONE", "BORDERS_PREVIEW_NOW", "BORDERS_PREVIEW_SHOWN", "BORDERS_PREVIEW_TIP" }
 		for name in TIER_LIST:gmatch("[^, ]+") do keys[#keys + 1] = "BORDERS_WHO_" .. name:upper():gsub("%-", "_") end
-		eq(#keys, 17, "the five tiers' too (1.1.5: six until then, three, then the two without wings)")
+		eq(#keys, 18, "the six tiers' too (1.1.6: the Treasurer's dragon) (1.1.5: six until then, three, then the two without wings)")
 		for _, key in ipairs(keys) do
 			assert(type(ns.L[key]) == "string" and ns.L[key] ~= key, "English " .. key)
 			assert(type(pt.L[key]) == "string" and pt.L[key] ~= ns.L[key], "Portuguese " .. key)
@@ -25545,7 +25557,7 @@ do
 			eq(w.shown("target"), "bronze-elite"); eq(w.shown("player"), nil)
 			-- Five textures on each member frame itself (it has no container), as on the target's (1.1.5:
 			-- three, then the two without wings).
-			eq(#w.textures, 38, "five borders (1.1.5: three, then the two without wings) on the target, the focus, your own and the four party frames, and the metal underlay on the first three (1.2)")
+			eq(#w.textures, 45, "six borders (1.1.6: the Treasurer's dragon too) (1.1.5: three, then the two without wings) on the target, the focus, your own and the four party frames, and the metal underlay on the first three (1.2)")
 			local seen = {}
 			local regions = w.partyRegions
 			for _, tex in ipairs(w.textures) do
@@ -25600,7 +25612,7 @@ do
 			local made = {}
 			for _, entry in ipairs(w.log) do made[entry] = (made[entry] or 0) + 1 end
 			OnlyCreateTexture(w)
-			for k = 1, 4 do eq(made["PartyMember#" .. k .. ":CreateTexture"], 5) end
+			for k = 1, 4 do eq(made["PartyMember#" .. k .. ":CreateTexture"], 6) end
 			eq(table.concat(w.hooks, " "), "TargetFrame.CheckClassification FocusFrame.CheckClassification PartyFrame.InitializePartyMemberFrames")
 			assert(w.B.StatusLine():find("player -, party1 gold-elite, party2 silver-elite, party3 bronze-elite, party4 -", 1, true), w.B.StatusLine())
 		end)
@@ -25651,7 +25663,7 @@ do
 			local n = w.computed()
 			w.fire("GROUP_ROSTER_UPDATE")
 			eq(w.computed(), n, "empty places again: nothing worked out")
-			eq(#w.textures, 38, "nothing made after the first: five on each frame")
+			eq(#w.textures, 45, "nothing made after the first: six on each frame")
 			-- Only the guilds of the members looked at were ever looked up.
 			local theirs = { ["Olympus Zeus"] = true, ["OLYMPUS"] = true, ["Olympus II"] = true }
 			for _, k in ipairs(looked) do assert(theirs[k], "looked up " .. tostring(k)) end
@@ -25680,7 +25692,7 @@ do
 			eq(w.shownOn("PartyMember#2"), nil, "now the plain member's")
 			eq(PartyLine(w), "gold-elite silver-elite bronze-elite -")
 			eq(w.computed(), n, "nobody worked out again: the same members in the same places")
-			eq(#w.textures, 38, "no texture more")
+			eq(#w.textures, 45, "no texture more")
 			-- Another order, then the first again.
 			w.partyOrder = { 2, 4, 1, 3 }
 			PartyFrame:InitializePartyMemberFrames()
@@ -25746,7 +25758,7 @@ do
 			eq(w.shownOn("PartyMember#1"), nil, "not the one he showed on before")
 			w.fire("INPUT_DEVICE_INTERFACE_TRANSITION", 0, 1)
 			eq(PartyLine(w), "gold-elite - - -")
-			eq(#w.textures, 38, "nothing made again")
+			eq(#w.textures, 45, "nothing made again")
 		end)
 	end)
 
@@ -25817,7 +25829,7 @@ do
 				end
 			end
 			assert(calls >= 10, "shown and hidden in combat: " .. calls)
-			eq(#w.textures, 38, "nothing made in combat")
+			eq(#w.textures, 45, "nothing made in combat")
 			OnlyCreateTexture(w)
 		end)
 		-- Logged in (or reloaded) in combat, in a party: nothing made, no hook, until it ends.
@@ -25831,25 +25843,25 @@ do
 			eq(#w.log, 0, "nothing made in combat"); eq(#w.hooks, 0); eq(#w.textures, 0)
 			w.combat = false
 			w.fire("PLAYER_REGEN_ENABLED")
-			eq(#w.textures, 38); eq(PartyLine(w), "gold-elite silver-elite - -", "made once combat ended, and shown")
+			eq(#w.textures, 45); eq(PartyLine(w), "gold-elite silver-elite - -", "made once combat ended, and shown")
 		end)
 		-- PartyFrame not shown yet at login (no member frame handed out), then first shown in combat.
 		WithBorders(function(w)
 			w.party(false)
 			Party(w, PARTY_MASTER)
 			w.internal("LOGIN")
-			eq(#w.textures, 18, "the target's, the focus's and yours (each with its underlay): no member frame yet")
+			eq(#w.textures, 21, "the target's, the focus's and yours (each with its underlay): no member frame yet")
 			eq(table.concat(w.hooks, " "), "TargetFrame.CheckClassification FocusFrame.CheckClassification PartyFrame.InitializePartyMemberFrames",
 				"PartyFrame's hook, to see them come")
 			w.combat = true
 			PartyFrame:InitializePartyMemberFrames()
 			w.fire("GROUP_ROSTER_UPDATE")
-			eq(#w.textures, 18, "none made in combat"); eq(w.shown("party1"), nil)
+			eq(#w.textures, 21, "none made in combat"); eq(w.shown("party1"), nil)
 			w.fire("PLAYER_REGEN_ENABLED")
-			eq(#w.textures, 18, "still in combat")
+			eq(#w.textures, 21, "still in combat")
 			w.combat = false
 			w.fire("PLAYER_REGEN_ENABLED")
-			eq(#w.textures, 38); eq(w.shown("party1"), "bronze-elite", "made once combat ended, and shown")
+			eq(#w.textures, 45); eq(w.shown("party1"), "bronze-elite", "made once combat ended, and shown")
 			-- Nothing waits any more: the next fight's end works nothing out again.
 			local n = w.computed()
 			w.combat = true; w.combat = false
@@ -25871,7 +25883,7 @@ do
 			-- To mouse and keyboard: made and shown.
 			w.style = 0
 			w.fire("INPUT_DEVICE_INTERFACE_TRANSITION", 0, 1)
-			eq(#w.textures, 38); eq(#w.hooks, 3); eq(PartyLine(w), "gold-elite silver-elite bronze-elite -")
+			eq(#w.textures, 45); eq(#w.hooks, 3); eq(PartyLine(w), "gold-elite silver-elite bronze-elite -")
 			-- Back to the gamepad UI: hidden at once; the roster, PartyFrame's hook, names and the census
 			-- call nothing on them and work nothing out.
 			w.style = 1
@@ -26004,7 +26016,7 @@ do
 			Party(w, PARTY_MASTER)
 			w.internal("LOGIN")
 			w.fire("GROUP_ROSTER_UPDATE")
-			eq(#w.textures, 18); eq(table.concat(w.hooks, " "), "TargetFrame.CheckClassification FocusFrame.CheckClassification")
+			eq(#w.textures, 21); eq(table.concat(w.hooks, " "), "TargetFrame.CheckClassification FocusFrame.CheckClassification")
 			eq(w.shown("party1"), nil)
 			assert(w.B.StatusLine():find("target -, focus -, player -  |", 1, true), w.B.StatusLine())
 			OnlyCreateTexture(w)
@@ -27104,7 +27116,7 @@ test("1.0.1 borders: Max's frames ship as 256 x 256 32-bit TGAs with alpha, the 
 				assert(clear > 256 * 256 - artW * artH, path .. ": transparent round the frame")
 			end
 		end
-		eq(files, 2, "Max's two frames")
+		eq(files, 3, "Max's two frames and the primary Treasurer's dragon (1.1.6)")
 	end)
 	-- His PNGs, in the repository (not in the addon), at the size of the game's frames he drew over.
 	for name, size in pairs({ ["bronze-plain"] = { 200, 200 }, ["bronze-winged"] = { 220, 180 } }) do
@@ -57938,17 +57950,17 @@ end)()
 	test("1.1.2 Ask to update: confirmation sends nothing until accepted; one ask per player a day, five an hour; the author's is his usual update window (V3)", function()
 		WithVersions("Tester-Realm", function(w, W)
 			-- (Changed on purpose, 1.1.2's review: a player's ask, V9, goes to 1.1.2 and newer alone,
-			-- the first that show it: here the author's presence named 1.1.6 as out.)
-			W.HeardVersion("1.1.6")
-			w.hellos = { Ann = "1.1.6", Bob = "1.1.5", P1 = "1.1.5", P2 = "1.1.5", P3 = "1.1.5", P4 = "1.1.5", P5 = "1.1.5" }
+			-- the first that show it: here the author's presence named 1.2.0 as out.)
+			W.HeardVersion("1.2.0")
+			w.hellos = { Ann = "1.2.0", Bob = "1.1.5", P1 = "1.1.5", P2 = "1.1.5", P3 = "1.1.5", P4 = "1.1.5", P5 = "1.1.5" }
 			eq(V.AskUpdate("Ann-Realm"), false, "up to date"); eq(#w.whispered, 0)
 			eq(V.AskUpdate("Eve-Realm"), false, "nothing known"); eq(#w.whispered, 0)
 			eq(V.AskUpdate("Bob-Realm"), true)
 			eq(#w.whispered, 0, "opening the confirmation sends nothing")
 			eq(w.popups[#w.popups].name, "OLYMPUS_UPDATE_CONFIRM")
-			eq(w.popups[#w.popups].a, "Bob"); eq(w.popups[#w.popups].b, "1.1.6")
+			eq(w.popups[#w.popups].a, "Bob"); eq(w.popups[#w.popups].b, "1.2.0")
 			StaticPopupDialogs.OLYMPUS_UPDATE_CONFIRM.OnAccept(nil, w.popups[#w.popups].data)
-			eq(w.whispered[1].to, "Bob-Realm"); eq(w.whispered[1].msg, "V9~1.1.6"); eq(w.whispered[1].key, "vask:bob")
+			eq(w.whispered[1].to, "Bob-Realm"); eq(w.whispered[1].msg, "V9~1.2.0"); eq(w.whispered[1].key, "vask:bob")
 			eq(w.printed[#w.printed], L.VERSION_ASKED:format("Bob"))
 			eq(V.AskUpdate("Bob"), false, "once a day"); eq(w.printed[#w.printed], L.VERSION_ASK_WAIT_ONE:format("Bob"))
 			for i = 1, 5 do AskAndConfirm(w, "P" .. i .. "-Realm") end
@@ -57963,7 +57975,7 @@ end)()
 			local root = MenuRoot()
 			V.MenuLines({ name = "Ann-Realm" }, { Line = function(t) root:CreateTitle(t) end, Button = function(t) root:CreateButton(t) end })
 			-- (both lines there, Ask to update greyed for a player on the latest: the owner's call, 2026-09-30)
-			eq(root.Texts(), "title:" .. L.VERSION_LINE_CURRENT:format("1.1.6") .. " | title:|cff9d9d9d" .. L.VERSION_DETAIL_HELLO:format(ns.Ago(w.clock)) .. "|r"
+			eq(root.Texts(), "title:" .. L.VERSION_LINE_CURRENT:format("1.2.0") .. " | title:|cff9d9d9d" .. L.VERSION_DETAIL_HELLO:format(ns.Ago(w.clock)) .. "|r"
 				.. " | button:" .. L.VERSION_ASK .. " | button:" .. L.VERSION_CHECK)
 		end)
 		WithVersions(AUTHOR_FULL, function(w, W)
@@ -57985,7 +57997,7 @@ end)()
 		WithUI(function()
 			WithGamepadUI(true, function(game)
 				WithVersions("Tester-Realm", function(w, W)
-					W.HeardVersion("1.1.6")
+					W.HeardVersion("1.2.0")
 					w.hellos = { Bob = "1.1.5" }
 					eq(V.AskUpdate("Bob-Realm"), true)
 					eq(#w.whispered, 0); eq(#game.shown, 0, "never Blizzard's popup under gamepad")
@@ -57998,7 +58010,7 @@ end)()
 					eq(V.AskUpdate("Bob-Realm"), true)
 					d = ns.Dialog.Find("OLYMPUS_UPDATE_CONFIRM")
 					d.buttons[1]:Click()
-					eq(#w.whispered, 1); eq(w.whispered[1].msg, "V9~1.1.6")
+					eq(#w.whispered, 1); eq(w.whispered[1].msg, "V9~1.2.0")
 				end)
 			end)
 		end)
@@ -58817,11 +58829,11 @@ end)()
 			eq((V.Status("Bob")), "unknown"); eq(w.printed[#w.printed], L.VERSION_NOT_SENT:format("Bob"))
 			eq(V.Check("Bob-Realm"), true, "checked again at once")
 			-- An ask to update dropped: the day's and the hour's slots come back.
-			W.HeardVersion("1.1.6")
+			W.HeardVersion("1.2.0")
 			w.hellos = { Cid = "1.1.5" }
 			eq(AskAndConfirm(w, "Cid-Realm"), true)
 			local e = w.whispered[#w.whispered]
-			eq(e.msg, "V9~1.1.6")
+			eq(e.msg, "V9~1.2.0")
 			e.done(false)
 			eq(ns.db.updateAsked.cid, nil); eq(#ns.db.updateAskTimes, 0); eq(w.printed[#w.printed], L.VERSION_NOT_SENT:format("Cid"))
 			w.holdSends = false
@@ -60259,6 +60271,8 @@ end)()
 		-- a dropdown's look), and the pointer onto the game's chat tab (the game's own help tips'
 		-- look, HelpTipTemplate: a dark box with a gold edge, its arrow and its X).
 		["ChatWindow.lua"] = { BackdropTemplate = 3, edgeFile = 3, ["UI-Tooltip-Border"] = 3 },
+		-- (1.2.0) No window: the Bones row in the innkeeper's own gossip list, the game's gossip row look.
+		["InnkeeperGossip.lua"] = { GossipTitleButtonTemplate = 1 },
 		-- The world map button's menu (a dropdown's look).
 		["Map.lua"] = { BackdropTemplate = 1, edgeFile = 1, ["UI-Tooltip-Border"] = 1 },
 		-- The Church filters' titleless dropdown, not a window (same border as the chat/map menus).

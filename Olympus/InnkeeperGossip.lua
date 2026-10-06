@@ -88,7 +88,7 @@ local function Build(f, panel, scroll) -- gp:innkeeper-gossip
 	if not ns.Gate.Allowed(GATE) then return false end
 	if host == f and row and dialog then return true end
 	G.Park()
-	if not CreateFrame then return false end
+	if type(panel) ~= "table" then return false end
 	local nextRow = Button(panel, scroll:GetWidth(), "", function() -- gp:innkeeper-gossip
 		if not ns.Gate.Allowed(GATE) then return end
 		G.Open()
@@ -127,6 +127,7 @@ function G.ShowRow() -- gp:innkeeper-gossip
 	if not ns.Gate.Allowed(GATE) then return false, "gamepad" end
 	local name, id = Context()
 	if not name then G.Park(); return false, id end
+	G.Listen()
 	local f, panel, scroll, bar = Native()
 	if not f then G.Park(); return false, "native-api" end
 	G.Park()
@@ -221,10 +222,17 @@ local function Install() -- gp:innkeeper-gossip!hook
 	if Native() then G.OnShow() end
 end
 ns.Gate.Hooks(GATE, { install = Install, park = G.Park, leftover = function() return saved ~= nil end })
-for _, event in ipairs({ "GOSSIP_CLOSED", "PLAYER_REGEN_DISABLED", "PLAYER_GUILD_UPDATE", "GUILD_ROSTER_UPDATE" }) do
-	pcall(ns.RegisterEvent, event, function() -- gp:innkeeper-gossip
-		if not ns.Gate.Allowed(GATE) then return end
-		if event == "GOSSIP_CLOSED" or event == "PLAYER_REGEN_DISABLED" or not Context() then G.Park() end
-	end)
+-- What parks the row again, listened to only once the Bones row has shown (G.ShowRow): an
+-- idle client registers nothing for it but GOSSIP_SHOW (the arena's idle weight).
+local listening = false
+function G.Listen()
+	if listening then return end
+	listening = true
+	for _, event in ipairs({ "GOSSIP_CLOSED", "PLAYER_REGEN_DISABLED", "PLAYER_GUILD_UPDATE", "GUILD_ROSTER_UPDATE" }) do
+		pcall(ns.RegisterEvent, event, function() -- gp:innkeeper-gossip
+			if not ns.Gate.Allowed(GATE) then return end
+			if event == "GOSSIP_CLOSED" or event == "PLAYER_REGEN_DISABLED" or not Context() then G.Park() end
+		end)
+	end
 end
 ns.On("LOGOUT", G.Park)

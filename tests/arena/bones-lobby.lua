@@ -32,7 +32,7 @@ test("Bones lobby: the real Play parchment explains the first lesson in steps, t
 		local canvas = assert(UI.Canvas("bone.play"))
 		local first = canvas.letterBody:GetText()
 		assert(first:find(L.FARKLE_LOBBY_FIRST, 1, true), "the visible parchment includes first-game instructions")
-		local _, bullets = first:gsub("•", "")
+		local _, bullets = first:gsub("·", "")
 		eq(bullets, 3, "three readable steps, not one dense paragraph")
 		local keeper = assert(first:find("speak to an innkeeper", 1, true))
 		local lesson = assert(first:find("2,000-point", 1, true))

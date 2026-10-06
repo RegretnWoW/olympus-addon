@@ -1130,6 +1130,7 @@ end)
 test("1.2 the fights part review: the honours' art keeps its provenance in the repository: media/honors/src/SHA256SUMS names every shipped file and the lab file it is (the Paladin's gold is paladin-new.tga); sampled files hash to it (the whole set: scripts/make-honors.py --check)", function()
 	local ns = {}
 	assert(loadfile(H.ADDON_DIR .. "Honors.lua"))("Olympus", ns)
+	ns.Honors.FRAMES_SHIPPED = nil -- (every family's frame: the machinery's tests; 1.2.0 wears the donors' alone)
 	assert(loadfile(H.ADDON_DIR .. "Sign.lua"))("Olympus", ns)
 	local f = assert(io.open(H.ROOT .. "media/honors/src/SHA256SUMS", "rb"), "the manifest")
 	local sums, n = {}, 0

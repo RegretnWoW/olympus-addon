@@ -73,7 +73,7 @@ end
 local function MakeFrame() -- gp:minimap
 	if not ns.Gate.Allowed("minimap") then return nil end
 	if frame then return frame end
-	if type(Minimap) ~= "table" or not CreateFrame then return nil end
+	if type(Minimap) ~= "table" then return nil end
 	local f = CreateFrame("Frame", nil, Minimap)
 	if not f or not f.CreateTexture or not f.SetSize or not f.SetScript or not f.Hide or not f.Show then return nil end
 	f:Hide()

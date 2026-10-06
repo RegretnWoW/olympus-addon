@@ -1128,8 +1128,19 @@ local function Copy(pick)
 	return { frame = frame, title = title, seen = seen, locked = pick.locked == true or nil }
 end
 
+-- 1.2.0 (the owner's call): the only honours' frames worn are the all-time donors'. The level race's
+-- comet waits for the game's launch; the month's donors, the Arena's, the Oracle's raven, the games',
+-- the Church's and the slayers' come later. Their frames stay in the code, worn by nobody here.
+Honors.FRAMES_SHIPPED = { ["donor-top"] = true }
+-- (nil: every family's frame, as the honours' own tests and 2.0 have them.)
+local function Shipped(h)
+	local s = Honors.FRAMES_SHIPPED
+	return h ~= nil and (s == nil or s[h.family or h.kind] == true)
+end
+Honors.FrameShipped = Shipped
+
 function Honors.Choose(pick, held, frame, title)
-	if frame ~= "rank" and frame ~= "none" and not HeldBy("frame", frame, held) then return nil, "frame" end
+	if frame ~= "rank" and frame ~= "none" and not Shipped(HeldBy("frame", frame, held)) then return nil, "frame" end
 	if title == "none" then title = nil end
 	if title ~= nil and not HeldBy("title", title, held) then return nil, "title" end
 	local new = Copy(pick)
@@ -1190,7 +1201,7 @@ function Honors.Shown(pick, held)
 		frame = "none"
 	else
 		local h = HeldBy("frame", pick.frame, held)
-		if h then frame, mark, honour = h.frame, h.mark, h end
+		if h and Shipped(h) then frame, mark, honour = h.frame, h.mark, h end
 	end
 	local title = HeldBy("title", pick.title, held) and pick.title or nil
 	return frame, mark, title, honour

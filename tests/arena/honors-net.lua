@@ -201,7 +201,7 @@ test("1.2 the fights part: AP only with a pick that is not the default or arena 
 	eq(#w:Sent{ from = idle, type = "AP" }, 0)
 	eq(#w:Timers(idle, true), 0, "no arena timer")
 	local events = w:ArenaWeight(idle).events
-	eq(#events, 2, "only keeper gossip and logout are registered while idle")
+	eq(#events, 2, "only keeper gossip and logout are registered while idle: " .. table.concat(events, ","))
 	eq(events[1], "GOSSIP_SHOW")
 	eq(events[2], "PLAYER_LOGOUT")
 	eq(idle.db.arenaProfile, nil, "nothing written")
@@ -606,6 +606,7 @@ print("The honours' art and words")
 test("1.2 the fights part: every art file the honours name ships in Olympus/media/honors: a 256 x 256 frame and a 32 x 32 mark, 32-bit uncompressed TGA with its footer (scripts/make-honors.py); nothing else there", function()
 	local ns = { Honors = nil }
 	assert(loadfile(H.ADDON_DIR .. "Honors.lua"))("Olympus", ns)
+	ns.Honors.FRAMES_SHIPPED = nil -- (every family's frame: the machinery's tests; 1.2.0 wears the donors' alone)
 	local dir = H.ADDON_DIR .. "media/honors/"
 	local function Check(path, size)
 		local s = Read(path)

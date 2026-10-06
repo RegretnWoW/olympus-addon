@@ -1412,7 +1412,8 @@ local function CensusDetail(s)
 		for _, c in ipairs(conts) do parts[#parts + 1] = c.name .. " " .. ns.FormatNumber(c.n) end
 		title = L.WHERE .. ":  |cffffffff" .. table.concat(parts, "  ·  ") .. "|r"
 	end
-	return title, text .. "\n" .. Grey(ns.UI.StatusLine())
+	local UI = ns.UI
+	return title, text .. "\n" .. Grey(UI and UI.StatusLine and UI.StatusLine() or "")
 end
 
 ---------------------------------------------------------------------------

@@ -1945,7 +1945,7 @@ local function CreatePanel()
 		C.guest = list[at % #list + 1]
 		Refresh()
 	end), 360, 0)
-	create.invite = At(Button(create, L.FARKLE_B_C_INVITE, 110, 32, function() if C.guest then A().Do("farkle.invite", C.guest) end end), 456, 0)
+	create.invite = At(Button(create, L.FARKLE_B_C_INVITE, 140, 32, function() if C.guest then A().Do("farkle.invite", C.guest) end end), 426, 0)
 	-- 2: the target
 	Label(L.FARKLE_B_C_TARGET, 8, 50)
 	create.targets = {}
@@ -2051,7 +2051,8 @@ function Board.CreateRefresh()
 	if not live then C.rehearsal = false end
 	create.rehearsal:SetOn(C.rehearsal)
 	local ok, why = A().Can("farkle.create", Board.CreateOpts())
-	create.why:SetText(ok and (C.from and L.FARKLE_B_C_MATCHED or wait or "") or WhyText(why))
+	-- (1.2.0, the owner's call: a free game shows no bets notice; "Plays for: points" says it.)
+	create.why:SetText(ok and (C.from and L.FARKLE_B_C_MATCHED or "") or WhyText(why))
 	if ok then create.send:Enable() else create.send:Disable() end
 end
 

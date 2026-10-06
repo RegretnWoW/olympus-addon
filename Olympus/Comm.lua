@@ -386,6 +386,7 @@ end
 --   1.1.6, chat moderation: WatchChat MD (lines deleted, recent lines deleted, timeouts and their
 --   lifts, a guild master's Watchers, the Olympus moderators, a target's own word, appeals and their
 --   answers, a case's decision told to its player; logged, over GUILD or the channel).
+--   1.1.6, the War Room's squads: WarSquads WU (a guild's squad assignments, over GUILD) SC (a squad's chat, logged whispers).
 local handlers = {}
 -- 1.1 (Moderation.lua): a client the moderators took off (net-off) sends none of what they hide.
 local function Held(msg)

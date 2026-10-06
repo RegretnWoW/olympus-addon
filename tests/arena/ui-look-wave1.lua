@@ -457,10 +457,9 @@ test("1.2 UI: Bones has a real landing/history/practice presentation and live bo
 	-- Eligibility reads real client position/rest APIs; evaluate in this client's context.
 	local buttons = w:As(a, function() return UI.Pane("bone.play").buttons({ key = "bone.play" }) end)
 	eq(buttons[2][1], L.ARENA_BONE_NEW); eq(buttons[2].enabled, true)
-	eq(buttons[3][1], L.ARENA_BONE_PRACTICE); eq(buttons[3].enabled, true)
-	eq(buttons[3][2], UI.BoneFindInnkeeper, "Practice guides to a real innkeeper")
-	eq(buttons[4][1], L.ARENA_PANE_BONE_HISTORY)
-	buttons[4][2](); eq(UI.state.pane.farkle, "bone.history")
+	-- (1.2.0, the owner's call: no Practice button; practice is the innkeeper's.)
+	eq(buttons[3][1], L.ARENA_PANE_BONE_HISTORY)
+	buttons[3][2](); eq(UI.state.pane.farkle, "bone.history")
 	-- Rules can be read without starting a practice game. Training begins with an innkeeper;
 	-- the old local lab cannot replace this stateful multiplayer surface.
 	w:As(a, function() UI.BoneBoard("guide") end)

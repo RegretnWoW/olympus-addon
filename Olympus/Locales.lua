@@ -4,7 +4,7 @@ local ADDON, ns = ...
 local L = setmetatable({}, { __index = function(_, k) return k end })
 ns.L = L
 
-L.SQUAD_TITLE = "Military squads — your guild"
+L.SQUAD_TITLE = "Military squads - your guild"
 L.SQUAD_COUNT = "%d/99 soldiers"
 L.SQUAD_EMPTY = "No soldiers assigned"
 L.SQUAD_ADD = "Assign soldier"
@@ -13,10 +13,10 @@ L.SQUAD_HINT = "Name of a current member of your guild. Each leader may have up 
 L.SQUAD_OPEN_CHAT = "Open private squad chat"
 L.SQUAD_CHAT_LABEL = "Squad %d"
 L.SQUAD_COUNCILLOR = "High Councillor %d"
-L.SQUAD_LEADER_COUNCIL = "High Councillor — %s"
-L.SQUAD_LEADER_CENTURION = "Centurion — %s"
+L.SQUAD_LEADER_COUNCIL = "High Councillor - %s"
+L.SQUAD_LEADER_CENTURION = "Centurion - %s"
 if GetLocale and GetLocale() == "ptBR" then
-	L.SQUAD_TITLE = "Esquadrões militares — sua guilda"
+	L.SQUAD_TITLE = "Esquadrões militares - sua guilda"
 	L.SQUAD_COUNT = "%d/99 soldados"
 	L.SQUAD_EMPTY = "Nenhum soldado designado"
 	L.SQUAD_ADD = "Designar soldado"
@@ -25,8 +25,8 @@ if GetLocale and GetLocale() == "ptBR" then
 	L.SQUAD_OPEN_CHAT = "Abrir chat privado do esquadrão"
 	L.SQUAD_CHAT_LABEL = "Esquadrão %d"
 	L.SQUAD_COUNCILLOR = "Conselheiro do High Council %d"
-	L.SQUAD_LEADER_COUNCIL = "Conselheiro do High Council — %s"
-	L.SQUAD_LEADER_CENTURION = "Centurião — %s"
+	L.SQUAD_LEADER_COUNCIL = "Conselheiro do High Council - %s"
+	L.SQUAD_LEADER_CENTURION = "Centurião - %s"
 end
 
 L.THOUSANDS = ","
@@ -1039,6 +1039,7 @@ L.BORDERS_PREVIEW_SHOWN = "shown"
 L.BORDERS_PREVIEW_TIP = "Shows this border round your own portrait, and on your target frame when you target yourself, as someone who holds it sees his own, and its mark after your name on your own frame and on every friendly player's nameplate. On your screen only: nothing is sent, and a /reload forgets it. Click it again, or type /oly borders test off, to end it."
 L.BORDERS_PREVIEW_TIP_MEMBER = "Shows the star of any other Olympus member after your name on your own frame and on every friendly player's nameplate (no border has it). On your screen only: nothing is sent, and a /reload forgets it. Click it again, or type /oly borders test off, to end it."
 L.BORDERS_WHO_GOLD_ELITE = "gold wings: the King"
+L.BORDERS_WHO_TREASURER_DRAGON = "the jewelled dragon: the federal Treasurer"
 L.BORDERS_WHO_SILVER_ELITE = "silver wings: the High Council"
 L.BORDERS_WHO_BRONZE_ELITE = "bronze wings: guild masters"
 L.BORDERS_WHO_MEMBER = "the star: any other member (a nameplate mark, no border)"
@@ -3235,6 +3236,7 @@ if GetLocale and GetLocale() == "ptBR" then
 	L.BORDERS_PREVIEW_TIP = "Mostra esta borda em volta do seu próprio retrato, e no quadro do alvo quando você mira em si mesmo, como quem a tem vê a própria, e a marca dela depois do seu nome no seu quadro e na placa de identificação de todo jogador aliado. Só na sua tela: nada é enviado, e um /reload esquece. Clique de novo, ou digite /oly borders test off, para encerrar."
 	L.BORDERS_PREVIEW_TIP_MEMBER = "Mostra a estrela de qualquer outro membro do Olympus depois do seu nome no seu quadro e na placa de identificação de todo jogador aliado (nenhuma borda a tem). Só na sua tela: nada é enviado, e um /reload esquece. Clique de novo, ou digite /oly borders test off, para encerrar."
 	L.BORDERS_WHO_GOLD_ELITE = "dourada com asas: o Rei"
+	L.BORDERS_WHO_TREASURER_DRAGON = "o dragão de joias: o Tesoureiro federal"
 	L.BORDERS_WHO_SILVER_ELITE = "prateada com asas: o High Council"
 	L.BORDERS_WHO_BRONZE_ELITE = "bronze com asas: mestres de guilda"
 	L.BORDERS_WHO_MEMBER = "a estrela: qualquer outro membro (uma marca nas placas, sem borda)"

@@ -386,7 +386,7 @@ test("watch: chat moderation: a long line's parts go together, another sender's 
 	end)
 end)
 
-test("watch: chat moderation: his recent lines go on every surface (the three chats, the guild room); one heard later never takes a newer line", function()
+test("watch: chat moderation: his recent lines go on every surface (the three chats; the guild room is the game's own guild chat since 1.2.0); one heard later never takes a newer line", function()
 	World(function(w)
 		local G, A, B, D, Y1 = Standard(w)
 		w.Say(B, "A", "old one")
@@ -394,9 +394,7 @@ test("watch: chat moderation: his recent lines go on every surface (the three ch
 		for _, cl in ipairs({ G, A, D }) do local e = w.Line(cl, "A", B.name, "old one") e.t = e.t - 2 * 86400 end
 		w.Say(B, "A", "recent one")
 		w.Say(B, "A", "recent two")
-		w.Room(B, "in the guild room")
 		w.Say(D, "A", "someone else")
-		eq(#w.As(A, A.R.RawHistory, "guild"), 1, "the room's line kept")
 		assert(w.As(A, A.WC.Purge, B.name, "spam"))
 		w.Run()
 		for _, cl in ipairs({ G, A, D }) do
@@ -404,7 +402,6 @@ test("watch: chat moderation: his recent lines go on every surface (the three ch
 			for _, e in ipairs(w.Lines(cl, "A", B.name)) do
 				if e ~= w.Line(cl, "A", B.name, "old one") then eq(e.del, true, "deleted on " .. cl.short) end
 			end
-			eq(w.As(cl, cl.R.RawHistory, "guild")[1].del, true, "the guild room's too on " .. cl.short)
 			eq(w.Line(cl, "A", D.name, "someone else").del, nil, "another sender's stays on " .. cl.short)
 		end
 		-- A line of his still in flight (sent before, heard within the grace) is dropped; one after shows.

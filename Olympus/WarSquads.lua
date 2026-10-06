@@ -396,7 +396,7 @@ function Squads.Lines(query, baseIndent, manage)
 		end
 		if hit then
 			local shown = masked and Label("SQUAD_COUNCILLOR", "High Councillor %d"):format(e.index) or ns.Codec.Plain(ns.ShortName(e.name))
-			if not masked then shown = (e.kind == "councillor" and Label("SQUAD_LEADER_COUNCIL", "High Councillor — %s") or Label("SQUAD_LEADER_CENTURION", "Centurion — %s")):format(shown) end
+			if not masked then shown = (e.kind == "councillor" and Label("SQUAD_LEADER_COUNCIL", "High Councillor - %s") or Label("SQUAD_LEADER_CENTURION", "Centurion - %s")):format(shown) end
 			lines[#lines + 1] = { indent = indent, squadLeader = not masked and e.name or nil, text = shown,
 				right = Label("SQUAD_COUNT", "%d/99 soldiers"):format(squad.count) }
 			if not masked then
@@ -427,7 +427,7 @@ function Squads.Lines(query, baseIndent, manage)
 			end
 		end
 	end
-	if #lines > 0 then table.insert(lines, 1, { indent = indent, header = true, text = Label("SQUAD_TITLE", "Military squads — your guild") }) end
+	if #lines > 0 then table.insert(lines, 1, { indent = indent, header = true, text = Label("SQUAD_TITLE", "Military squads - your guild") }) end
 	return lines
 end
 if ns.ChatRooms then ns.ChatRooms.RegisterProvider(provider) end

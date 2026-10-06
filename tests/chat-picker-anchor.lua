@@ -7,7 +7,7 @@ local function Tab(frame, kind)
 	error("missing destination " .. kind)
 end
 
-test("Chat picker anchor: Race and Class open below their clicked tabs, remain contained and close on redraw", function()
+test("Chat picker anchor: Race and Class open below their clicked tabs, remain contained, and stay open through a redraw that changes none of their rooms", function()
 	WithWindow(function(w)
 		local R, saved = ns.ChatRooms, ns.ChatRooms.Options
 		local label, picked = "One room", 0
@@ -31,7 +31,10 @@ test("Chat picker anchor: Race and Class open below their clicked tabs, remain c
 				assert(menu:GetFrameLevel() > f.subCatcher:GetFrameLevel())
 				menu.rows[1]:Click(); eq(menu:IsShown(), false)
 				owner:Click(); f.subCatcher:Click(); eq(menu:IsShown(), false)
-				owner:Click(); w.fire("DATA_CHANGED"); w.CW.Render(); eq(menu:IsShown(), false)
+				-- (1.2.0: a redraw closes it only when its rooms changed: census news twice a second must not
+				-- shut a list the player is reading.)
+				owner:Click(); w.fire("DATA_CHANGED"); w.CW.Render(); eq(menu:IsShown(), true, "the same rooms: still open")
+				f.subCatcher:Click(); eq(menu:IsShown(), false)
 			end
 			eq(picked, 2, "each choice still acts once")
 			-- A long choice clamps instead of returning to the right regardless of its tab.

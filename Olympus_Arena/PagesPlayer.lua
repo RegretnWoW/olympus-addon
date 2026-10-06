@@ -1241,7 +1241,8 @@ ArenaUI.RegisterPane("bone.play", { section = "farkle", label = L.ARENA_PANE_BON
 		return {
 			mt and { L.ARENA_BONE_OPEN, function() ArenaUI.BoneBoard("board", mt.id) end, enabled = ready, why = why } or { L.ARENA_FIND_PLAYER, function() ArenaUI.FindOpponent("b") end, enabled = ready, why = why },
 			{ L.ARENA_BONE_NEW, function() ArenaUI.BoneInvite({}) end, enabled = ready, why = why },
-			{ L.ARENA_BONE_PRACTICE, ArenaUI.BoneFindInnkeeper, enabled = ns.InnkeeperArrow ~= nil, why = Kit.Why("missing") },
+			-- (1.2.0, the owner's call: no Practice button; practice is the innkeeper's, and the page's
+			-- words above say so.)
 			{ L.ARENA_PANE_BONE_HISTORY, function() ArenaUI.ShowPane("bone.history") end },
 		}
 	end })
