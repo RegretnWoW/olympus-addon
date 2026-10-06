@@ -187,6 +187,7 @@ L.ARENA_MENU_CHALLENGE_TIP = "Opens the challenge: casual or staked, direct or w
 -- (1.1.6: no stakes and no arbiters, ArenaHome.ArbitersOn: these words then)
 L.ARENA_MENU_CHALLENGE_TIP_POINTS = "Opens the challenge: a duel between the two of you, for points. Nothing goes until you send it."
 L.ARENA_MENU_BONE = "Invite to Bones"
+L.PROFILE_ARENA_HISTORY = "History"
 L.ARENA_MENU_BONE_TIP = "Opens a new Bones table for this player."
 L.ARENA_MENU_WATCH = "Watch"
 L.ARENA_MENU_WATCH_TIP = "Watch this player's Bones table."
@@ -460,6 +461,7 @@ if GetLocale and GetLocale() == "ptBR" then
 	L.ARENA_MENU_CHALLENGE_TIP = "Abre o desafio: amistoso ou valendo, direto ou com árbitro. Nada vai até você enviar."
 	L.ARENA_MENU_CHALLENGE_TIP_POINTS = "Abre o desafio: um duelo entre vocês dois, por pontos. Nada vai até você enviar."
 	L.ARENA_MENU_BONE = "Convidar para o Bones"
+	L.PROFILE_ARENA_HISTORY = "Histórico"
 	L.ARENA_MENU_BONE_TIP = "Abre uma nova mesa de Bones para este jogador."
 	L.ARENA_MENU_WATCH = "Assistir"
 	L.ARENA_MENU_WATCH_TIP = "Assista à mesa de Bones deste jogador."

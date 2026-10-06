@@ -20,7 +20,7 @@ end
 local function HistoryAction(p)
 	local lines = ns.PlayerProfile.Build(p)
 	for _, row in ipairs(lines) do
-		if row.onClick and row.text == "|cffffd200" .. ns.L.ARENA_HISTORY_TITLE .. "|r" then return row end
+		if row.onClick and row.text == "|cffffd200" .. ns.L.PROFILE_ARENA_HISTORY .. "|r" then return row end
 	end
 end
 

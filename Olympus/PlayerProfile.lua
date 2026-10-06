@@ -253,7 +253,7 @@ function Profile.Build(p)
 		end)
 	end
 	if FightHistoryAllowed(details.full) then
-		lines[#lines + 1] = Action(L.ARENA_HISTORY_TITLE, function()
+		lines[#lines + 1] = Action(L.PROFILE_ARENA_HISTORY, function()
 			return Profile.OpenFightHistory(details.full)
 		end)
 	end
