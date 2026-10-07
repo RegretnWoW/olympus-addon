@@ -36,7 +36,6 @@ local RACES = {
 	{ id = "race:8", label = "Troll", race = 8 },
 }
 local HORDE_RACE = { [1] = false, [2] = true, [3] = false, [4] = false, [5] = true, [6] = true, [7] = false, [8] = true }
-local FACTION_CLASS = { PALADIN = "Alliance", SHAMAN = "Horde" }
 local CLASSES = {
 	{ id = "class:WA", file = "WARRIOR", label = "Warrior" },
 	{ id = "class:PA", file = "PALADIN", label = "Paladin" },
@@ -344,8 +343,8 @@ end
 
 function Rooms.Options(kind)
 	local out = {}
-	-- 1.2.1: only our faction's races and classes are offered (Paladin is the Alliance's, Shaman the
-	-- Horde's); while the faction is unknown, all of them.
+	-- 1.2.1: only our faction's races are offered (while the faction is unknown, all of them); every
+	-- class is, Forever's Alliance having Shamans too.
 	local horde = ns.faction == "Horde"
 	local known = ns.faction == "Horde" or ns.faction == "Alliance"
 	if kind == "race" then
@@ -353,9 +352,7 @@ function Rooms.Options(kind)
 			if not known or HORDE_RACE[e.race] == horde then out[#out + 1] = Rooms.Info(e.id) end
 		end
 	elseif kind == "class" then
-		for _, e in ipairs(CLASSES) do
-			if not known or (FACTION_CLASS[e.file] or ns.faction) == ns.faction then out[#out + 1] = Rooms.Info(e.id) end
-		end
+		for _, e in ipairs(CLASSES) do out[#out + 1] = Rooms.Info(e.id) end
 	elseif kind == "authority" then
 		out = AuthorityOptions()
 	elseif kind == "department" then
