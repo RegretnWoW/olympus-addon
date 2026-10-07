@@ -1269,6 +1269,38 @@ local function ConflictOf(e, acceptedOnly)
 	return nil
 end
 
+-- 1.2.0: an Olympus member (our roster, or a federation guild's claim the channel takes).
+local function EvidenceMember(sender)
+	local R = ns.Roster
+	if R and R.RankOf and R.RankOf(sender) ~= nil then return true end
+	local C, M = ns.Channels, ns.Moderation
+	if type(C) ~= "table" or type(C.VerifiedLevel) ~= "function" then return false end
+	local guild = M and M.GuildOf and M.GuildOf(sender)
+	if type(guild) ~= "string" or guild == "" or not (ns.IsFederation and ns.IsFederation(guild)) then return false end
+	local ok, level = pcall(C.VerifiedLevel, sender, guild)
+	return ok and type(level) == "number" and level >= 1
+end
+
+-- Whether a player GUID is the sender's character: true or false when this client can name it
+-- (a unit, or the game's cache of seen players), nil when it cannot.
+local function GuidIsSender(guid, sender)
+	local who = ns.Fold(ns.FullName(sender))
+	if type(UnitTokenFromGUID) == "function" then
+		local ok, token = pcall(UnitTokenFromGUID, guid)
+		if ok and type(token) == "string" and not Secret(token) then
+			local name = ns.UnitFullName(token)
+			if type(name) == "string" and not Secret(name) then return ns.Fold(ns.FullName(name)) == who end
+		end
+	end
+	if type(GetPlayerInfoByGUID) == "function" then
+		local ok, _, _, _, _, _, name, realm = pcall(GetPlayerInfoByGUID, guid)
+		if ok and type(name) == "string" and name ~= "" and not Secret(name) and not Secret(realm) then
+			return ns.Fold(ns.FullName(name, type(realm) == "string" and realm ~= "" and realm or nil)) == who
+		end
+	end
+	return nil
+end
+
 local function ReviewEvidence(sender, body)
 	if not Wanted.CanPublish(ns.me) then return false, "access" end
 	local version, digest, at, month, kind, action, killerWire, victimWire =
@@ -1281,6 +1313,11 @@ local function ReviewEvidence(sender, body)
 	if at > now + Wanted.GLOBAL_SKEW or now - at > Wanted.EVIDENCE_AGE then return false, "stale" end
 	sender = CleanName(sender)
 	if not sender then return false, "sender" end
+	-- 1.2.0: a member's own evidence only: the Olympian side of the row (the killer of a party
+	-- kill, the victim of a death) is the sender whenever this client can name that GUID.
+	if ns.Moderation and ns.Moderation.Hides and ns.Moderation.Hides(sender) then return false, "olympus" end
+	if not EvidenceMember(sender) then return false, "olympus" end
+	if GuidIsSender(kind == "S" and victim or killer, sender) == false then return false, "not-own" end
 	local key = ns.Fold(sender) .. "#" .. digest
 	-- A row held already costs the sender's rate nothing: after his reload his client may send
 	-- again what it sent before. Pending here, or accepted (in this session or an earlier one:
@@ -2339,7 +2376,8 @@ Wanted.buttons = buttons -- (tests)
 -- player is in an instance.
 ---------------------------------------------------------------------------
 
-local function SightingsOn() return type(ns.db) == "table" and ns.db.wantedSightings ~= false end
+-- (1.2.0: off until the member's own Yes on its line.)
+local function SightingsOn() return type(ns.db) == "table" and ns.db.wantedSightings == true end
 Wanted.SightingsOn = SightingsOn
 -- (The section's helpers: Wanted.lua's main chunk is near Lua's 200 locals.)
 local Sight = {}
@@ -2601,6 +2639,10 @@ local function SendSighting(e)
 	-- (Only through a Comm that can cancel what waits: a No must reach every queued sighting.)
 	if type(C) ~= "table" or type(C.Whisper) ~= "function" or type(C.CancelQueued) ~= "function" then return 0, "transport" end
 	if Sight.CrownHidden() then return 0, "crown" end
+	-- (1.2.0: a sighting carries where this player stands and his layer: none goes while he keeps
+	-- his zone and layer private.)
+	local Ly = ns.Layers
+	if not (type(Ly) == "table" and type(Ly.Sharing) == "function" and Ly.Sharing() == true) then return 0, "private" end
 	local guild = Sight.OwnGuild()
 	if not guild then return 0, "guild" end
 	local now = math.floor(Clock())
@@ -2655,7 +2697,15 @@ end
 -- sighting, or false and why it is none.
 function Wanted.ObserveUnit(unit)
 	local ok, why = Collects()
-	if not ok then return false, why end
+	if not ok then
+		-- (1.2.0: sightings wait for a Yes; until one is answered, a hostile Horde player seen is
+		-- still remembered here, never sent, for one's own death recap. A No stops that too.)
+		if why == "off" and type(ns.db) == "table" and ns.db.wantedSightings == nil and type(unit) == "string" and not InInstance() then
+			local _, _, horde = SightedUnit(unit)
+			if horde then RememberHorde(horde) end
+		end
+		return false, why
+	end
 	if InInstance() then return false, "instance" end
 	if type(unit) ~= "string" then return false, "unit" end
 	-- A Horde player this client recorded on this map within SIGHT_GAP: dropped before anything
@@ -3046,10 +3096,10 @@ if ns.Consent and ns.Consent.Register then
 		shown = function() return ns.IsMember() == true and ns.faction ~= "Horde" end,
 		get = function() return SightingsOn() end,
 		set = function(on) Wanted.SetSightings(on) end,
-		-- On until a No, and asked like the page's other lines until it is answered: the page
-		-- opens by itself for it once a session (a member who answered every other line before is
-		-- shown it too), and a bulk Yes records a yes, never over a No (Consent's BulkPending).
+		-- 1.2.0: off until its own Yes, and asked like the page's other lines until it is answered
+		-- (the page opens by itself for it once a session); the bulk Yes never turns it on.
 		pending = function() return type(ns.db) == "table" and ns.db.wantedSightings == nil end,
+		explicit = true,
 	})
 end
 

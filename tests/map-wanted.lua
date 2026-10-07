@@ -89,6 +89,7 @@ test("Wanted map option: hides and restores actual sightings without changing mi
 		-- (Only the wanted are sighted: the target is on this client's list.)
 		c.Wanted.CanManage = function() return true end
 		assert(c.Wanted.AddTarget("Enemy-Realm", guid))
+		c.db.wantedSightings = true -- (1.2.0: off until the member's Yes)
 		assert(c.Wanted.ObserveUnit("target"))
 		local f = assert(c.Wanted.PinFrames()[guid])
 		eq(world[f.world], true); eq(mini[f.mini], true)
@@ -97,7 +98,7 @@ test("Wanted map option: hides and restores actual sightings without changing mi
 		assert(cb, "Wanted checkbox exists")
 		cb:SetChecked(false); cb:GetScript("OnClick")(cb)
 		eq(world[f.world], nil); eq(mini[f.mini], true); eq(#c.Wanted.Sightings(), 1)
-		eq(c.db.wantedSightings, nil); eq(c.Wanted.SightingsOn(), true)
+		eq(c.db.wantedSightings, true); eq(c.Wanted.SightingsOn(), true)
 		c.Wanted.RefreshPins(); eq(world[f.world], nil)
 		cb:SetChecked(true); cb:GetScript("OnClick")(cb)
 		eq(world[f.world], true); eq(mini[f.mini], true)

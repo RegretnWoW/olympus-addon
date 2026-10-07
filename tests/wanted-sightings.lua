@@ -195,7 +195,7 @@ local function WithSightings(fn)
 			c.UnitFullName = function(unit) return U(unit) and U(unit).name end
 			c.Roster = { RankOf = function(name) return world.olympians[Fold(name)] and 3 or nil end }
 			c.Channels = { VerifiedLevel = function(sender) if world.olympians[Fold(sender)] then return 1, true end return 0, false end }
-			c.Layers = { Mine = function() return cl.layer end }
+			c.Layers = { Mine = function() return cl.layer end, Sharing = function() return cl.private ~= true end }
 			c.Pins = function() return cl.lib end
 			c.Map = {
 				Badge = function(size, round) local a = Frame("anchor") a.badge, a.size, a.round = Frame("badge"), size, round return a end,
@@ -250,7 +250,8 @@ local function WithSightings(fn)
 		function world:Client(name, guid, o)
 			o = o or {}
 			name = ns.FullName(name)
-			local cl = { name = name, guid = guid, member = o.member ~= false, manager = o.manager, db = o.db or {}, rdb = {}, prints = {},
+			-- (1.2.0: sightings are off until a Yes; these members said Yes unless a test gives its own db.)
+			local cl = { name = name, guid = guid, member = o.member ~= false, manager = o.manager, db = o.db or { wantedSightings = true }, rdb = {}, prints = {},
 				realComm = o.realComm, realConsent = o.realConsent, realBackup = o.realBackup, crown = o.crown, wanted = o.wanted,
 				units = { player = { name = name, guid = guid, faction = "Alliance", guild = o.guild or "Olympus II" } },
 				map = 1429, x = 0.4123, y = 0.6789, online = true }
@@ -377,19 +378,23 @@ local function MadeBackup(data)
 	return ("OLYB1:%d:%s:%s"):format(#payload, ns.Backup.Sum(payload), payload)
 end
 
-test("wanted sightings: on by default for members, a line of its own on the privacy page that says what goes and to whom, asked until answered; its No, or /oly sightings off, stops collecting at once", function()
+test("wanted sightings (1.2.0): off until the member's own Yes, a line of its own on the privacy page that says what goes and to whom, asked until answered; its No, or /oly sightings off, stops collecting at once", function()
 	WithSightings(function(world)
-		local o = world:Client("Aldric-Realm", "Player-1-AB000001")
+		local o = world:Client("Aldric-Realm", "Player-1-AB000001", { db = {} })
 		local W = o.W
 		eq(o.db.wantedSightings, nil, "never answered")
-		eq(world:As(o, W.SightingsOn), true, "on by default")
+		eq(world:As(o, W.SightingsOn), false, "off until a Yes")
 		local item = assert(o.consent, "its line on the privacy page")
 		eq(item.key, "wantedsightings")
-		eq(world:As(o, item.get), true, "the page shows it on")
+		eq(world:As(o, item.get), false, "the page shows it off")
+		eq(item.explicit, true, "its own Yes only")
 		-- (Review: with pending always false the page never opened for it, so a member who had
 		-- answered every other line was never shown it. It waits for an answer like the others,
-		-- on meanwhile: tests below run the real page.)
-		eq(world:As(o, item.pending), true, "asked until answered, on meanwhile")
+		-- off meanwhile: tests below run the real page.)
+		eq(world:As(o, item.pending), true, "asked until answered, off meanwhile")
+		local ok = world:See(o, "nameplate1", Horde("Grom-Realm", GROM))
+		eq(ok, false, "nothing collected before a Yes")
+		world:As(o, item.set, true)
 		eq(world:As(o, item.shown), true, "a member's line")
 		o.member = false
 		eq(world:As(o, item.shown), false, "nobody else's")
@@ -397,16 +402,17 @@ test("wanted sightings: on by default for members, a line of its own on the priv
 		local text = L[item.text]
 		for _, part in ipairs({ "Horde player", "name and GUID", "your own map position (rounded) and layer", "the time, your name and your guild",
 			"15 minutes", "whispered to one reviewer", "the one you send your Most Wanted evidence to", "the King, a High Councillor or the author",
-			"until you have sent evidence to one, nobody gets it", "seen nearby", "whatever you answered about sharing your zone and layer",
-			"The King's go out only while his crown shows on the map", "Never on the Olympus channel", "never in an instance", "nothing saved",
+			"until you have sent evidence to one, nobody gets it", "seen nearby", "Nothing goes while you keep your zone and layer private",
+			"the King's only while his crown shows on the map", "Never anyone off the list", "never on the Olympus channel", "never in an instance", "nothing saved",
+			"Accept all does not turn it on",
 			"No stops it at once", "take your pins off his map", "before you logged out stays there until its 15 minutes are up",
 			"/oly sightings on|off" }) do
 			assert(text:find(part, 1, true), "the page says: " .. part)
 		end
 		-- (Review: what reached a reviewer outlives a logout; the page no longer says it does not.)
 		assert(not text:find("after you log out", 1, true) and not text:find("two at most", 1, true), "no claim it cannot keep")
-		assert(L[item.label]:find("on until you say No", 1, true), L[item.label])
-		assert(L.CONSENT_OPTIONAL:find("on until you say No", 1, true), "the page's own words no longer say every line waits for a Yes")
+		assert(L[item.label]:find("off until you say Yes", 1, true), L[item.label])
+		assert(not L.CONSENT_OPTIONAL:find("on until you say No", 1, true), "no line is on until a No any more")
 
 		assert(world:See(o, "nameplate1", Horde("Grom-Realm", GROM)), "collected with no question asked")
 		eq(#world:Pins(o), 1)
@@ -460,7 +466,7 @@ test("wanted sightings: on by default for members, a line of its own on the priv
 	assert(table.concat(lines, "\n"):find(L.HELP_SIGHTINGS, 1, true), "in /oly help")
 end)
 
-test("wanted sightings on the real privacy page (Consent.lua): it opens by itself for a member who answered every other line, once a session; its bulk Yes records a yes, never over a No; answered, it opens no more", function()
+test("wanted sightings on the real privacy page (Consent.lua): it opens by itself for a member who answered every other line, once a session; the bulk Yes never turns it on (1.2.0); its own Yes does; answered, it opens no more", function()
 	WithSightings(function(world)
 		-- A 1.1 member who answered every line the page had before this one.
 		local db = { shareLocation = false, layerHelp = false, royalInspection = false, rollCall = true, addonChat = true }
@@ -473,14 +479,17 @@ test("wanted sightings on the real privacy page (Consent.lua): it opens by itsel
 			return table.concat(keys, ",")
 		end
 		eq(Waiting(), "wantedsightings", "this line alone waits")
-		eq(world:As(o, P.Answer, "wantedsightings"), true, "on while it waits")
+		eq(world:As(o, P.Answer, "wantedsightings"), false, "off while it waits")
 		eq(world:As(o, P.Ask, "login"), true, "the page opens by itself for it")
 		eq(P.Frame():IsShown(), true)
 		P.Hide()
 		eq(world:As(o, P.Ask, "login"), false, "once a session")
-		-- Its main button, nothing chosen: authorize all records the yes.
+		-- Its main button, nothing chosen: authorize all leaves it unanswered and off.
 		world:As(o, P.Show)
-		eq(world:As(o, P.AuthorizePending), true)
+		world:As(o, P.AuthorizePending)
+		eq(o.db.wantedSightings, nil, "the bulk Yes never answers it"); eq(Waiting(), "wantedsightings")
+		-- Its own Yes turns it on.
+		eq(world:As(o, P.Choose, "wantedsightings", true), true)
 		eq(o.db.wantedSightings, true, "a yes, recorded"); eq(Waiting(), "")
 		-- A No, then the bulk Yes again: the No stands.
 		eq(world:As(o, P.Choose, "wantedsightings", false), true)
@@ -669,7 +678,7 @@ test("wanted sightings: the No cancels every sighting still waiting in Comm at o
 		o.db.wantedSightings = false
 		world:Pump()
 		eq(Dropped(world, "off"), 2, "a No that reached the saved answer some other way")
-		o.db.wantedSightings = nil
+		o.db.wantedSightings = true -- (the Yes again; 1.2.0: no answer is off)
 		Next("Garrosh-Realm", GARROSH)
 		world:Advance(o.W.SIGHT_QUEUE_TTL + 1)
 		world:Pump()
@@ -1148,7 +1157,7 @@ test("wanted sightings through the real Comm.lua: a sighting waits in its queue 
 		o.db.wantedSightings = false
 		Pump()
 		eq(#world.wire, 0, "Comm's permit, at its turn"); eq(C.QueueSize(), 0)
-		o.db.wantedSightings = nil
+		o.db.wantedSightings = true -- (the Yes again; 1.2.0: no answer is off)
 		ok, e = world:See(o, "nameplate3", Horde("Rexxar-Realm", REXXAR))
 		eq(e.sent, 1)
 		Pump()
@@ -1201,4 +1210,21 @@ test("wanted sightings mixed versions: 1.1.4's Comm (what live clients run) igno
 	local src = f:read("*a")
 	f:close()
 	assert(src:find("Wanted WS WX WY", 1, true))
+end)
+
+test("wanted sightings (1.2.0): a member who keeps his zone and layer private sends none (his own map still shows them)", function()
+	WithSightings(function(world)
+		local o = world:Client("Aldric-Realm", "Player-1-AB000001")
+		local king = world:Client("Kingly-Realm", "Player-1-AB0000F1", { role = "king", manager = true })
+		world:Lease(king)
+		world:Choose(o, king)
+		o.private = true
+		local ok, e = world:See(o, "nameplate1", Horde("Grom-Realm", GROM))
+		assert(ok, e); eq(e.sent, 0, "nothing goes while private"); eq(#world:Pins(o), 1, "his own map")
+		world:Pump(); eq(#world:Pins(king), 0)
+		o.private = nil
+		world:Advance(o.W.SIGHT_GAP + 1)
+		ok, e = world:See(o, "nameplate2", Horde("Thrall-Realm", THRALL))
+		assert(ok, e); eq(e.sent, 1, "sharing again: it goes")
+	end)
 end)

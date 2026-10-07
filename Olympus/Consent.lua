@@ -30,10 +30,9 @@ local L = ns.L
 --     pending = function() return true while it waits for an answer end })
 -- (`get` is what goes out now, shown on the line; `pending`, when given, says whether the line
 -- still waits for the player's answer: by default, while `get` is nil.)
--- A line that is on until its No (1.2: Most Wanted sightings, Wanted.lua) says so in its
--- label, and its `get` is true while it waits: it is pending until answered all the same, so the
--- page opens by itself for it (a member who answered every other line before is shown it too),
--- and the bulk Yes records a yes for it (never over a No: BulkPending).
+-- A line with `explicit = true` (1.2.0: Most Wanted sightings, Wanted.lua) is off until its own
+-- Yes: it is pending until answered, so the page opens by itself for it (a member who answered
+-- every other line before is shown it too), but the bulk Yes never answers it (BulkPending).
 -- A focused status section may also register a `readonly` item with `section`, `status` and no
 -- setter. It describes local/shared/derived/hidden/unknown/unavailable state and is never part of
 -- first-open or bulk authorization.
@@ -200,7 +199,7 @@ end
 local function BulkPending()
 	local out = {}
 	for _, item in ipairs(Consent.Items(activeSection)) do
-		if Waits(item) and Get(item) ~= false then out[#out + 1] = item end
+		if Waits(item) and Get(item) ~= false and not item.explicit then out[#out + 1] = item end
 	end
 	return out
 end

@@ -59,6 +59,14 @@ local function WithWanted(fn)
 		}
 		c.UnitFullName = function(unit) return w.units[unit] and w.units[unit].name end
 		c.Roster = { RankOf = function(name) return w.olympians[c.Fold(c.FullName(name))] and 3 or nil end }
+		-- (1.2.0: evidence comes only from members: whoever whispers here claims a federation guild
+		-- the channel takes, unless named in w.strangers.)
+		w.strangers = {}
+		c.Moderation.GuildOf = function(name) if not w.strangers[c.Fold(c.FullName(name))] then return "Olympus II" end end
+		c.Channels = setmetatable({ VerifiedLevel = function(name)
+			if w.strangers[c.Fold(c.FullName(name))] then return 0, false end
+			return 1, false
+		end }, { __index = c.Channels })
 		c.RegisterEvent = function(name, call) w.handlers[name] = call end
 		c.On = function(name, call) w.listeners[name] = call end
 		c.Fire = function(name, ...) w.events[#w.events + 1] = { name, ... } end
@@ -1930,4 +1938,27 @@ test("Most Wanted: no Olympus file registers a restricted combat log event (Fore
 		p:close()
 	end
 	eq(#found, 0, table.concat(found, "\n"))
+end)
+
+test("wanted review adversarial (1.2.0): WX only from a member, about his own kill or death: a stranger's row, or a member's row whose Olympian side names someone else, waits nowhere", function()
+	WithWanted(function(w, W, c)
+		c.me = w.authority("OwnReviewer-Realm", "council")
+		local H = w.commHandlers.WX
+		w.strangers[c.Fold("Outsider-Realm")] = true
+		H("WHISPER", "Outsider-Realm", ("WX~1~00000000000000b1~%d~24000~S~B~1.dd000021~1.cc000021"):format(w.epoch))
+		eq(#W.ReviewInbox(), 0, "a stranger's evidence")
+		local saved = GetPlayerInfoByGUID
+		GetPlayerInfoByGUID = function(guid)
+			if guid == "Player-1-CC000021" then return "Warrior", "WARRIOR", "Human", "Human", 2, "Someoneelse", "Realm" end
+			if guid == "Player-1-CC000022" then return "Warrior", "WARRIOR", "Human", "Human", 2, "Ownvictim", "Realm" end
+		end
+		local ok, err = pcall(function()
+			H("WHISPER", "Ownvictim-Realm", ("WX~1~00000000000000b2~%d~24000~S~B~1.dd000021~1.cc000021"):format(w.epoch))
+			eq(#W.ReviewInbox(), 0, "a death that names another victim than the sender")
+			H("WHISPER", "Ownvictim-Realm", ("WX~1~00000000000000b3~%d~24000~S~B~1.dd000022~1.cc000022"):format(w.epoch))
+			eq(#W.ReviewInbox(), 1, "his own death waits for the reviewer")
+		end)
+		GetPlayerInfoByGUID = saved
+		if not ok then error(err, 0) end
+	end)
 end)
