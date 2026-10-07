@@ -3454,11 +3454,13 @@ end
 ---------------------------------------------------------------------------
 
 local function HexOf(v, n) return type(v) == "string" and #v == n and v:find("^[0-9a-f]+$") ~= nil end
+Wallet.BACKUP_SEQ_MAX = 1000000 -- a bank's ledger seq a backup may carry (the design holds 5,000 entries)
 function Wallet.CheckBackup(v)
 	if type(v) ~= "table" or not HexOf(v.secret, 64) or not HexOf(v.kb, 64) or not HexOf(v.head, 64) then return nil end
 	if type(v.epoch) ~= "string" or not v.epoch:find("^R?[0-9a-z]+$") or #v.epoch > 12 then return nil end
 	local seq = tonumber(v.seq)
-	if not seq or seq < 0 or seq % 1 ~= 0 or type(v.mac) ~= "string" then return nil end
+	-- (1.2.0: bounded: a crafted text's huge seq would hang the client in the chain's loop.)
+	if not seq or seq < 0 or seq % 1 ~= 0 or seq > Wallet.BACKUP_SEQ_MAX or type(v.mac) ~= "string" then return nil end
 	for _, k in ipairs({ "accounts", "entries", "macs", "backlog", "st" }) do
 		if type(v[k]) ~= "table" then return nil end
 	end

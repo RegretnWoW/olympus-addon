@@ -934,7 +934,8 @@ local function Parse(text)
 	lineId = tonumber(lineId)
 	if version ~= "1" or not Rooms.Info(id) or not lineId or lineId < 0 or lineId > 9999 or lineId ~= math.floor(lineId) then return nil end
 	if class ~= "" and not class:match("^%u%u$") then return nil end
-	if guild == "" or not ns.IsFederation(guild) then return nil end
+	-- (1.2.0: no "|" or control byte in the guild field either, as M1: it reaches the debug log.)
+	if guild == "" or guild:find("[|%c]") or not ns.IsFederation(guild) then return nil end
 	words = ns.Codec.SanitizeChat(words)
 	if words == "" or #words > Rooms.TEXT_MAX then return nil end
 	local request = class == "RQ"

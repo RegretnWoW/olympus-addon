@@ -3264,3 +3264,15 @@ test("1.2 the guild's rows: the rosters' menus hooked; an Olympus row's right-cl
 	assert(text:find("button:" .. ns.L.VERSION_ASK, 1, true), "Ask to update: " .. text)
 	eq(PM.OpenFor("row", nil), false, "a row with no player: nothing")
 end)
+
+test("1.2.0 backup: a bank ledger whose seq is past the bound is refused at once (a crafted text cannot hang the client)", function()
+	local w = World.New()
+	local a = w:Client("Lida Fenn")
+	local W = assert(a.ns.Wallet, "the Wallet")
+	local hex = ("ab"):rep(32)
+	local v = { secret = hex, kb = hex, head = hex, epoch = "r1", seq = 2000000, mac = "m",
+		accounts = {}, entries = {}, macs = {}, backlog = {}, st = { acc = {}, m = {} } }
+	eq(w:As(a, W.CheckBackup, v), nil); eq(W.BACKUP_SEQ_MAX < 2000000, true)
+	v.seq = 3
+	eq(w:As(a, W.CheckBackup, v), v, "a seq within the bound is checked as before")
+end)

@@ -206,8 +206,20 @@ function Roster.Scan()
 end
 
 -- Rank of a member of OUR guild, from the roster the server gave us (nil if not a member).
+-- (1.2.0: a name written in another case is the same character, "aldric" is Aldric: a miss is
+-- looked up again case-folded, in an index made once per roster read.)
+local folded, foldedFrom
 function Roster.RankOf(name)
-	return Roster.byName and name and Roster.byName[ns.FullName(name)]
+	local byName = Roster.byName
+	if not (byName and type(name) == "string") then return nil end
+	local full = ns.FullName(name)
+	local rank = byName[full]
+	if rank ~= nil then return rank end
+	if foldedFrom ~= byName then
+		folded, foldedFrom = {}, byName
+		for n, r in pairs(byName) do folded[ns.Fold(n)] = r end
+	end
+	return folded[ns.Fold(full)]
 end
 
 -- Our own rank index (0 = guild master), used for layer names and decree permission.

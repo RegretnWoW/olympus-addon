@@ -375,6 +375,14 @@ test("roster scan of 1000 members", function()
 	eq(sum, 300, "level bands")
 end)
 
+test("1.2.0 roster: a name written in another case is the same member (a Captain cannot pass the guild master off as a stranger)", function()
+	ns.Roster.Scan()
+	eq(ns.Roster.RankOf("Member1"), 0, "the leader")
+	eq(ns.Roster.RankOf("member1"), 0, "in lower case")
+	eq(ns.Roster.RankOf("MEMBER1-" .. ns.realm), 0, "in upper case, realm and all")
+	eq(ns.Roster.RankOf("Nobodyhere"), nil)
+end)
+
 test("watch: roster authority freshness marks only a complete snapshot containing the player", function()
 	local savedTotal, savedInfo = GetNumGuildMembers, GetGuildRosterInfo
 	local ok, err = pcall(function()

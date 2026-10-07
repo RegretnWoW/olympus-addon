@@ -758,3 +758,12 @@ test("1.1.6 Church: the room past thirty: the sender's own network and the Churc
 	for _, p in ipairs(m1.printed) do if p == ns.L.CHURCH_ROOM_NOT_REACHED:format(5) then told = true end end
 	eq(told, true)
 end)
+
+test("1.2.0 chat rooms: an M2 line whose guild field carries a pipe is dropped as malformed, as M1 drops it", function()
+	local plain = setmetatable({ db = { chatRooms = true }, me = "Plain-Realm" }, { __index = ns })
+	plain.Comm = { Handle = function() end }
+	plain.On = function() end
+	plain.Consent = { Register = function() end }
+	assert(loadfile(ROOT .. "Olympus/ChatRooms.lua"))("Olympus", plain)
+	eq(select(2, plain.ChatRooms.Receive("WHISPER", "Aldric Vane-Realm", "M2~1~guild~1~~Olympus II|cffff0000~hi")), "shape")
+end)
