@@ -1396,6 +1396,7 @@ local function MakeChallenge()
 	ns.EscapeCloses("OlympusArenaChallenge")
 	return f
 end
+local sounded = {} -- [challenger] = true once his challenge sounded
 function ArenaHome.ShowChallenge(c)
 	if type(c) ~= "table" then return nil end
 	challenge = challenge or MakeChallenge()
@@ -1407,7 +1408,9 @@ function ArenaHome.ShowChallenge(c)
 	f.clock:SetText(L.ARENA_CHALLENGE_CLOCK:format(ArenaHome.CHALLENGE_TIME))
 	f:Show()
 	ArenaHome.FadeIn(f)
-	ArenaHome.Sound("READY_CHECK")
+	-- The sound only for a challenger's first challenge in the session.
+	local who = type(c.A) == "string" and c.A:lower() or "?"
+	if not sounded[who] then sounded[who] = true; ArenaHome.Sound("READY_CHECK") end
 	if C_Timer and C_Timer.NewTimer then
 		local t = rawget(f, "timer")
 		if t and t.Cancel then t:Cancel() end

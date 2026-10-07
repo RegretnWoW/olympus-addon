@@ -70,6 +70,7 @@ F.BOUTS_MAX = 12
 F.TITLE_MAX = 40        -- bytes of a card's title
 F.AHEAD = 60            -- a time further ahead of the server's clock is refused
 F.SIGN_GAP = 3          -- AS at most every 3 s per sender
+F.CHALLENGE_GAP = 60    -- no new challenge from a player for 60 s after a no
 F.NO_SHOW_DAYS = 30
 F.NO_SHOWS_BLOCK = 2
 F.KEEP = 300            -- fights kept in a store
@@ -2076,6 +2077,7 @@ ns.Comm.Handle("AR", ns.Arena.Handle("AR", OnResult))
 
 -- (The challenges this session holds, chal: declared with the helpers above.)
 local lastAS = {} -- [sender] = time (1 per 3 s)
+local lastChal = {} -- [challenger] = when we said no to him (none from him for F.CHALLENGE_GAP)
 
 -- Link a fight to the private match that created its local challenge without adding a field to
 -- AF or AS. Direct fights have oid == fid. An arbitrated AF may race AS Z, so exact fid wins and
@@ -2275,6 +2277,7 @@ function F.Answer(oid, yes, why)
 			body = body .. "~" .. wire
 		end
 	else
+		lastChal[Lower(c.A)] = Now()
 		body = table.concat({ oid, "Y", "0", (tostring(why or "n"):gsub("[~|%c]", "")):sub(1, 8) }, "~")
 	end
 	local sent, whySend = Arena.Send("AS", c.mode, body, { to = c.A, urgent = true })
@@ -2382,6 +2385,12 @@ local function OnSign(dist, sender, mode, body)
 		local M = ns.Moderation
 		if type(M) == "table" and not M.missing and M.Hides and M.Hides(sender) then return No("X") end
 		if Arena.Sanctioned and Arena.Sanctioned(sender) then return No("X") end -- (1.1.6: a sanctioned challenger)
+		-- One open challenge per challenger (open: unanswered for under a minute), and none for a minute after
+		-- we said no to him: no spam.
+		for _, x in pairs(chal) do
+			if x.incoming and not x.judge and x.state == "asked" and Same(x.A, sender) and now - (x.t or 0) < F.CHALLENGE_GAP then return Refuse("spam") end
+		end
+		if lastChal[key] and now - lastChal[key] < F.CHALLENGE_GAP then return Refuse("spam") end
 		chal[oid] = c
 		ns.Fire("ARENA_CHALLENGE", oid)
 		Arena.Changed()

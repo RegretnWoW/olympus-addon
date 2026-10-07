@@ -215,8 +215,9 @@ test("1.2 the fights part review: the currency, the live switch and the caps (th
 	local can = W3.M(w, cast.A, "Arena").Can
 	ok, why = can("fights.challenge", cast.B.name, { stake = 10000, how = "a", arbiter = cast.spectator.name, cur = "g" })
 	eq(ok, false); eq(why, "arbiter-cap")
-	-- A Judge whose money side is missing refuses the stake (no book, no unchecked stake).
-	w:Run(5)
+	-- A Judge whose money side is missing refuses the stake (no book, no unchecked stake). (A minute on:
+	-- the unanswered challenge above still holds the challenger off until then.)
+	w:Run(60)
 	oid = Agreed(w, cast, { how = "a", arbiter = cast.arbiter.name, stake = 10000, cur = "g" })
 	cast.arbiter.ns.Stakes.Open = nil
 	ok, why = Fights(w, cast.arbiter).Judge(oid, true)
