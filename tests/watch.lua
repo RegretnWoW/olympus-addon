@@ -453,6 +453,32 @@ test("watch: queued logged whispers revalidate actor, guild and recipient at act
 	end)
 end)
 
+test("watch: one officer's actions are taken MW_RATE a minute at most, and the records stay within their hard cap (the oldest watched first, a ban last)", function()
+	WithWatch(function(w, W, c)
+		w.setRank("OtherOfficer-Realm", 1)
+		local hard, rate = W.RECORDS_HARD, W.MW_RATE or 30
+		W.RECORDS_HARD = 6
+		local ok, err = pcall(function()
+			assert(W.Handle("WHISPER", "OtherOfficer-Realm", w.wire("B", "Banned One-Realm", 1, w.epoch - 10, "gold seller")))
+			for i = 2, rate do
+				assert(W.Handle("WHISPER", "OtherOfficer-Realm", w.wire("V", ("Watched%02d-Realm"):format(i), i, w.epoch - 10 + i, "seen")))
+			end
+			local taken, why = W.Handle("WHISPER", "OtherOfficer-Realm", w.wire("V", "One Too Many-Realm", 999, w.epoch, "seen"))
+			eq(taken, false); eq(why, "rate")
+			local n = 0
+			for _ in pairs(W.Store(true).records) do n = n + 1 end
+			eq(n, 6, "within the hard cap")
+			eq(W.Record("Banned One-Realm").status, "ban", "the ban kept, the oldest watched gone first")
+			eq(W.Record(("Watched%02d-Realm"):format(rate)).status, "watch")
+			eq(W.Record("Watched02-Realm"), nil)
+			w.epoch = w.epoch + 61
+			assert(W.Handle("WHISPER", "OtherOfficer-Realm", w.wire("V", "Next Minute-Realm", 1000, w.epoch, "seen")))
+		end)
+		W.RECORDS_HARD = hard
+		if not ok then error(err, 0) end
+	end)
+end)
+
 test("watch: spoofed, unlogged, malformed, oversized and replayed writes fail closed", function()
 	WithWatch(function(w, W, c)
 		w.setRank("Target-Realm", 3)
@@ -1244,6 +1270,41 @@ test("watch: the judgment card names no reporter, note or chat line; its thumbs 
 	end)
 end)
 
+test("watch: on the King's stream an accused is named only once a finding upheld the case, never beside the guild's ban-list, and no reporters' count shows", function()
+	WithWatch(function(w, W, c)
+		FakeWidgets()
+		w.setRank("Reporter One-Realm", 3); w.setRank("Reporter Two-Realm", 3); w.setRank(SPAMMER, 3); w.online(c.me)
+		for i, reporter in ipairs({ "Reporter One-Realm", "Reporter Two-Realm" }) do
+			for _, msg in ipairs(ReportMessages(w, W, c, { seq = 20 + i })) do assert(W.HandleReport("WHISPER", reporter, msg)) end
+		end
+		local key = c.Fold(SPAMMER)
+		w.masked = true
+		local f = assert(W.ShowCard(key))
+		eq(f.name:GetText(), c.MaskName("Spammer Guy"), "cut short before a finding")
+		assert(not f.body:GetText():find(ns.L.WATCH_CARD_REPORTED:format(2), 1, true), "no reporters' count on the stream")
+		W.Show("cases")
+		local page = {}
+		for _, l in ipairs(W.Build()) do page[#page + 1] = tostring(l.text or "") .. " " .. tostring(l.right or "") end
+		local text = table.concat(page, "\n")
+		assert(not text:find("Spammer Guy", 1, true), "the cases list: " .. text)
+		assert(not text:find(ns.L.WATCH_CASE_REPORTS:format(2), 1, true), "nor the count")
+		-- The finding upholds it: named.
+		f.up:Click()
+		eq(f.name:GetText(), "Spammer Guy")
+		-- The guild's own record on the desk: a ban-list never names him on the stream.
+		assert(W.Ban(SPAMMER, "gold seller"))
+		W.Show()
+		page = {}
+		for _, l in ipairs(W.Build()) do page[#page + 1] = tostring(l.text or "") end
+		text = table.concat(page, "\n")
+		assert(text:find(ns.L.WATCH_ACTION_BAN:format(c.MaskName("Spammer Guy")), 1, true), "masked: " .. text)
+		assert(not text:find(ns.L.WATCH_ACTION_BAN:format("Spammer Guy"), 1, true))
+		w.masked = false
+		W.RefreshCard()
+		assert(f.body:GetText():find(ns.L.WATCH_CARD_REPORTED:format(2), 1, true), "off the stream the officers keep the count")
+	end)
+end)
+
 test("watch: /oly watch report opens the report for any member; reports and cases open their pages for officers", function()
 	WithWatch(function(w, W, c)
 		w.setRank(c.me, 3)
@@ -1717,6 +1778,13 @@ test("watch: judgment: a case goes to the King, the High Council votes for a day
 		for _, part in ipairs({ "Officer", "Sage One", "Sage Two", L.JUDGMENT_NOT_UPHELD, os.date("%Y-%m-%d %H:%M", w.epoch) }) do
 			assert(record:find(part, 1, true), "the record names " .. part .. ":\n" .. record)
 		end
+		-- (1.2.0) On his stream: a case not upheld never names its accused, nor how many reported him.
+		w.masked = true
+		local streamed = king.Judgment.Text(j)
+		assert(not streamed:find("Spammer Guy", 1, true), streamed)
+		assert(streamed:find(c.MaskName("Spammer Guy"), 1, true), streamed)
+		assert(not streamed:find(L.JUDGMENT_ABOUT:format("-", 1, 0):match("· ([^·]+) ·"), 1, true), "no reporters' count: " .. streamed)
+		w.masked = false
 		-- Nothing happens by itself: no sanction, nothing to the player, nothing on a channel or a guild.
 		eq(W.Record(SPAMMER), nil, "no sanction")
 		for _, m in ipairs(w.log) do

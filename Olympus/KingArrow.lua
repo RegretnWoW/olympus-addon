@@ -172,11 +172,15 @@ end
 
 -- A deterministic tie makes clients converge if two authorized people act in the same server
 -- second.  Honest clients also make their own timestamps strictly increase.
+-- 1.2.0: rank before recency while the word kept is in force (its lease): a High Councillor's
+-- newer "on" never beats the King's "off". A lapsed word gives way to the newest.
 local function Compare(a, b)
 	if not b then return 1 end
-	if a.at ~= b.at then return a.at > b.at and 1 or -1 end
 	local _, aw = Controller(a.scope, a.by, a.guild)
 	local _, bw = Controller(b.scope, b.by, b.guild)
+	local inForce = bw > 0 and type(b.heard) == "number" and Clock() - b.heard <= Arrow.CONTROL_LEASE
+	if aw ~= bw and inForce then return aw > bw and 1 or -1 end
+	if a.at ~= b.at then return a.at > b.at and 1 or -1 end
 	if aw ~= bw then return aw > bw and 1 or -1 end
 	local ak, bk = Fold(a.by), Fold(b.by)
 	if ak ~= bk then return ak > bk and 1 or -1 end
@@ -554,6 +558,15 @@ end
 function Arrow.RepeatOwn()
 	local e = OwnChoice()
 	if not e or not Controller(e.scope, ns.me, e.guild) then return false end
+	-- (1.2.0: never stamped again past a higher rank's later word, in force or lapsed: the King's
+	-- "off" is not undone by a councillor's client repeating its older "on" once the King is gone.)
+	EnsureLoaded()
+	local kept = policies[e.scope]
+	if kept and kept.at > e.at and Fold(kept.by) ~= Fold(ns.FullName(ns.me)) then
+		local _, mine = Controller(e.scope, ns.me, e.guild)
+		local _, theirs = Controller(kept.scope, kept.by, kept.guild)
+		if theirs > mine then return false end
+	end
 	-- A fresh server timestamp makes an intercepted older control useless; an honest client never
 	-- extends an old wire message indefinitely.
 	return Arrow.SetEnabled(e.enabled, e.scope, true)

@@ -15,6 +15,8 @@ Watch.PROTOCOL = 1
 Watch.MESSAGE_MAX = 255
 Watch.REASON_MAX = 80
 Watch.MAX_RECORDS = 200
+Watch.RECORDS_HARD = 1000   -- 1.2.0: records at most, active or not (the oldest watch first, a ban last)
+Watch.MW_RATE = 30          -- 1.2.0: one officer's actions taken a minute at most
 Watch.MAX_AUDIT = 200
 Watch.MIN_AUDIT = 20
 Watch.MAX_ATTEMPTS = 50
@@ -75,6 +77,7 @@ local stats = { sent = 0, taken = 0, refused = 0, replay = 0, malformed = 0, ove
 local attemptAt = {}
 local pendingTargets = {}
 local syncAsked, syncIncoming, syncOutgoing, syncRates = {}, {}, {}, {}
+local mwRates = {} -- [sender key] = { times }: his actions this minute (Watch.MW_RATE)
 local syncCounter, syncPeerIndex, lastSync = 0, 0, -math.huge
 
 Watch.after = function(seconds, where, fn) ns.After(seconds, where, fn) end
@@ -274,6 +277,17 @@ local function TrimInactive(s, now, reserve)
 			end
 		end
 		if not oldest then break end -- active entries are never discarded merely to satisfy the soft cap
+		s.records[oldest] = nil
+	end
+	-- (1.2.0: the hard cap, active or not: the oldest one not ban-listed first, then the oldest ban.)
+	while Count(s.records) + reserve > Watch.RECORDS_HARD do
+		local oldest, oldestAt, oldestBan
+		for key, e in pairs(s.records) do
+			local at, ban = tonumber(e.lastAt) or 0, e.status == "ban"
+			local better = not oldest or (oldestBan and not ban) or (ban == oldestBan and (at < oldestAt or (at == oldestAt and key < oldest)))
+			if better then oldest, oldestAt, oldestBan = key, at, ban end
+		end
+		if not oldest then break end
 		s.records[oldest] = nil
 	end
 end
@@ -1242,6 +1256,13 @@ function Watch.Handle(dist, sender, text)
 		if why == "size" then stats.oversized = stats.oversized + 1 else stats.malformed = stats.malformed + 1 end
 		return false, why
 	end
+	-- (1.2.0: one officer's actions, MW_RATE a minute at most.)
+	local rk, now = Key(sender), ns.Now()
+	local times = mwRates[rk] or {}
+	mwRates[rk] = times
+	for i = #times, 1, -1 do if now - times[i] >= 60 then table.remove(times, i) end end
+	if #times >= Watch.MW_RATE then stats.refused = stats.refused + 1 return false, "rate" end
+	times[#times + 1] = now
 	a.by = sender
 	local allowed
 	allowed, why = TargetAllowed(sender, a.name)
@@ -1795,6 +1816,19 @@ local function ShownBy(name)
 end
 Watch.ShownBy = ShownBy -- (1.2: Judgment.lua's names too)
 
+-- 1.2.0: on the King's stream an accused player's name shows only once a finding upheld the case;
+-- until then, and beside the guild's own record (a warning, a ban-list), it is cut short as the
+-- council's names are. Nor does the stream show how many reported him (alts could inflate it).
+local function OnStream() return ns.CouncilMasked ~= nil and ns.CouncilMasked() == true end
+Watch.OnStream = OnStream
+local function Accused(name, upheld)
+	local shown = ns.DisplayName(name) or name or "?"
+	if OnStream() and not upheld then return ns.MaskName(shown) end
+	return shown
+end
+Watch.Accused = Accused
+local function Upheld(c) return type(c) == "table" and type(c.finding) == "table" and c.finding.verdict == "up" end
+
 local function ShownReason(e)
 	local authenticated = e.via or e.by
 	if ns.CouncilMasked and ns.CouncilMasked() and not ns.IsKingCharacter(authenticated) then return L.NETOFF_REASON_HIDDEN end
@@ -1839,9 +1873,9 @@ local function AddAttemptLines(lines)
 	lines[#lines + 1] = { header = true, text = L.WATCH_ATTEMPTS, right = Grey(tostring(#attempts)) }
 	for i = 1, math.min(10, #attempts) do
 		local e = attempts[i]
-		lines[#lines + 1] = { indent = 1, text = Red(ns.DisplayName(e.name) or e.name), right = Grey(ns.Ago(e.at)),
+		lines[#lines + 1] = { indent = 1, text = Red(Accused(e.name)), right = Grey(ns.Ago(e.at)),
 			tooltip = function(tt)
-				tt:AddLine(L.WATCH_ATTEMPT_TIP:format(ns.DisplayName(e.name) or e.name), 1, 0.82, 0, true)
+				tt:AddLine(L.WATCH_ATTEMPT_TIP:format(Accused(e.name)), 1, 0.82, 0, true)
 				if e.alt then tt:AddLine(L.WATCH_LINKED_MATCH:format(ns.DisplayName(e.match) or e.match), 1, 1, 1, true) end
 			end }
 	end
@@ -1856,9 +1890,9 @@ local function AddAuditLines(lines)
 		local e = audit[i]
 		local label = e.op == "W" and L.WATCH_ACTION_WARN or e.op == "V" and L.WATCH_ACTION_WATCH
 			or e.op == "B" and L.WATCH_ACTION_BAN or CHAT_OPS[e.op] and L["WATCHCHAT_OP_" .. e.op] or L.WATCH_ACTION_CLEAR
-		lines[#lines + 1] = { indent = 1, text = label:format(ns.DisplayName(e.name) or e.name), right = Grey(ns.Ago(e.at)),
+		lines[#lines + 1] = { indent = 1, text = label:format(Accused(e.name)), right = Grey(ns.Ago(e.at)),
 			tooltip = function(tt)
-				tt:AddLine(label:format(ns.DisplayName(e.name) or e.name), 1, 0.82, 0)
+				tt:AddLine(label:format(Accused(e.name)), 1, 0.82, 0)
 				-- A snapshot authenticates only its relay. Never present its claimed original actor as
 				-- though this client had authenticated that character.
 				if e.via then tt:AddLine(L.WATCH_RECOVERED_VIA:format(ShownBy(e.via)), 0.7, 0.7, 0.7)
@@ -2158,7 +2192,7 @@ local function AddReportLines(lines)
 	if #reports == 0 then lines[#lines + 1] = { indent = 1, text = Grey(L.WATCH_REPORTS_EMPTY) } end
 	for _, r in ipairs(reports) do
 		lines[#lines + 1] = {
-			indent = 1, text = Gold(CategoryLabel(r.cat)) .. "  " .. (ns.DisplayName(r.target) or r.target),
+			indent = 1, text = Gold(CategoryLabel(r.cat)) .. "  " .. Accused(r.target),
 			right = Grey(ns.Ago(r.at)),
 			tooltip = function(tt) ReportTip(tt, r); tt:AddLine(L.WATCH_CLICK_CASE, 0.6, 0.6, 0.6, true) end,
 			onClick = function() Watch.Show("case", Key(r.target)) end,
@@ -2169,13 +2203,13 @@ end
 local function CaseRow(c)
 	return {
 		indent = 1,
-		text = (c.open and Red(L.WATCH_CASE_OPEN) or Grey(L.WATCH_CASE_HANDLED)) .. "  " .. (ns.DisplayName(c.target) or c.target)
+		text = (c.open and Red(L.WATCH_CASE_OPEN) or Grey(L.WATCH_CASE_HANDLED)) .. "  " .. Accused(c.target, Upheld(c))
 			.. "  " .. Grey(CatsText(c.cats)),
-		right = Grey(L.WATCH_CASE_REPORTS:format(c.reporters)),
+		right = not OnStream() and Grey(L.WATCH_CASE_REPORTS:format(c.reporters)) or nil,
 		tooltip = function(tt)
-			tt:AddLine(ns.DisplayName(c.target) or c.target, 1, 0.82, 0)
+			tt:AddLine(Accused(c.target, Upheld(c)), 1, 0.82, 0)
 			tt:AddLine(L.WATCH_CASE_ALLEGATION:format(CatsText(c.cats)), 1, 1, 1, true)
-			tt:AddLine(L.WATCH_CASE_REPORTED:format(c.reporters, ns.Ago(c.firstAt), ns.Ago(c.lastAt)), 1, 1, 1, true)
+			if not OnStream() then tt:AddLine(L.WATCH_CASE_REPORTED:format(c.reporters, ns.Ago(c.firstAt), ns.Ago(c.lastAt)), 1, 1, 1, true) end
 			tt:AddLine(L.WATCH_CLICK_CASE, 0.6, 0.6, 0.6, true)
 		end,
 		onClick = function() Watch.Show("case", c.key) end,
@@ -2203,9 +2237,9 @@ end
 -- King's stream no note or line either (ShownWords).
 function Watch.CaseText(c)
 	if type(c) ~= "table" then return "" end
-	local out = { L.WATCH_CASE_TITLE:format(ns.DisplayName(c.target) or c.target),
+	local out = { L.WATCH_CASE_TITLE:format(Accused(c.target, Upheld(c))),
 		L.WATCH_CASE_ALLEGATION:format(CatsText(c.cats)),
-		L.WATCH_CASE_REPORTED:format(c.reporters, Stamp(c.firstAt), Stamp(c.lastAt)),
+		OnStream() and "" or L.WATCH_CASE_REPORTED:format(c.reporters, Stamp(c.firstAt), Stamp(c.lastAt)),
 		RecordText(c.record), "" }
 	for _, r in ipairs(c.reports) do
 		out[#out + 1] = ("%s · %s · %s"):format(Stamp(r.at), CategoryLabel(r.cat), r.note ~= "" and ShownWords(r.note, r.reporter) or "-")
@@ -2225,14 +2259,16 @@ local function CaseLines(c)
 		lines[#lines + 1] = { indent = 1, text = Grey(L.WATCH_CASE_GONE) }
 		return lines
 	end
-	local name = ns.DisplayName(c.target) or c.target
+	local name = Accused(c.target, Upheld(c))
 	lines[#lines + 1] = { header = true, text = L.WATCH_CASE_TITLE:format(name), right = c.open and Red(L.WATCH_CASE_OPEN) or Grey(L.WATCH_CASE_HANDLED) }
 	lines[#lines + 1] = { indent = 1, text = L.WATCH_CASE_ALLEGATION:format(CatsText(c.cats)) }
-	lines[#lines + 1] = { indent = 1, text = L.WATCH_CASE_REPORTED:format(c.reporters, ns.Ago(c.firstAt), ns.Ago(c.lastAt)),
-		tooltip = function(tt)
-			tt:AddLine(L.WATCH_CASE_REPORTERS_TIP, 1, 0.82, 0, true)
-			for _, r in ipairs(c.reports) do tt:AddLine(ShownReporter(r.reporter) .. "  " .. Grey(Stamp(r.at)), 1, 1, 1) end
-		end }
+	if not OnStream() then
+		lines[#lines + 1] = { indent = 1, text = L.WATCH_CASE_REPORTED:format(c.reporters, ns.Ago(c.firstAt), ns.Ago(c.lastAt)),
+			tooltip = function(tt)
+				tt:AddLine(L.WATCH_CASE_REPORTERS_TIP, 1, 0.82, 0, true)
+				for _, r in ipairs(c.reports) do tt:AddLine(ShownReporter(r.reporter) .. "  " .. Grey(Stamp(r.at)), 1, 1, 1) end
+			end }
+	end
 	lines[#lines + 1] = { indent = 1, text = RecordText(c.record) }
 	if not c.open then
 		local closed = c.closed
@@ -2318,11 +2354,10 @@ end
 -- its two buttons the finding itself (Watch.SetFinding). Olympus's own window with no edit box and
 -- none of the game's popups, so it is the same with the gamepad UI.
 local function CardBody(c)
-	return table.concat({
-		L.WATCH_CARD_ACCUSED:format(CatsText(c.cats)),
-		L.WATCH_CARD_REPORTED:format(c.reporters),
-		L.WATCH_CARD_EVIDENCE:format(c.lines),
-	}, "\n\n")
+	local parts = { L.WATCH_CARD_ACCUSED:format(CatsText(c.cats)) }
+	if not OnStream() then parts[#parts + 1] = L.WATCH_CARD_REPORTED:format(c.reporters) end
+	parts[#parts + 1] = L.WATCH_CARD_EVIDENCE:format(c.lines)
+	return table.concat(parts, "\n\n")
 end
 Watch.CardBody = CardBody
 
@@ -2390,7 +2425,7 @@ function Watch.RefreshCard()
 	local c = Watch.CanRead() and Watch.Case(f.key) or nil
 	if not c then f:Hide() return nil end
 	f.title:SetText(L.WATCH_CARD_TITLE)
-	f.name:SetText(ns.DisplayName(c.target) or c.target)
+	f.name:SetText(Accused(c.target, Upheld(c)))
 	f.body:SetText(CardBody(c))
 	local verdict = c.finding and c.finding.verdict
 	f.verdict:SetText(verdict == "up" and ("|cff1f6f1f" .. L.WATCH_CARD_UPHELD .. "|r")
@@ -2825,7 +2860,7 @@ function Watch.ResetForTests()
 	Watch.mode, Watch.caseKey = nil, nil
 	if cardFrame then cardFrame:Hide() end
 	cardFrame = nil
-	wipe(syncAsked); wipe(syncIncoming); wipe(syncOutgoing); wipe(syncRates)
+	wipe(syncAsked); wipe(syncIncoming); wipe(syncOutgoing); wipe(syncRates); wipe(mwRates)
 	syncCounter, syncPeerIndex, lastSync = 0, 0, -math.huge
 	for k in pairs(stats) do stats[k] = 0 end
 end

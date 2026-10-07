@@ -897,6 +897,31 @@ test("king arrow controls: server-stamped fresh authority wins; forged, unlogged
 	end)
 end)
 
+test("king arrow controls: rank before recency: a High Councillor's newer 'on' never beats the King's 'off' in force, and his client's repeat never stamps it again past the King's word", function()
+	WithWorld(function(w)
+		local c = w.client("Council")
+		c.council[c.me:lower()], c.issuers[c.me:lower()] = true, true
+		eq(w.use(c, c.KingArrow.SetEnabled, true, "global", true), true)
+		w.clock = w.clock + 10
+		eq(w.use(c, c.KingArrow.Handle, "CHANNEL", KING, ("K6~1~G~0~%d~"):format(w.clock)), true, "the King's off")
+		eq(c.KingArrow.Enabled(), false)
+		local v = w.client("Viewer")
+		v.council[c.me:lower()], v.issuers[c.me:lower()] = true, true
+		eq(w.use(v, v.KingArrow.Handle, "CHANNEL", KING, ("K6~1~G~0~%d~"):format(w.clock)), true)
+		eq(w.use(v, v.KingArrow.Handle, "CHANNEL", c.me, ("K6~1~G~1~%d~"):format(w.clock + 5)), false, "a councillor's newer on")
+		eq(v.KingArrow.Enabled(), false, "the King's off stands")
+		-- The councillor's own repeat: nothing goes out, even once the King's word has lapsed.
+		local sent = #c.sent
+		eq(w.use(c, c.KingArrow.RepeatOwn), false)
+		w.clock = w.clock + c.KingArrow.CONTROL_LEASE + 1
+		eq(w.use(c, c.KingArrow.RepeatOwn), false, "never past the King's later word")
+		eq(#c.sent, sent)
+		-- A lapsed word gives way: the councillor's new choice is taken.
+		eq(w.use(v, v.KingArrow.Handle, "CHANNEL", c.me, ("K6~1~G~1~%d~"):format(w.clock)), true)
+		eq(v.KingArrow.Enabled(), true)
+	end)
+end)
+
 test("king arrow: disabling removes its pin and leaves every crown/location fact intact", function()
 	WithWorld(function(w)
 		local c = w.client("Viewer")

@@ -820,8 +820,17 @@ end
 -- The pages: The Watch's Judgments (the King's, the council's) and the case page's lines
 ---------------------------------------------------------------------------
 
+-- (1.2.0: on the King's stream, no reporters' count, which alts could inflate; and the accused
+-- named only once the King upheld the case, Watch.Accused.)
+local function OnStream() return ns.CouncilMasked ~= nil and ns.CouncilMasked() == true end
 local function AboutText(e)
+	if OnStream() then return L.JUDGMENT_ABOUT_STREAM:format(CatsText(e.cats), tonumber(e.lines) or 0) end
 	return L.JUDGMENT_ABOUT:format(CatsText(e.cats), tonumber(e.reporters) or 0, tonumber(e.lines) or 0)
+end
+local function Accused(j)
+	local shown = ns.DisplayName(j.target) or j.target
+	if OnStream() and not (type(j.final) == "table" and j.final.v == "U") then return ns.MaskName(shown) end
+	return shown
 end
 
 local function CouncilText(up, down, n, size)
@@ -835,7 +844,7 @@ end
 function J.Text(j)
 	if type(j) ~= "table" then return "" end
 	local up, down, n, size = Tally(j)
-	local out = { L.WATCH_CASE_TITLE:format(ns.DisplayName(j.target) or j.target) .. "  <" .. j.guild .. ">",
+	local out = { L.WATCH_CASE_TITLE:format(Accused(j)) .. "  <" .. j.guild .. ">",
 		AboutText(j),
 		L.JUDGMENT_SENT_BY:format(ShownBy(j.from), j.guild, Stamp(j.at)),
 		L.JUDGMENT_THEIR_FINDING:format(VerdictText(j.finding)),
@@ -866,7 +875,7 @@ local function KingRows(lines)
 		local up, down, n, size = Tally(j)
 		local right = state == "F" and VerdictColored(j.final.v) or state == "W" and Gold(L.JUDGMENT_STATE_WAIT)
 			or Grey(L.JUDGMENT_STATE_OPEN:format(Span(j.closes - Clock())))
-		local name = ns.DisplayName(j.target) or j.target
+		local name = Accused(j)
 		lines[#lines + 1] = { indent = 1, text = Gold(name) .. "  " .. Grey("<" .. j.guild .. ">"), right = right }
 		lines[#lines + 1] = { indent = 2, text = AboutText(j) }
 		lines[#lines + 1] = { indent = 2, text = Grey(L.JUDGMENT_SENT_BY:format(ShownBy(j.from), j.guild, ns.Ago(j.at)))
@@ -910,7 +919,7 @@ local function CouncilRows(lines)
 		lines[#lines + 1] = { indent = 1, text = Grey(L.JUDGMENT_EMPTY_COUNCIL), gapAfter = true }
 	end
 	for _, e in ipairs(list) do
-		local name = ns.DisplayName(e.target) or e.target
+		local name = Accused(e)
 		lines[#lines + 1] = { indent = 1, text = Gold(name) .. "  " .. Grey("<" .. e.guild .. ">"),
 			right = Grey(L.JUDGMENT_LEFT:format(Span(e.closesAt - ns.Now()))) }
 		lines[#lines + 1] = { indent = 2, text = AboutText(e) .. "  " .. Grey(L.JUDGMENT_THEIR_FINDING:format(VerdictText(e.finding))) }
