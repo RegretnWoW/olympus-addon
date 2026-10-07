@@ -1481,7 +1481,9 @@ function Requests.ConfirmDelivery(id)
 	r.completionPending = true
 	-- The buyer's word of the sale goes to the fee desk now, on the crafter's own figures: a
 	-- seller's client that never answers with its "completeok" cannot keep the sale from it.
-	QueueFeeReport(r, "b", r.delivery.price)
+	-- (1.2.0: only while the Wallet's fee desk is on, Compliance.Wallet.)
+	local C = ns.Compliance
+	if type(C) == "table" and type(C.Wallet) == "function" and C.Wallet() == true then QueueFeeReport(r, "b", r.delivery.price) end
 	local ok, why = SendPrivate(r, "complete", r.delivery.quantity, r.delivery.price)
 	if not ok then r.completionLastError = Clean(why, 40) end
 	Changed()
@@ -1562,6 +1564,13 @@ local function RegisterGuildFee(r)
 	-- (Once: a completion heard again books nothing more.)
 	if s.feeState then return true end
 	if s.guildFee <= 0 then s.feeState = "paid" return true end
+	-- 1.2.0 (Konig's review): no fee desk while the Wallet is off (Compliance.Wallet): nothing owed,
+	-- nothing printed, no penalty, no report to the Treasurer.
+	local C = ns.Compliance
+	if not (type(C) == "table" and type(C.Wallet) == "function" and C.Wallet() == true) then
+		s.feeState, s.feeWhy = "off", "wallet"
+		return true
+	end
 	s.feeDue = (r.completedAt or Now()) + Requests.FEE_DUE
 	local to = FeeReceiver()
 	if not to or TestBuild() then
