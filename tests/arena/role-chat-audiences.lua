@@ -6,7 +6,7 @@ local function WithRoles(fn)
 	local oldGuild, oldTime = GetGuildInfo, GetTime
 	local popups = {}; for key, value in pairs(StaticPopupDialogs) do popups[key] = value end
 	local own, foreign = "Olympus II", "Olympus III"
-	local w = { time = 1000, ranks = {}, lists = {}, council = {}, titles = {}, jobs = {}, role = nil, fresh = true }
+	local w = { time = 1000, ranks = {}, lists = {}, council = {}, titles = {}, jobs = {}, role = nil, fresh = true, census = {} }
 	local c = setmetatable({ L = H.ns.L, me = "Sage Owl-Realm", db = { chatRooms = true },
 		rdb = { guilds = {}, council = { names = {} } }, CAPTAIN_RANK = 1 }, { __index = H.ns })
 	GetGuildInfo = function() return own end
@@ -31,7 +31,11 @@ local function WithRoles(fn)
 	c.Roster = { members = {}, Fresh = function() return w.fresh end,
 		RankOf = function(name) return (w.ranks[own] or {})[c.FullName(name)] end }
 	c.Data = { Guild = function(g) return c.rdb.guilds[g] end,
-		AuthorizedRank = function(name, g) return (w.ranks[g] or {})[c.FullName(name)] end }
+		AuthorizedRank = function(name, g)
+			local rank = (w.ranks[g] or {})[c.FullName(name)]
+			if rank == nil then return nil end
+			return rank, g == own and "roster" or (w.census[g] and "census" or "signed")
+		end }
 	c.Nominees = {
 		ListOf = function(g) return w.lists[g] end,
 		Proven = function(name, g) return c.Data.AuthorizedRank(name, g) == 0 end,
@@ -147,5 +151,19 @@ test("Role audiences: guild and global centurions stay separate from guild maste
 		w.role = "gm"; local options = R.Options("role")
 		eq(#options, 1); eq(options[1].id, "masters"); eq(R.Send("masters", "preview"), false)
 		eq(#R.History("masters"), 0)
+	end)
+end)
+
+test("Role audiences: a guild known only from census reports opens no private room: its 'master' and 'officers' are neither recipients nor accepted", function()
+	WithRoles(function(R, c, w, Rank, List, own, foreign)
+		w.census[foreign] = true
+		c.rdb.guilds[foreign] = { leader = "Fake Master", officers = {} }
+		Rank("Fake Master", foreign, 0); Rank("Fake Officer", foreign, 1)
+		eq(R.CanAccess("masters", "Fake Master"), false, "a census guild master")
+		eq(R.CanAccess("allcenturions", "Fake Officer"), false, "a census officer")
+		local recipients = table.concat(R.Recipients("allcenturions"), ",")
+		assert(not recipients:find("Fake", 1, true), recipients)
+		w.census[foreign] = nil
+		eq(R.CanAccess("masters", "Fake Master"), true, "the same rank from the signed list")
 	end)
 end)

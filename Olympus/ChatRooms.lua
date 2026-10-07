@@ -157,7 +157,12 @@ local function Rank(name, guild)
 		if not R or not R.Fresh or not R.Fresh() then return nil end
 	end
 	local D = ns.Data
-	return D and D.AuthorizedRank and D.AuthorizedRank(ns.FullName(name), guild) or nil
+	if not (D and D.AuthorizedRank) then return nil end
+	-- Our own roster, the pinned King or the signed list; never the census (two characters could
+	-- otherwise invent a guild and vouch for each other into these rooms).
+	local rank, source = D.AuthorizedRank(ns.FullName(name), guild)
+	if source == "census" then return nil end
+	return rank
 end
 
 -- Nomination lists are received from proven guild masters, never from a nominee's own claim.
