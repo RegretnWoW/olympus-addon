@@ -160,7 +160,16 @@ test("chat rooms: race and class are explicit open-topic choices with independen
 		eq(#tabs, 3); eq(tabs[1].id, "guild"); eq(tabs[2].kind, "race"); eq(tabs[2].id, nil)
 		eq(tabs[3].kind, "class"); eq(tabs[3].id, nil)
 		eq(R.Selected("race"), nil); eq(R.Selected("class"), nil)
-		eq(#R.Options("race"), 8); eq(#R.Options("class"), 9)
+		-- (1.2.1: only our faction's races: an Alliance character gets no Orc room, a Horde one no Human
+		-- room; every class for both, Forever's Alliance having Shamans too.)
+		local faction = c.faction
+		c.faction = "Alliance"
+		eq(#R.Options("race"), 5); eq(#R.Options("class"), 9)
+		for _, o in ipairs(R.Options("race")) do assert(o.id ~= "race:2", "no Orc room for the Alliance") end
+		eq(R.Options("race")[5].id, "race:95", "the Skyborn's room"); eq(R.Options("race")[5].raceName, "Skyborn")
+		c.faction = "Horde"
+		eq(#R.Options("race"), 4); eq(R.Options("race")[1].id, "race:2"); eq(#R.Options("class"), 9)
+		c.faction = faction
 
 		assert(R.Select("race:1")); assert(R.Select("class:MA"))
 		eq(R.Selected("race"), "race:1"); eq(R.Selected("class"), "class:MA")

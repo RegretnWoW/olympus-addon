@@ -34,7 +34,9 @@ local RACES = {
 	{ id = "race:6", label = "Tauren", race = 6 },
 	{ id = "race:7", label = "Gnome", race = 7 },
 	{ id = "race:8", label = "Troll", race = 8 },
+	{ id = "race:95", label = "Skyborn", race = 95 }, -- (1.2.1: Forever's Skyborn, an Alliance race)
 }
+local HORDE_RACE = { [1] = false, [2] = true, [3] = false, [4] = false, [5] = true, [6] = true, [7] = false, [8] = true, [95] = false }
 local CLASSES = {
 	{ id = "class:WA", file = "WARRIOR", label = "Warrior" },
 	{ id = "class:PA", file = "PALADIN", label = "Paladin" },
@@ -342,8 +344,14 @@ end
 
 function Rooms.Options(kind)
 	local out = {}
+	-- 1.2.1: only our faction's races are offered (while the faction is unknown, all of them); every
+	-- class is, Forever's Alliance having Shamans too.
+	local horde = ns.faction == "Horde"
+	local known = ns.faction == "Horde" or ns.faction == "Alliance"
 	if kind == "race" then
-		for _, e in ipairs(RACES) do out[#out + 1] = Rooms.Info(e.id) end
+		for _, e in ipairs(RACES) do
+			if not known or HORDE_RACE[e.race] == horde then out[#out + 1] = Rooms.Info(e.id) end
+		end
 	elseif kind == "class" then
 		for _, e in ipairs(CLASSES) do out[#out + 1] = Rooms.Info(e.id) end
 	elseif kind == "authority" then
