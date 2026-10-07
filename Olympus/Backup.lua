@@ -236,8 +236,9 @@ end
 local function ArenaData()
 	local r, db, me = ArenaRealm(), ns.db or {}, ns.me
 	local out = {}
-	if r and type(r.bank) == "table" then out.bank = Copy(r.bank) end
-	if type(db.arenaKey) == "table" then out.key = Copy(db.arenaKey) end
+	-- Never the account's Arena key nor a bank's secret: a text is pasted around, and a key restored
+	-- from one could be a key its writer knows.
+	if r and type(r.bank) == "table" then out.bank = Copy(r.bank); out.bank.secret, out.bank.kb = nil, nil end
 	if type(db.arenaCopper) == "table" and next(db.arenaCopper) then out.copper = Copy(db.arenaCopper) end
 	if r and me and type(r.mine) == "table" and type(r.mine[me]) == "table" then out.mine = Copy(r.mine[me]) end
 	if r and type(r.stakes) == "table" then out.stakes = Copy(r.stakes) end
@@ -505,6 +506,9 @@ function Backup.Read(text)
 				out.arenaElsewhere = d.arena.realm
 			end
 		end
+		-- (never a key or a bank's secret from a text, whoever wrote it)
+		a.key = nil
+		if type(a.bank) == "table" then a.bank.secret, a.bank.kb = nil, nil end
 		if next(a) then out.arena = a end
 		if failed[1] then out.arenaFailed = failed end
 	end
@@ -671,8 +675,10 @@ function Backup.ApplyArena(a)
 	local r = ns.rdb.arena.realms[ns.realm]
 	if type(r) ~= "table" then r = { v = 1 } ns.rdb.arena.realms[ns.realm] = r end
 	local done = {}
-	if type(a.bank) == "table" and type(r.bank) ~= "table" then r.bank, done[#done + 1] = a.bank, "bank" end
-	if type(a.key) == "table" and type(db.arenaKey) ~= "table" then db.arenaKey, done[#done + 1] = a.key, "key" end
+	if type(a.bank) == "table" and type(r.bank) ~= "table" then
+		r.bank, done[#done + 1] = a.bank, "bank"
+		r.bank.secret, r.bank.kb = nil, nil
+	end
 	if type(a.copper) == "table" then
 		db.arenaCopper = type(db.arenaCopper) == "table" and db.arenaCopper or {}
 		local added = 0

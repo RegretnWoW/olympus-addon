@@ -1420,10 +1420,17 @@ test("1.2 the arena's foundation: the backup: the arena's settings (never 'pub')
 	eq(d.settings.arenaOff, true)
 	eq(d.arenaSettings.ui.delay, 30); eq(d.arenaSettings.follow["1abc.00aa11bb"], "Torvin Hale")
 	eq(d.arenaSettings.profile[a.name].nick, "a.n"); eq(d.arenaSettings.profile[a.name].pub, nil, "never pub")
-	eq(d.arena.bank.secret, "banksecret"); eq(d.arena.key.pk, "pkbytes"); eq(d.arena.copper.c1.state, "open")
+	-- 1.2.0: never the key nor the bank's secret (a key restored from a text could be its writer's).
+	eq(d.arena.bank.secret, nil); eq(d.arena.bank.kb, nil); eq(d.arena.bank.seq, 12); eq(d.arena.key, nil); eq(d.arena.copper.c1.state, "open")
 	eq(d.arena.mine.banks[N.bank].code, "k1"); eq(d.arena.stakes[1].id, "F1"); eq(d.arena.tickets[1].o, "A")
-	eq(B.HoldsKey(d), true)
+	eq(B.HoldsKey(d), false)
 	local text = w:As(a, B.Export)
+	assert(not text:find("pkbytes", 1, true) and not text:find("banksecret", 1, true) and not text:find("blindkey", 1, true))
+	-- A text that carries them anyway (an older export, or written to plant a key): never taken.
+	local data = B.Data
+	B.Data = function() local x = data(); x.arena.key = { pk = "planted" }; x.arena.bank.secret = "planted"; return x end
+	local planted = w:As(a, B.Export)
+	B.Data = data
 	for _, never in ipairs({ "arenaTest", "arenaRules", "arenaChecklist", "arenaSaved", "director" }) do
 		assert(not text:find(never, 1, true), "the backup holds " .. never)
 	end
@@ -1433,7 +1440,7 @@ test("1.2 the arena's foundation: the backup: the arena's settings (never 'pub')
 	local b = w:Client("Coffrey Vault", { realm = "Emberfall2" })
 	w:As(b, function() assert(loadfile(H.ADDON_DIR .. "Backup.lua"))("Olympus", b.ns) end)
 	local other = w:As(b, b.ns.Backup.Read, text)
-	eq(type(other), "table"); eq(other.arena.key.pk, "pkbytes"); eq(other.arena.copper.c1.state, "open")
+	eq(type(other), "table"); eq(other.arena.key, nil); eq(other.arena.copper.c1.state, "open")
 	eq(other.arena.bank, nil, "another realm's ledger is not this realm's"); eq(other.arena.mine, nil); eq(other.arena.stakes, nil); eq(other.arena.tickets, nil)
 	eq(other.arenaElsewhere, "Emberfall")
 	local said = table.concat(w:As(b, b.ns.Backup.Summary, other), "\n")
@@ -1445,15 +1452,17 @@ test("1.2 the arena's foundation: the backup: the arena's settings (never 'pub')
 	c.db.arenaKey = { pk = "held here" }
 	c.db.arenaCopper = { c0 = { state = "open" } }
 	c.db.arenaProfile = { [c.name] = { nick = "x.y" } }
-	local back = w2:As(c, c.ns.Backup.Read, text)
-	eq(type(back.arena), "table"); eq(back.arena.bank.secret, "banksecret")
-	local summary = table.concat(w2:As(c, c.ns.Backup.Summary, back), "\n")
-	assert(summary:find(c.ns.L.BACKUP_ARENA_KEY_WARNING, 1, true), "the key warning")
+	local back = w2:As(c, c.ns.Backup.Read, planted)
+	eq(type(back.arena), "table"); eq(back.arena.bank.secret, nil, "a planted secret is dropped"); eq(back.arena.key, nil, "a planted key is dropped")
 	c.ns.UI = {} -- (the windows are not the point here)
 	w2:As(c, c.ns.Backup.Apply, back)
 	local r2 = c.Arena.Store("L")
 	eq(c.db.arenaKey.pk, "held here", "a key held here is never replaced")
-	eq(r2.bank.secret, "banksecret"); eq(c.db.arenaCopper.c0.state, "open"); eq(c.db.arenaCopper.c1.copper, 10000)
+	eq(w2:As(c, c.ns.Backup.ApplyArena, { key = { pk = "planted" } }) and c.db.arenaKey.pk, "held here")
+	c.db.arenaKey = nil
+	w2:As(c, c.ns.Backup.ApplyArena, { key = { pk = "planted" } })
+	eq(c.db.arenaKey, nil, "nor planted where none is held")
+	eq(r2.bank.secret, nil); eq(r2.bank.seq, 12); eq(c.db.arenaCopper.c0.state, "open"); eq(c.db.arenaCopper.c1.copper, 10000)
 	eq(r2.mine[c.name].banks[N.bank].code, "k1"); eq(r2.tickets[c.name][1].o, "A"); eq(r2.stakes[1].id, "F1")
 	eq(c.db.arenaOff, true); eq(c.db.arenaUI.delay, 30); eq(c.db.arenaFollow["1abc.00aa11bb"], "Torvin Hale")
 	eq(c.db.arenaProfile[c.name].nick, "a.n"); eq(c.db.arenaProfile[c.name].pub, nil, "a text never turns sharing on")
@@ -1978,7 +1987,7 @@ test("1.2 the arena's foundation review: the King's delay goes on after he logs 
 	NoErrors(w)
 end)
 
-test("1.2 the arena's foundation review: the backup at the design's caps (a bank of 5,000 accounts and 5,000 entries) keeps the key, the copper lines and the ledger; a part its owner's check refuses, or whose check fails, is left out and named; the copy box shows what Export writes", function()
+test("1.2 the arena's foundation review: the backup at the design's caps (a bank of 5,000 accounts and 5,000 entries) keeps the copper lines and the ledger (1.2.0: never the key nor the bank's secret); a part its owner's check refuses, or whose check fails, is left out and named; the copy box shows what Export writes", function()
 	local w = World.New()
 	local a = w:Client("Coffrey Vault")
 	w:As(a, function() assert(loadfile(H.ADDON_DIR .. "Backup.lua"))("Olympus", a.ns) end)
@@ -2005,26 +2014,23 @@ test("1.2 the arena's foundation review: the backup at the design's caps (a bank
 	B.arenaChecks.stakes = function() return nil end
 	B.arenaChecks.tickets = function() error("a check that fails") end
 	local back = w2:As(c, B.Read, text)
-	eq(back.arena.key.pk, "pkbytes"); eq(back.arena.copper.c1.copper, 10000)
+	eq(back.arena.key, nil, "1.2.0: never the key"); eq(back.arena.copper.c1.copper, 10000)
 	local n = 0
 	for _ in pairs(back.arena.bank.accounts) do n = n + 1 end
-	eq(n, 5000); eq(#back.arena.bank.entries, 5000); eq(back.arena.bank.secret, "banksecret")
+	eq(n, 5000); eq(#back.arena.bank.entries, 5000); eq(back.arena.bank.secret, nil, "nor the bank's secret")
 	eq(back.arena.stakes, nil); eq(back.arena.tickets, nil)
 	eq(table.concat(back.arenaFailed, ","), "stakes,tickets")
 	local L2 = c.ns.L
 	local summary = table.concat(w2:As(c, B.Summary, back), "\n")
 	assert(summary:find(L2.BACKUP_ARENA_FAILED:format(L2.BACKUP_ARENA_STAKES .. ", " .. L2.BACKUP_ARENA_TICKETS), 1, true), summary)
-	-- The copy box: Export's text, and the warning (the key is in it).
+	-- The copy box: Export's text; the key held here never goes in it, so no key warning.
 	local shown
 	c.ns.UI = { ShowCopy = function(title, t) shown = { title = title, text = t } end }
 	c.db.arenaKey = { pk = "held here" }
 	w2:As(c, B.ShowExport)
 	eq(shown.text, w2:As(c, B.Export))
-	assert(shown.title:find(L2.BACKUP_ARENA_KEY_WARNING, 1, true), shown.title)
-	eq(Printed(c, L2.BACKUP_ARENA_KEY_WARNING), 1)
-	c.db.arenaKey = nil
-	w2:As(c, B.ShowExport)
-	eq(shown.title, L2.BACKUP_TITLE, "no key in it: no warning"); eq(Printed(c, L2.BACKUP_ARENA_KEY_WARNING), 1)
+	assert(not shown.text:find("held here", 1, true), "the key is not in it")
+	eq(shown.title, L2.BACKUP_TITLE, "no key in it: no warning"); eq(Printed(c, L2.BACKUP_ARENA_KEY_WARNING), 0)
 	NoErrors(w)
 	NoErrors(w2)
 end)
