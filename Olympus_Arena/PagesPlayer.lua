@@ -148,7 +148,8 @@ end
 -- (before 1.1.6) shows them as it did.
 function ArenaUI.BetsShown(game)
 	local G = ns.Compliance
-	if type(G) ~= "table" or type(G.Allows) ~= "function" then return true end
+	-- (1.2.0, Konig's review: fail closed; no gate, no bets shown.)
+	if type(G) ~= "table" or type(G.Allows) ~= "function" then return false end
 	return G.Allows("bet", game) == true
 end
 

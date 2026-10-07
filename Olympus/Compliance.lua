@@ -110,7 +110,12 @@ function Compliance.Wire(kind)
 end
 
 -- Whether an arena action may be done (one that is not a wager always).
+-- 1.2.0 (Konig's review): the Wallet's, the banks' and a debt's fee actions go by the Wallet's own
+-- switch (Compliance.Wallet), off in the release, whatever hides their screens.
+Compliance.WALLET_PREFIXES = { wallet = true, bank = true }
 function Compliance.Action(name)
+	local prefix = type(name) == "string" and name:match("^([^%.]+)") or nil
+	if (Compliance.WALLET_PREFIXES[prefix] or name == "debt.payfee") and not Compliance.Wallet() then return false end
 	if Compliance.ARBITER_ACTIONS[name] and not Compliance.Arbiters() then return false end
 	local k = Compliance.ACTIONS[name]
 	if not k then return true end

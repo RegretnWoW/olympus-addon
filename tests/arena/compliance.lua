@@ -651,3 +651,11 @@ test("1.1.6 compliance: no arbiters without a wager: the screens: no Arbiter pag
 		NoErrors(w)
 	end
 end)
+
+test("1.2.0 the gate: the Wallet's, the banks' and a debt's fee actions wait for the Wallet's own switch, whatever hides their screens (Konig's review)", function()
+	local C = Gate()
+	for _, name in ipairs({ "wallet.deposit", "wallet.withdraw", "bank.open", "debt.payfee" }) do eq(C.Action(name), false, name) end
+	eq(C.Action("farkle.create"), true, "a free game still goes")
+	C.WALLET_ENABLED = true
+	eq(C.Action("wallet.deposit"), true, "the switch on (2.0)"); eq(C.Action("bank.open"), true)
+end)
