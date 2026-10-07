@@ -1199,3 +1199,18 @@ test("1.2.0 the fights part: no challenge spam: one open challenge per challenge
 	w:Run(0); eq(asked, 3, "one left unanswered for a minute no longer holds him off")
 	W3.NoErrors(w)
 end)
+
+test("1.2.0 the fights part: the writer's repeated calls (AC C) raise one alert per 20 seconds, not one per whisper", function()
+	local w, cast = W3.New()
+	local fid = Booked(w, cast)
+	local writer = cast.A.ns.ArenaFights.Find("fights", fid).writer
+	local called = 0
+	cast.A.ns.On("ARENA_CALLED", function() called = called + 1 end)
+	local function Call() w:As(cast.A, function() cast.A.ns.Arena.Inject("WHISPER", writer, "AC~L1~" .. fid .. "~C~1~0~0~0") end) end
+	Call(); eq(called, 1)
+	w:Run(4); Call(); w:Run(4); Call()
+	eq(called, 1, "repeats within 20 s: no new alert")
+	w:Run(21); Call()
+	eq(called, 2, "a call 20 s later alerts again")
+	W3.NoErrors(w)
+end)

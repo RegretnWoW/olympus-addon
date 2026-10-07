@@ -1534,7 +1534,8 @@ local function OnClosing(id)
 	if not (HasTicket(id) or opened[id]) then return false end
 	return Raise("soft", "arena:closing:" .. id, Prefix(ev) .. L.ARENA_ALERT_CLOSING:format(ArenaHome.EventTitle(ev)), ev, true)
 end
--- My fight is called (ARENA_CALLED): the fighter, loud, through /dnd (never in an instance).
+-- My fight is called (ARENA_CALLED): the fighter, loud (held, as every alert, under /dnd or in an
+-- instance).
 local function OnCalled(id)
 	local ev = Data.Event(id) or { id = id }
 	if not Audience(ev) then return false end
@@ -1542,7 +1543,7 @@ local function OnCalled(id)
 	local text = Prefix(ev) .. L.ARENA_ALERT_CALLED:format(ArenaHome.EventTitle(ev))
 	ns.Print(text)
 	return ns.Alert("arena", "loud", {
-		text = text, key = "arena:call:" .. id, what = text, own = not (IsInInstance and IsInInstance()) or nil,
+		text = text, key = "arena:call:" .. id, what = text,
 		open = function() local cur = Data.Event(id) return cur ~= nil and not cur.over and not cur.live end,
 		show = function()
 			ArenaHome.ShowCall({ title = text, who = L.ARENA_ALERT_CALLED_HOW, open = function()

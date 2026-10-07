@@ -71,6 +71,7 @@ F.TITLE_MAX = 40        -- bytes of a card's title
 F.AHEAD = 60            -- a time further ahead of the server's clock is refused
 F.SIGN_GAP = 3          -- AS at most every 3 s per sender
 F.CHALLENGE_GAP = 60    -- no new challenge from a player for 60 s after a no
+F.CALL_GAP = 20         -- a fight called again within 20 s raises no new alert
 F.NO_SHOW_DAYS = 30
 F.NO_SHOWS_BLOCK = 2
 F.KEEP = 300            -- fights kept in a store
@@ -1925,7 +1926,12 @@ local function OnControl(dist, sender, mode, body)
 			if what == "C" then
 				-- ("I'm here" is the fighter's click; its repeats start with it.)
 				f.hereSent = nil
-				ns.Fire("ARENA_CALLED", fid)
+				-- (one alert per CALL_GAP: a writer's repeated calls raise no new one)
+				local now = Now()
+				if not f.calledAt or now - f.calledAt >= F.CALL_GAP or now < f.calledAt then
+					f.calledAt = now
+					ns.Fire("ARENA_CALLED", fid)
+				end
 			end
 		elseif what == "B" or what == "N" then
 			f.round = round
