@@ -230,11 +230,21 @@ local function KnownMember(sender, claimedGuild)
 	local myGuild = CleanGuild(GetGuildInfo and GetGuildInfo("player"))
 	if own ~= nil then return myGuild ~= nil and claimedGuild:lower() == myGuild:lower() end
 	-- Moderation.GuildOf is only what this sender claimed in an earlier message.  It is not
-	-- membership proof.  Across guilds, require the census's independently vouched rank; ordinary
-	-- members remain unknown until a similarly verified membership source exists.
+	-- membership proof.  Across guilds, require the signed list (or the pinned King), never the
+	-- census: two characters could invent a guild and vouch for each other. Ordinary members remain
+	-- unknown until a similarly verified membership source exists.
 	if not ns.IsFederation(claimedGuild) then return false end
-	local rank = ns.Data and ns.Data.KnownRank and ns.Data.KnownRank(sender, claimedGuild)
-	return rank ~= nil
+	local rank, source = nil, nil
+	if ns.Data and ns.Data.AuthorizedRank then rank, source = ns.Data.AuthorizedRank(sender, claimedGuild) end
+	return rank ~= nil and source ~= "census"
+end
+
+-- Someone else's tabard is reported only by an officer (captain or above) of a verified guild.
+local function KnownOfficer(sender, claimedGuild)
+	if not KnownMember(sender, claimedGuild) then return false end
+	local rank = ns.Roster and ns.Roster.RankOf and ns.Roster.RankOf(sender)
+	if rank == nil and ns.Data and ns.Data.AuthorizedRank then rank = ns.Data.AuthorizedRank(sender, claimedGuild) end
+	return type(rank) == "number" and rank <= (ns.CAPTAIN_RANK or 1)
 end
 
 local function AcceptSequence(sender, lease, seq)
@@ -268,7 +278,7 @@ function T.HandleNearby(dist, sender, text)
 	level = tonumber(level)
 	if tonumber(version) ~= T.CONTRACT or not name or not guild or not observerGuild or not ns.IsFederation(observerGuild)
 		or not StatusFits(level, status) then return false end
-	local trusted = KnownMember(sender, observerGuild)
+	local trusted = KnownOfficer(sender, observerGuild)
 	if not AcceptSequence(sender, lease, seq) then return false end
 	return StoreObservation("nearby", ns.FullName(sender), name, guild, level, status, ns.Now(), trusted)
 end

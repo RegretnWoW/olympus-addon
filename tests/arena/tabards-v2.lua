@@ -192,7 +192,7 @@ test("1.2 tabards v2: malformed, spoofed and replayed whispers fail; two indepen
 	end)
 end)
 
-test("1.2 tabards v2: a claimed guild never authenticates two forged cross-guild observers", function()
+test("1.2 tabards v2: a claimed guild never authenticates two forged cross-guild observers, nor do census reports of their rank", function()
 	local T, db, rdb, comm, now = ns.TabardsV2, {}, {}, FakeComm(), 35000
 	local verified = {}
 	T.Reset()
@@ -201,7 +201,13 @@ test("1.2 tabards v2: a claimed guild never authenticates two forged cross-guild
 		Now = function() return now end, IsMember = function() return true end,
 		Roster = { RankOf = function() return nil end },
 		Moderation = { GuildOf = function() return "Olympus II" end },
-		Data = { KnownRank = function(sender, guild) return guild == "Olympus II" and verified[ns.ShortName(sender)] end },
+		-- (1.2.0: the signed list counts; census reports never do, however many vouch.)
+		Data = { AuthorizedRank = function(sender, guild)
+			if guild ~= "Olympus II" then return nil end
+			local short = ns.ShortName(sender)
+			if verified[short] then return verified[short], "signed" end
+			if short:find("^Attacker") then return 1, "census" end
+		end },
 	}, function()
 		Globals({ GetGuildInfo = function() return "Olympus" end }, function()
 			assert(T.Announce(true)); local lease = comm.sent[#comm.sent].msg:match("^U2~2~([%w]+)~")
@@ -286,4 +292,26 @@ test("1.2 tabards v2: a fresh empty publication reveals the surface, a stale one
 		end)
 	end)
 	V.Reset()
+end)
+
+test("1.2.0 tabards v2: two ordinary members of the King's guild cannot put anyone on the list; two of its officers can", function()
+	local T, db, rdb, comm, now = ns.TabardsV2, {}, {}, FakeComm(), 40000
+	T.Reset()
+	local roster = { RankOf = function(name) return name and (ns.ShortName(name):find("^Member") and 5 or 1) or nil end }
+	With({
+		db = db, rdb = rdb, Comm = comm, King = KingStub(true), Roster = roster, me = "Theking-Realm", realm = "Realm",
+		Now = function() return now end, IsMember = function() return true end,
+		IsKingCharacter = function(name) return ns.ShortName(name) == "Theking" end,
+	}, function()
+		Globals({ GetGuildInfo = function() return "Olympus" end }, function()
+			assert(T.Announce(true)); local lease = comm.sent[#comm.sent].msg:match("^U2~2~([%w]+)~")
+			local function Nearby(sender) return T.HandleNearby("WHISPER", sender, "U4~2~" .. lease .. "~1~Victim-Realm~Olympus II~60~N~Olympus") end
+			assert(Nearby("MemberA-Realm")); assert(Nearby("MemberB-Realm"))
+			local status, actionable = T.Conclusion("Victim-Realm")
+			eq(status, "U"); eq(actionable, false, "members are not officers")
+			assert(Nearby("Captain-Realm")); assert(Nearby("Officer-Realm"))
+			status, actionable = T.Conclusion("Victim-Realm")
+			eq(status, "N"); eq(actionable, true)
+		end)
+	end)
 end)
