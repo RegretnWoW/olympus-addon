@@ -35534,8 +35534,15 @@ do
 				eq(F.Hides("scam"), true, "a list without a word keeps it")
 				Page(COUNCILLOR, "-junk@" .. (now + 5))
 				eq(F.Hides("junk"), false, "a newer removal")
+				-- (1.2.0: rank before recency: the King's own word outranks a councillor's newer one.)
 				Page(KING, "+junk@" .. (now + 2))
-				eq(F.Hides("junk"), false, "and an older add doesn't bring it back")
+				eq(F.Hides("junk"), true, "the King's own older add outranks a councillor's newer removal")
+				Page(COUNCILLOR, "-junk@" .. (now + 6))
+				eq(F.Hides("junk"), true, "and no councillor undoes it")
+				-- Among equals the newest wins: an older add doesn't bring back his own newer removal.
+				Page(KING, "-junk@" .. (now + 7))
+				Page(KING, "+junk@" .. (now + 3))
+				eq(F.Hides("junk"), false, "an older add of the same rank doesn't bring it back")
 				Page(KING, "+ahead@" .. (now + F.AHEAD + 5) .. ",+Upper@" .. now .. ",+two words@" .. now)
 				eq(F.Hides("ahead"), false, "dated ahead of the server's clock: not taken")
 				eq(F.Hides("upper"), false, "a word not as the list keeps it: not taken")
@@ -35550,7 +35557,7 @@ do
 				local kinds = {}
 				for _, e in ipairs(ns.Chronicle.Entries()) do if e.kind == "terms" then kinds[#kinds + 1] = e.by .. " " .. e.words end end
 				eq(table.concat(kinds, "|"), COUNCILLOR .. " +junk|" .. KING .. " +scam|Hand Person-Realm +spam|Steward Person-Realm +fraud|"
-					.. COUNCILLOR .. " +other|" .. COUNCILLOR .. " -junk")
+					.. COUNCILLOR .. " +other|" .. COUNCILLOR .. " -junk|" .. KING .. " +junk|" .. KING .. " -junk")
 				assert(ns.Chronicle.Line(ns.Chronicle.Entries()[2]):find(ns.L.FILTER_WORDS_HIDDEN_SHORT, 1, true), "the term itself hidden")
 				local count = #ns.Chronicle.Entries()
 				Page(KING, "+oldword@" .. (now - 2 * 86400))
@@ -46410,6 +46417,58 @@ test("1.1 review (#11): for the Treasurer whose 0.9.3 yes stands, his line says 
 			ns.rdb.filterShared, ns.rdb.council, F.random = saved.shared, saved.council, saved.random
 			F.Reset()
 			ns.Chronicle.Clear()
+			if not ok then error(err, 0) end
+		end)
+	end)
+
+	test("1.2.0 block terms: editors are ranked: the King's own word, named in every repeat, reaches late logins at his rank; no councillor's newer edit undoes it, and his own client refuses to try", function()
+		WithThrone(function(w, K)
+			local F = ns.Filter
+			local saved = { shared = ns.rdb.filterShared, council = ns.rdb.council, random = F.random }
+			local ok, err = pcall(function()
+				ns.rdb.council = { names = { ["test councillor"] = true } }
+				F.random = function() return 0 end
+				local lists = {}
+				local function Client(name, as)
+					as()
+					ns.me = name
+					lists[name] = lists[name] or {}
+					ns.rdb.filterShared = lists[name]
+					F.Reset()
+				end
+				local function Councillor() GetGuildInfo = function() return "Olympus II", "Member", 3 end end
+				-- The King adds a word; long after, his repeat still names him.
+				Client(KING, AsKing)
+				local t0 = w.clock
+				eq(F.EditShared("scam", true), true)
+				w.clock = t0 + F.FRESH + F.REPEAT + 1
+				local before = #w.sent
+				eq(F.Tick(), true)
+				local repeatMsg = w.sent[before + 1].msg
+				eq(repeatMsg:match("^BW~%x+~(.*)$"), "+scam@" .. t0 .. "@" .. KING, "the King's own word, named")
+				-- A late login takes it at his rank: a councillor's newer removal changes nothing there.
+				Client("Late Login-Realm", function() AsSoldier("Late Login") end)
+				F.Receive("CHANNEL", KING, repeatMsg)
+				eq(F.Hides("scam"), true)
+				F.Receive("CHANNEL", COUNCILLOR, "BW~00000000~-scam@" .. w.clock .. "@" .. COUNCILLOR)
+				eq(F.Hides("scam"), true, "a councillor's newer removal does not undo the King's word")
+				-- The councillor's own client: refused, said why.
+				Client(COUNCILLOR, Councillor)
+				F.Receive("CHANNEL", KING, repeatMsg)
+				eq(F.EditShared("scam", false), nil)
+				eq(F.Hides("scam"), true)
+				-- A councillor's own word stays his rank: another councillor's newer one wins among equals.
+				eq(F.EditShared("gold", true), true)
+				Client("Late Login-Realm", function() AsSoldier("Late Login") end)
+				F.Receive("CHANNEL", COUNCILLOR, LastSent(w))
+				F.Receive("CHANNEL", "Other Councillor-Realm", "BW~00000000~-gold@" .. (w.clock + 1) .. "@Other Councillor-Realm")
+				eq(F.Hides("gold"), true, "not an editor: refused")
+				ns.rdb.council.names["other councillor"] = true
+				F.Receive("CHANNEL", "Other Councillor-Realm", "BW~00000000~-gold@" .. (w.clock + 1) .. "@Other Councillor-Realm")
+				eq(F.Hides("gold"), false, "an equal's newer word")
+			end)
+			ns.rdb.filterShared, ns.rdb.council, F.random = saved.shared, saved.council, saved.random
+			F.Reset()
 			if not ok then error(err, 0) end
 		end)
 	end)

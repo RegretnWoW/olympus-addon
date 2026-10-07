@@ -82,6 +82,8 @@ WC.MAX_PER_TARGET = 6
 WC.AUDIT_MAX = 300
 WC.RECORD_MAX = 20
 WC.APPEALS_MAX = 50
+WC.APPEALS_EACH = 3         -- appeals kept from one player at most
+WC.SELF_AUDIT_MAX = 5       -- a player's own words (S) in the council's audit at most
 WC.ACTIONS_MAX = 50           -- the actor's own actions it repeats
 WC.APPLIED_MAX = 1000
 WC.LISTS_MAX = 40             -- namers' lists kept
@@ -972,6 +974,14 @@ local function Record(a, words)
 	-- The High Council, the King and the author: every Olympus action, every guild one a target's
 	-- own client confirmed.
 	if CouncilSide() and (a.scope == "O" or a.scope == "S") then
+		-- (1.2.0: a player's own words, a few each: his flood never pushes anyone else's out.)
+		if a.scope == "S" then
+			local mine, first = 0, nil
+			for i, e in ipairs(s.audit) do
+				if e.scope == "S" and Same(e.name, a.target) then mine = mine + 1 first = first or i end
+			end
+			if mine >= WC.SELF_AUDIT_MAX and first then table.remove(s.audit, first) end
+		end
 		s.audit[#s.audit + 1] = { op = op, scope = a.scope, name = a.target, by = a.by, via = a.relay, at = a.at, seq = a.seq,
 			untilAt = a.untilAt or 0, reason = a.reason or "", text = words and words[1] or nil, guild = a.guild }
 		Trim(s.audit, WC.AUDIT_MAX)
@@ -1397,13 +1407,20 @@ end
 local function TakeSelf(dist, sender, f)
 	if dist ~= "CHANNEL" or #f ~= 11 then return Refuse("shape", sender) end
 	if Same(sender, ns.me) then return false, "own" end
-	-- (Its own budgets: anyone may send one, so these never spend the moderators' shared one.)
-	if not Rate(sender .. "#S", WC.RATE_SELF) or not Budget(rateSelf, WC.RATE_SELF_ALL) then return false, "rate" end
+	-- (Its own budgets: these never spend the moderators' shared one. 1.2.0: the shared S budget
+	-- only once the sender has standing for it, a member of the Olympus guild his word names.)
+	if not Rate(sender .. "#S", WC.RATE_SELF) then return false, "rate" end
 	local op = f[4]
 	local seq, at = Int(f[5], 1, WC.MAX_SEQ), Int(f[6], 1, WC.MAX_SEQ)
 	local actor = CharName(f[8])
 	local reason = f[11]
 	if not seq or not at or not actor or actor ~= f[8] or CleanReason(reason) ~= reason then return Refuse("shape", sender) end
+	local guild = f[7] ~= "-" and f[7] or nil
+	local C = ns.Channels
+	if not guild or not ns.IsFederation(guild) or not (C and C.VerifiedLevel and C.VerifiedLevel(sender, guild) >= 1) then
+		return Refuse("guild", sender)
+	end
+	if not Budget(rateSelf, WC.RATE_SELF_ALL) then return false, "rate" end
 	local now = Clock()
 	if at > now + WC.DATE_AHEAD or now - at > WC.KEEP then return Refuse("time", sender) end
 	local a = { op = op, scope = "S", seq = seq, at = at, target = sender, by = actor, reason = reason, weight = LEVEL.self, role = "S",
@@ -1540,12 +1557,28 @@ local function TakeAppeal(dist, sender, f)
 	local s = Store()
 	local key = Key(sender) .. "#" .. Key(actor) .. "#" .. seq
 	if s.appeals[key] then return true, "repeat" end
-	if Count(s.appeals) >= WC.APPEALS_MAX then
-		local oldest, t
-		for k, e in pairs(s.appeals) do if not t or e.at < t then oldest, t = k, e.at end end
-		if oldest then s.appeals[oldest] = nil end
+	-- (1.2.0: a few of his own at most; and an appeal about a sanction this client holds against
+	-- him, by that actor and sequence, is never pushed out by one about nothing it holds. A
+	-- councillor who logged in later still takes one about a sanction he never heard.)
+	local mine = 0
+	for _, e in pairs(s.appeals) do if Same(e.name, sender) then mine = mine + 1 end end
+	if mine >= WC.APPEALS_EACH then return false, "full" end
+	local held = false
+	for _, e in ipairs(s.audit) do
+		if e.op ~= "L" and e.seq == seq and Same(e.name, sender) and Same(e.by, actor) then held = true break end
 	end
-	s.appeals[key] = { name = sender, actor = actor, seq = seq, at = at, op = op, text = text }
+	if Count(s.appeals) >= WC.APPEALS_MAX then
+		local function Oldest(ok)
+			local k0, t
+			for k, e in pairs(s.appeals) do if ok(e) and (not t or e.at < t) then k0, t = k, e.at end end
+			return k0
+		end
+		local oldest = Oldest(function(e) return e.answer ~= nil end) or Oldest(function(e) return not e.held end)
+			or (held and Oldest(function() return true end)) or nil
+		if not oldest then return false, "full" end
+		s.appeals[oldest] = nil
+	end
+	s.appeals[key] = { name = sender, actor = actor, seq = seq, at = at, op = op, text = text, held = held or nil }
 	ns.Print(Gold(L.WATCHCHAT_APPEAL_IN:format(ns.DisplayName(sender) or sender)))
 	ns.Fire("WATCH_CHANGED")
 	return true

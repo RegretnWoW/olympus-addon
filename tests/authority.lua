@@ -363,3 +363,45 @@ local ns, test, eq = ...
 			end)
 		end)
 	end)
+
+	test("authority: one sender's parts spend his own share of the signature checks, never the whole lane's", function()
+		WithState(function()
+			WithFakeSign(function(Parts)
+				local function Junk(i) return Parts({ "Olympus Zeus=Junk" .. i .. "-Realm" }, { at = T0 + i, epoch = 2, unsigned = true })[1] end
+				for i = 1, A.VERIFY_EACH or 4 do eq(select(2, A.HandlePart("WHISPER", "Spammer-Realm", "H2~" .. Junk(i))), "signature") end
+				eq(select(2, A.HandlePart("WHISPER", "Spammer-Realm", "H2~" .. Junk(99))), "budget", "past his share")
+				-- Another sender's part is still checked, and a real holder's set completes.
+				local parts = Parts({ "Olympus Zeus=Answer Lord-Realm" }, { at = T0 + 10, epoch = 2 })
+				eq(select(2, A.HandlePart("WHISPER", "Holder-Realm", "H2~" .. parts[1])), "complete")
+			end)
+		end)
+	end)
+
+	test("authority: while enforcement is dormant H3 asks stop after the login burst; past the boundary they keep recovering", function()
+		WithState(function()
+			local comm, isMember, after, every = ns.Comm, ns.IsMember, ns.After, ns.Every
+			local sent = 0
+			local ok, err = pcall(function()
+				ns.Comm = { Handle = function() end, Send = function() sent = sent + 1 return true end }
+				ns.IsMember = function() return true end
+				ns.After, ns.Every = function() end, function() end
+				A.Reset(); A.Start()
+				local now = T0
+				ns.Now = function() return now end
+				eq(A.Enforced(), false)
+				for _ = 1, A.ASKS do eq(A.Ask(true), true) end
+				now = now + A.ASK_IDLE + 1
+				eq(A.Ask(false), false, "dormant: no ask after the burst")
+				-- Past the boundary (a verified first part), the client keeps asking for the rest.
+				WithFakeSign(function(Parts)
+					local parts = Parts({ "Olympus Zeus=Answer Lord-Realm", "Olympus Ares=Answer Ares-Other" }, { at = T0 + 10, epoch = 2 })
+					eq(select(2, A.TakePart(parts[1], nil, "LOCAL")), "partial")
+				end)
+				eq(A.Enforced(), true)
+				eq(A.Ask(false), true)
+				eq(sent, 2 * (A.ASKS + 1), "the channel and the guild each time")
+			end)
+			ns.Comm, ns.IsMember, ns.After, ns.Every = comm, isMember, after, every
+			if not ok then error(err, 0) end
+		end)
+	end)

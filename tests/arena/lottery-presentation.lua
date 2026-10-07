@@ -169,3 +169,16 @@ test("Lottery presentation: original draw sound loop stops on settling and closi
 	eq(stopped[31580], 2, "closing stops the active loop")
 	w:Run(10); eq(played[31580], 2, "no hidden replay"); Errors(c)
 end)
+
+test("Lottery presentation (1.2.0): the practice window says, in its own strip above the pick, what the High Council may use it for, and leaves that strip to the result after the draw", function()
+	local w, c, UI, f = Client(true)
+	local L = c.ns.L
+	eq(f.future:IsShown(), true)
+	eq(f.future:GetText(), L.LOTTERY_PRACTICE_FUTURE)
+	assert(L.LOTTERY_PRACTICE_FUTURE:find("High Council", 1, true) and L.LOTTERY_PRACTICE_FUTURE:find("Nothing is decided yet", 1, true))
+	eq(w:As(c, UI.LotteryPracticeModel).future, L.LOTTERY_PRACTICE_FUTURE, "the pane's practice text carries it too")
+	Draw(w, c, UI, f)
+	w:Run(10)
+	eq(f.future:IsShown(), false, "the result's own layout")
+	Errors(c)
+end)

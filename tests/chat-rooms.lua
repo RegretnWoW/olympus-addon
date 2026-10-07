@@ -365,6 +365,45 @@ test("chat rooms: restricted tabs and recipients come only from current shared a
 	end)
 end)
 
+test("chat rooms: a restricted room whispers no one the server says is offline (the roster's offline members, a name just not found)", function()
+	WithRooms(function(w, R, c)
+		local me = c.me:lower()
+		w.council[me] = true
+		w.council["alpha-realm"], w.council["beta-realm"], w.council["gamma-realm"] = true, true, true
+		c.rdb.council.names = { [me] = "Member", alpha = "Alpha", beta = "Beta", gamma = "Gamma" }
+		c.Roster.members = { { name = "Alpha", online = true }, { name = "Beta", online = false } }
+		ERR_CHAT_PLAYER_NOT_FOUND_S = "No player named '%s' is currently playing."
+		assert(R.Send("council", "first line"))
+		local function Targets()
+			local out = {}
+			for _, job in ipairs(w.jobs) do out[job.target] = true end
+			return out
+		end
+		local t = Targets()
+		eq(t["Alpha-Realm"], true); eq(t["Beta-Realm"], nil, "offline in the roster"); eq(t["Gamma-Realm"], true, "not in the roster: tried")
+		eq(#w.jobs, 4, "the King, the Treasurer, Alpha and Gamma")
+		-- The server answers Gamma is not playing: the next line leaves him out, until GONE_FOR passes.
+		w.nativeEvents.CHAT_MSG_SYSTEM("No player named 'Gamma-Realm' is currently playing.")
+		w.clearJobs(); w.advance(10)
+		assert(R.Send("council", "second line"))
+		eq(Targets()["Gamma-Realm"], nil); eq(#w.jobs, 3)
+		w.clearJobs(); w.advance(R.GONE_FOR)
+		assert(R.Send("council", "third line"))
+		eq(Targets()["Gamma-Realm"], true)
+		ERR_CHAT_PLAYER_NOT_FOUND_S = nil
+	end)
+end)
+
+test("chat rooms: a race or class room gives each sender a fair share of its minute (PER_MINUTE), so one sender cannot crowd the others out", function()
+	WithRooms(function(w, R, c)
+		assert(R.Select("race:1"))
+		for i = 1, R.PER_MINUTE do eq(R.Receive("CHANNEL", "Loud One-Realm", RoomMessage("race:1", i, "line " .. i), 1000 + i), true) end
+		eq(R.Receive("CHANNEL", "Loud One-Realm", RoomMessage("race:1", 50, "one too many"), 1010), false, "past his share")
+		eq(R.Receive("CHANNEL", "Quiet Two-Realm", RoomMessage("race:1", 51, "still heard"), 1011), true, "another sender")
+		eq(R.Receive("CHANNEL", "Loud One-Realm", RoomMessage("race:1", 52, "a minute later"), 1062), true)
+	end)
+end)
+
 assert(loadfile(ROOT .. "tests/chat-role-rooms.lua"))(ns, test, eq, WithRooms, RoomMessage)
 
 test("chat rooms: restricted delivery is whisper-only, all-or-none on admission, and revocable in queue", function()

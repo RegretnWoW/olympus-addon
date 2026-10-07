@@ -23,6 +23,7 @@ Rooms.SEND_GAP = 1.5
 Rooms.PER_MINUTE = 6
 Rooms.FLOOD = 60
 Rooms.REQUEST_WAIT = 30 * 60
+Rooms.GONE_FOR = 10 * 60    -- a recipient the server said is not playing: no whisper this long
 
 local RACES = {
 	{ id = "race:1", label = "Human", race = 1 },
@@ -597,13 +598,46 @@ function Rooms.RawHistory(id)
 	return r and r.lines or {}
 end
 
+-- 1.2.0: a restricted room whispers nobody the game says is offline: our roster's offline members,
+-- and a name the server just answered "not currently playing" for (ERR_CHAT_PLAYER_NOT_FOUND_S,
+-- GONE_FOR). Both are the server's word, never a report's.
+local gone, notFound, watchingGone = {}, nil, false
+function Rooms.NotFound(text)
+	if type(text) ~= "string" or (issecretvalue and issecretvalue(text)) then return end
+	if not notFound then
+		local f = type(ERR_CHAT_PLAYER_NOT_FOUND_S) == "string" and ERR_CHAT_PLAYER_NOT_FOUND_S or nil
+		if not f then return end
+		notFound = "^" .. (f:gsub("[%^%$%(%)%%%.%[%]%*%+%-%?]", "%%%0"):gsub("%%%%s", "(.+)")) .. "$"
+	end
+	local who = text:match(notFound)
+	if who then gone[Lower(ns.FullName(who))] = Now() end
+end
+local function WatchGone()
+	if watchingGone or not ns.RegisterEvent then return end
+	watchingGone = true
+	pcall(ns.RegisterEvent, "CHAT_MSG_SYSTEM", function(text) ns.SafeCall("chat room not found", Rooms.NotFound, text) end)
+end
+local function Offline(full, roster)
+	local key = Lower(full)
+	local t = gone[key]
+	if t and Now() - t < Rooms.GONE_FOR then return true end
+	return roster[key] == false
+end
+
 local function Members(id)
 	local out, seen = {}, {}
+	local roster = {}
+	for _, m in ipairs(ns.Roster and ns.Roster.members or {}) do
+		if type(m) == "table" and type(m.name) == "string" and m.online ~= nil then roster[Lower(ns.FullName(m.full or m.name))] = m.online == true end
+	end
 	local function Add(name)
 		if type(name) ~= "string" or name == "" then return end
 		local full = ns.FullName(name)
 		local key = full:lower()
-		if not seen[key] and not IsMe(full) and Rooms.CanAccess(id, full) then seen[key], out[#out + 1] = true, full end
+		if not seen[key] and not IsMe(full) and Rooms.CanAccess(id, full) then
+			seen[key] = true
+			if not Offline(full, roster) then out[#out + 1] = full end
+		end
 	end
 	if id == "council" then
 		if ns.KingCharacter then Add(ns.KingCharacter()) end
@@ -773,6 +807,7 @@ local function Send(id, text, confirmed)
 	local msg = ("M2~1~%s~%d~%s~%s~%s"):format(id, lineId, class, CleanGuild(guild), text)
 	if #msg > 255 then return false, "size" end
 	local recipients = info.scope == "restricted" and Members(id) or nil
+	if recipients then WatchGone() end
 	local count = recipients and #recipients or 1
 	if ns.Comm.QueueRoom and ns.Comm.QueueRoom() < count then ns.Print(L.CHAN_BUSY) return false, "busy" end
 	if info.scope == "topic" and not ns.Comm.ChannelReady() then ns.Print(L.CHAN_NOT_READY) return false, "ready" end
@@ -856,10 +891,16 @@ if StaticPopupDialogs then
 	}
 end
 
-local function Flooded(r, now)
-	for i = #r.recent, 1, -1 do if now - r.recent[i] >= 60 then table.remove(r.recent, i) end end
-	if #r.recent >= Rooms.FLOOD then return true end
-	r.recent[#r.recent + 1] = now
+-- A room's minute: FLOOD lines in all, and (1.2.0) each sender's fair share of it, PER_MINUTE
+-- (what an unmodified client sends at most): one sender cannot crowd the others out.
+local function Flooded(r, sender, now)
+	local who, mine = Lower(sender), 0
+	for i = #r.recent, 1, -1 do
+		local e = r.recent[i]
+		if now - e.t >= 60 then table.remove(r.recent, i) elseif e.who == who then mine = mine + 1 end
+	end
+	if #r.recent >= Rooms.FLOOD or mine >= Rooms.PER_MINUTE then return true end
+	r.recent[#r.recent + 1] = { t = now, who = who }
 	return false
 end
 
@@ -969,7 +1010,7 @@ function Rooms.Receive(dist, sender, text, now)
 	})
 	if not admitted and why ~= "filtered" then return Drop(why) end
 	local r = State(id, true)
-	if Flooded(r, now) then return Drop("flood") end
+	if Flooded(r, sender, now) then return Drop("flood") end
 	if request then remoteRequests[RemoteKey(id, sender)] = { id = id, sentAt = now } end
 	MarkMemberReply(id, sender, member, request, now)
 	Keep(id, { t = ns.Now(), sender = sender, guild = guild, class = class ~= "" and class or nil,
@@ -998,6 +1039,7 @@ function Rooms.Reset()
 	nextId = 0
 	lastSend, sentTimes = -math.huge, {}
 	receiveBuckets, receiveSeen, receiveMine = {}, {}, {}
+	gone = {}
 	stats = { sent = 0, shown = 0, dropped = {} }
 	held, writing = nil, {}
 	local c = Choices()

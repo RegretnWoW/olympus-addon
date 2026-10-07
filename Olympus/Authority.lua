@@ -44,6 +44,7 @@ Authority.ASKS = 4
 Authority.ASK_IDLE = 10 * 60 -- after the login burst, keep recovering when no holder was online
 Authority.ANSWER_GAP = 120
 Authority.VERIFY_MAX = 16
+Authority.VERIFY_EACH = 4 -- one sender's share of a lane's checks a minute (a holder's parts come slower)
 Authority.OUTGOING_MAX = 1 -- a signed snapshot must never crowd normal addon work off the queue
 Authority.QUEUE_WAIT = 45
 
@@ -52,7 +53,7 @@ local cachedBlob, cachedRealm, cached
 local bundleCacheKey, bundleCache
 local pending, pendingCount = {}, 0
 local verified, verifiedCount = {}, 0
-local verifyTimes = { channel = {}, guild = {} }
+local verifyTimes = { channel = {}, guild = {}, by = {} }
 local askedFrom, askedCount = {}, 0
 local outgoing, outgoingCount = {}, 0
 local asks, lastAsk, started = 0, -math.huge, false
@@ -416,9 +417,21 @@ local function VerifyBudget(sender, dist, blob)
 	if not author then
 		local lane = dist == "GUILD" and verifyTimes.guild or verifyTimes.channel
 		local now = ns.Now()
+		-- (1.2.0: each sender's own share first, so one sender never spends the lane's budget.)
+		local key = Fold(ns.FullName(sender))
+		local mine = verifyTimes.by[key] or {}
+		for i = #mine, 1, -1 do if now - mine[i] >= 60 then table.remove(mine, i) end end
+		if #mine >= Authority.VERIFY_EACH then return false end
 		for i = #lane, 1, -1 do if now - lane[i] >= 60 then table.remove(lane, i) end end
 		if #lane >= Authority.VERIFY_MAX then return false end
 		lane[#lane + 1] = now
+		if not verifyTimes.by[key] then
+			local n = 0
+			for _ in pairs(verifyTimes.by) do n = n + 1 end
+			if n >= 256 then wipe(verifyTimes.by) end
+			verifyTimes.by[key] = mine
+		end
+		mine[#mine + 1] = now
 	end
 	return true
 end
@@ -602,6 +615,9 @@ function Authority.Ask(force)
 	local now = ns.Now()
 	local gap = asks < Authority.ASKS and Authority.ASK_GAP or Authority.ASK_IDLE
 	if not force and now - lastAsk < gap then return false end
+	-- (1.2.0: while enforcement is dormant here, the login burst only, then no more asks until the
+	-- next login; a client past the boundary keeps recovering its parts.)
+	if not force and asks >= Authority.ASKS and not Authority.Enforced(ns.faction) then return false end
 	local bundle = HeldBundle(ns.faction or "Alliance")
 	local at, epoch = bundle and bundle.at or 0, bundle and bundle.epoch or 0
 	local msg = ("H3~%s~%d~%d"):format(ns.faction or "Alliance", at, epoch)
@@ -639,7 +655,7 @@ function Authority.Reset()
 	bundleCacheKey, bundleCache = nil, nil
 	wipe(pending); pendingCount = 0
 	wipe(verified); verifiedCount = 0
-	wipe(verifyTimes.channel); wipe(verifyTimes.guild)
+	wipe(verifyTimes.channel); wipe(verifyTimes.guild); wipe(verifyTimes.by)
 	wipe(askedFrom); askedCount = 0
 	wipe(outgoing); outgoingCount = 0
 	wipe(realmInfo)

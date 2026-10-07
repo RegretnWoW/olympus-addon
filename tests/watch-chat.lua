@@ -1207,6 +1207,61 @@ test("watch: chat moderation: a player's own word never writes his guild's audit
 	end)
 end)
 
+test("watch: chat moderation: a player's own word (S) counts only from a member of the guild it names, a few each in the council's audit; others never spend its shared budget", function()
+	World(function(w)
+		local G, A, B, D, Y1 = Standard(w)
+		w.council[Fold("Councillor-Realm")] = true
+		local Co = w.Client("Councillor", Y, 3)
+		local function Word(seq, guild) return ("MD~1~S~T~%d~%d~%s~%s~%d~-~"):format(seq, w.epoch, guild, A.name, w.epoch + 600) end
+		-- Y1 is no member of X: his word framing X's officer is refused on X's own clients (the roster).
+		local ok, why = w.Inject("CHANNEL", Y1.name, D, Word(1, X))
+		eq(ok, false); eq(why, "guild")
+		eq(w.As(D, D.WC.Silenced, Y1.name), false)
+		-- Many senders with no standing: the shared budget is left for B's real word.
+		for i = 1, 30 do
+			for j = 1, 3 do w.Inject("CHANNEL", "Junk" .. i .. "-Realm", D, Word(100 + j, X)) end
+		end
+		eq(w.Inject("CHANNEL", B.name, D, Word(2, X)), true, "B's own word, after the junk")
+		-- One player's own words: five each in the council's audit, nobody else's pushed out.
+		eq(w.Inject("CHANNEL", D.name, Co, Word(3, X)), true)
+		for i = 1, 8 do w.epoch = w.epoch + 61 w.Inject("CHANNEL", B.name, Co, Word(10 + i, X)) end
+		local mine, other = 0, 0
+		for _, e in ipairs(Co.WC.Store().audit) do
+			if e.scope == "S" and e.name == B.name then mine = mine + 1 elseif e.scope == "S" and e.name == D.name then other = other + 1 end
+		end
+		eq(mine, Co.WC.SELF_AUDIT_MAX); eq(other, 1, "D's entry stays")
+	end)
+end)
+
+test("watch: chat moderation: appeals: three open from one player at most; one about a sanction the councillor's client holds is never pushed out by others", function()
+	World(function(w)
+		local G, A, B, D, Y1 = Standard(w)
+		w.council[Fold("Councillor-Realm")] = true
+		local Co = w.Client("Councillor", Y, 3)
+		assert(w.As(A, A.WC.Timeout, B.name, 86400, "insult"))
+		w.Run()
+		local r = B.WC.Store().record[1]
+		assert(w.As(B, B.WC.Appeal, r.by, r.seq, "I was quoting him"))
+		w.Run()
+		local s = Co.WC.Store()
+		local real
+		for k, e in pairs(s.appeals) do if e.name == B.name then real = k end end
+		assert(real and s.appeals[real].held, "his appeal, about a sanction held here")
+		local function Appeal(from, seq)
+			return w.Inject("CHANNEL", from, Co, ("MD~1~A~%d~%s~%d~T~please"):format(w.epoch, A.name, seq))
+		end
+		for i = 1, 3 do w.epoch = w.epoch + 61 eq(Appeal(Y1.name, i), true) end
+		w.epoch = w.epoch + 61
+		eq(select(2, Appeal(Y1.name, 4)), "full", "a fourth from the same player")
+		-- Fifty players with appeals about nothing held here: the real one stays.
+		for i = 1, 60 do w.epoch = w.epoch + 1 Appeal("Filer" .. i .. "-Realm", 1) end
+		assert(s.appeals[real], "the real appeal is kept")
+		local n = 0
+		for _ in pairs(s.appeals) do n = n + 1 end
+		eq(n, Co.WC.APPEALS_MAX)
+	end)
+end)
+
 test("watch: chat moderation: a line deleted from a report without its id: that line alone goes, the same words said later still show", function()
 	World(function(w)
 		local G, A, B, D, Y1 = Standard(w)
