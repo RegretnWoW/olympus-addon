@@ -102,8 +102,14 @@ function Compliance.Allows(kind, game)
 	return false, "compliance"
 end
 
+-- 1.2.0 (Konig's review): debt marks and their details (ZX, ZY) go out and come in only with the
+-- Wallet on (off in the release): nothing in 1.2.0 makes a debt, and a stranger's marks would only
+-- fill everyone's saved data.
+Compliance.WALLET_WIRE = { ZX = true, ZY = true }
+
 -- Whether an arena message of this type may go out or be taken (a type that is not a wager always).
 function Compliance.Wire(kind)
+	if Compliance.WALLET_WIRE[kind] and not Compliance.Wallet() then return false end
 	local k = Compliance.WIRE[kind]
 	if not k then return true end
 	return Compliance.Allows(k) == true

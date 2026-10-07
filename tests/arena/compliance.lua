@@ -68,6 +68,8 @@ test("1.1.6 compliance: as it ships, the gate allows no wager of any kind, on an
 	end
 	for _, kind in ipairs({ "BM", "BS", "BK", "ZA", "KD", "KH", "LW", "IO" }) do assert(C.WIRE[kind], kind) end
 	for _, kind in ipairs({ "AF", "AS", "AE", "AP", "KI", "KK", "KE", "ZT", "ZR", "ZH", "ZV", "AM", "EC" }) do eq(C.Wire(kind), true, kind) end
+	-- 1.2.0: debt marks and their details wait for the Wallet (off in the release).
+	eq(C.Wallet(), false); eq(C.Wire("ZX"), false, "ZX"); eq(C.Wire("ZY"), false, "ZY")
 	for name in pairs(C.ACTIONS) do eq(C.Action(name), false, name) end
 	for _, name in ipairs({ "fights.challenge", "farkle.create", "farkle.practice", "farkle.refund", "lottery.open", "lottery.schedule", "match.open" }) do
 		eq(C.Action(name), true, name)
