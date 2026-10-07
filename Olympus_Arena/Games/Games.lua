@@ -655,7 +655,10 @@ local function BuildHub()
 	Break(hub, MX, 76, HW - 2 * MX, 12)
 	hub.rows = {}
 	local games = {}
-	for _, g in ipairs(GAMES) do if g.key ~= "wallet" or Games.WalletShown() then games[#games + 1] = g end end
+	for _, g in ipairs(GAMES) do
+		-- (a game whose file the package left out, e.g. the lab's lottery in the release: not listed)
+		if (g.key ~= "wallet" or Games.WalletShown()) and (not g.module or Module(g)) then games[#games + 1] = g end
+	end
 	hub:SetHeight(ROW0 + #games * ROWH + 62)
 	for i, g in ipairs(games) do
 		local y = ROW0 + (i - 1) * ROWH

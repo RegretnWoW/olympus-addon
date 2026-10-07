@@ -455,14 +455,29 @@ test("1.1.6 package: scripts/bets-only.txt names files that only carry wagers' t
 	local toc = {}
 	for line in io.lines(H.ADDON_DIR .. "Olympus.toc") do toc[(line:gsub("\r$", ""))] = true end
 	local C = Gate()
+	local arenaToc, without = {}, {}
+	for line in io.lines(H.ROOT .. "Olympus_Arena/Olympus_Arena.toc") do arenaToc[(line:gsub("\r$", ""))] = true end
 	for _, path in ipairs(listed) do
-		local file = assert(path:match("^Olympus/([%w_]+)%.lua$"), path .. ": a file of the core")
+		local inArena = path:match("^Olympus_Arena/(.+%.lua)$")
+		if inArena then
+			-- 1.2.0: a companion file (the lab's animal lottery): in its TOC, never the Lottery's practice.
+			assert(arenaToc[(inArena:gsub("/", "\\"))], path .. " in Olympus_Arena.toc")
+			assert(inArena ~= "LotteryBoard.lua", "the Lottery's practice ships")
+			without[inArena] = true
+		end
+	end
+	assert(without["Games/Bicho.lua"], "bets-only.txt names the lab's animal lottery")
+	for _, path in ipairs(listed) do
+		local file = path:match("^Olympus/([%w_]+)%.lua$")
+		assert(file or path:match("^Olympus_Arena/"), path .. ": a file of the core or the companion")
+		if file then
 		assert(toc[file .. ".lua"], path .. " in Olympus.toc")
 		local f = assert(io.open(H.ADDON_DIR .. file .. ".lua"))
 		local code = f:read("*a"):gsub("%-%-[^\n]*", "")
 		f:close()
 		for kind in code:gmatch('Comm%.Handle%("(%w%w)"') do assert(C.WIRE[kind], path .. " registers " .. kind .. ", not a wager's type") end
 		for name in code:gmatch('Arena%.Action%("([%w%.]+)"') do assert(C.ACTIONS[name] or name == "overrule" or name == "closebets", path .. " registers the action " .. name) end
+		end
 	end
 	assert(gone.Markets and gone.MarketBank, "the markets and the bank's half")
 	for _, f in ipairs({ "Compliance", "Lottery", "Stakes", "Wallet", "FarkleTable", "ArenaFights", "Honors" }) do
@@ -658,4 +673,23 @@ test("1.2.0 the gate: the Wallet's, the banks' and a debt's fee actions wait for
 	eq(C.Action("farkle.create"), true, "a free game still goes")
 	C.WALLET_ENABLED = true
 	eq(C.Action("wallet.deposit"), true, "the switch on (2.0)"); eq(C.Action("bank.open"), true)
+end)
+
+test("1.2.0 package: the companion without the files bets-only.txt names (the lab's animal lottery) loads clean through the core; the Lottery's practice and Bones are there", function()
+	local without = {}
+	for _, path in ipairs(BetsOnly()) do
+		local inArena = path:match("^Olympus_Arena/(.+%.lua)$")
+		if inArena then without[inArena] = true end
+	end
+	assert(without["Games/Bicho.lua"], "bets-only.txt names the lab's animal lottery")
+	local w = FW.New({ compliance = "shipped" })
+	local a = w:Player(N.fighterA, { companion = { without = without }, compliance = "shipped" })
+	eq(w:As(a, function() return a.ns.Arena.LoadUI() end), true)
+	local own = a.companion.own
+	eq(own.Bicho, nil, "the lab's animal lottery is not in the package")
+	assert(own.Farkle and own.ArenaUI and own.ArenaUI.LotteryPracticeWindow, "the Lottery's practice and Bones are")
+	local listed = {}
+	for _, g in ipairs(own.Games.LIST) do if g.module == nil or own[g.module] then listed[g.key] = true end end
+	eq(listed.lottery, nil, "no games' window row for a game the package left out")
+	NoErrors(w)
 end)

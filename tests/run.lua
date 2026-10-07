@@ -59456,7 +59456,8 @@ if not Harness.watchOnly then
 			local v = line:match("^## Version:%s*(%S+)")
 			if v and not version then version = v end
 			local file = line:match("^([%w_\\/]+%.lua)%s*$")
-			if file then files[#files + 1] = (file:gsub("\\", "/")) end
+			file = file and file:gsub("\\", "/")
+			if file and not (opts.without and opts.without[file]) then files[#files + 1] = file end
 		end
 		local fire = not opts.keepHandoff and opts.fire ~= false and type(cns) == "table"
 		local caught, ownRegister = {}, nil

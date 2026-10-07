@@ -4,3 +4,6 @@
 # the core's TOC without these and plays the games. One path per line, from the repository root.
 Olympus/Markets.lua
 Olympus/MarketBank.lua
+# The lab's animal lottery (a bet on a beast; only a Wallet-on lab session opens it). The Lottery's
+# practice (LotteryBoard.lua) is not this file and ships.
+Olympus_Arena/Games/Bicho.lua

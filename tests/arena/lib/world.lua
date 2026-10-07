@@ -626,7 +626,7 @@ function World:LoadAddOn(c, name)
 	if STATES[state] then return false, STATES[state] end
 	if c.companion.loaded then return true end
 	c.companion.loaded = true
-	c.companion.own = H.LoadCompanion(nil, { keepHandoff = true, version = c.companion.version })
+	c.companion.own = H.LoadCompanion(nil, { keepHandoff = true, version = c.companion.version, without = c.companion.without })
 	c.globals.OlympusArenaDB = c.saved and c.saved.heavy or nil
 	rawset(_G, "OlympusArenaDB", c.globals.OlympusArenaDB)
 	self:Fire(c, "ADDON_LOADED", "Olympus_Arena")
