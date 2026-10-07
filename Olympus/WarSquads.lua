@@ -4,12 +4,17 @@ ns.WarSquads = Squads
 
 -- Small military squads are NOT the War Room's historical capability-post Centuries.
 -- WU~1~S~leader~revision~members: a complete bounded assignment, over actual GUILD.
--- WU~1~Q: request current assignments; only current own-guild officers answer.
+-- WU~1~Q: request current assignments; only current own-guild officers answer (1.2.0: one of
+-- them, the first by name of those heard on WU lately, once a minute, on the normal lane).
 -- SC~1~room-hash~sequence~words: logged private WHISPER, never a guild broadcast.
 Squads.MAX_SOLDIERS, Squads.MAX_LEADERS = 99, 10
 Squads.MAX_ROWS, Squads.MAX_GUILDS, Squads.CHAT_MAX = 40, 20, 100
 Squads.SEEN_MAX = 1000
+Squads.ASK_GAP, Squads.ASKS = 300, 3  -- 1.2.0: a client's asks: this far apart, this many a session
+Squads.REPLY_GAP = 60                 -- ...an officer answers once a window
+Squads.ELECT_FOR = 1800               -- ...the one first by name of the officers heard on WU this lately
 local incoming, outgoing, chatRate = {}, {}, {}
+local heardOfficers, asks, answered = {}, 0, false
 local roomCache, roomCacheCount = {}, 0
 local memberIndex, indexedRoster, indexedNames, indexedGeneration, indexedAt = {}, nil, nil, nil, nil
 local lastRequest = -math.huge
@@ -189,7 +194,7 @@ local function Put(e, sender)
 	e.by = sender; s.rows[key] = e
 	Changed(); return true
 end
-local function SendRecord(e)
+local function SendRecord(e, low)
 	if not ValidRow(e) then return false end
 	local guild, msg = Guild(), Encode(e)
 	local key = "squad:" .. Fold(e.leader)
@@ -198,8 +203,9 @@ local function SendRecord(e)
 		local s = Store(false); local current = s and s.rows[Fold(e.leader)]
 		return Guild() == guild and Squads.CanManage() and ValidRow(current) and Encode(current) == msg or false
 	end }
-	if #msg <= 255 then return ns.Comm.Send("GUILD", msg, options.key, true, false, nil, options) end
-	return ns.Comm.SendChunked(msg, true, "GUILD", nil, options)
+	-- (An officer's own edit goes urgent; an answer to an ask on the normal lane, 1.2.0.)
+	if #msg <= 255 then return ns.Comm.Send("GUILD", msg, options.key, not low, false, nil, options) end
+	return ns.Comm.SendChunked(msg, not low, "GUILD", nil, options)
 end
 function Squads.Replace(name, members)
 	if not Squads.CanManage() then return false, "officer" end
@@ -237,13 +243,21 @@ end
 function Squads.Handle(dist, sender, text)
 	if dist ~= "GUILD" or not Guild() or type(text) ~= "string" or #text > ns.Codec.CHUNK * ns.Codec.MAX_CHUNKS or not Member(sender) then return false end
 	if not Rate(incoming, Fold(sender), 60, 60) then return false end
+	if Officer(sender) then heardOfficers[Fold(Member(sender))] = Clock() end
 	if text == "WU~1~Q" then
-		if not Squads.CanManage() or not Rate(outgoing, "reply", 1, 60) then return false end
+		if not Squads.CanManage() then return false end
+		-- (1.2.0: one officer answers, the first by name of those heard lately, this one included.)
+		local mine, now = Fold(Member(ns.me)), Clock()
+		for key, at in pairs(heardOfficers) do
+			if now - at > Squads.ELECT_FOR then heardOfficers[key] = nil
+			elseif key < mine and Officer(key) then return true, "other" end
+		end
+		if not Rate(outgoing, "reply", 1, Squads.REPLY_GAP) then return true, "window" end
 		local s = Store(false)
 		local checked = 0
 		for key, row in pairs(s and s.rows or {}) do
 			checked = checked + 1; if checked > Squads.MAX_ROWS then return false end
-			if ValidRow(row) and key == Fold(row.leader) and Leader(row.leader) then SendRecord(row) end
+			if ValidRow(row) and key == Fold(row.leader) and Leader(row.leader) then SendRecord(row, true) end
 		end
 		return true
 	end
@@ -254,11 +268,14 @@ function Squads.Handle(dist, sender, text)
 	local members = {}; for member in raw:gmatch("[^,]+") do members[#members + 1] = member end
 	local list = List(leader.name, members)
 	if not list or table.concat(list, ",") ~= raw then return false end
+	answered = true
 	return Put({ leader = leader.name, members = list, rev = rev }, Member(sender))
 end
+-- (1.2.0: at login, and after a roster scan only until an officer's rows came, ASKS at most a
+-- session, ASK_GAP apart.)
 function Squads.Request()
-	if not Guild() or Clock() - lastRequest < 60 then return false end
-	local guild = Guild(); lastRequest = Clock()
+	if not Guild() or Clock() - lastRequest < Squads.ASK_GAP or answered or asks >= Squads.ASKS then return false end
+	local guild = Guild(); lastRequest = Clock(); asks = asks + 1
 	return ns.Comm.Send("GUILD", "WU~1~Q", "squads:query", false, false, nil, { owner = Squads, key = "squads:query",
 		permit = function(_, key, dist, target, message)
 			return key == "squads:query" and dist == "GUILD" and target == nil and message == "WU~1~Q"
@@ -433,6 +450,7 @@ end
 if ns.ChatRooms then ns.ChatRooms.RegisterProvider(provider) end
 ns.Comm.Handle("WU", Squads.Handle)
 ns.Comm.Handle("SC", Squads.ReceiveChat)
--- Event driven only: no per-frame task or periodic enumeration while idle.
+-- Event driven only: no per-frame task or periodic enumeration while idle; a roster scan asks
+-- for rows only until an officer's came (Squads.Request's own limits).
 ns.On("DATA_CHANGED", function() indexedRoster = nil; Changed(); Squads.Request() end)
 ns.On("LOGIN", Squads.Request)

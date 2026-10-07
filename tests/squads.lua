@@ -105,6 +105,42 @@ test("Squads: bounded assignments preserve Centuries and require current officer
 		eq(w.c.rdb.war.centuries.old, "preserved")
 	end)
 end)
+test("Squads: asks are throttled (not every roster scan) and answered once a window by one officer, on the normal lane", function()
+	World(function(w, s)
+		eq(s.Replace("Leader", { "Soldier1" }), true)
+		local urgent = {}
+		local send = w.c.Comm.Send
+		w.c.Comm.Send = function(dist, msg, key, isUrgent, ...)
+			urgent[#urgent + 1] = { msg = msg, urgent = isUrgent }
+			return send(dist, msg, key, isUrgent, ...)
+		end
+		-- The asks: ASK_GAP apart, ASKS a session.
+		eq(s.Request(), true); eq(s.Request(), false, "a roster scan right after")
+		w.now = w.now + s.ASK_GAP; eq(s.Request(), true)
+		w.now = w.now + s.ASK_GAP; eq(s.Request(), true)
+		w.now = w.now + s.ASK_GAP; eq(s.Request(), false, "ASKS a session")
+		-- An answer: once a window, not urgent.
+		local before = #urgent
+		eq(s.Handle("GUILD", "Soldier1-Realm", "WU~1~Q"), true)
+		eq(#urgent, before + 1); eq(urgent[#urgent].urgent, false, "the normal lane")
+		eq(select(2, s.Handle("GUILD", "Soldier2-Realm", "WU~1~Q")), "window"); eq(#urgent, before + 1)
+		-- Another officer first by name heard on WU lately: he answers, not this client.
+		w.c.Roster.byName["Able-Realm"] = {}; w.ranks["Able-Realm"] = 1
+		eq(s.Handle("GUILD", "Able-Realm", "WU~1~Q"), true)
+		w.now = w.now + s.REPLY_GAP
+		eq(select(2, s.Handle("GUILD", "Soldier3-Realm", "WU~1~Q")), "other"); eq(#urgent, before + 1)
+		-- Once he has not been heard for ELECT_FOR, this one answers again.
+		w.now = w.now + s.ELECT_FOR + 1
+		eq(s.Handle("GUILD", "Soldier4-Realm", "WU~1~Q"), true); eq(#urgent, before + 2)
+	end)
+end)
+test("Squads: a client that heard an officer's rows asks no more", function()
+	World(function(w, s)
+		w.c.me = "Soldier1-Realm"
+		eq(s.Handle("GUILD", "Officer-Realm", "WU~1~S~Leader-Realm~1800000000~Soldier1-Realm"), true)
+		eq(s.Request(), false)
+	end)
+end)
 test("Squads: actual Realm tree inserts only own-guild hierarchy when that guild is expanded", function()
 	World(function(w, s)
 		local c = w.c
