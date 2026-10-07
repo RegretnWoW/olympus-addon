@@ -61,7 +61,8 @@ print("ArenaNet: the envelope, lanes and modes")
 
 test("1.2 the arena's foundation: the envelope: no mode, another mode or protocol 2 never reach the handler; L1 and T1 do", function()
 	local w = World.New()
-	local a, b = w:Client("Lida Fenn"), w:Client("Parric Stowe")
+	local king, a, b = w:Role("king"), w:Client("Lida Fenn"), w:Client("Parric Stowe")
+	GoLive(w, king)
 	local got = Catch(b, "AF")
 	for _, text in ipairs({ "AF~~x", "AF~1~x", "AF~X1~x", "AF~L2~x", "AF~L~x", "AF~l1~x", "AF~LL1~x", "AF~T0~x" }) do
 		b.Arena.Inject("CHANNEL", a.name, text)
@@ -117,9 +118,30 @@ test("1.2 the arena's foundation: a release sends L only with its realm's live s
 	NoErrors(w)
 end)
 
+test("1.2 the arena's foundation: a release takes L only with its realm's live switch on (honours, a match, the games' ledger and a player's own obligations whatever it says)", function()
+	local w = World.New()
+	local king, a, b = w:Role("king"), w:Client("Lida Fenn"), w:Client("Parric Stowe")
+	local af, ae, ap, zr, zx, ay = Catch(b, "AF"), Catch(b, "AE"), Catch(b, "AP"), Catch(b, "ZR"), Catch(b, "ZX"), Catch(b, "AY")
+	eq(b.Roles.Live(), false)
+	-- A modified client sends L with the switch off: refused on the way in as on the way out.
+	for _, text in ipairs({ "AF~L1~x", "AE~L1~x", "AP~L1~x", "ZR~L1~x", "ZX~L1~x", "AY~L1~x", "AF~T1~t" }) do
+		b.Arena.Inject("CHANNEL", a.name, text)
+	end
+	eq(#af, 1, "only the rehearsal's AF"); eq(af[1].mode, "T"); eq(#ae, 0, "no ledger entry")
+	eq(b.Arena.Stats().dropped["live-off"], 2)
+	eq(#ap, 1, "a profile is an honour's"); eq(#zr, 1, "a receipt: an obligation"); eq(#zx, 1, "a debtor's own mark may be one")
+	eq(#ay, 1, "the games' ledger")
+	-- The King turns it on: L comes in.
+	GoLive(w, king)
+	b.Arena.Inject("CHANNEL", a.name, "AE~L1~y")
+	eq(#ae, 1); eq(ae[1].body, "y")
+	NoErrors(w)
+end)
+
 test("1.2 the arena's foundation: a release takes L on the channel and by whisper (ID on GUILD too), T on any lane but GUILD", function()
 	local w = World.New()
-	local a, b = w:Client("Lida Fenn"), w:Client("Parric Stowe")
+	local king, a, b = w:Role("king"), w:Client("Lida Fenn"), w:Client("Parric Stowe")
+	GoLive(w, king)
 	local af, id = Catch(b, "AF"), Catch(b, "ID")
 	for _, case in ipairs({ { "CHANNEL", "L", 1 }, { "WHISPER", "L", 1 }, { "RAID", "L", 0 }, { "PARTY", "L", 0 }, { "GUILD", "L", 0 },
 		{ "CHANNEL", "T", 1 }, { "RAID", "T", 1 }, { "PARTY", "T", 1 }, { "WHISPER", "T", 1 }, { "GUILD", "T", 0 } }) do

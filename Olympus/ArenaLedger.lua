@@ -53,6 +53,7 @@ LG.DAY_MAX = 10             -- rated fights of a fighter in a server day
 LG.PAIR_MAX = 3             -- rated fights of a pair in PAIR_DAYS
 LG.PAIR_DAYS = 7
 LG.ENTRIES_MAX = 5000       -- per season
+LG.ARB_DAY_MAX = 60         -- entries of one arbiter in a server day at most (a full tournament and two cards)
 LG.TITLES_MAX = 500
 LG.WORDS_MAX = 200
 LG.HALL_MAX = 20
@@ -287,6 +288,22 @@ LG.Decode = Decode
 
 local function Content(e) return Encode(e) end
 
+-- Entries per arbiter and server day of a book (counted once from the book, then kept up as
+-- entries come and go): one arbiter cannot fill a season's ledger.
+local arbDays = setmetatable({}, { __mode = "k" })
+local function ArbDay(e)
+	return (e.gkArb or (e.arbName and e.arbName:lower()) or "-") .. "|" .. math.floor((e.t or 0) / LG.DAY)
+end
+local function ArbDays(book)
+	local d = arbDays[book]
+	if not d then
+		d = {}
+		for _, x in pairs(book.list) do local k = ArbDay(x) d[k] = (d[k] or 0) + 1 end
+		arbDays[book] = d
+	end
+	return d
+end
+
 -- An entry taken (the arbiter's own AE, or the clerk's relay): kept in the heavy ledger (the title
 -- fights in the core too). True when new. A fid already held with other content is a conflict: the
 -- first kept, unless the new one is the fight's own arbiter's (e.auth: its AF held here names him,
@@ -303,9 +320,14 @@ local function Keep(e, mode, via)
 		-- The fight's own arbiter's entry replaces one somebody else put first.
 		local titles = CoreT(mode, "titles")
 		if titles then titles[e.fid] = nil end
-		if book and book.list[e.fid] then book.list[e.fid] = nil book.n = math.max(0, book.n - 1) end
+		if book and book.list[e.fid] then
+			local days, k = ArbDays(book), ArbDay(book.list[e.fid])
+			days[k] = math.max(0, (days[k] or 1) - 1)
+			book.list[e.fid] = nil book.n = math.max(0, book.n - 1)
+		end
 		Count("replaced")
 	end
+	if book and not book.list[e.fid] and (ArbDays(book)[ArbDay(e)] or 0) >= LG.ARB_DAY_MAX then return Count("arbiter-day") end
 	-- A title fight: in the core whatever else (enough to verify a belt without the ledger).
 	local fresh = false
 	if Has(e.fl, "t") then
@@ -331,6 +353,8 @@ local function Keep(e, mode, via)
 			e.via = via
 			book.list[e.fid] = e
 			book.n = book.n + 1
+			local days, k = ArbDays(book), ArbDay(e)
+			days[k] = (days[k] or 0) + 1
 			fresh = true
 		end
 	end
@@ -349,7 +373,7 @@ function LG.Write(f)
 	local e = { season = LG.SeasonOf(f.graceEnd or Now(), f.mode), fid = f.fid, t = f.graceEnd or Now(), cat = f.cat, bo = f.bo,
 		gkA = f.A.gk, A = f.A.name, fA = f.facts.A, gkB = f.B.gk, B = f.B.name, fB = f.facts.B,
 		sc = (f.sc[1] or 0) .. ":" .. (f.sc[2] or 0), w = f.w, m = f.m, dur = f.dur or 0, gkArb = F().MyGk(), fl = ((f.fl or ""):gsub("x", "")),
-		auth = true }
+		auth = true, arbName = ns.FullName(ns.me) }
 	if not (e.gkA and e.gkB) then return false, "gk" end
 	if not (e.m == "K" or e.m == "R" or e.m == "D") then return false, "method" end
 	Keep(e, f.mode, "own")
@@ -387,13 +411,54 @@ local function OnEntry(dist, sender, mode, body)
 end
 ns.Comm.Handle("AE", ns.Arena.Handle("AE", OnEntry))
 
--- Every entry held, of a season (the current by default), as a list.
+-- An entry's arbiter, when this client can tell: the name his own AE gave (named: gkArb -> name,
+-- from the entries that have one), else the game's answer for his GUID; nil when unknown.
+local function Plain(v) if issecretvalue and issecretvalue(v) then return nil end return v end
+local function ArbiterName(e, named)
+	if e.arbName then return e.arbName end
+	if not e.gkArb then return nil end
+	if named[e.gkArb] then return named[e.gkArb] end
+	local guid = Arena.GuidOf(e.gkArb)
+	if guid and type(GetPlayerInfoByGUID) == "function" then
+		local ok, _, _, _, _, _, name, realm = pcall(GetPlayerInfoByGUID, guid)
+		name, realm = Plain(name), Plain(realm)
+		if ok and type(name) == "string" and name ~= "" then
+			return ns.FullName(name, type(realm) == "string" and realm ~= "" and realm or nil)
+		end
+	end
+	return nil
+end
+-- A delisted arbiter's entries stop counting (the ratings, belts, history) and the clerk stops
+-- relaying them, while his name is known here and he is no arbiter any more. memo: one pass's
+-- verdicts, per arbiter.
+local function Delisted(e, mode, memo)
+	local key = e.gkArb or (e.arbName and e.arbName:lower())
+	if not key then return false end
+	local v = memo.v[key]
+	if v == nil then
+		local name = ArbiterName(e, memo.named)
+		local R = ns.ArenaRoles
+		v = name ~= nil and R ~= nil and not R.IsArbiter(name, mode)
+		memo.v[key] = v
+	end
+	return v
+end
+local function Memo(list)
+	local memo = { v = {}, named = {} }
+	for _, e in pairs(list) do if e.gkArb and e.arbName then memo.named[e.gkArb] = e.arbName end end
+	return memo
+end
+LG.Delisted = function(e, mode) return Delisted(e, mode or "L", Memo({ e })) end
+
+-- Every entry held, of a season (the current by default), as a list (a delisted arbiter's left out).
 function LG.Entries(season, mode)
 	mode = mode or "L"
 	season = season or LG.Season(mode).n
 	local out = {}
 	local book = Book(mode, season)
-	for _, e in pairs(book and book.list or {}) do out[#out + 1] = e end
+	local list = book and book.list or {}
+	local memo = Memo(list)
+	for _, e in pairs(list) do if not Delisted(e, mode, memo) then out[#out + 1] = e end end
 	table.sort(out, function(a, b) if a.t ~= b.t then return a.t < b.t end return a.fid < b.fid end)
 	return out
 end
@@ -509,7 +574,9 @@ function LG.BeltState(mode)
 	if beltCache[mode] and beltGen[mode] == gen and beltCache[mode].at == math.floor(Now() / 60) then return beltCache[mode].belts end
 	local R = ns.ArenaRating
 	local fights, words = {}, {}
-	for _, e in pairs(CoreT(mode, "titles") or {}) do fights[#fights + 1] = Fight(e, Has(e.fl, "r")) end
+	local titles = CoreT(mode, "titles") or {}
+	local memo = Memo(titles)
+	for _, e in pairs(titles) do if not Delisted(e, mode, memo) then fights[#fights + 1] = Fight(e, Has(e.fl, "r")) end end
 	for _, w in pairs(CoreT(mode, "beltWords") or {}) do words[#words + 1] = w end
 	local belts = R.Belts(fights, words, Now(), VacSchedule(mode))
 	beltCache[mode] = { belts = belts, at = math.floor(Now() / 60) }

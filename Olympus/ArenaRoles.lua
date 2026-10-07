@@ -489,6 +489,8 @@ local function Take(kind, sender, at, value)
 	end
 	value.at, value.from, value.t = at, ns.FullName(sender), Now()
 	words[kind] = value
+	-- (Who is an arbiter decides whose ledger entries count: the ratings are worked out again.)
+	if kind == "arbiters" and ns.ArenaLedger and ns.ArenaLedger.Bump then ns.ArenaLedger.Bump() end
 	if ns.King.IsKing() and ns.King.IsStewardName(sender) then
 		ns.Print(L.ARENA_STEWARD_SET:format(ns.King.StewardLabel(sender), L["ARENA_WORD_" .. kind:upper()]))
 	end

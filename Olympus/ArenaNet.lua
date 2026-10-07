@@ -88,6 +88,9 @@ Arena.OBLIGATIONS = { ZR = true, ZF = true, KD = true, ZT = true }
 -- the design): it moves nothing; the challenge or table it hands off to fixes its own mode.
 -- Nor is the games' ledger (AY, 1.1.6): a game's record to the auditors, whatever its mode.
 Arena.LIVE_EXEMPT = { AP = true, IL = true, ID = true, IO = true, AM = true, AU = true, AY = true }
+-- The types a sender may mark as his own obligation (o.obligation: ZX about himself, a staked AW,
+-- the Wallet's hello): taken in L whatever the switch, their handlers check the rest.
+Arena.MAY_OBLIGE = { ZX = true, ZQ = true, AW = true }
 -- Only ID rides GUILD (the Treasurer's own client, the design); nothing else is relayed there.
 Arena.GUILD_TYPES = { ID = true }
 -- The letters of Arena.NewId: a fight, a card (Fight Night), a tournament, a Farkle table, a
@@ -1369,6 +1372,12 @@ function Arena.Handle(kind, fn)
 		if Arena.Off() then Count(stats.dropped, "off") return end
 		if Arena.Sim() and not injecting then Count(stats.dropped, "sim") return end
 		if not Accepts(kind, mode, dist) then Count(stats.dropped, Arena.TestBuild() and "live-in-test" or "lane") return end
+		-- (L while this realm's live switch is off: refused here as Refusal refuses it going out, a
+		-- modified client's too. The switch itself is the King's T1, not an arena type.)
+		if mode == "L" and not (Arena.OBLIGATIONS[kind] or Arena.LIVE_EXEMPT[kind] or Arena.MAY_OBLIGE[kind]) then
+			local R = Roles()
+			if not (R and R.Live and R.Live()) then Count(stats.dropped, "live-off") return end
+		end
 		ns.SafeCall("arena " .. kind, fn, dist, sender, mode, body)
 	end
 	wrappers[kind] = wrapper

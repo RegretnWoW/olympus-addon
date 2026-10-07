@@ -652,6 +652,9 @@ test("1.2 the Bone Throw tables: wallet stakes (w/w, the King as arbiter): the a
 	eq(Get(a, id).state, "play"); eq(Get(arb, id).state, "play")
 	-- the bank: a client told of the market (Markets.Has), hearing the KEs
 	local bank = w:Player(bankName)
+	-- (A late login takes L once it has heard the live switch: the King's repeat.)
+	w:As(arb, arb.ns.ArenaRoles.Repeat)
+	w:Run(2)
 	FakeMoney(bank, calls, { has = true, view = view })
 	local agreed = {}
 	bank.ns.On("FARKLE_AGREED", function(eid, res) agreed[#agreed + 1] = { id = eid, res = res } end)
@@ -693,6 +696,9 @@ local function Crowd(o)
 	o = o or {}
 	local w, a, b, arb, king, calls = Live({ arbiter = true, money = o.money })
 	local crowdA = w:Player(N.bettor1)
+	-- (A late login takes L once it has heard the live switch: the King's repeat.)
+	w:As(king, king.ns.ArenaRoles.Repeat)
+	w:Run(0)
 	local id, why = FT(w, a).Create({ guest = b.name, stake = o.stake or 0, src = o.src, mode = "a", arbiter = arb.name, target = 2000,
 		spectators = true, crowd = o.crowd ~= false, rehearsal = o.rehearsal })
 	assert(id, why)

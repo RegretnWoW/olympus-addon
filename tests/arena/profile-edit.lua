@@ -21,9 +21,11 @@ end
 print("ProfileEdit: the Edit in the core window")
 
 test("1.2 the fights part: with the live switch off and the companion not loaded, a frame and a title picked in the Edit change the pick and the profile goes out (AP)", function()
-	local w, cast = W3.New({ live = false })
+	-- (The belt won while the switch was on: an L entry is refused while it is off.)
+	local w, cast = W3.New()
 	local A = cast.A
 	Belt(w, cast, A, cast.B, { A, cast.spectator })
+	W3.Live(w, cast.king, { live = 0 })
 	w:Run(3)
 	eq(A.ns.ArenaRoles.Live(), false); eq(A.companion.loaded, nil)
 	local before = #w:Sent{ from = A, type = "AP" }

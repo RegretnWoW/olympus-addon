@@ -618,6 +618,60 @@ test("1.2 the fights part: the ledger takes AE only from a listed arbiter who is
 	W3.NoErrors(w)
 end)
 
+test("1.2 the fights part: a listed arbiter's entries: 60 a server day at most; once the King delists him they stop counting and the clerk stops relaying them (listed again, they count again)", function()
+	local w, cast = W3.New()
+	local sp = cast.spectator
+	W3.Companion(w, sp)
+	local LG = sp.ns.ArenaLedger
+	local arb = "Corvin Hale-Emberfall"
+	assert(cast.king.Roles.SetArbiters({ { name = arb, cap = 100 } }))
+	w:Run(0)
+	eq(w:As(sp, sp.ns.ArenaRoles.IsArbiter, arb, "L"), true)
+	local mark = w:As(sp, sp.ns.Arena.Hash36, arb:lower(), 2)
+	local function Send(i, t)
+		local e = Entry(i, ("3e8.%08x"):format(2 * i), ("3e8.%08x"):format(2 * i + 1), t, { fid = "F" .. i .. "z" .. mark, gkArb = "3e8.cccccccc" })
+		w:As(sp, function() sp.ns.Arena.Inject("CHANNEL", arb, "AE~L1~" .. LG.Encode(e)) end)
+	end
+	local day = w.clock - 40000
+	for i = 1, 61 do Send(i, day + i * 10) end
+	eq(#w:As(sp, LG.Entries), 60, "the 61st of his day refused"); eq(LG.Stats().refused["arbiter-day"], 1)
+	Send(62, day - 86400)
+	eq(#w:As(sp, LG.Entries), 61, "another day")
+	-- The signed arbiter's own entry on the same day is his own count.
+	w:As(sp, function() sp.ns.Arena.Inject("CHANNEL", N.arbiter, "AE~L1~" .. LG.Encode(Entry(70, "3e8.0000aaa1", "3e8.0000aaa2", day))) end)
+	eq(#w:As(sp, LG.Entries), 62)
+	local function Fights(gk) return select(2, w:As(sp, LG.Rating, gk)) end
+	eq(Fights("3e8.00000002"), 1); eq(Fights("3e8.0000aaa2"), 1)
+	-- Delisted: his entries leave the ratings and the history; the signed arbiter's stay.
+	assert(cast.king.Roles.SetArbiters({}))
+	w:Run(0)
+	local left = w:As(sp, LG.Entries)
+	eq(#left, 1); eq(left[1].fid, "F70zz")
+	eq(Fights("3e8.0000aaa2"), 1, "the signed arbiter's entry still counts")
+	eq(Fights("3e8.00000002"), 0, "his fighter is unrated again")
+	-- A clerk holding them relays none.
+	local clerk = cast.arbiter
+	W3.Companion(w, clerk)
+	assert(cast.king.Roles.SetArbiters({ { name = arb, cap = 100 } }))
+	w:Run(0)
+	for i = 1, 3 do Send(100 + i, day - 2 * 86400 + i) end
+	for i = 1, 3 do
+		local e = Entry(100 + i, ("3e8.%08x"):format(200 + 2 * i), ("3e8.%08x"):format(201 + 2 * i), day - 2 * 86400 + i, { fid = "F" .. (100 + i) .. "z" .. mark, gkArb = "3e8.cccccccc" })
+		w:As(clerk, function() clerk.ns.Arena.Inject("CHANNEL", arb, "AE~L1~" .. LG.Encode(e)) end)
+	end
+	eq(#w:As(clerk, clerk.ns.ArenaLedger.Entries), 3)
+	assert(cast.king.Roles.SetArbiters({}))
+	w:Run(0)
+	eq(#w:As(clerk, clerk.ns.ArenaLedger.Entries), 0)
+	local d = w:As(clerk, clerk.ns.ArenaLedger.MakeDigest, "L")
+	eq(d.n, 0, "nothing of his in the clerk's digest or carousel")
+	-- Listed again: they count again.
+	assert(cast.king.Roles.SetArbiters({ { name = arb, cap = 100 } }))
+	w:Run(0)
+	eq(#w:As(sp, LG.Entries), 65)
+	W3.NoErrors(w)
+end)
+
 test("1.2 the fights part: the clerk (a public arbiter with the companion, never the King's character) broadcasts a carousel of the week's entries; 1,000 listeners that join late all hold every entry within one turn, and the clerk's sends do not grow with them", function()
 	local w, cast = W3.New({ more = { { "hc", "Brannoc Weald" }, { "late", "Wenna Crale" } } })
 	local clerk = cast.arbiter
