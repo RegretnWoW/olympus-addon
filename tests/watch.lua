@@ -1667,7 +1667,9 @@ test("watch: judgment: a case goes to the King, the High Council votes for a day
 		eq(j.from, c.me); eq(j.target, SPAMMER); eq(j.guild, w.guild); eq(j.finding, "U"); eq(j.at, w.epoch)
 		eq(j.closes - j.at, 86400, "the council's day")
 		eq(J.Escalation(key).jid, j.jid, "the King's client's receipt")
-		assert(king.prints[#king.prints]:find(SPAMMER:gsub("%-Realm$", ""), 1, true), "the King is told")
+		assert(king.prints[#king.prints]:find(w.guild, 1, true), "the King is told, by guild")
+		-- (1.2.0, Konig's review: never the accused's name in his chat, which may be on stream.)
+		assert(not king.prints[#king.prints]:find((SPAMMER:gsub("%-Realm$", "")), 1, true), "not the accused's name")
 		-- The councillors' clients ask the King's (they heard its lease): each one has it to vote on.
 		for _, p in ipairs({ hc1, hc2, hc3 }) do p.Judgment.Tick(false) end
 		Deliver(w, c)
@@ -2088,4 +2090,24 @@ test("watch: judgment: its strings in English and pt-BR, with the same placehold
 		end
 	end
 	assert(n >= 70, "the strings: " .. n)
+end)
+
+test("watch: judgment: one guild's officers keep at most J.MAX_OPEN_GUILD cases open with the King; another guild's still reach him (Konig's review)", function()
+	WithWatch(function(w, W, c)
+		Council(w, c)
+		local KJ = Peer(w, c, KING, { king = true }).Judgment
+		w.lease = { name = KING, guild = "Olympus", id = "lease-1" }
+		local officers = { c.me, "Captain Two-Realm", "Captain Three-Realm" }
+		for _, name in ipairs(officers) do w.ranksSeen[c.Fold(name) .. "@" .. c.Fold(w.guild)] = 1 end
+		w.ranksSeen[c.Fold("Captain Other-Realm") .. "@" .. c.Fold("Olympus Other")] = 1
+		for n = 1, KJ.MAX_OPEN_GUILD do
+			w.epoch = w.epoch + 10
+			local _, _, how = KJ.Handle("WHISPER", officers[math.floor((n - 1) / 4) + 1], ("MJ~1~E~%d~%s~Case %s-Realm~A1~1~0~-"):format(n, w.guild, string.char(64 + n)))
+			eq(how, "new", "case " .. n)
+		end
+		w.epoch = w.epoch + 10
+		eq(select(2, KJ.Handle("WHISPER", "Captain Three-Realm", ("MJ~1~E~99~%s~One Too Many-Realm~A1~1~0~-"):format(w.guild))), "full", "that guild's cases: full")
+		local _, _, how = KJ.Handle("WHISPER", "Captain Other-Realm", "MJ~1~E~1~Olympus Other~Their Case-Realm~A1~1~0~-")
+		eq(how, "new", "another guild's case still reaches the King")
+	end)
 end)

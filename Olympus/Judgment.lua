@@ -37,6 +37,7 @@ J.KEEP = 30 * 86400          -- the King's client keeps a judgment this long
 J.MAX = 60                   -- and this many (the oldest decided ones go first)
 J.MAX_OPEN = 40              -- not decided yet, at most
 J.DAY = 5                    -- from one officer in a day
+J.MAX_OPEN_GUILD = 10        -- 1.2.0 (Konig's review): not decided yet, from one guild
 J.RETRY = 5 * 60             -- a case the King's client did not confirm goes again this often
 J.QUERY_EVERY = 15 * 60      -- a councillor's (or a waiting officer's) client asks this often
 J.HEARD = 20 * 60            -- the King's client tells at once those who asked this recently
@@ -414,7 +415,7 @@ local function TakeCase(sender, id, guild, target, cats, reporters, lines, findi
 	local s = KingStore(true)
 	if not s then return false, "store" end
 	J.Prune()
-	local now, open, today = Clock(), 0, 0
+	local now, open, today, fromGuild = Clock(), 0, 0, 0
 	for _, j in pairs(s.list) do
 		if Same(j.from, who) and j.id == id and Same(j.guild, guild) and Same(j.target, target) then
 			if who ~= ns.me then Whisper(who, Wire("A", id, j.jid), "judgment-a-" .. Key(who) .. id, AsKing) end
@@ -427,10 +428,14 @@ local function TakeCase(sender, id, guild, target, cats, reporters, lines, findi
 			if who ~= ns.me then Whisper(who, Wire("A", id, j.jid), "judgment-a-" .. Key(who) .. id, AsKing) end
 			return true, j.jid, "open"
 		end
-		if not j.final then open = open + 1 end
+		if not j.final then
+			open = open + 1
+			if Same(j.guild, guild) then fromGuild = fromGuild + 1 end
+		end
 		if Same(j.from, who) and now - j.at < 86400 then today = today + 1 end
 	end
 	if today >= J.DAY then return Refuse(who, id, "day") end
+	if fromGuild >= J.MAX_OPEN_GUILD then return Refuse(who, id, "full") end
 	if open >= J.MAX_OPEN then return Refuse(who, id, "full") end
 	s.seq = s.seq + 1
 	local j = { jid = s.seq, from = who, id = id, guild = guild, target = target, cats = cats, reporters = reporters,
@@ -439,7 +444,9 @@ local function TakeCase(sender, id, guild, target, cats, reporters, lines, findi
 	s.list[tostring(j.jid)] = j
 	J.Prune()
 	if who ~= ns.me then Whisper(who, Wire("A", id, j.jid), "judgment-a-" .. Key(who) .. id, AsKing) end
-	ns.Print(Gold(L.JUDGMENT_IN_KING:format(guild, ns.DisplayName(target) or target)))
+	-- (1.2.0, Konig's review: the King's chat may be on stream; the accused's name, a sender's text,
+	-- shows only in The Watch.)
+	ns.Print(Gold(L.JUDGMENT_IN_KING:format(guild)))
 	if ns.PlayAlert then ns.PlayAlert("soft", "watch") end
 	-- The councillors who asked lately hear of it now.
 	for name in pairs(heard) do
