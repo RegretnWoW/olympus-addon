@@ -81,6 +81,8 @@ L.LOTTERY_PRACTICE_GRID_INTRO = "Choose your beast. Draw five numbers. See which
 L.LOTTERY_PRACTICE_RECORD = "This free practice draw is saved in Your games. Nothing is paid or owed."
 L.LOTTERY_PRACTICE_MISS = "Your beast did not appear. Try another draw."
 L.LOTTERY_PRACTICE_LOCAL = "Practice only: no gold, debt or honour. The draw goes into your games (the King, the High Council and the author see them too)."
+-- 1.2.0: what the Lottery may become (an idea for the High Council, nothing decided).
+L.LOTTERY_PRACTICE_FUTURE = "Later, maybe: the High Council could use this Lottery to reward members with prizes, with free tickets (one a week per member). Nothing is decided yet: if you'd like it, tell the High Council."
 -- How to play (the lab's three pages, on the games' pop-up): the deal is the first-use explanation.
 L.LOTTERY_GUIDE_TITLE = "How to play the Lottery"
 L.LOTTERY_FREE_GUIDE_GOAL = "Choose one of the 25 beasts and see how many of the five drawn numbers match it. This is a free practice game."
@@ -216,6 +218,7 @@ if GetLocale and GetLocale() == "ptBR" then
 	L.LOTTERY_PRACTICE_RECORD = "Este sorteio de treino grátis fica salvo nos seus jogos. Nada é pago nem devido."
 	L.LOTTERY_PRACTICE_MISS = "Seu bicho não apareceu. Tente outro sorteio."
 	L.LOTTERY_PRACTICE_LOCAL = "Só treino: sem ouro, dívida nem honra. O sorteio entra nos seus jogos (o Rei, o Alto Conselho e o autor também veem)."
+	L.LOTTERY_PRACTICE_FUTURE = "Mais pra frente, talvez: o Alto Conselho pode usar esta Loteria para premiar os membros, com bilhetes grátis (um por semana para cada membro). Nada está decidido ainda: se você gostaria, diga ao Alto Conselho."
 	L.LOTTERY_GUIDE_TITLE = "Como jogar a Loteria"
 	L.LOTTERY_FREE_GUIDE_GOAL = "Escolha um dos 25 bichos e veja quantos dos cinco números sorteados combinam com ele. Este é um jogo de prática gratuito."
 	L.LOTTERY_FREE_GUIDE_DRAW = "Clique em Sortear. Os cinco números aparecem aqui, com o bicho a que cada um pertence."

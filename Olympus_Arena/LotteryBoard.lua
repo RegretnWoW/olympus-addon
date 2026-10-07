@@ -1608,7 +1608,7 @@ end
 function ArenaUI.LotteryPracticeModel()
 	local Lt = Lot()
 	local m = { pick = practice.pick, free = true, prizes = {}, rows = {}, positions = {}, localOnly = true,
-		instructions = L.LOTTERY_PRACTICE_INTRO, warning = L.LOTTERY_PRACTICE_LOCAL,
+		instructions = L.LOTTERY_PRACTICE_INTRO, warning = L.LOTTERY_PRACTICE_LOCAL, future = L.LOTTERY_PRACTICE_FUTURE,
 		compliance = type(Lt.Wagers) == "function" and not Lt.Wagers() and L.COMPLIANCE_LOTTERY_PRACTICE or nil }
 	if practice.pick then m.label = Lt.Label(practice.pick) end
 	for i, prize in ipairs(practice.prizes or {}) do
@@ -1695,6 +1695,7 @@ local function PracticeDetail(canvas)
 	lines[#lines + 1] = ""
 	lines[#lines + 1] = m.warning
 	if m.compliance then lines[#lines + 1] = m.compliance end
+	if m.future then lines[#lines + 1] = ""; lines[#lines + 1] = m.future end
 	canvas.practiceText:SetText(table.concat(lines, "\n"))
 end
 
@@ -1759,6 +1760,7 @@ RefreshPracticeWindow = function()
 	local m = ArenaUI.LotteryPracticeModel()
 	local done = #m.rows == Lot().PRIZES
 	f.grid:SetShown(not done); f.result:SetShown(done)
+	f.future:SetShown(not done) -- (its strip is the cards' bottom margin; the result fills it)
 	f.note:SetText(m.compliance or L.LOTTERY_PRACTICE_FREE)
 	f.pick:SetText(m.label and L.LOTTERY_PRACTICE_CHOSEN:format(m.label) or L.LOTTERY_BOARD_PICK)
 	for i, c in ipairs(f.cards) do
@@ -1980,6 +1982,9 @@ function ArenaUI.LotteryPracticeWindow(show)
 		local record = Text(f.result, 13, SOFT, STANDARD_TEXT_FONT)
 		record:SetPoint("TOP", f.outcome, "BOTTOM", 0, -28); record:SetWidth(650); record:SetText(L.LOTTERY_PRACTICE_RECORD)
 		f.pick = Text(f, 14, INK, STANDARD_TEXT_FONT); f.pick:SetPoint("BOTTOM", 0, 72); f.pick:SetWidth(PRACTICE_W - 60)
+		-- 1.2.0: what the Lottery may become, between the cards and the pick (two lines at most).
+		f.future = Text(f, 12, INK, STANDARD_TEXT_FONT); f.future:SetPoint("BOTTOM", 0, 92); f.future:SetWidth(PRACTICE_W - 60)
+		f.future:SetText(L.LOTTERY_PRACTICE_FUTURE)
 		if own.Games and type(own.Games.Footer) == "function" then f.foot = own.Games.Footer(f, 618, 106, 10) end
 		f.help = Button(f, L.LOTTERY_BOARD_HOW, 150, 32, function() ArenaUI.LotteryHowToPlay(nil, true) end)
 		f.help:SetPoint("BOTTOMLEFT", 24, 26)
