@@ -178,13 +178,29 @@ end
 function Filter.IsEditorName(name)
 	if type(name) ~= "string" or name == "" then return false end
 	if ns.IsKingCharacter(name) then return true end
+	-- (1.1.6: a sanctioned editor, WatchChat.Barred "powers", edits nothing while it lasts.)
+	local WC = ns.WatchChat
+	if WC and not WC.missing and WC.Barred and WC.Barred("powers", name) then return false end
 	local K = ns.King
 	if K and not K.missing and (K.IsStewardName(name) or K.IsHandName(name)) then return true end
 	return ns.IsHighCouncillor(name)
 end
 
+-- 1.2.0: editors are ranked: the King's character 3, his Steward or a Hand 2, a High Councillor 1
+-- (0: no editor). A word's entry keeps the rank it came with: an editor below it never changes it
+-- (the King's terms stay his), the newest winning among equals.
+function Filter.EditorLevel(name)
+	if not Filter.IsEditorName(name) then return 0 end
+	if ns.IsKingCharacter(name) then return 3 end
+	local K = ns.King
+	if K and not K.missing and (K.IsStewardName(name) or K.IsHandName(name)) then return 2 end
+	return 1
+end
+
 function Filter.CanEdit()
 	if not ns.me or not ns.IsMember() then return false end
+	local WC = ns.WatchChat
+	if WC and not WC.missing and WC.Barred and WC.Barred("powers") and not ns.IsKingCharacter(ns.me) then return false end
 	local K = ns.King
 	if K and not K.missing and (K.IsKing() or K.IsSteward() or K.IsHand()) then return true end
 	return ns.IsHighCouncillor(ns.me)
@@ -229,7 +245,11 @@ end
 -- of acts); anyone else's never does.
 local function Piece(term, e)
 	local s = Entry(term, e)
-	if ns.me and SameName(e.by, ns.me) and Clock() - (tonumber(e.at) or 0) <= Filter.FRESH then s = s .. "@" .. ns.FullName(ns.me) end
+	-- (Named: our own edit while fresh; and, 1.2.0, always one of an editor above the High Council,
+	-- so its rank reaches late logins.)
+	if ns.me and SameName(e.by, ns.me) and (Clock() - (tonumber(e.at) or 0) <= Filter.FRESH or Filter.EditorLevel(ns.me) > 1) then
+		s = s .. "@" .. ns.FullName(ns.me)
+	end
 	return s
 end
 
@@ -308,8 +328,10 @@ function Filter.EditShared(word, on)
 	if (type(e) == "table" and e.on == true) == (on and true or false) then
 		return ns.Print((on and L.FILTER_SHARED_ALREADY or L.FILTER_NOT_THERE):format(Shown(term)))
 	end
+	local level = Filter.EditorLevel(ns.me)
+	if type(e) == "table" and (tonumber(e.lv) or 0) > level then return ns.Print(L.FILTER_SHARED_HIGHER:format(Shown(term))) end
 	if on and Active() >= Filter.SHARED_MAX then return ns.Print(L.FILTER_SHARED_FULL:format(Filter.SHARED_MAX)) end
-	S[term] = { on = on and true or false, at = math.max(math.floor(Clock()), (e and e.at or 0) + 1), by = ns.me }
+	S[term] = { on = on and true or false, at = math.max(math.floor(Clock()), (e and e.at or 0) + 1), by = ns.me, lv = level }
 	Prune()
 	ns.Comm.Send("CHANNEL", Filter.Pages({ { term = term, e = S[term] } })[1], "filteredit:" .. term)
 	-- Our own edit never comes back to us: in our log of acts as we send it.
@@ -344,9 +366,15 @@ function Filter.Receive(dist, sender, text)
 			local e = S[term]
 			local was = type(e) == "table" and e.on == true
 			local newer = type(e) ~= "table" or at > (tonumber(e.at) or 0)
+			-- (1.2.0: the rank an entry comes with: its editor's when he sends his own, named; a
+			-- relay's the lowest. A kept entry without one (before 1.2.0): the newest wins.)
+			local level = (editor and SameName(editor, sender)) and Filter.EditorLevel(sender) or 1
+			local kept = type(e) == "table" and tonumber(e.lv) or nil
+			local wins = newer
+			if kept then wins = level > kept or (level == kept and newer) end
 			local stale = not on and now - at > Filter.SHARED_TOMB
-			if newer and not stale and not (on and not was and Active() >= Filter.SHARED_MAX) then
-				S[term] = { on = on, at = at, by = sender }
+			if wins and not stale and not (on and not was and Active() >= Filter.SHARED_MAX) then
+				S[term] = { on = on, at = at, by = sender, lv = level }
 				stored = true
 				if was ~= on then
 					changed = true

@@ -29,6 +29,11 @@ master and the officers of the Horde guild named exactly "Olympus", if there is 
 
 ## Recent versions
 
+- **1.2.0**: The Watch (each guild's moderation desk, the Tabards in it); crafting requests on the Crafters
+  tab; the King's arrow on the minimap; Vox Populi's history and a guild master's own questions; the
+  Guild treasuries in one list with one search; Bones between players for points, at a tavern or at a
+  camp; no arbiters without bets (duels and Bones between their two players); duel points that
+  consider levels; Find a player by level, distance and game
 - **1.1.5**: Three elite borders (the King gold, the High Council silver, guild masters bronze) and
   their marks in the game's own chat (`/oly chatmarks`), none on Olympus lines; councillors'
   tooltips; a guild the High Council removed is no Olympus guild, with an appeal through the signed
@@ -39,8 +44,6 @@ master and the officers of the Horde guild named exactly "Olympus", if there is 
   button in the guild windows, nothing on the world map; a switch steps back and says what a
   `/reload` completes); the nameplate marks no longer hook a plate's own layout (Lua errors)
 - **1.1.4**: Crafters as its own tab; the side tabs keep one order when they run out of room
-- **1.1.3**: Ordinary clicks never start a restricted `/who`: census and player searches only from their own
-  controls
 
 Every version's notes are in the [GitHub releases](https://github.com/dnl-gentile/olympus-addon/releases). This page is the short one for CurseForge: the [README](https://github.com/dnl-gentile/olympus-addon#olympus) has every section in full.
 
@@ -139,6 +142,8 @@ versions before 1.1 just get the whisper, as before.
   player's client counts its own evening, and nothing is sent.
 
 ### The Realm: the hierarchy
+- **War Room**: members read their guild's records; its officers and verified War roles manage them.
+  No cross-guild writes. Empty lists explain what is missing; role previews cannot act.
 - The **King**, then every guild's **Lord** (guild master) and **Captains** (the officer rank
   right below the guild master).
   Each shows level, class and online or *offline 3d*. Long absences show in red
@@ -180,6 +185,11 @@ versions before 1.1 just get the whisper, as before.
   for another), keeps it 6 hours after he stops repeating it, and drops it at once when he is no
   longer guild master. `/oly nominees centurion <name>`, `/oly nominees correspondent <department
   number> <name>` and `/oly nominees remove <name>` do the same from the chat.
+  A confirmed correspondent also sees a **Guild** workspace for their own department. War and
+  Justice duties apply only to their own guild, checked against its fresh roster and its current
+  guild master's nomination; neither title grants federal powers. Artisanry and Heritage link to
+  the existing boards and clearly say their dedicated workflows are not available yet. A Church
+  contact still needs a Church appointment for its private room and recruitment numbers.
 - **Level race**: the highest level players of the realm.
 - **Recruiting**: the guilds that still have free slots, so new players go where there is room
   (the five with the most, then every one on a click, 1.1).
@@ -226,7 +236,15 @@ as the layer they are on, and the King himself is never asked.
 
 Layers are known from the members who share their zone and layer (see Privacy, below):
 the more share, the better hopping works. Asking works either way, and says on the channel
-the zone you are in and the layer you want. The King's layer is known only while his crown
+the zone you are in and the layer you want. If the King's own layer announcement has not
+arrived yet, clicking his hop line sends one discovery question on the Olympus channel while his crown is visible.
+Clients that can see his exact nameplate keep that fact private until the question; eligible
+helpers answer the asker alone, and two independent answers must agree before the ordinary
+layer-hop ask begins. A lone or conflicting answer moves nobody. Turning location sharing,
+layer help or the crown off cancels a queued answer and privately withdraws one already sent
+while that discovery question remains active.
+
+The King's layer is known only while his crown
 shows on the map (**Show me on the map** on his Throne, off by default): his addon sends it
 the moment he shows the crown and repeats it every minute while it shows. With his crown
 hidden (or while he is in a dungeon, where it hides) the line says so instead of "try again in
@@ -236,8 +254,14 @@ of `/oly status` (and of `/oly bug`) says what your addon knows of him: online a
 his realm, his layer and his crown, and how long ago each was heard.
 
 ### Person details
-Click any Lord, Captain, racer or inspected player. You get the same card the Guild window
-shows: level, class, zone, rank and status, with **Whisper**, **Invite** and **Who** buttons.
+Click any Lord, Captain, racer or inspected player. Their profile opens in the normal Olympus
+window, at that window's size, with the census facts Olympus already knows: level, class, zone,
+rank and status. **Back** returns to the same list or Realm subpage; **Whisper**, **Invite** and
+**Who** stay on the profile. Offline players cannot be whispered or invited from it. This is
+separate from the Blood Arena companion's player profile and opening it sends no new query.
+`/oly profile Name` (or `Name-Realm`) opens a player's profile by name, yours with no name. A
+profile opened from another one is one more step: **Back** goes to the profile before it, then
+to the list.
 Any soldier can reach the Lord of another Olympus guild in two clicks.
 
 A High Councillor's tooltip (1.1.5) says so too: their mark and own icon after their name, then
@@ -255,9 +279,11 @@ friends list, the guild roster) and the game's menu gets an **Olympus** part at 
   answer, so no answer in 10 seconds can mean no Olympus, an older one, a dungeon or raid, or no
   Olympus guild (outside one the addon sends nothing). The author's check is his roll call to that
   player alone, which every version since 0.9.9 answers, and only after their yes to his roll calls.
-- **Ask to update**, when they are behind the newest version your addon knows: on 1.1.2 or newer
-  their addon shows a small notice with both versions and where to update; an older one can't, so
-  the click opens a whisper with the ask for you to send. One ask per player a day, 5 an hour;
+- **Ask to update**, when they are behind the newest version your addon knows: first a small
+  confirmation asks you before anything is sent. On 1.1.2 or newer their addon shows a compact
+  notice with both versions and where to update; **Read update** opens a parchment letter in plain
+  language, with reviewed public release notes and the safe next step. An older one can't show the
+  notice, so after your confirmation Olympus opens a whisper with the ask for you to send. One ask per player a day, 5 an hour;
   they see one a day at most, **Don't remind me** hides them for 7 days (on the beta, which forgets
   addon data at login, these last until you log out), and a player they block (`/oly block`) or
   ignore, or one the moderators took off, never gets through. The notice never names a version the
@@ -362,79 +388,7 @@ When the side column of the new look runs out of room, its canonical tail contin
 bottom of the window's left edge upward. Reading the right top-to-bottom and then the left
 bottom-to-top always gives the same tab order; changing role or debug view never rearranges it.
 
-- On top, where the other tabs show the army's counts, the search box: a name, a guild or words
-  of a line, and only the lines that hold it show (a line your block terms hide is found by its
-  writer and guild, not its words), with an **x** to empty it; like every tab's, it keeps its text
-  until you log out or `/reload`. On the same row, right of it: for a rank that reads more than
-  one channel, a small switch with the channel shown, in its colour, and **+N** for the lines that
-  came in on the others while the tab was open (a click lists your channels, each with its count,
-  to pick one); then the gear of the settings (below). There is no row of channels: most players
-  read [Olympus] alone, and the lines take that room. A channel muted in chat (`/oly mute`) still
-  shows here, and a line you write here keeps it muted in chat. The pinned line shows over the
-  lines, as on the Realm tab, and takes no room while nothing is pinned.
-- Every line whole, in a bubble that wraps: never cut, nothing to hover to read it. Other
-  players' lines on the left, yours on the right in the channel's colour (a line another of your
-  characters wrote shows under that character's name, on the left); the writer's name, guild and
-  time where a writer starts, and the date where the day changes. The lines take the room of the
-  list and of the box under it (this tab has no detail box). The last 100 lines of each channel
-  are kept, from every session, and scroll back. The tab follows the newest line until you scroll
-  up; then the line you are reading stays in its place while new lines come in and the oldest go,
-  and **N new** at the bottom takes you down to them.
-- By each name, the name in its colour (the High Council's for a councillor, the writer's class
-  for anyone else), the Treasurer's coin, and **Steward** or **Hand** after the King's. No mark
-  before a name since 1.1.5: Olympus's marks show in the game's own chat instead, where players
-  outside Olympus are ([Channels](#channels), `/oly chatmarks`). A click on a name whispers that
-  player, in Olympus's whisper window.
-- A line your block terms hide shows as a grey bubble, and a click shows it, marked. Over the
-  lines, like the pinned line, how many your filter hides in the channel (no room while it hides
-  none), and a click there shows them all (another hides them again). A link shows its tooltip
-  when you hover it, and a Shift-click puts it in the tab's box.
-- **The box** runs across the bottom, where the other tabs have their buttons, with no Send
-  button: Enter sends. It is Olympus's own, not the game's chat box: it takes the keyboard only
-  when you click into it or press your open-chat key (Enter, unless you changed it) while the tab
-  shows (the tab never takes it when it opens, so your movement keys keep working; in a fight the
-  key changes over when the fight ends). Enter sends to the channel shown and the cursor stays for
-  the next line; Enter on an empty box, Escape or a left-click elsewhere gives the keyboard back to
-  the game; Tab changes channel. With the gamepad UI only a click puts the cursor there, and Enter
-  lets it go. It runs no command: a line that starts with `/` stays in the box and is not sent
-  (commands go in the game's chat box, which Olympus never opens or touches). Your first line in
-  each channel still waits for the privacy warning's **Send**. A line of yours that did not leave
-  shows a note in its channel, and a click puts it back in the box when the box is empty (what you
-  are writing is never replaced: the note waits).
-- **Add an Olympus tab to the game chat**: while your game chat has no Olympus tab (see Channels
-  above), a line over the lines offers one. Olympus cannot make that tab itself, so a click
-  shows you where: a small Olympus pointer by your main chat tab says right-click it, Create New
-  Window, and name it Olympus. The moment a chat window named Olympus exists, Olympus sends the
-  chats there (as `/oly chatwindow tab` does) and says so once; the pointer and the line go. It
-  only reads the game's chat windows to see the new one appear. With the gamepad UI there is no
-  pointer (the game's chat tabs work otherwise there): the line gives the same steps as text. The
-  line stays away while you send a channel to a chat window of your own (`/oly chatwindow`), and
-  its **x** puts it away for good, on every character: the settings and `/oly chatwindow tab`
-  still make the tab. With Chattynator (1.1.2) there is no pointer either (the game's tabs are
-  hidden behind Chattynator's): the click sends the chats to its tab named Olympus at once, and
-  chat says how to make that tab in Chattynator; the Chat tab reads Chattynator's tabs while it
-  shows. The tab is announced once, by the Chat tab when it sees the tab or by the tab's first
-  line if that comes first, and a channel you moved meanwhile stays where you put it.
-- **Settings**: the gear at the end of the top row shows them in place of the lines (a click on it
-  again, or **< Back to the lines**, goes back). The Olympus chats on or off on this client, what
-  that means, and a click to choose (the first-open page); for officers while your channel is
-  public, its quiet grey line. For each channel your rank reads: whether it shows in your game
-  chat (a click mutes it there or shows it again, as `/oly mute`), and the chat window it prints
-  in (a click moves it to the next chat window open in your game, then back to the main one, as
-  `/oly chatwindow`; with Chattynator, to its next tab, by name, 1.1.2). The Olympus tab of the
-  game chat: add it (as the line over the lines does),
-  the steps while it is awaited, **on**, or waiting for a chat tab named Olympus. And for whoever
-  may pin, **Pin a line for the army...** (or **for your guild...**). Each choice is the one its
-  command makes, kept where it always was, so nothing chosen before 1.1.1 is lost; the game's chat
-  windows are only read, and printed in.
-- The tab has no place or size of its own: it is the Olympus window's, docked by your guild
-  window or wherever you put it. Escape or the window's X closes it; it never opens by itself.
-  With the chats off on this client it says so, what the choice means, and offers it.
-- **Blizzard's gamepad mode**: the same tab, opened from the Olympus window (the minimap button
-  opens it; no command is typed with the gamepad UI, see below); click into the box with the
-  gamepad cursor to write. The Olympus window stays off the
-  Escape list there (its X closes it), and the tab opens no game popup: the whisper, a pinned
-  line's takedown and the settings' pin use Olympus's own windows.
+*Continued in the README: [The Chat tab (1.1.1)](https://github.com/dnl-gentile/olympus-addon#the-chat-tab-111).*
 
 ### The Board: who is looking for a group, and where (1.1)
 The Realm tab links **the Board** (or `/oly lfg`): who in Olympus wants a group right now, from
@@ -462,7 +416,8 @@ what each player chose to share, and the King's week.
 - **Camps**: drop one where you stand (`/oly camp [note]`) so the army reuses a fire already up.
   Its zone only, never your spot; it needs `/oly location on` and ends by itself after 30
   minutes. The Board lists them by zone, and the world map shows one badge per zone with how
-  many (mouse and keyboard only; `/oly camps off` hides them).
+  many (mouse and keyboard only; `/oly camps off` hides them). **Bones can be played at a tavern
+  or at a camp** (1.1.6): grouped, within about 10 yards, at the same inn or by your camp.
 
 ### Net-off (1.1): the moderators hide a character or take a guild off the network
 The King, his Steward, a Hand (the King's list or a Steward's) or a High Councillor of the
@@ -616,7 +571,8 @@ whisper to a named crafter (`/oly craft`).
   once; `/oly crafter on` lists every profession read again.
 - **Ask who can make an item**: shift-click it after `/oly craft` (or type part of its name). The
   crafters listed who know its recipe answer by whisper, their addons by themselves; the page shows
-  who can, with their skill and the item, and a click whispers one of them.
+  who can, with their skill and the item, and a click whispers one of them. (From 1.2 the tab's
+  **Ask who can make an item...** button opens the request page instead: see below.)
 - A crafter's row opens a whisper to him and, on a click, the recipes he listed (hover one for the
   item). Search the board by crafter, guild or profession.
 - It stays light on the Olympus channel and on your own messages: your listing goes once at login,
@@ -627,6 +583,49 @@ whisper to a named crafter (`/oly craft`).
   is told you are busy and clicks again a minute later.
 - Nothing is crafted, ordered, bought or sold for anyone, nothing touches the auction house, and
   nothing is whispered for you: the whisper is yours to write. Old clients ignore the board.
+
+### Crafting requests (1.2)
+On the **Crafters** tab, **Ask who can make an item...** opens the request page: search an item
+(your own recipes, the recipe lists other crafters sent you, the answers to your `/oly craft` ask,
+and gathered herbs, ores and leathers) or paste its link, choose the quantity and the details, and
+publish the request to the board.
+- The request is a card on the board of every Olympus player of your realm and faction: the item and
+  quantity, your guild, who brings the materials, a price reference and your details. It only ever
+  says open, taken, cancelled or expired: never who took it, the terms or how it ended.
+- A listed crafter who makes it, or for a gathered material a player whose own Herbalism, Mining or
+  Skinning skill shows it (read on his client, sent nowhere), sees it marked and hears it once. The
+  first claim to reach the requester wins; everything after it (the terms, the delivery, the
+  request's chat) is a logged whisper between the two of them, and on the guild-mediated rail with
+  the treasury keeper who holds the goods and the gold. Olympus fills a mail or says what to send:
+  you press Trade or Send.
+- Once a claim wins, Olympus opens the request's own chat on both players' Chat tab, with the
+  Olympus window in front. It waits as Olympus's other windows do: in an instance or Busy until you
+  are out (its line waits on the Decrees tab), in a fight until it ends, and while you are typing
+  in the Chat tab's box until you send or leave it; by then it opens only if the deal is still
+  open. It stays while the deal is open; once the deal is over you may remove it, and the
+  request's **Open chat** brings it back.
+- **The guild's 6% of a direct sale**: the seller owes the guild 6% of each direct sale made through
+  the board, in gold, by 3 days after the sale the buyer confirmed (a sale the buyer never confirmed
+  and nobody disputed owes it all the same, 3 days after the delivery the seller recorded or the
+  trade both addons saw). He mails it to the guild's fee receiver (the Treasurer's mail character)
+  titled "Olympus craft fee" and the request (his sale's line fills the mail). Late, he is warned and
+  takes no new requests until it is paid; a fee mail that comes back is owed again. Both parties'
+  addons tell the Treasurer's characters of the sale. The Treasurer, the King, the High Council and
+  the author see the debtors, the most overdue first, each with his step on the guild's ladder (late,
+  a warning from his guild's Watch, his guild's decision up to removal), and every fee owed; the
+  reminders to a debtor are the Treasurer's and the King's. A sale only the buyer reported, or
+  a buyer's price above the seller's, waits apart until the Treasurer confirms it. Nothing here
+  removes anyone. There is no guarantee fund yet.
+
+### The Missionary Church of Olympus (1.1.6)
+The Church brings new players into Olympus. **Asmongold is its Head**, using the addon's canonical
+King identity. This position cannot be nominated; a legacy signed Head marker grants no Head powers.
+The author's signed list sets the Twelve Apostles. The King, the author and the signed High Council may name
+other Apostles in game. Under the Apostles are their **missionaries**: an Apostle names missionaries, and each missionary may name more under himself, so
+every Apostle's network grows. Each Olympus guild has one **Church correspondent**, named by its guild
+master (or the Head, the King or the author), who keeps that guild full and answers to the Head.
+
+*Continued in the README: [The Missionary Church of Olympus (1.1.6)](https://github.com/dnl-gentile/olympus-addon#the-missionary-church-of-olympus-116).*
 
 ### World map
 - Soldiers per zone on zone and continent maps, and per continent on the world map (none with
@@ -971,7 +970,10 @@ also saved in `WTF/Account/<ACCOUNT>/SavedVariables/Olympus.lua`.
 - **Security reviews:** Konig, bjess9 (jess), lordjumper and Fadirstave, who read the code and
   showed what an attacker could do.
 - **Code and ideas:** RoyLeviGit (Olympus chats in their own chat window), Artz (hiding the
-  Issue Reporter), bjess9 (CI and the shared checks), hypertectonic (Chattynator's tabs).
+  Issue Reporter), bjess9 (CI and the shared checks), hypertectonic (Chattynator's tabs),
+  Bernardo Costa / Costafitness (exact layer-hop confirmation and stale-request regressions,
+  adapted from PR #51), and Rick-laboratory (bounded transport, cancellation and admission
+  regressions, adapted from PR #52).
 - **Feature requests:** Fernmelder, whose 39 posts became 1.1 (the Fernmelder release);
   shenanigans_ (the nameplate marks), Valdericht (`<OLYMPIAN>`), Pyralis Ashandar (taking
   donations) and Zeal (what the King hides stays off the channel).

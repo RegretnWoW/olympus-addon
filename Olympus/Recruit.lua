@@ -405,8 +405,9 @@ function Recruit.OpenGuilds()
 end
 
 -- Up to ROUTE_CONTACTS Lords and Captains online of a guild with room, to name to a recruit:
--- our own guild's from our roster, another's from its report, where two senders name them to
--- that rank (Data.KnownRank). Never the King (the most asked of all), and never ourselves while
+-- our own guild's from our roster. Another keeps the old two-report census rule until signed
+-- enforcement is explicitly activated, then comes only from that manifest. Never the King
+-- (the most asked of all), and never ourselves while
 -- we ask not to be contacted.
 local function Contacts(o, own)
 	local g, out = o.e.g, {}
@@ -424,8 +425,8 @@ local function Contacts(o, own)
 	else
 		local function Named(name, rank)
 			if type(name) ~= "string" or name == "" then return false end
-			local k, senders = ns.Data.KnownRank(ns.FullName(name, g.realm), o.name)
-			return k == rank and (senders or 0) >= 2
+			local k, source, senders = ns.Data.AuthorizedRank(ns.FullName(name, g.realm), o.name)
+			return k == rank and (source ~= "census" or (senders or 0) >= 2)
 		end
 		if g.leaderOnline and Named(g.leader, 0) then Add(g.leader, g.realm) end
 		for _, of in ipairs(g.officers or {}) do
@@ -523,6 +524,9 @@ function Recruit.OnJoinRequest(dist, sender, text)
 	local req = { name = sender, guild = own, level = level and level >= 1 and level <= 100 and level or nil,
 		class = class ~= "" and #class <= 12 and class or nil, t = now, text = w and now - w.t <= 120 and w.text or nil }
 	Recruit.requests[#Recruit.requests + 1] = req
+	-- Officers using The Watch are notified, but the request is never rejected automatically.
+	-- A related character counts only when Alts.lua already holds its two-sided confirmation.
+	if ns.Watch and ns.Watch.EntryAttempt then ns.SafeCall("watch entry attempt", ns.Watch.EntryAttempt, sender) end
 	-- One chat line, REQUEST_LINES a minute at most (the rest wait in the Census).
 	for i = #lineTimes, 1, -1 do
 		if now - lineTimes[i] >= 60 then table.remove(lineTimes, i) end

@@ -143,9 +143,24 @@ function Workshop.Newer(a, b)
 	return false
 end
 
+-- 1.2: this client is an arena test build (scripts/package.sh --test N, ArenaNet.lua's
+-- Arena.TestBuild): its table { n, base, built, expires, commit, lane }, else nil.
+local function TestBuild()
+	local A = ns.Arena
+	if type(A) ~= "table" or type(A.TestBuild) ~= "function" then return nil end
+	local t = A.TestBuild()
+	return type(t) == "table" and t or nil
+end
+Workshop.TestBuild = TestBuild
+
 -- The newest version: the author's own, who runs the newest. What others claim never raises
 -- it (anyone can send any number), so "please update" never names a version that is not out.
-function Workshop.Latest() return ns.VERSION end
+-- 1.2: on an arena test build the author runs an unreleased version: the one he marked as out
+-- (/oly released), or none, so nobody is ever asked to update to a version not published.
+function Workshop.Latest()
+	if TestBuild() then return Workshop.Released() end
+	return ns.VERSION
+end
 
 ---------------------------------------------------------------------------
 -- This client, as a roll call answer tells it
@@ -180,14 +195,16 @@ function Workshop.Flags()
 	if ns.rdb and ns.rdb.realmKey then f[#f + 1] = "k" end
 	if ns.Pins and ns.Pins() then f[#f + 1] = "m" end
 	if ns.db and ns.db.showMap then f[#f + 1] = "p" end
+	if TestBuild() then f[#f + 1] = "t" end -- (1.2: an arena test build)
 	return table.concat(f)
 end
 
 -- What a roll call gets (0.9.2): the addon's version, the game client, and the channel's state
 -- (joined, our guild's reporter, sealed). Nothing about the character: no guild, level or class,
 -- no window style, no error count (those fields stay, empty, for the author's older version).
+-- 1.2: "t" too on an arena test build (the Workshop shows "test" next to it).
 local function Answer(id)
-	local flags = Workshop.Flags():gsub("[^crk]", "")
+	local flags = Workshop.Flags():gsub("[^crkt]", "")
 	return ("V2~%d~%s~~%s~~%s~0~0~"):format(id, Clean(ns.VERSION, 12), Workshop.Client(), flags)
 end
 
@@ -521,9 +538,13 @@ function Workshop.AskUpdate(name, version, done)
 	if not Workshop.Visible() or type(name) ~= "string" then return false end
 	local now = ns.Now()
 	local key = ns.FullName(name)
+	-- (1.2: an arena test build names no version it has not marked as out: none, nobody asked.)
+	local latest = Workshop.Latest()
+	if not latest then ns.Print(L.WORKSHOP_NO_RELEASED) return false end
 	if now - (asked[key] or -math.huge) < Workshop.UPDATE_GAP then return false end
 	asked[key] = now
-	if type(version) ~= "string" or not Parts(version) or Workshop.Newer(version, ns.VERSION) then version = Workshop.Latest() end
+	-- (1.1.2's version to name, never newer than his build; 1.2's: none he has not marked as out)
+	if type(version) ~= "string" or not Parts(version) or Workshop.Newer(version, ns.VERSION) then version = latest end
 	ns.Comm.Whisper(key, "V3~" .. version, "askupdate:" .. key, nil, nil, function(sent) -- one queued per player
 		if not sent and asked[key] == now then asked[key] = nil end
 		if done then done(sent) end
@@ -535,6 +556,7 @@ end
 function Workshop.AskOutdated()
 	local now = ns.Now()
 	if now - lastAsk < Workshop.ASK_EVERY then return end
+	if not Workshop.Latest() then ns.Print(L.WORKSHOP_NO_RELEASED) return end
 	lastAsk = now
 	local latest, n = Workshop.Latest(), 0
 	for _, a in pairs(roll and roll.answers or {}) do
@@ -645,7 +667,8 @@ function Workshop.HeardVersion(v)
 	local behind = Workshop.Behind()
 	if behind and not toldBehind then
 		toldBehind = true
-		ns.Print(L.BEHIND_CHAT:format(behind, ns.VERSION))
+		-- (1.2: a test build is told its release is out, to be replaced by it.)
+		if TestBuild() then ns.Print(L.ARENA_TEST_BEHIND:format(behind)) else ns.Print(L.BEHIND_CHAT:format(behind, ns.VERSION)) end
 	end
 end
 
@@ -659,10 +682,14 @@ function Workshop.AuthorVersion()
 end
 
 -- The author's released version when it is newer than ours, else nil (always nil on his own client).
+-- 1.2: on an arena test build, also once the released version is not older than the version the
+-- test was built on (ns.TEST_BUILD.base): the release is out, the test build is to go.
 function Workshop.Behind()
 	if Workshop.IsAuthor() then return nil end
 	local v = Workshop.AuthorVersion()
 	if v and Workshop.Newer(v, ns.VERSION) then return v end
+	local tb = TestBuild()
+	if v and tb and not Workshop.Newer(tb.base, v) then return v end
 	return nil
 end
 
@@ -681,10 +708,12 @@ end
 function Workshop.BehindLine()
 	local v = Workshop.Behind()
 	if not v then return nil end
+	-- (1.2: on an arena test build, the release that replaces it.)
+	local text = TestBuild() and L.ARENA_TEST_BEHIND:format(v) or L.BEHIND_LINE:format(v, ns.VERSION)
 	return {
-		text = "|cffffd200" .. L.BEHIND_LINE:format(v, ns.VERSION) .. "|r",
+		text = "|cffffd200" .. text .. "|r",
 		tooltip = function(tt)
-			tt:AddLine(L.BEHIND_LINE:format(v, ns.VERSION), 1, 0.82, 0)
+			tt:AddLine(text, 1, 0.82, 0)
 			tt:AddLine(L.BEHIND_TIP, 1, 1, 1, true)
 		end,
 	}
@@ -1523,12 +1552,25 @@ function Workshop.Build(report)
 	if not Workshop.Visible() then return {}, L.TAB_WORKSHOP, "" end
 	local lines = {}
 	if Workshop.Preview() then lines[#lines + 1] = { text = Grey(L.WORKSHOP_PREVIEW), gapAfter = true } end
+	-- (1.2: View as is in the window's title bar, UI.lua, on every tab.)
 	-- The version his presence tells the army is out (1.1): /oly released marks it.
 	lines[#lines + 1] = {
 		text = L.WORKSHOP_RELEASED:format(Workshop.Released() or "-", ns.VERSION), noReport = true, gapAfter = true,
 		tooltip = function(tt)
 			tt:AddLine(L.WORKSHOP_RELEASED:format(Workshop.Released() or "-", ns.VERSION), 1, 0.82, 0)
 			tt:AddLine(L.WORKSHOP_RELEASED_TIP, 1, 1, 1, true)
+		end,
+	}
+	-- 1.2: an arena test build says which, and the arena's solo simulation opens from here (no
+	-- slash command needed: the gamepad UI).
+	local tb = TestBuild()
+	if tb then lines[#lines + 1] = { text = Gold(ns.Arena.TestBuildLine()), noReport = true } end
+	lines[#lines + 1] = {
+		text = Gold("> " .. L.WORKSHOP_ARENA_SIM), noReport = true, gapAfter = true,
+		onClick = function() ns.Arena.RunSlash("sim") end,
+		tooltip = function(tt)
+			tt:AddLine(L.WORKSHOP_ARENA_SIM, 1, 0.82, 0)
+			tt:AddLine(L.WORKSHOP_ARENA_SIM_TIP, 1, 1, 1, true)
 		end,
 	}
 	InstallLines(lines)
@@ -1937,8 +1979,14 @@ function Workshop.TakeTitles(blob, sender, guild)
 	local stewards = ns.ReadStewards(list)
 	-- The approved guilds (1.1, Core.lua: ns.ReadApprovedGuilds): the list may make our guild Olympus.
 	local wasMember = ns.IsMember()
+	-- 1.2: the signed arbiters and auditors of the Blood Arena (Core.lua: ns.ReadArbiters), an entry
+	-- of their own, as the Steward's.
 	ns.rdb.councilTitles = { at = at, public = public == "1", realm = realm ~= "" and realm or nil, depts = depts, blob = blob, stewards = stewards,
-		guilds = ns.ReadApprovedGuilds(list) }
+		guilds = ns.ReadApprovedGuilds(list), arbiters = ns.ReadArbiters(list) }
+	-- 1.2's legacy HT1 migration marker records its one-way activation boundary here. The scalable
+	-- HA1 sets are separate and enter through Authority.lua; either path makes a later absent,
+	-- expired or bad generation fail closed instead of falling back to census ranks.
+	if ns.Authority and ns.Authority.AcceptTitles then ns.Authority.AcceptTitles(ns.rdb.councilTitles) end
 	if ns.IsMember() ~= wasMember then Workshop.MembershipChanged(wasMember) end
 	local named = 0
 	for _, names in pairs(stewards) do named = named + #names end
@@ -2428,6 +2476,7 @@ Workshop.ICON_COLS, Workshop.ICON_ROWS = 8, 5
 local ICON_CELL, ICON_GAP = 36, 4
 local lastIconSent = -math.huge
 local picker          -- the picker window, built the first time it opens
+local host            -- 1.2: { onPick } while the picker lives inside the profile's Edit (Workshop.IconPickerHost)
 local gameIcons       -- the game's icons while it is open (let go when it closes, like Blizzard's)
 local shownIcons      -- the ones the filter leaves
 local iconPage, iconChoice = 1, nil
@@ -2540,8 +2589,32 @@ function Workshop.GameIcons() -- gp:lookups
 	return out, names
 end
 
+-- 1.2: inside a host (Workshop.IconPickerHost) an entry may also be an honour's mark, an addon
+-- texture of Olympus's own: { key, texture, label } (IconEntry checks it). Its texture is drawn, its
+-- key handed back.
 local function IconLabel(icon)
+	if type(icon) == "table" then return icon.label or icon.key end
 	return type(icon) == "number" and ("#" .. icon) or tostring(icon)
+end
+local function IconArt(icon)
+	if type(icon) == "table" then return icon.texture end
+	return ns.CouncilIconTexture(icon)
+end
+Workshop.MARK_TEXTURES = "^Interface\\AddOns\\Olympus\\media\\[%w_%-\\]+$" -- where a mark's texture may be
+-- A host's entry: a council icon value (a file number, an icon's name), or a mark { key (letters,
+-- digits, _ and -), texture (a file number, or a path under Interface\AddOns\Olympus\media\),
+-- label }; nil for anything else.
+function Workshop.IconEntry(v)
+	if type(v) ~= "table" then return ns.CouncilIconValue(v) end
+	local key, texture, label = v.key, v.texture, v.label
+	if type(key) ~= "string" or #key > 64 or not key:find("^[%w_%-]+$") then return nil end
+	if type(texture) == "number" then
+		if texture < 1 or texture >= 2147483648 or texture ~= math.floor(texture) then return nil end
+	elseif type(texture) ~= "string" or #texture > 160 or not texture:find(Workshop.MARK_TEXTURES) then
+		return nil
+	end
+	if label ~= nil and (type(label) ~= "string" or #label > 60 or label:find("[|%c]")) then label = nil end
+	return { key = key, texture = texture, label = label }
 end
 
 function Workshop.RefreshIconPicker()
@@ -2554,7 +2627,7 @@ function Workshop.RefreshIconPicker()
 		local icon = list[(iconPage - 1) * per + i]
 		b.icon = icon
 		if icon then
-			b.art:SetTexture(ns.CouncilIconTexture(icon))
+			b.art:SetTexture(IconArt(icon))
 			b.chosen:SetShown(icon == iconChoice)
 			b:Show()
 		else
@@ -2569,17 +2642,24 @@ function Workshop.RefreshIconPicker()
 	-- will show it: the mark always, the icon after it (0.9.9). Since 1.1.5 the mark there is the
 	-- High Council's silver dragon (Borders.ChatMarkText), and Olympus's own lines carry none; a
 	-- client updated without a restart (Borders.lua's stand-in) shows the council's skull.
-	local texture = ns.CouncilIconTexture(iconChoice)
+	local texture = IconArt(iconChoice)
 	picker.preview:SetTexture(texture or ns.HIGH_COUNCIL_SKULL)
+	-- (1.2: inside the profile's Edit a player who is no councillor has no mark before the icon.)
 	local B = ns.Borders
-	local mark = type(B) == "table" and type(B.ChatMarkText) == "function" and B.ChatMarkText("silver") or ns.HIGH_COUNCIL_MARK
+	local councillor = ns.IsHighCouncillor(ns.me)
+	local mark = not councillor and ""
+		or type(B) == "table" and type(B.ChatMarkText) == "function" and B.ChatMarkText("silver") or ns.HIGH_COUNCIL_MARK
 	picker.sample:SetText("[" .. mark .. (texture and ("|T" .. texture .. ":0|t") or "") .. (ns.DisplayName(ns.me) or "?") .. "]")
 	picker.chosenName:SetText(iconChoice and IconLabel(iconChoice) or L.COUNCIL_ICON_MARK_ONLY)
 end
 
--- A click on an icon (or No icon, nil): the preview only, until OK.
+-- A click on an icon (or No icon, nil): the preview only, until OK. (A mark only in a host.)
 function Workshop.PickIcon(icon)
-	iconChoice = ns.CouncilIconValue(icon)
+	if type(icon) == "table" then
+		iconChoice = host and Workshop.IconEntry(icon) and icon or nil
+	else
+		iconChoice = ns.CouncilIconValue(icon)
+	end
 	Workshop.RefreshIconPicker()
 end
 
@@ -2596,7 +2676,8 @@ function Workshop.FilterIcons(text)
 	else
 		shownIcons = {}
 		for _, icon in ipairs(gameIcons or {}) do
-			if tostring(icon):lower():find(text, 1, true) then shownIcons[#shownIcons + 1] = icon end
+			local words = type(icon) == "table" and ((icon.label or "") .. " " .. icon.key) or tostring(icon)
+			if words:lower():find(text, 1, true) then shownIcons[#shownIcons + 1] = icon end
 		end
 	end
 	iconPage = 1
@@ -2619,7 +2700,7 @@ local function MakePicker()
 	local gridW = cols * ICON_CELL + (cols - 1) * ICON_GAP
 	local gridTop = -150
 	local gridBottom = gridTop - (rows * ICON_CELL + (rows - 1) * ICON_GAP)
-	local f = ns.Window("OlympusCouncilIconFrame", UIParent, { title = L.COUNCIL_ICON_TITLE })
+	local f = ns.Window("OlympusCouncilIconFrame", UIParent, { title = L.COUNCIL_ICON_TITLE, escape = false })
 	f:SetSize(gridW + 56, -gridBottom + 96)
 	f:SetPoint("CENTER", 0, 40)
 	f:SetFrameStrata("DIALOG")
@@ -2710,7 +2791,13 @@ local function MakePicker()
 	f.ok:SetPoint("BOTTOMRIGHT", -24, 18)
 	f.ok:SetScript("OnClick", function()
 		ns.SafeCall("council icon ok", function()
-			if iconChoice == MyIcon() or Workshop.SetCouncilIcon(iconChoice) then f:Hide() end
+			-- (1.2: inside a host, the profile's Edit, its own choice: Workshop.IconPickerHost.)
+			if host then
+				host.onPick(type(iconChoice) == "table" and iconChoice.key or iconChoice)
+				f:Hide()
+			elseif iconChoice == MyIcon() or Workshop.SetCouncilIcon(iconChoice) then
+				f:Hide()
+			end
 		end)
 	end)
 	f.cancel = PickerButton(f, CANCEL or "Cancel", 90)
@@ -2724,6 +2811,23 @@ local function MakePicker()
 	return f
 end
 
+-- The picker back in its own window, on UIParent, after the profile's Edit held it: movable again,
+-- above the other windows, closed by Escape (ShowIconPicker lists it again).
+local function Unhost()
+	if not (picker and host) then return end
+	host = nil
+	picker:Hide()
+	picker:SetParent(UIParent)
+	picker:ClearAllPoints()
+	picker:SetPoint("CENTER", 0, 40)
+	picker:SetFrameStrata("DIALOG")
+	picker:SetToplevel(true)
+	picker:SetMovable(true)
+	picker:SetScript("OnDragStart", picker.StartMoving)
+	picker:SetScript("OnDragStop", picker.StopMovingOrSizing)
+	picker.close:Show()
+end
+
 -- /oly council icon, and the Realm tab's button: a councillor's alone.
 function Workshop.ShowIconPicker()
 	if not ns.IsHighCouncillor(ns.me) then
@@ -2731,6 +2835,7 @@ function Workshop.ShowIconPicker()
 		return false
 	end
 	picker = picker or MakePicker()
+	Unhost()
 	local names
 	gameIcons, names = Workshop.GameIcons()
 	shownIcons, iconChoice = gameIcons, MyIcon()
@@ -2753,10 +2858,68 @@ end
 
 function Workshop.IconPicker() return picker end
 
+-- 1.2 (ProfileEdit.lua: the profile's Edit in the Olympus window, where the icon picker moves):
+-- the same picker, inside `parent` (anchored to its top left; the host sizes and closes it), listing
+-- `list` in its order (the player's honour marks first, then the game's icons the caller chose:
+-- the whole list for councillors), each taken only as ns.CouncilIconValue takes it; nil: the
+-- game's icons. Its OK calls onPick(icon) (nil: no icon) instead of setting a councillor's icon.
+-- `current`: the icon shown chosen. Returns the picker's frame, built on first use only.
+-- 1.2 (review): hosted, it is part of the Edit: never dragged out of it, in the host's strata, and
+-- off the Escape list (Escape closes the Olympus window, the Edit with it).
+function Workshop.IconPickerHost(parent, list, onPick, current)
+	if type(parent) ~= "table" or type(onPick) ~= "function" then return nil end
+	picker = picker or MakePicker()
+	picker:Hide()
+	picker:SetParent(parent)
+	picker:ClearAllPoints()
+	picker:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, 0)
+	picker.close:Hide()
+	picker:SetMovable(false)
+	picker:SetScript("OnDragStart", nil)
+	picker:SetScript("OnDragStop", nil)
+	picker:SetToplevel(false)
+	if parent.GetFrameStrata then
+		local strata = parent:GetFrameStrata()
+		if type(strata) == "string" then picker:SetFrameStrata(strata) end
+	end
+	-- (Its own name off the escape list, in both modes: Escape closes the Olympus window instead.)
+	if type(UISpecialFrames) == "table" then -- gp:escape-list!undo
+		for i = #UISpecialFrames, 1, -1 do -- gp:escape-list!undo
+			if UISpecialFrames[i] == "OlympusCouncilIconFrame" then table.remove(UISpecialFrames, i) end -- gp:escape-list!undo
+		end
+	end
+	host = { onPick = onPick }
+	local icons, names = {}, false
+	local chosen = ns.CouncilIconValue(current)
+	if type(list) == "table" then
+		local seen = {}
+		for _, v in ipairs(list) do
+			local icon = Workshop.IconEntry(v)
+			local key = icon and (type(icon) == "table" and ("mark:" .. icon.key:lower()) or tostring(icon):lower())
+			if key and not seen[key] then
+				seen[key] = true
+				icons[#icons + 1] = icon
+				if type(icon) ~= "number" then names = true end
+				if type(icon) == "table" and current == icon.key then chosen = icon end
+			end
+		end
+	else
+		icons, names = Workshop.GameIcons()
+	end
+	gameIcons, shownIcons, iconChoice, iconPage = icons, icons, chosen, 1
+	picker.filter:SetText("")
+	picker.filter:SetShown(names)
+	picker.filterLabel:SetShown(names)
+	Workshop.RefreshIconPicker()
+	picker:Show()
+	return picker
+end
+function Workshop.IconPickerHosted() return host ~= nil end
+
 -- Tests start from a clean state.
 function Workshop.ResetIcons()
 	if picker then picker:Hide() end
-	picker, gameIcons, shownIcons, iconPage, iconChoice = nil, nil, nil, 1, nil
+	picker, host, gameIcons, shownIcons, iconPage, iconChoice = nil, nil, nil, nil, 1, nil
 	lastIconSent = -math.huge
 end
 

@@ -27,7 +27,7 @@ local Codec = {}
 ns.Codec = Codec
 
 Codec.CHUNK = 220
-Codec.MAX_CHUNKS = 30
+Codec.MAX_CHUNKS = 34 -- 7480 bytes: a squad's 99 full 72-byte identities plus leader/revision/header
 local MAX_COUNT = 10000
 Codec.GUILD_CAP = 1000 -- a guild's members, at most (the game's cap): a bigger report is forged
 
@@ -383,7 +383,7 @@ function Codec.DecodeShame(s)
 	local list = {}
 	for name, g in body:gmatch("([^,:]+):([^,]*)") do
 		if #list >= Codec.MAX_SHAME then break end
-		-- Shown on every screen (the Tabards tab): a character name and a guild name, never
+		-- Shown on every screen (The Watch's Tabards): a character name and a guild name, never
 		-- colour or link codes.
 		name, g = name:gsub("[|%c]", ""), g:gsub("[|%c]", "")
 		if name ~= "" then list[#list + 1] = { name = name:sub(1, 48), guild = g:sub(1, 24) } end
@@ -627,12 +627,12 @@ function Codec.Close(asm, key)
 	asm.bySender[e.sender] = left > 0 and left or nil
 end
 
--- Drops assemblies older than 60 s and returns how many were incomplete, with a sample
+-- Drops assemblies older than 60 s (70 s above 30 parts), with an incomplete sample
 -- ("sender#id 2/3") so lost chunks show up in the diagnostics.
 function Codec.Gc(asm, now)
 	local dropped, sample = 0, nil
 	for k, e in pairs(asm.buf) do
-		if now - e.t > 60 then
+		if now - e.t > (e.n > 30 and 70 or 60) then
 			dropped = dropped + 1
 			sample = sample or ("%s %d/%d"):format(k, e.got, e.n)
 			Codec.Close(asm, k)

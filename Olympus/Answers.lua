@@ -270,7 +270,7 @@ Answers.PAGES = {
 	["realm/members:recruits"] = { "feat-mentors" },
 	chat = { "feat-chat-tab", "feat-chat-settings", "feat-channels", "feat-olympus-tab", "feat-chat-off", "feat-block-terms" },
 	decrees = { "feat-decrees", "feat-alert-sounds", "feat-writs", "feat-net-off", "feat-acts-log" },
-	heraldry = { "feat-patrol", "feat-gear-seen", "feat-patrolshare", "feat-untabarded" },
+	["watch/tabards"] = { "feat-patrol", "feat-gear-seen", "feat-patrolshare", "feat-untabarded" }, -- (1.2: The Watch's Tabards)
 	throne = { "feat-throne", "feat-agenda", "feat-summon-lords", "feat-hold-court", "feat-royal-inspection", "feat-steward-hands", "feat-nominees" },
 	["throne/hands"] = { "feat-steward-hands" },
 	["throne/guild"] = { "feat-nominees" }, -- (1.1.5: a guild master's Guild tab, the tab in the Throne's place)
@@ -278,6 +278,8 @@ Answers.PAGES = {
 	treasury = { "feat-treasury", "feat-guild-bank", "feat-treasury-requests", "feat-sister-banks", "feat-donations", "feat-backup",
 		counts = { "count-treasury-donors" } },
 	["treasury/dues"] = { "feat-dues", "feat-treasury", counts = { "count-treasury-donors" } },
+	watch = { "feat-watch", "feat-block-terms", "feat-net-off", "feat-hold-court" },
+	["watch/judgments"] = { "feat-judgments", "feat-watch" }, -- (1.2: The Watch's Judgments)
 	workshop = { "feat-workshop", "rc-see-version", "rc-bug-report-ask", "help-report-bug" },
 }
 

@@ -407,7 +407,15 @@ local function NewClient(opts)
 	function W:GetBottom() return select(2, self:GetRect()) end
 	function W:GetTop() local _, b, _, h = self:GetRect(); return b + h end
 	function W:GetRight() local l, _, w = self:GetRect(); return l + w end
-	function W:GetCenter() local l, b, w, h = self:GetRect(); return l + w / 2, b + h / 2 end
+	function W:GetCenter()
+		-- HBD's actual pins use CENTER/CENTER relative to Minimap. Honour that screen offset;
+		-- the former parent-corner approximation discarded SetPoint and could not test bearing.
+		local p = self.points[1]
+		if p and p[1] == "CENTER" and p[2] == E.Minimap and p[3] == "CENTER" then
+			local x, y = p[2]:GetCenter(); return x + (p[4] or 0), y + (p[5] or 0)
+		end
+		local l, b, w, h = self:GetRect(); return l + w / 2, b + h / 2
+	end
 	function W:GetScale() return self.scale end
 	function W:SetScale(s) self.scale = s end
 	function W:GetEffectiveScale() return self.scale * (self.parent and self.parent:GetEffectiveScale() or 1) end
@@ -1000,6 +1008,7 @@ local function World(C, opts)
 	E.NEW_CHAT_WINDOW, E.CHAT_CONFIGURATION = "New Window", "Chat Configuration"
 	E.YES, E.NO, E.OKAY, E.ACCEPT, E.CANCEL, E.SEND_LABEL, E.UNKNOWNOBJECT = "Yes", "No", "Okay", "Accept", "Cancel", "Send", "Unknown"
 	E.ERR_CHAT_PLAYER_NOT_FOUND_S = "No player named '%s' is currently playing."
+	E.REMOVE = "Remove" -- (the engine's global string, read by Blizzard's own code: the fixture's "used")
 
 	-- The game's chat box (fidelity rule 8): opened, it is the last active edit box, which the
 	-- gamepad chat reads.
@@ -1050,7 +1059,11 @@ local function World(C, opts)
 		InChatMessagingLockdown = function() return false end,
 		GetChannelInfoFromIdentifier = function() return nil end,
 		SwapChatChannelsByChannelIndex = Fn("C_ChatInfo.SwapChatChannelsByChannelIndex", function() end),
+		-- (1.2: a whisper the player wrote, ns.SayTo; restricted to a hardware event, as the global.)
+		SendChatMessage = Fn("C_ChatInfo.SendChatMessage", function(text, kind, lang, target) C.said = C.said or {}; C.said[#C.said + 1] = { text, kind, target } end),
 	})
+	-- (1.2: a Farkle table's /sit, the player's click; restricted, the fixture's DoEmote.)
+	E.DoEmote = Fn("DoEmote", function(token) C.emotes = C.emotes or {}; C.emotes[#C.emotes + 1] = token end)
 	E.SendChatMessage = Fn("SendChatMessage", function(text, kind, lang, target) C.said = C.said or {}; C.said[#C.said + 1] = { text, kind, target } end)
 
 	-- The guild (Forever's roster: GetGuildRosterInfo, as Roster.lua reads it).
@@ -1082,8 +1095,14 @@ local function World(C, opts)
 	E.UnitIsUnit = function(a, b) return a == b end
 	E.UnitIsGroupLeader = function() return false end
 	E.UnitIsGroupAssistant = function() return false end
-	E.UnitPosition = function() return nil end
-	E.GetPlayerFacing = function() return nil end
+	E.UnitPosition = function(unit)
+		local p = unit == "player" and C.position
+		if p then return p.wx, p.wy, p.z or 0, p.cont end
+		return nil
+	end
+	assert(FIX.globals.IsResting == "api", "IsResting must be verified in the client fixture")
+	E.IsResting = function() return C.resting == true end
+	E.GetPlayerFacing = function() return C.facing end
 	E.GetUnitName = function(unit) return E.UnitName(unit) end
 	E.RegionalUniqueNamesEnabled = function() return false end
 	E.GetNativeRealmID = function() return 1 end
@@ -1321,6 +1340,10 @@ local function World(C, opts)
 			C.callbacks[#C.callbacks + 1] = { kind = "AddTooltipPostCall", type = kind, fn = fn }
 		end),
 	})
+	-- (1.2: a filter on the game's system lines, kept as the game keeps it, never removed.)
+	E.ChatFrame_AddMessageEventFilter = Fn("ChatFrame_AddMessageEventFilter", function(event, fn)
+		C.callbacks[#C.callbacks + 1] = { kind = "AddMessageEventFilter", key = event, fn = fn }
+	end)
 	E.ChatFrameUtil = Namespace("ChatFrameUtil", {
 		AddSenderNameFilter = Fn("ChatFrameUtil.AddSenderNameFilter", function(fn)
 			table.insert(C.nameFilters, fn)
@@ -1437,6 +1460,13 @@ local function World(C, opts)
 	E.QueryGuildBankTab = function() end
 	E.C_AutoComplete = Namespace("C_AutoComplete", { GetAutoCompleteRealms = function() return {} end })
 	E.C_TradeSkillUI = Namespace("C_TradeSkillUI", {})
+	-- (1.2: a race's name, the chat rooms' and the profile's; the addon memory the diagnostics read.)
+	E.C_CreatureInfo = Namespace("C_CreatureInfo", { GetRaceInfo = function(id)
+		if type(id) ~= "number" then return nil end
+		return { raceName = "Race " .. id, clientFileString = "Race" .. id, raceID = id }
+	end })
+	E.UpdateAddOnMemoryUsage = function() end
+	E.GetAddOnMemoryUsage = function() return 0 end
 end
 
 ---------------------------------------------------------------------------
@@ -1904,10 +1934,132 @@ local function InClick(C, fn)
 	if not ok then error(err, 0) end
 end
 
+for _, initialPad in ipairs({ false, true }) do
+	test("gamepad innkeeper gossip: " .. (initialPad and "gamepad" or "mouse") .. " login and mode switches without native capabilities", function()
+		local C, ns = Session(initialPad)
+		local gossip = assert(ns.InnkeeperGossip)
+		GP.Covers("innkeeper-gossip")
+		for _, mode in ipairs({ initialPad, not initialPad, initialPad }) do
+			C.Switch(mode); C.Advance(1)
+			eq(ns.Gate.Allowed("innkeeper-gossip"), not mode)
+			gossip.OnShow(); C.Advance(1)
+			eq(gossip.State().mode, "inactive")
+			eq(gossip.State().saved, nil, "missing native API never leaves borrowed geometry")
+			eq(gossip.Open(), false); eq(gossip.Confirm(), false)
+			ns.Gate.Park("innkeeper-gossip")
+			eq(gossip.State().row, nil, "no native frame created without source-backed capabilities")
+		end
+		Check(C.ledger, "innkeeper gossip optional capabilities"); NoErrors(C, "innkeeper gossip")
+	end)
+end
+
+for _, initialPad in ipairs({ false, true }) do
+	test("gamepad native Guild chat: " .. (initialPad and "gamepad" or "mouse") .. " login, user send, server echo and input switches", function()
+		local C, ns = Session(initialPad)
+		GP.Covers("roster-actions")
+		ns.db.chatRooms = true
+		local R = ns.ChatRooms
+		for _, mode in ipairs({ initialPad, not initialPad, initialPad }) do
+			C.Switch(mode); C.Advance(10)
+			local before = #R.History("guild")
+			local sent = #(C.said or {})
+			InClick(C, function() assert(R.Send("guild", "native guild line")) end)
+			eq(#C.said, sent + 1); eq(C.said[#C.said][2], "GUILD")
+			eq(#R.History("guild"), before, "no optimistic echo")
+			C.Fire("CHAT_MSG_GUILD", "native guild line", ns.me)
+			eq(#R.History("guild"), before + 1)
+			C.Fire("CHAT_MSG_GUILD", "native guild line", ns.me)
+			eq(#R.History("guild"), before + 2, "two actual identical native events remain two messages")
+			C.Advance(2); eq(#C.said, sent + 1, "no timer sends native guild text")
+		end
+		local before = #R.History("guild")
+		ns.db.chatRooms = false
+		C.Fire("CHAT_MSG_GUILD", "not consented", "Someone-Realm")
+		ns.db.chatRooms = true
+		eq(#R.History("guild"), before, "consent-off event is not retained")
+		Check(C.ledger, "native Guild chat"); NoErrors(C, "native Guild chat")
+	end)
+end
+
+for _, initialPad in ipairs({ false, true }) do
+	test("gamepad innkeeper guidance: " .. (initialPad and "gamepad" or "mouse") .. " login, switches, native bearing and cleanup", function()
+		-- Isolate this session's jitter from earlier tests without changing global math
+		-- or disabling the real Authority/Workshop timers. Their midpoint deadlines fall
+		-- after this30-33.5s measurement; every guidance action/timer still must send nothing.
+		local C, ns = Session(initialPad, { setup = function(client)
+			local sessionMath = {}
+			for key, value in pairs(client.env.math) do sessionMath[key] = value end
+			sessionMath.random = function(lo, hi)
+				if hi then return math.floor((lo + hi) / 2) end
+				if lo then return math.max(1, math.floor((1 + lo) / 2)) end
+				return 0.5
+			end
+			client.env.math, client.env.random = sessionMath, sessionMath.random
+		end })
+		local E, arrow = C.env, assert(ns.InnkeeperArrow, "the TOC loads local guidance")
+		GP.Covers("minimap")
+		local inn
+		for _, place in ipairs(ns.Places.list) do if place.id == "inn_goldshire" then inn = place end end
+		assert(inn, "actual registered inn")
+		eq(arrow.State().active, false); eq(arrow.State().ticker, nil, "no idle guidance ticker at login")
+		C.position = { cont = inn.cont, wx = inn.wx + 65, wy = inn.wy }
+		C.resting = false
+		local sent, kingSent = #C.sent, ns.KingArrow.State().stats.sent
+		local pins = ns.Pins()
+		eq(arrow.Start(), true)
+		eq(#C.sent, sent, "local guidance sends no private position or request")
+		local state = arrow.State()
+		local frame, ticker = state.frame, state.ticker
+		eq(state.target.id, inn.id); eq(frame.parent, E.Minimap)
+		assert(frame:GetScript("OnUpdate"), "active local direction update")
+		assert(pins:GetVectorToIcon(frame), "actual HBD registered its world pin")
+		C.Advance(0.1); C.Advance(0.1)
+		local fx, fy = frame:GetCenter(); local mx, my = E.Minimap:GetCenter()
+		assert(math.abs(fx - mx) < 0.000001 and fy < my, "actual HBD places the inn south")
+		assert(math.abs(math.abs(frame.icon.rotation) - math.pi) < 0.000001, "actual HBD screen vector points south")
+		eq(frame.icon.alpha, 1)
+		-- Native rotating minimap: the real HBD callback owns rotation and screen placement.
+		C.facing = math.pi / 2
+		C.Fire("CVAR_UPDATE", "rotateMinimap", "1")
+		C.Advance(0.1); C.Advance(0.1)
+		fx, fy = frame:GetCenter()
+		assert(fx < mx and math.abs(fy - my) < 0.000001, "actual rotated HBD pin is west")
+		assert(math.abs(frame.icon.rotation - math.pi / 2) < 0.000001, "rotated screen vector points west")
+		for _, pad in ipairs({ not initialPad, initialPad }) do
+			C.Switch(pad); C.Advance(0.2)
+			eq(arrow.State().active, true, "exempt local minimap guidance survives input switch")
+			eq(arrow.State().ticker, ticker, "no duplicate timer across switches")
+			assert(frame:IsVisible()); assert(pins:GetVectorToIcon(frame))
+		end
+		eq(ns.KingArrow.State().stats.sent, kingSent, "guidance makes no additional King request")
+		arrow.Cancel("user")
+		eq(ticker:IsCancelled(), true); eq(frame:GetScript("OnUpdate"), nil)
+		eq(C.updating[frame], nil); eq(frame:IsShown(), false)
+		eq(pins:GetVectorToIcon(frame), nil, "actual HBD pin removed")
+		local timers = #C.tickers
+		C.Advance(0.5)
+		eq(#C.tickers, timers, "cancelled guidance starts no idle ticker")
+		eq(arrow.State().ticker, nil); eq(frame:IsShown(), false)
+		eq(arrow.Start(), true); local arrivalTimer = arrow.State().ticker
+		C.position.wx, C.position.wy = inn.wx, inn.wy
+		C.Advance(1.1)
+		eq(arrow.State().active, true, "coordinates alone are not arrival")
+		C.resting = true; C.Advance(1.1)
+		eq(arrow.State().reason, "arrived"); eq(arrivalTimer:IsCancelled(), true)
+		eq(frame:GetScript("OnUpdate"), nil); eq(pins:GetVectorToIcon(frame), nil)
+		eq(#C.sent, sent, "local guidance lifecycle emits no addon messages")
+		Check(C.ledger, "innkeeper guidance in both input modes")
+		NoErrors(C, "innkeeper guidance")
+	end)
+end
+
 -- A player's card (a row of the census), its Whisper, Invite and Who buttons clicked.
 local function PersonFlow(C)
 	local ns = C.ns
-	ns.UI.ShowPerson({ name = "Someone", realm = "Realm", guild = "Olympus II", class = "WARRIOR", level = 60 })
+	-- (1.2: UI.ShowPerson opens the player's profile in the Olympus window; the side card, its
+	-- Whisper, Invite and Who on the same functions, stays for a client without PlayerProfile.lua.)
+	local Show = ns.UI.ShowPersonCard or ns.UI.ShowPerson
+	Show({ name = "Someone", realm = "Realm", guild = "Olympus II", class = "WARRIOR", level = 60 })
 	local card
 	-- (1.1.5's windows: ns.Window gives the metal frame its own name, the plain fallback "<name>Basic".)
 	for _, n in ipairs({ "OlympusPersonFrameHD", "OlympusPersonFrame", "OlympusPersonFrameHDBasic", "OlympusPersonFrameBasic" }) do
@@ -2259,7 +2411,7 @@ test("gamepad pass 3: the gamepad UI and mouse and keyboard, back and forth thre
 	eq(#C.menus.MENU_UNIT_PLAYER, 1, "the player menu's callback, once")
 	local slash = 0
 	for k in pairs(E.SlashCmdList) do if k:find("^OLYMPUS") then slash = slash + 1 end end
-	eq(slash, 4, "/oly and /ol, /olc, /oll, once")
+	eq(slash, 5, "/oly and /ol, /olc, /oll, and /ola (1.2: a line in the fight room), once")
 	GP.Covers("player-menu"); GP.Covers("slash"); GP.Covers("minimap")
 	assert(rawget(E, "OlympusMinimapButton"):IsVisible(), "the minimap button in both modes")
 end)
@@ -2335,8 +2487,11 @@ test("gamepad pass 5: the rest of the list with the gamepad UI on: the Issue Rep
 	Hh.units.target = { name = "Mob", realm = "Realm", guid = "Creature-0-4619-0-7-68-0000AAA1" }
 	Hh.ns.Layers.HOLD = 0
 	for k = 1, 2 do Hh.units.target.guid = ("Creature-0-4619-0-7-68-0000AAA%d"):format(k); Hh.ns.Layers.Observe("target") end
+	local rankOf = Hh.ns.Roster.RankOf -- (1.2.0: only a member is invited; the asker is a guildmate)
+	Hh.ns.Roster.RankOf = function(n) if type(n) == "string" and n:find("^Asker") then return 3 end return rankOf(n) end
 	hop.HandleAsk("CHANNEL", "Asker-Realm", "LQ~42~1429~7")
 	hop.HandleRequest("WHISPER", "Asker-Realm", "LR~42")
+	Hh.ns.Roster.RankOf = rankOf
 	eq(Hh.invited, "Asker", "the helper's invite, on its own")
 	GP.Covers("hop-group")
 	hop.Reset()
@@ -2417,6 +2572,54 @@ if MODE == "--debug" then
 		TypeSlash = TypeSlash, Snapshot = Snapshot, Diff = Diff, Check = Check, NavigableOlympus = NavigableOlympus, Describe = Describe,
 		AllowedUnderPad = AllowedUnderPad }
 end
+-- 1.2 (the Blood Arena): its restricted calls only inside the player's click, the match's waypoint
+-- and the chat filters on the game's system lines never with the gamepad UI (the filter left from
+-- mouse and keyboard doing nothing), its companion loaded as Olympus's own addon.
+test("gamepad pass 6: the Arena's integrations: restricted calls from a click alone, no waypoint and no chat filter with the gamepad UI, the companion loaded as Olympus's own", function()
+	local A = Session(true)
+	local ns = A.ns
+	local before = A.Mark()
+	InClick(A, function()
+		eq(ns.SayTo("Bob-Realm", "On my way"), true, "a whisper he wrote, handed to the game")
+		ns.FarkleTable.Sit()
+	end)
+	local ids = Ids(A.Since(before))
+	eq(ids["arena-clicks"], 2, "the whisper and the sit, inside the click")
+	eq(A.said and A.said[#A.said][3], "Bob-Realm"); eq(A.emotes and A.emotes[1], "SIT")
+	GP.Covers("arena-clicks")
+	-- The match's [Show on map]: refused with the gamepad UI, nothing of the game's map touched.
+	before = A.Mark()
+	eq(ns.ArenaMatch.ShowOnMap(), false, "no waypoint with the gamepad UI")
+	eq(#A.Since(before), 0, "nothing of the game's map")
+	GP.Covers("map-waypoint")
+	-- A Farkle table's rolls hidden from the chat: no filter with the gamepad UI; registered once
+	-- back with mouse and keyboard; doing nothing from its first line after a switch back.
+	local FT = ns.FarkleTable
+	local was = FT.Opts().chatRolls
+	FT.Opts().chatRolls = false
+	before = A.Mark()
+	FT.ChatFilter()
+	eq(#A.Since(before), 0, "no chat filter with the gamepad UI")
+	A.Switch(false); A.Advance(1)
+	FT.ChatFilter(); FT.ChatFilter()
+	local filters = {}
+	for _, cb in ipairs(A.callbacks) do if cb.kind == "AddMessageEventFilter" then filters[#filters + 1] = cb end end
+	eq(#filters, 1, "registered once, with mouse and keyboard"); eq(filters[1].key, "CHAT_MSG_SYSTEM")
+	A.Switch(true); A.Advance(1)
+	eq(filters[1].fn(nil, "CHAT_MSG_SYSTEM", "Someone rolls 3 (1-6)"), false, "inert with the gamepad UI")
+	FT.Opts().chatRolls = was
+	GP.Covers("system-filters")
+	-- The companion, Olympus_Arena: Olympus's own addon, loaded on demand with the gamepad UI too.
+	before = A.Mark()
+	ns.Arena.LoadUI()
+	local loaded = false
+	for _, r in ipairs(A.Since(before)) do if r.sym == "C_AddOns.LoadAddOn" then loaded = true end end
+	assert(loaded, "the companion asked for, with the gamepad UI on")
+	eq(A.loadedAddOns.Olympus_Arena, true)
+	GP.Covers("load-companion")
+	Check(A.ledger, "the Arena")
+end)
+
 if MODE == "--discover" then
 	local C, ns = Boot({ discover = true, gamepad = arg and arg[2] == "gamepad" })
 	Login(C)

@@ -107,7 +107,9 @@ local function RefreshNow()
 		pool[#pool + 1] = active[i]
 		active[i] = nil
 	end
-	if not ns.db.showMap or not ns.IsMember() then
+	-- (1.1.6: a sanctioned player, WatchChat.Barred, sees no locations while it lasts.)
+	local WC = ns.WatchChat
+	if not ns.db.showMap or not ns.IsMember() or (WC and not WC.missing and WC.Barred and WC.Barred("locations")) then
 		AddContinentTotals({ zoneList = {}, zoneGuilds = {} }) -- also clears the continent circles
 		return
 	end
@@ -457,14 +459,35 @@ function Map.SetBadge(anchor, texture, r, g, b)
 	end
 end
 
+-- The client's millisecond clock (debugprofilestop), or nil where there is none.
+local function Clock()
+	local clock = rawget(_G, "debugprofilestop")
+	if type(clock) ~= "function" then return nil end
+	local ok, ms = pcall(clock)
+	return ok and type(ms) == "number" and ms or nil
+end
+
+-- 1.1.6: what the last refresh cost on this client (seconds) spaces the next one the census asks
+-- for: REFRESH_COST times it, at least REFRESH_GAP, at most REFRESH_MAX_GAP (as UI.RedrawGap).
+Map.REFRESH_GAP = 1
+Map.REFRESH_COST = 10
+Map.REFRESH_MAX_GAP = 15
+Map.lastCost = 0
+function Map.RefreshGap()
+	return math.min(Map.REFRESH_MAX_GAP, math.max(Map.REFRESH_GAP, (Map.lastCost or 0) * Map.REFRESH_COST))
+end
+
 function Map.Refresh()
+	local started = Clock()
 	ns.SafeCall("map refresh", RefreshNow)
+	local finished = started and Clock()
+	if finished then Map.lastCost = math.max(0, (finished - started) / 1000) end
 end
 
 local function QueueRefresh()
 	if refreshQueued then return end
 	refreshQueued = true
-	ns.After(1, "map refresh", Map.Refresh)
+	ns.After(Map.RefreshGap(), "map refresh", Map.Refresh)
 end
 
 -- "Olympus" menu on the world map: everything map related lives here, like Questie's toggle.
@@ -474,6 +497,8 @@ local OPTIONS = {
 	{ key = "showDecrees", label = "MAPOPT_DECREES", apply = function() ns.Decree.RefreshPins() end },
 	-- The Board's camps (1.1, Board.lua).
 	{ key = "showCamps", label = "MAPOPT_CAMPS", apply = function() if ns.Board and ns.Board.RefreshCamps then ns.Board.RefreshCamps() end end },
+	{ key = "showWanted", text = "Wanted", get = function() return ns.db.showWanted ~= false end,
+		apply = function() if ns.Wanted and ns.Wanted.RefreshPins then ns.Wanted.RefreshPins() end end },
 }
 
 local function CreateMapToggle() -- gp:map-overlay
@@ -508,7 +533,7 @@ local function CreateMapToggle() -- gp:map-overlay
 		cb:SetPoint("TOPLEFT", 6, -20 - (i - 1) * 22)
 		local label = menu:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 		label:SetPoint("LEFT", cb, "RIGHT", 2, 1)
-		label:SetText(L[opt.label])
+		label:SetText(opt.text or L[opt.label])
 		cb:SetScript("OnClick", function(self)
 			ns.db[opt.key] = self:GetChecked() and true or false
 			ns.SafeCall("map option", opt.apply)
@@ -517,7 +542,9 @@ local function CreateMapToggle() -- gp:map-overlay
 		menu.checks[i] = cb
 	end
 	menu:SetScript("OnShow", function(self)
-		for _, cb in ipairs(self.checks) do cb:SetChecked(ns.db[cb.opt.key]) end
+		for _, cb in ipairs(self.checks) do
+			if cb.opt.get then cb:SetChecked(cb.opt.get()) else cb:SetChecked(ns.db[cb.opt.key]) end
+		end
 	end)
 	menu:Hide()
 	toggle:SetScript("OnClick", function() menu:SetShown(not menu:IsShown()) end)

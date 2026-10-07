@@ -20,7 +20,35 @@ end
 
 local SCAN_EVERY = 60
 local MIN_GAP = 20
+Roster.AUTHORITY_FRESH = 120
 local lastScan, pending = 0, false
+local raceByGUID = {}
+
+-- The guild roster gives every member's GUID but not their race.  The client can resolve that
+-- stable GUID locally through GetPlayerInfoByGUID, including for offline guildmates.  Keep the
+-- answer only on this client's in-memory roster: census reports deliberately do not grow a race
+-- field, and a lookup which has not resolved yet is tried again on the next scan.
+local function PublicString(value)
+	if value == nil then return nil end
+	if type(issecretvalue) == "function" and issecretvalue(value) then return nil end
+	return type(value) == "string" and value ~= "" and value or nil
+end
+
+local function RaceForGUID(guid)
+	guid = PublicString(guid)
+	if not guid then return nil end
+	local cached = raceByGUID[guid]
+	if cached then return cached.key, cached.name end
+	if type(GetPlayerInfoByGUID) ~= "function" then return nil end
+	local ok, _, _, raceName, raceFile = pcall(GetPlayerInfoByGUID, guid)
+	if not ok then return nil end
+	raceName, raceFile = PublicString(raceName), PublicString(raceFile)
+	local key = raceFile or raceName
+	if not key then return nil end
+	cached = { key = key, name = raceName }
+	raceByGUID[guid] = cached
+	return cached.key, cached.name
+end
 
 local function RequestServerRoster()
 	if C_GuildInfo and C_GuildInfo.GuildRoster then
@@ -71,6 +99,7 @@ function Roster.Scan()
 	for i = 1, numTotal do
 		local name, rankName, rankIndex, level, _, zone, _, _, isOnline, _, classFile, _, _, _, _, _, guid = GetGuildRosterInfo(i)
 		if name then
+			local race, raceName = RaceForGUID(guid)
 			seen = seen + 1
 			local rawRealm = name:match("%-(.+)$")
 			CountRaw(rawRealms, rawRealm or "bare")
@@ -105,8 +134,9 @@ function Roster.Scan()
 			-- Every member, online or not, for our guild's members page (1.1, Members.lua): the
 			-- name as the server gave it (raw: what a removal takes), rank, days offline. Kept in
 			-- memory only, never in the report.
-			everyone[#everyone + 1] = { name = short, level = level, class = code, raw = name, full = full, rankIndex = rankIndex,
-				rank = rankName or rank.name, days = days, online = isOnline and true or false }
+			everyone[#everyone + 1] = { name = short, level = level, class = code, race = race, raceName = raceName,
+				raw = name, full = full, rankIndex = rankIndex, rank = rankName or rank.name, days = days,
+				online = isOnline and true or false }
 			if isOnline then
 				online[#online + 1] = { name = short, level = level, class = code, zone = zoneKey, rank = rankName, rankIndex = rankIndex }
 				r.online = r.online + 1
@@ -133,9 +163,26 @@ function Roster.Scan()
 		if a.level ~= b.level then return a.level > b.level end
 		return a.name < b.name
 	end)
-	for i = 1, math.min(5, #everyone) do r.top[i] = everyone[i] end
+	-- The report is persisted locally before it is encoded.  Keep its public top-five rows to the
+	-- three fields the wire actually carries; GUID-derived race and the richer roster-only identity
+	-- fields must remain on Roster.members rather than leaking into OlympusDB through r.top.
+	for i = 1, math.min(5, #everyone) do
+		local member = everyone[i]
+		r.top[i] = { name = member.name, level = member.level, class = member.class }
+	end
 	r.avgLevel = seen > 0 and levelSum / seen or 0
 	Roster.byName, Roster.guild = byName, guild -- (whose roster it is: Olympus Link's "r", Link.lua)
+	-- Consumers which use the roster as an authority boundary need to distinguish a current
+	-- server snapshot from rows left in memory after a guild/faction/realm-group change.  The
+	-- generation is process-local; together with the identity and timestamp it is only a freshness
+	-- capability, never a value sent over the wire.
+	Roster.group, Roster.faction = ns.group, ns.faction or ns.Faction()
+	Roster.snapshotAt = ns.Now()
+	Roster.generation = math.max(0, math.floor(tonumber(Roster.generation) or 0)) + 1
+	-- A GUILD_ROSTER_UPDATE can be observed while Blizzard is still filling the rows.  Such a
+	-- partial scan remains useful to the census, but it must never authorize a third party or make
+	-- an absent protected target look like a non-member to The Watch.
+	Roster.complete = seen == numTotal and ns.me ~= nil and byName[ns.FullName(ns.me)] ~= nil
 	Roster.members = everyone -- (1.1: every member's row, Members.lua)
 	table.sort(online, function(a, b)
 		if a.rankIndex ~= b.rankIndex then return a.rankIndex < b.rankIndex end
@@ -171,6 +218,22 @@ end
 
 function Roster.IsOfficer()
 	return IsInGuild() and Roster.MyRank() <= ns.CAPTAIN_RANK
+end
+
+-- A roster row may authorize another character only while it is a complete, recent snapshot of
+-- this character's current guild, realm group and faction.  Census/display callers may still use
+-- the last scan while the server fills a new one; security-sensitive callers must use this gate
+-- before RankOf so a guild transfer cannot lend the old roster to the new guild.
+function Roster.Fresh(maxAge)
+	local guild = type(GetGuildInfo) == "function" and GetGuildInfo("player") or nil
+	maxAge = tonumber(maxAge) or Roster.AUTHORITY_FRESH
+	if type(guild) ~= "string" or guild == "" or maxAge < 0 or Roster.complete ~= true
+		or type(Roster.byName) ~= "table" or type(Roster.generation) ~= "number" or Roster.generation < 1
+		or Roster.guild ~= guild or Roster.group ~= ns.group or Roster.faction ~= ns.faction
+		or type(Roster.snapshotAt) ~= "number" then return nil end
+	local age = ns.Now() - Roster.snapshotAt
+	if age < 0 or age > maxAge then return nil end
+	return Roster
 end
 
 function Roster.TryScan()

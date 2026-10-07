@@ -100,7 +100,8 @@ local function CanSend() return ns.Treasury and ns.Treasury.CanSend and ns.Treas
 local function Room() return (ns.Codec.CHUNK or 220) * (ns.Codec.MAX_CHUNKS or 30) - 40 end
 
 -- kind: "T9" (a keeper's snapshot of the King's guild's bank) unless said; "TS" (1.1: a sister
--- guild's, for the King, his Stewards and his Hands alone) leaves the tabs' names out.
+-- guild's, for the Guild treasuries' audience alone) leaves the tabs' names out: 1.2 writes each
+-- tab's number in the bank there instead (1.1 wrote nothing, and reads nothing there).
 function Bank.Message(snap, kind)
 	snap = snap or Bank.Own()
 	if not snap then return nil end
@@ -120,7 +121,9 @@ function Bank.Message(snap, kind)
 				pos = slot + 1
 				total = total + 1
 			end
-			parts[#parts + 1] = (kind == "TS" and "" or Clean(tab.name, 30)) .. ";" .. table.concat(items, ",")
+			local label = Clean(tab.name, 30)
+			if kind == "TS" or kind == "UG" then label = tonumber(tab.i) and tostring(math.floor(tonumber(tab.i))) or "" end
+			parts[#parts + 1] = label .. ";" .. table.concat(items, ",")
 		end
 	end
 	local msg = table.concat(parts, "~")
@@ -171,7 +174,7 @@ function Bank.Share(force)
 		return false
 	end
 	lastShare, lastSent = now, msg
-	if #msg <= 250 then ns.Comm.Send("CHANNEL", msg, "bank") else ns.Comm.SendChunked(msg) end
+	ns.Treasury.SendPublic(msg, "bank", function() return ns.Treasury.PublicShows("book") end)
 	return true
 end
 
@@ -179,13 +182,23 @@ end
 -- census vote, which forged ones could turn against him). The newest one is kept: a keeper
 -- repeating an older snapshot doesn't replace a newer one of another's.
 -- A snapshot's tabs as a message writes them ("<name>;<id>x<n>,.<gap>,...~..."): each item where it
--- sits, MAX_TABS and MAX_ITEMS at most. noNames: "Tab n" for each (a sister guild's: TS).
+-- sits, MAX_TABS and MAX_ITEMS at most. noNames: "Tab n" for each (a sister guild's: TS), n its
+-- number in the bank where the message gives it (1.2: i), else its place in the message (1.1).
+-- Returns the tabs, and (noNames) whether every tab came with its own number, none twice.
 local function ReadTabs(rest, noNames)
-	local tabs, total = {}, 0
+	local tabs, total, seen, numbered = {}, 0, {}, noNames == true
 	for part in (rest .. "~"):gmatch("([^~]*)~") do
 		local name, items = part:match("^([^;]*);(.*)$")
 		if name and #tabs < Bank.MAX_TABS then
-			local tab, pos = { name = noNames and ns.L.BANK_SISTER_TAB:format(#tabs + 1) or ns.Cut(name, 30), items = {} }, 1
+			local tab, pos
+			if noNames then
+				local i = tonumber(name:match("^(%d+)$"))
+				if not i or i < 1 or i > Bank.MAX_TABS or seen[i] then i, numbered = nil, false end
+				if i then seen[i] = true end
+				tab, pos = { name = ns.L.BANK_SISTER_TAB:format(i or (#tabs + 1)), i = i, items = {} }, 1
+			else
+				tab, pos = { name = ns.Cut(name, 30), items = {} }, 1
+			end
 			for entry in items:gmatch("[^,]+") do
 				local gap = entry:match("^%.(%d+)$")
 				local id, n = entry:match("^(%d+)x(%d+)$")
@@ -200,7 +213,7 @@ local function ReadTabs(rest, noNames)
 			tabs[#tabs + 1] = tab
 		end
 	end
-	return tabs
+	return tabs, numbered and #tabs > 0
 end
 
 function Bank.HandleReport(dist, sender, text)
@@ -225,6 +238,7 @@ function Bank.HandleReport(dist, sender, text)
 end
 ns.Comm.Handle("T9", function(...) Bank.HandleReport(...) end)
 ns.Treasury.OnPrivate("T9", { from = function(s) return ns.Treasury.KeeperByName(s) end, to = function() return ns.Treasury.IsInsider() end,
+	send = function(to) return CanSend() and ns.Treasury.InsiderName(to) end,
 	handle = function(...) Bank.HandleReport(...) end })
 
 -- A tab asked for whose slots never arrived reads empty, just like a tab that is: an empty
@@ -272,6 +286,7 @@ local function ReadNow()
 	ns.Fire("TREASURY_CHANGED")
 	Bank.Share()
 	Bank.ShareSister()
+	Bank.ShareOwnGuild()
 end
 
 -- The bank open: every tab we may see is asked for (the game loads the one shown alone), and
@@ -341,12 +356,18 @@ ns.On("LOGIN", function()
 		GUILDBANKFRAME_CLOSED = Bank.Closed,
 		PLAYER_INTERACTION_MANAGER_FRAME_SHOW = Bank.InteractionShow,
 		PLAYER_INTERACTION_MANAGER_FRAME_HIDE = Bank.InteractionHide,
+		-- 1.2: an item the Treasury's search asked the game for has arrived (Bank.ItemInfoReceived).
+		GET_ITEM_INFO_RECEIVED = function(id) Bank.ItemInfoReceived(id) end,
 	}
 	for event, fn in pairs(events) do
 		pcall(ns.RegisterEvent, event, function(...) ns.SafeCall("bank " .. event, fn, ...) end)
 	end
-	-- Repeated for late logins (a keeper's), while the bank is not open.
-	ns.Every(300, "bank share", function() if not open then Bank.Share() end end)
+	-- Repeated for late logins (a keeper's), while the bank is not open. (1.2: and the sister guilds'
+	-- banks held here dropped once this character is no longer of their audience.)
+	ns.Every(300, "bank share", function()
+		if not open then Bank.Share() end
+		if ns.Bank.Holding then ns.Bank.Holding() end
+	end)
 end)
 
 ---------------------------------------------------------------------------
@@ -362,7 +383,19 @@ end)
 -- modified client's, or one of fewer tabs) never marks anything gone: a snapshot is its sender's
 -- word, and "gone" reads as a theft.
 function Bank.Previous(cur)
-	if type(cur) ~= "table" or not ns.rdb then return nil end
+	if type(cur) ~= "table" then return nil end
+	-- 1.2: a sister guild's (in memory): the one it replaced, of the same sender and older, both
+	-- with their tabs' numbers (a 1.1 message's "Tab 2" is only its place: a tab left out unread
+	-- would shift the others, and their stacks would read as gone).
+	if cur.sister then
+		local p = cur.prev
+		if type(p) == "table" and cur.numbered and p.numbered and type(p.tabs) == "table" and (tonumber(p.t) or 0) < (tonumber(cur.t) or 0)
+			and ns.Treasury.SameChar(p.by, cur.by) then
+			return p
+		end
+		return nil
+	end
+	if not ns.rdb then return nil end
 	local own = cur == ns.rdb.bank or cur == ns.rdb.bankPrev
 	local best
 	for _, key in ipairs(own and { "bankPrev", "bank" } or { "bankReportPrev", "bankReport" }) do
@@ -456,43 +489,505 @@ function Bank.Find(snap, q)
 	return out
 end
 
+---------------------------------------------------------------------------
+-- 1.2: the Treasury's one search over every bank this client shows (<Olympus>'s and each sister
+-- guild's: the Guild treasuries, Treasury.lua). Each snapshot is indexed once (a snapshot is never
+-- changed once kept: a read of the bank, a message heard, is a new table), and the banks shown are
+-- put together again only when one of them changes. A keystroke reads that: each item once (its
+-- name folded once, when the client knows it), never a bank's slots. A hundred guilds of six full
+-- tabs are some 60,000 slots; a keystroke reads their distinct items alone. Bank.indexBuilds and
+-- Bank.unionBuilds count the builds (tests).
+---------------------------------------------------------------------------
+Bank.indexBuilds, Bank.unionBuilds = 0, 0
+Bank.NAME_RETRY = 2   -- seconds before an item the client could not name yet is asked of it again
+Bank.NAME_ASKS = 100  -- items the client holds no data of, asked of the game at most, a search
+local EMPTY_INDEX = { ids = {}, order = {}, units = 0, stacks = 0 }
+local indexed = setmetatable({}, { __mode = "k" }) -- [snapshot] = its index (gone with the snapshot)
+local union = { idx = {}, ids = {}, list = {}, total = {} }
+local foldedNames, nameMiss, nameAsked = {}, {}, {}
+local asksLeft = 0 -- what this search may still ask of the game (Bank.Search sets it)
+local namesSoon = false -- a redraw is coming for names that arrived (Bank.ItemInfoReceived)
+Bank.NAMES_REDRAW = 0.5 -- seconds: items arriving together, one redraw
+
+-- A snapshot's index: each item once, { id, n, stacks, tabs = { [tab] = n }, at = { tab, ... } },
+-- in the order the bank holds them, and its units and stacks in all. Built once a snapshot (its
+-- shape, its tabs and how many stacks each holds, is checked: a snapshot changed in place is
+-- indexed again).
+function Bank.Index(snap)
+	if type(snap) ~= "table" or type(snap.tabs) ~= "table" then return nil end
+	local shape = #snap.tabs
+	for _, tab in ipairs(snap.tabs) do shape = shape * 1009 + #(type(tab.items) == "table" and tab.items or {}) end
+	local x = indexed[snap]
+	if x and x.shape == shape then return x end
+	Bank.indexBuilds = Bank.indexBuilds + 1
+	x = { shape = shape, ids = {}, order = {}, units = 0, stacks = 0 }
+	for ti, tab in ipairs(snap.tabs) do
+		for _, it in ipairs(type(tab.items) == "table" and tab.items or {}) do
+			local id, n = tonumber(it.id), math.floor(tonumber(it.n) or 0)
+			if id and n > 0 then
+				local e = x.ids[id]
+				if not e then
+					e = { id = id, n = 0, stacks = 0, tabs = {}, at = {} }
+					x.ids[id] = e
+					x.order[#x.order + 1] = id
+				end
+				if not e.tabs[ti] then e.tabs[ti], e.at[#e.at + 1] = 0, ti end
+				e.tabs[ti] = e.tabs[ti] + n
+				e.n, e.stacks = e.n + n, e.stacks + 1
+				x.units, x.stacks = x.units + n, x.stacks + 1
+			end
+		end
+	end
+	indexed[snap] = x
+	return x
+end
+
+-- The banks shown (`banks`: { { snap = ... }, ... }, in the caller's order) put together: each
+-- item once, the banks holding it (their places in `banks`), how many in all. The same banks (the
+-- same indexes, in the same order) give the same one back.
+local function Union(banks)
+	local idx = {}
+	for k, b in ipairs(banks) do idx[k] = Bank.Index(b.snap) or EMPTY_INDEX end
+	local same = #idx == #union.idx
+	for k = 1, same and #idx or 0 do
+		if idx[k] ~= union.idx[k] then same = false break end
+	end
+	if same then return union end
+	Bank.unionBuilds = Bank.unionBuilds + 1
+	local u = { idx = idx, ids = {}, list = {}, total = {} }
+	for k, x in ipairs(idx) do
+		for _, id in ipairs(x.order) do
+			local posts = u.ids[id]
+			if not posts then
+				posts = {}
+				u.ids[id], u.list[#u.list + 1], u.total[id] = posts, id, 0
+			end
+			posts[#posts + 1] = k
+			u.total[id] = u.total[id] + x.ids[id].n
+		end
+	end
+	union = u
+	return u
+end
+
+-- An item's name as the search reads it (folded: ns.Fold), once the client knows it; until then
+-- nil, the game asked to load it once a session, and asked again for its name NAME_RETRY later.
+-- Where the client says which items it holds data of, one it holds none of is not read (a read
+-- asks the server), and at most NAME_ASKS of them are asked for in one search: a hundred guilds'
+-- banks never send the game thousands of item queries at a keystroke (the others at the next ones).
+local function FoldedName(id)
+	local f = foldedNames[id]
+	if f then return f end
+	local now = GetTime and GetTime() or 0
+	if nameMiss[id] and now - nameMiss[id] < Bank.NAME_RETRY then return nil end
+	if type(C_Item) == "table" and type(C_Item.IsItemDataCachedByID) == "function" then
+		local ok, cached = pcall(C_Item.IsItemDataCachedByID, id)
+		if ok and cached == false and type(C_Item.RequestLoadItemDataByID) == "function" then
+			if not nameAsked[id] then
+				if asksLeft <= 0 then return nil end
+				asksLeft = asksLeft - 1
+				nameAsked[id] = true
+				pcall(C_Item.RequestLoadItemDataByID, id)
+			end
+			nameMiss[id] = now
+			return nil
+		end
+	end
+	local name = ns.Treasury and ns.Treasury.ItemName and ns.Treasury.ItemName(id)
+	if type(name) == "string" and name ~= "" and name ~= "#" .. tostring(id) then
+		f = ns.Fold(name)
+		foldedNames[id], nameMiss[id] = f, nil
+		return f
+	end
+	nameMiss[id] = now
+	if not nameAsked[id] and type(C_Item) == "table" and type(C_Item.RequestLoadItemDataByID) == "function" then
+		nameAsked[id] = true
+		pcall(C_Item.RequestLoadItemDataByID, id)
+	end
+	return nil
+end
+
+-- An item a search asked the game for arrived (GET_ITEM_INFO_RECEIVED): its name is read at the
+-- next draw, and the Treasury is drawn again by itself (once for those arriving together), so the
+-- results the search could not name yet show without another keystroke. Every other item the
+-- client loads costs a look-up here and nothing else.
+function Bank.ItemInfoReceived(id)
+	id = tonumber(id)
+	if not id or not nameAsked[id] or foldedNames[id] then return false end
+	nameMiss[id] = nil
+	if not namesSoon then
+		namesSoon = true
+		ns.After(Bank.NAMES_REDRAW, "bank names", function()
+			namesSoon = false
+			ns.Fire("TREASURY_CHANGED")
+		end)
+	end
+	return true
+end
+
+-- The search as the box holds it (folded: Views.Query): an item's link pasted in finds that item
+-- alone (its number, whatever the box did to its codes), its name between brackets (a link's text,
+-- pasted as the chat shows it) that name alone; otherwise a number (an item's) or a piece of a
+-- name. nil for nothing to look for.
+function Bank.ReadQuery(q)
+	if type(q) ~= "string" then return nil end
+	local link = tonumber(q:match("item:(%d+)"))
+	if link then return { id = link } end
+	local inner = q:match("%[(.-)%]")
+	q = (tostring(inner or q):gsub("^%s+", ""):gsub("%s+$", ""))
+	if q == "" then return nil end
+	return { text = q, number = not inner and q:match("^%d+$") or nil, exact = inner ~= nil }
+end
+
+-- How well item `id` matches `w` (Bank.ReadQuery): 0 the item itself (its link, its number, its
+-- whole name), 1 its name's start, 2 a word's start in it, 3 anywhere in it (or in its number);
+-- nil for none (a name in brackets: the whole name or none).
+local function Rank(id, w)
+	if w.id then return id == w.id and 0 or nil end
+	if w.number then
+		local s = tostring(id)
+		if s == w.number then return 0 end
+		if s:find(w.number, 1, true) then return 3 end
+	end
+	local name = FoldedName(id)
+	if not name then return nil end
+	if name == w.text then return 0 end
+	if w.exact then return nil end
+	local at = name:find(w.text, 1, true)
+	if not at then return nil end
+	if at == 1 then return 1 end
+	if name:sub(at - 1, at - 1):match("[%s%-'%(]") then return 2 end
+	return 3
+end
+
+-- The items of the banks shown (`banks`, as Union takes them) that the search `q` finds, the best
+-- match first, then the most: { { id, n (in all), rank, banks = { place in `banks`, ... } }, ... }.
+function Bank.Search(banks, q)
+	local out = {}
+	local w = Bank.ReadQuery(q)
+	if not w or type(banks) ~= "table" or #banks == 0 then return out end
+	local u = Union(banks)
+	asksLeft = Bank.NAME_ASKS
+	for _, id in ipairs(u.list) do
+		local rank = Rank(id, w)
+		if rank then out[#out + 1] = { id = id, n = u.total[id], rank = rank, banks = u.ids[id] } end
+	end
+	table.sort(out, function(a, b)
+		if a.rank ~= b.rank then return a.rank < b.rank end
+		if a.n ~= b.n then return a.n > b.n end
+		return a.id < b.id
+	end)
+	return out
+end
+
+-- Where a found item (Bank.Search's) sits: each tab of each bank holding it, the most first:
+-- { { bank = place in `banks`, tab = its tab's place in that snapshot, n }, ... }.
+function Bank.Places(banks, found)
+	local out = {}
+	for _, k in ipairs(type(found) == "table" and found.banks or {}) do
+		local b = banks[k]
+		local x = b and Bank.Index(b.snap)
+		local e = x and x.ids[found.id]
+		for _, ti in ipairs(e and e.at or {}) do out[#out + 1] = { bank = k, tab = ti, n = e.tabs[ti] } end
+	end
+	table.sort(out, function(a, b)
+		if a.n ~= b.n then return a.n > b.n end
+		if a.bank ~= b.bank then return a.bank < b.bank end
+		return a.tab < b.tab
+	end)
+	return out
+end
+
+-- Own-guild bank snapshots are separate from the federal treasury and its directory. Only the
+-- live roster's GM or that guild's Treasury correspondent supplies them. The GM's short-lived
+-- visibility grant reaches GUILD; the stock itself is always a bounded private transfer.
+Bank.OWN_GUILD_LEASE = 1800
+Bank.OWN_GUILD_ASK_GAP = 180
+Bank.OWN_GUILD_KEEP = 3 * 86400
+local ownGuildGrant, ownGuildReport
+local ownGuildReaders, ownGuildLastAsk, ownGuildLastGrant = {}, -math.huge, -math.huge
+local ownGuildGrantPending = false
+local function GuildPreview()
+	local V = ns.ViewAs
+	return (ns.King and ns.King.Preview and ns.King.Preview() == true)
+		or (type(V) == "table" and not V.missing and type(V.Role) == "function" and V.Role() ~= "my")
+		or (ns.db and ns.db.devGMView == true)
+end
+local function GuildRank(name)
+	local R = ns.Roster
+	if not ns.IsMember() or not R or not R.Fresh or not R.Fresh() then return nil end
+	local rank = R.RankOf(ns.FullName(name))
+	if ns.Treasury.SameChar(name, ns.me) then
+		local _, _, live = GetGuildInfo("player")
+		if rank ~= live then return nil end
+	end
+	return rank
+end
+function Bank.OwnGuildKeeper(name)
+	name = name or ns.me
+	local rank = GuildRank(name)
+	if rank == nil then return false end
+	if rank == 0 then return true end
+	local N = ns.Nominees
+	return N and N.IsCorrespondent and N.IsCorrespondent(name, GetGuildInfo("player"), "Federal Treasury") == true or false
+end
+function Bank.OwnGuildMaster() return not GuildPreview() and GuildRank(ns.me) == 0 end
+function Bank.OwnGuildPublic()
+	local g = ownGuildGrant
+	if not g or g.guild ~= GetGuildInfo("player") or GuildRank(g.by) ~= 0
+		or ns.Now() - g.at > Bank.OWN_GUILD_LEASE then return false end
+	return g.on == true
+end
+function Bank.OwnGuildReader(name)
+	return GuildRank(name or ns.me) ~= nil and (Bank.OwnGuildKeeper(name) or Bank.OwnGuildPublic()) or false
+end
+function Bank.OwnGuildView() return not GuildPreview() and Bank.OwnGuildReader() end
+function Bank.OwnGuildSnapshot()
+	if GuildPreview() then return nil end
+	if not Bank.OwnGuildReader() then ownGuildReport = nil; return nil end
+	local guild, now = GetGuildInfo("player"), ns.Now()
+	local function Valid(s)
+		return type(s) == "table" and s.guild == guild and type(s.t) == "number" and s.t <= now + 30
+			and now - s.t <= Bank.OWN_GUILD_KEEP and Bank.OwnGuildKeeper(s.by)
+	end
+	if not Valid(ownGuildReport) then ownGuildReport = nil end
+	local own = Bank.OwnGuildKeeper() and Bank.Own() or nil
+	if not Valid(own) then own = nil end
+	if own and (not ownGuildReport or own.t >= ownGuildReport.t) then return own end
+	return ownGuildReport
+end
+local function GuildGrantSend(force)
+	if not Bank.OwnGuildMaster() then return false end
+	local saved = ns.rdb and ns.rdb.guildBankVisibility
+	local guild = GetGuildInfo("player")
+	if type(saved) ~= "table" or saved.guild ~= guild or not ns.Treasury.SameChar(saved.by, ns.me) then return false end
+	if not force and ns.Now() - ownGuildLastGrant < 30 then
+		if not ownGuildGrantPending then
+			ownGuildGrantPending = true
+			ns.After(30, "guild bank visibility", function()
+				ownGuildGrantPending = false
+				GuildGrantSend()
+				Bank.ShareOwnGuild()
+			end)
+		end
+		return false
+	end
+	local rev, at = saved.rev, math.floor(ns.Now())
+	ownGuildLastGrant = ns.Now()
+	ownGuildGrant = { guild = guild, by = ns.me, on = saved.on == true, rev = rev, at = at }
+	local msg = ("UP~%s~%.0f~%d~%d"):format(Clean(guild, 40), rev, at, saved.on and 1 or 0)
+	ns.Comm.Send("GUILD", msg, "guild bank visibility", nil, nil, nil, { guard = function()
+		return Bank.OwnGuildMaster() and GetGuildInfo("player") == guild and ns.rdb.guildBankVisibility == saved and saved.rev == rev
+	end })
+	return true
+end
+function Bank.SetOwnGuildPublic(on)
+	if not Bank.OwnGuildMaster() or not ns.rdb then return false end
+	local old = ns.rdb.guildBankVisibility
+	ns.rdb.guildBankVisibility = { guild = GetGuildInfo("player"), by = ns.me, on = on == true,
+		rev = math.max(math.floor(ns.Now()) * 1000, ((type(old) == "table" and tonumber(old.rev)) or 0) + 1) }
+	GuildGrantSend(true)
+	ns.Treasury.PrunePrivate()
+	Bank.ShareOwnGuild()
+	ns.Fire("TREASURY_CHANGED")
+	return true
+end
+function Bank.HandleGuildGrant(dist, sender, text)
+	if dist ~= "GUILD" or type(text) ~= "string" or #text > 140 or GuildRank(sender) ~= 0 then return false end
+	local guild, rev, at, on = text:match("^UP~([^~]+)~(%d+)~(%d+)~([01])$")
+	rev, at = tonumber(rev), tonumber(at)
+	if guild ~= GetGuildInfo("player") or not rev or not at or rev > (ns.Now() + 30) * 1000
+		or at > ns.Now() + 30 or ns.Now() - at > Bank.OWN_GUILD_LEASE then return false end
+	if ownGuildGrant and ownGuildGrant.guild == guild then
+		if ownGuildGrant.rev > rev then return false end
+		if ownGuildGrant.rev == rev and (ownGuildGrant.on ~= (on == "1") or ownGuildGrant.at >= at) then return false end
+	end
+	local wasPublic, previousRev = Bank.OwnGuildPublic(), ownGuildGrant and ownGuildGrant.rev
+	ownGuildGrant = { guild = guild, by = ns.FullName(sender), rev = rev, at = at, on = on == "1" }
+	if not Bank.OwnGuildReader() then ownGuildReport = nil end
+	ns.Treasury.PrunePrivate()
+	ns.Fire("TREASURY_CHANGED")
+	-- A late joiner's first ask discovers the policy; ask for stock only after receiving it.
+	if on == "1" and (not wasPublic or previousRev ~= rev) and ns.Now() - ownGuildLastAsk <= Bank.OWN_GUILD_LEASE then
+		ownGuildLastAsk = -math.huge
+		Bank.AskOwnGuild()
+	end
+	return true
+end
+local function GuildSnapshotMessage()
+	if GuildPreview() or not Bank.OwnGuildKeeper() then return nil end
+	local snap = Bank.Own()
+	if type(snap) ~= "table" or snap.guild ~= GetGuildInfo("player") or not ns.Treasury.SameChar(snap.by, ns.me)
+		or type(snap.t) ~= "number" or snap.t > ns.Now() + 30 or ns.Now() - snap.t > Bank.OWN_GUILD_KEEP then return nil end
+	return Bank.Message(snap, "UG")
+end
+function Bank.ShareOwnGuild()
+	local msg, now, n = GuildSnapshotMessage(), ns.Now(), 0
+	if not msg then return n end
+	for name, request in pairs(ownGuildReaders) do
+		if now - request.at > Bank.OWN_GUILD_LEASE or GuildRank(name) == nil then ownGuildReaders[name] = nil
+		elseif (Bank.OwnGuildKeeper(name) or (Bank.OwnGuildPublic() and request.rev == ownGuildGrant.rev))
+			and ns.Treasury.Private(name, "UG", msg) then n = n + 1 end
+	end
+	return n
+end
+function Bank.AskOwnGuild()
+	if GuildPreview() or GuildRank(ns.me) == nil or ns.Now() - ownGuildLastAsk < Bank.OWN_GUILD_ASK_GAP then return false end
+	ownGuildLastAsk = ns.Now()
+	local guild = GetGuildInfo("player")
+	local rev = Bank.OwnGuildPublic() and ownGuildGrant.rev or 0
+	ns.Comm.Send("GUILD", ("UQ~%s~%.0f"):format(Clean(guild, 40), rev), "guild bank ask", nil, nil, nil, { guard = function()
+		return not GuildPreview() and GetGuildInfo("player") == guild and GuildRank(ns.me) ~= nil
+	end })
+	return true
+end
+function Bank.HandleGuildAsk(dist, sender, text)
+	if GuildPreview() or dist ~= "GUILD" or type(text) ~= "string" or #text > 80 or GuildRank(sender) == nil then return false end
+	local guild, rev = text:match("^UQ~([^~]+)~(%d+)$")
+	rev = tonumber(rev)
+	if guild ~= GetGuildInfo("player") or not rev or rev > (ns.Now() + 30) * 1000 then return false end
+	local name, now, count, oldest = ns.FullName(sender), ns.Now(), 0
+	local old = ownGuildReaders[name]
+	if old and now - old.at < 30 and not (rev > old.rev and ownGuildGrant and rev == ownGuildGrant.rev) then return false end
+	for who, request in pairs(ownGuildReaders) do
+		if now - request.at > Bank.OWN_GUILD_LEASE or GuildRank(who) == nil then ownGuildReaders[who] = nil
+		else count = count + 1; if not oldest or request.at < ownGuildReaders[oldest].at then oldest = who end end
+	end
+	if not ownGuildReaders[name] and count >= 64 then ownGuildReaders[oldest] = nil end
+	ownGuildReaders[name] = { at = now, rev = rev }
+	-- A reload, a missed transfer, or a withdrawn grant may have removed unchanged stock.
+	-- Resend preserves the private transport's minimum gap; a request cannot flood it.
+	ns.Treasury.Resend(name, "UG")
+	GuildGrantSend()
+	Bank.ShareOwnGuild()
+	return true
+end
+function Bank.HandleOwnGuild(dist, sender, text)
+	if dist ~= "WHISPER" or type(text) ~= "string" or #text > Room() or not Bank.OwnGuildReader()
+		or not Bank.OwnGuildKeeper(sender) then return false end
+	local guild, at, money, rest = text:match("^UG~([^~]+)~(%d+)~(%d+)~(.*)$")
+	at, money = tonumber(at), tonumber(money)
+	if guild ~= GetGuildInfo("player") or not at or at > ns.Now() + 30 or ns.Now() - at > Bank.OWN_GUILD_KEEP
+		or not money or money > 2147483647 then return false end
+	local tabs, numbered = ReadTabs(rest, true)
+	if not numbered or #tabs == 0 then return false end
+	for _, tab in ipairs(tabs) do
+		for _, item in ipairs(tab.items) do
+			if item.id < 1 or item.id > 2147483647 or item.n < 1 then return false end
+		end
+	end
+	if ownGuildReport and ownGuildReport.guild == guild and ownGuildReport.t > at then return false end
+	ownGuildReport = { guild = guild, by = ns.FullName(sender), t = at, money = money, tabs = tabs, numbered = true }
+	ns.Fire("TREASURY_CHANGED")
+	return true
+end
+ns.Comm.Handle("UP", Bank.HandleGuildGrant)
+ns.Comm.Handle("UQ", Bank.HandleGuildAsk)
+ns.Comm.Handle("UG", Bank.HandleOwnGuild)
+ns.Treasury.OnPrivate("UG", { from = Bank.OwnGuildKeeper, to = Bank.OwnGuildReader,
+	send = function(to, msg) return not GuildPreview() and Bank.OwnGuildKeeper() and Bank.OwnGuildReader(to)
+		and (Bank.OwnGuildKeeper(to) or (ownGuildReaders[ns.FullName(to)] and ownGuildGrant
+			and ownGuildReaders[ns.FullName(to)].rev == ownGuildGrant.rev))
+		and msg == GuildSnapshotMessage() end,
+	handle = Bank.HandleOwnGuild })
+
 -- Sister guilds' banks: an Olympus guild other than the King's, whose treasurer (its guild
 -- master or an officer, by the server's own roster) says yes, has its snapshot whispered to the
--- King, his Stewards and his Hands alone, never on the channel (the whole army would see another
--- guild's stock), when their addon asks (TA, Treasury.lua) and when it changes:
---   TS~<guild>~<time>~<copper>~;<id>x<count>,.<gap>,...~;...   in pieces (Treasury.Private): the
---   tabs' names left out (a name another guild typed never reaches the King's screen, his stream:
---   "Tab 1", "Tab 2"); TS~<guild>~0~0~ withdraws it (his no)
--- Taken only from a Lord or Captain of that guild as our roster or its census confirms (the
--- census can be gamed: a snapshot is its sender's word, shown with his name), kept in memory
--- alone, SISTERS_MAX guilds at most. A no is taken from them too, and from whoever sent the
--- snapshot held. Konig's review of 1.1: his no reaches every viewer holding his bank, at once
+-- directory's audience alone, never on the channel (the whole army would see another guild's
+-- stock), when their addon asks (TA, Treasury.lua) and when it changes. 1.2 (the Guild treasuries,
+-- on the Treasury tab): that audience is the King, the High Council (the author's signed list; his
+-- Stewards and his Hands count as of it), the federal Treasurer (his own character, ns.TREASURER)
+-- and the author. A yes given to 1.1's question (the King, his Stewards and his Hands) still covers
+-- those alone: its giver is asked once more whether the others see it too (OLYMPUS_SISTER_BANK_WIDER).
+--   TS~<guild>~<time>~<copper>~<tab>;<id>x<count>,.<gap>,...~<tab>;...   in pieces (Treasury.Private):
+--   the tabs' names left out (a name another guild typed never reaches a viewer's screen, his
+--   stream: "Tab 1", "Tab 2"). 1.2: <tab> is the tab's number in the bank, so a viewer matches a tab
+--   with the same tab of the snapshot before (what left it since, Bank.Gone) even when one went
+--   unread and was left out; 1.1 sent nothing there and reads nothing there (its "Tab 1", "Tab 2"
+--   are the message's order). TS~<guild>~0~0~ withdraws it (his no)
+-- Taken only from a Lord or Captain of that guild as current authority confirms: the legacy
+-- census until explicit signed enforcement, our roster or the manifest afterwards. Before
+-- enforcement the census can be gamed; a snapshot is its sender's word, shown with his name.
+-- It is kept in memory alone, SISTERS_MAX guilds at most, and dropped once this character is no
+-- longer of the directory's audience (Bank.Sisters). A no is taken from them too, and from
+-- whoever sent the snapshot held. Konig's review of 1.1: his no reaches every viewer holding his bank, at once
 -- those whose addon asked within ASK_EVERY and NO_MARGIN (before a /reload of ours too: the names
 -- and times are kept in ns.db.sisterHeard that long), the others (heard before that: we were
 -- offline) at their next ask, once a session, for as long as it stands: a character whose snapshot
 -- went out is remembered (ns.db.sisterBankSent). A viewer we never hear again keeps it until he
 -- logs out (his client keeps it in memory alone).
-Bank.SISTERS_MAX = 20
+-- Every viewer's addon asks every ASK_EVERY, and each holder of a yes answers each one (a whole
+-- snapshot to one who holds none or an older one, Treasury.Private's pace and queue; the same one
+-- again SISTER_REPEAT later at the soonest): its cost grows with the audience, a few dozen characters.
+Bank.SISTERS_MAX = 128    -- (1.2: every Olympus guild, the signed authority's largest set; 1.1 kept 20)
+Bank.SISTER_OLD = 3 * 86400 -- a snapshot taken longer ago shows as old (the bank not opened since)
+-- The same snapshot whispered again to the same viewer this long after at most (Treasury.Private's
+-- PRIVATE_REPEAT is half an hour): he keeps it until he logs out, and his addon's ask that says it
+-- holds nothing (after a login or a /reload, its first of a session, its first back in the
+-- audience: Treasury.Ask) has it sent again, at once or PRIVATE_GAP after the last one (inside
+-- RESET_GAP: Treasury.Resend). A changed one goes as ever.
+Bank.SISTER_REPEAT = 3 * 3600
+Bank.CONSENT_ALL = 2      -- ns.db.sisterBankShares: 1.2's yes, to the directory's whole audience
+Bank.CONSENT_KING = 1     -- ...asked that, he kept 1.1's yes (the King, his Stewards and his Hands)
 Bank.NO_MARGIN = 180 -- a viewer heard within ASK_EVERY and this is told our no at once (his ask: on a minute's timer, queued)
 function Bank.NoWithin() return ns.Treasury.ASK_EVERY + Bank.NO_MARGIN end
-local sisters, sisterCount = {}, 0   -- [guild, lower case] = { guild, by, t, money, tabs, heard }
-local sisterHeard = {}               -- [Name-Realm] = when the King, a Steward or a Hand asked
+local sisters, sisterCount = {}, 0   -- [guild, lower case] = { guild, by, t, money, tabs, heard, sister, numbered, prev }
+local sisterHeard = {}               -- [Name-Realm] = when one of the directory's audience asked
 local sisterNoTold = {}              -- [Name-Realm] = true: he holds nothing of ours (told our no, or asked afresh)
 local sisterAsked = false
+local sisterSeen, sisterLapsed = false, false -- this client was of the audience; it left it since its last ask
 
--- The King, his Steward, his Hands: who may see them (their names, which the server stamps).
-local function SisterViewer(name)
+-- 1.1's audience: the King, his Steward, his Hands (their names, which the server stamps).
+local function CrownViewer(name)
 	if type(name) ~= "string" or name == "" then return false end
 	return ns.IsKingCharacter(name) or ns.King.IsStewardName(name) or ns.King.IsHandName(name)
 end
-function Bank.SeesSisters() return ns.King.IsKing() or ns.King.IsSteward() or ns.King.IsHand() end
--- A Hand's client asks for them too (TA): the King's and a Steward's ask anyway.
-function Bank.AsksSisters() return ns.King.IsHand() end
+-- 1.2's, the Guild treasuries': those, the High Council, the federal Treasurer and the author.
+local function DirectoryViewer(name)
+	if CrownViewer(name) then return true end
+	if type(name) ~= "string" or name == "" then return false end
+	if ns.IsHighCouncillor(name) or ns.Treasury.TreasurerPin(name) == 1 then return true end
+	return ns.Workshop ~= nil and ns.Workshop.IsAuthorName ~= nil and ns.Workshop.IsAuthorName(name) == true
+end
+Bank.DirectoryViewer = DirectoryViewer
+-- Who may hold a snapshot of ours, whatever our answer now: heard asking, told our no.
+local SisterViewer = DirectoryViewer
+-- This client is one of the directory's audience (never a preview: the author's views change
+-- which pages are drawn alone, ViewAs.lua).
+function Bank.SeesSisters()
+	if ns.King.IsKing() or ns.King.IsSteward() or ns.King.IsHand() then return true end
+	if type(ns.me) ~= "string" then return false end
+	if ns.IsHighCouncillor(ns.me) then return true end
+	if ns.IsMember() and ns.IsTreasurer(ns.me, GetGuildInfo("player")) then return true end
+	return ns.Workshop ~= nil and ns.Workshop.IsAuthor ~= nil and ns.Workshop.IsAuthor() == true
+end
+-- Still of it: once this character no longer is (taken off the High Council, no longer a Hand),
+-- what it held goes, at its next use or the share tick at the latest, and its next ask once it is
+-- of it again says it holds nothing (Bank.Lapsed: its senders' 3 hours, SISTER_REPEAT, never wait).
+local function Holding()
+	if Bank.SeesSisters() then
+		sisterSeen = true
+		return true
+	end
+	if sisterSeen then sisterSeen, sisterLapsed = false, true end
+	if sisterCount > 0 then wipe(sisters) sisterCount = 0 end
+	return false
+end
+Bank.Holding = Holding
+-- Its addon asks for them (TA): the King's, a Steward's and the Treasurer's ask anyway, as insiders.
+function Bank.AsksSisters() return Bank.SeesSisters() end
+-- Back in the audience after what it held was dropped: this ask says it holds nothing (once).
+function Bank.Lapsed()
+	if not sisterLapsed or not Bank.SeesSisters() then return false end
+	sisterLapsed, sisterSeen = false, true
+	return true
+end
 
--- A Lord or Captain of `guild`, as our roster (our own guild) or that guild's census says.
+-- A Lord or Captain of `guild`: the legacy census until explicit enforcement, then our roster
+-- for our guild and the author-signed leadership manifest for another.
 function Bank.LordOrCaptain(sender, guild)
 	if type(sender) ~= "string" or type(guild) ~= "string" or guild == "" then return false end
-	local rank = ns.Data.KnownRank(ns.FullName(sender), guild)
+	local rank = ns.Data.AuthorizedRank(ns.FullName(sender), guild)
 	return rank ~= nil and rank <= ns.CAPTAIN_RANK
 end
 
@@ -505,13 +1000,6 @@ function Bank.SisterTreasurer()
 	return type(guild) == "string" and not ns.IsKingGuild(guild) and rank ~= nil and rank <= ns.CAPTAIN_RANK
 end
 local function SisterKey() return tostring(ns.FullName(ns.me) or ""):lower() end
--- His yes (true), his no (false), or nil until he answers: per character.
-function Bank.SisterConsent()
-	local t = ns.db and ns.db.sisterBankShares
-	if type(t) ~= "table" then return nil end
-	return t[SisterKey()]
-end
-
 -- This character's snapshot went out (`guild`'s), or the guild it last went out of (nil: never).
 local function MarkSent(guild)
 	if not ns.db or type(guild) ~= "string" or guild == "" then return end
@@ -523,6 +1011,53 @@ local function SentGuild()
 	local g = type(t) == "table" and t[SisterKey()]
 	return type(g) == "string" and g ~= "" and g or nil
 end
+-- The guild his answer was given for (ns.db.sisterBankFor, per character: its question named it).
+local function AnsweredFor()
+	local t = ns.db and ns.db.sisterBankFor
+	local g = type(t) == "table" and t[SisterKey()]
+	return type(g) == "string" and g ~= "" and g or nil
+end
+-- His answer as kept, per character: CONSENT_ALL (1.2's yes), CONSENT_KING or true (1.1's yes:
+-- true until he is asked 1.2's question), false (his no), nil (never answered). (A 1.1 addon reads
+-- a number there as no yes: an addon taken back to 1.1 shares nothing.) 1.2: a yes is for the guild
+-- its question named, kept with it (sisterBankFor; 1.1's, which kept none: the guild its snapshot
+-- went out of, when it did). An officer now of another Olympus guild has no answer there: nothing
+-- of that bank goes anywhere until he is asked again, there. His no stands wherever he is.
+local function Answer()
+	local t = ns.db and ns.db.sisterBankShares
+	if type(t) ~= "table" then return nil end
+	local a = t[SisterKey()]
+	if a == Bank.CONSENT_ALL or a == Bank.CONSENT_KING or a == true then
+		local was, guild = AnsweredFor() or (a == true and SentGuild() or nil), GetGuildInfo("player")
+		if a ~= true and not was then return nil end
+		if was and (type(guild) ~= "string" or was:lower() ~= guild:lower()) then return nil end
+	end
+	return a
+end
+-- His yes (true: 1.2's or 1.1's), his no (false), or nil until he answers.
+function Bank.SisterConsent()
+	local a = Answer()
+	if a == false then return false end
+	if a == true or a == Bank.CONSENT_ALL or a == Bank.CONSENT_KING then return true end
+	return nil
+end
+-- Whom his yes covers: "all" (1.2's: the directory's audience), "crown" (1.1's: the King, his
+-- Stewards and his Hands), nil (no yes).
+function Bank.SisterScope()
+	local a = Answer()
+	if a == Bank.CONSENT_ALL then return "all" end
+	if a == true or a == Bank.CONSENT_KING then return "crown" end
+	return nil
+end
+-- Whom our snapshot goes to now, by his yes (checked again for every piece: Treasury.Private).
+local function Serves(name)
+	local scope = Bank.SisterScope()
+	if scope == "all" then return DirectoryViewer(name) end
+	if scope == "crown" then return CrownViewer(name) end
+	return false
+end
+Bank.Serves = Serves
+
 -- The viewers heard asking, kept over a /reload of ours (ns.db.sisterHeard, by name: when) for as
 -- long as our no goes to them at once (NO_WITHIN), older ones dropped. Konig's review of 1.1.
 local function KeptHeard()
@@ -548,27 +1083,29 @@ function Bank.SisterMessage()
 	return Bank.Message(snap, "TS")
 end
 
--- To the King, a Steward or a Hand who asked within Treasury.AUDIENCE_FRESH (each gets a
--- snapshot once, the next when it changed).
+-- To each viewer his yes covers who asked within Treasury.AUDIENCE_FRESH (each gets a snapshot
+-- once, the next when it changed).
 function Bank.ShareSister()
 	local msg = Bank.SisterMessage()
 	if not msg then return 0 end
 	local n, now = 0, ns.Now()
 	for name, t in pairs(sisterHeard) do
-		if now - t <= ns.Treasury.AUDIENCE_FRESH and SisterViewer(name) and ns.Treasury.Private(name, "TS", msg) then n = n + 1 end
+		if now - t <= ns.Treasury.AUDIENCE_FRESH and Serves(name) and ns.Treasury.Private(name, "TS", msg) then n = n + 1 end
 	end
 	if n > 0 then MarkSent(GetGuildInfo("player")) end
 	return n
 end
 
--- The King, a Steward or a Hand asked (TA): our guild's bank goes to him (fresh: he holds none).
--- While our no stands, after our snapshot went out: the no, once a session (Konig's review of 1.1).
-function Bank.HeardAsk(sender, fresh)
+-- One of the directory's audience asked (TA): our guild's bank goes to him if our yes covers him
+-- (fresh: he holds none, RESET_GAP apart; empty: his ask says so, however soon: the same snapshot
+-- again PRIVATE_GAP after the last at the soonest, Treasury.Resend). While our no stands, after our
+-- snapshot went out: the no, once a session (Konig's review of 1.1).
+function Bank.HeardAsk(sender, fresh, empty)
 	if not SisterViewer(sender) then return end
 	local name = ns.FullName(sender)
 	sisterHeard[name] = ns.Now()
 	KeptHeard()[name] = sisterHeard[name]
-	if fresh then ns.Treasury.ForgetSent(sender, "TS") end
+	if fresh then ns.Treasury.ForgetSent(sender, "TS") elseif empty then ns.Treasury.Resend(sender, "TS") end
 	if Bank.SisterConsent() == false then
 		local guild = SentGuild()
 		if guild and not sisterNoTold[name] then
@@ -577,7 +1114,7 @@ function Bank.HeardAsk(sender, fresh)
 		return
 	end
 	local msg = Bank.SisterMessage()
-	if msg and ns.Treasury.Private(sender, "TS", msg) then MarkSent(GetGuildInfo("player")) end
+	if msg and Serves(sender) and ns.Treasury.Private(sender, "TS", msg) then MarkSent(GetGuildInfo("player")) end
 end
 function Bank.NotFound(Is)
 	for name in pairs(sisterHeard) do if Is(name) then sisterHeard[name] = nil end end
@@ -585,15 +1122,21 @@ function Bank.NotFound(Is)
 	for name in pairs(kept) do if Is(name) then kept[name] = nil end end
 end
 
-function Bank.SetSisterConsent(on)
+-- on: his yes, 1.2's (the directory's whole audience), or with kingOnly 1.1's kept (the King, his
+-- Stewards and his Hands: his answer to OLYMPUS_SISTER_BANK_WIDER); otherwise his no.
+function Bank.SetSisterConsent(on, kingOnly)
 	if not Bank.SisterTreasurer() then return ns.Print(L.BANK_SISTER_ONLY) end
 	ns.db.sisterBankShares = type(ns.db.sisterBankShares) == "table" and ns.db.sisterBankShares or {}
-	ns.db.sisterBankShares[SisterKey()] = on and true or false
-	ns.Print(on and L.BANK_SISTER_ON or L.BANK_SISTER_OFF)
+	ns.db.sisterBankShares[SisterKey()] = on and (kingOnly and Bank.CONSENT_KING or Bank.CONSENT_ALL) or false
+	ns.db.sisterBankFor = type(ns.db.sisterBankFor) == "table" and ns.db.sisterBankFor or {}
+	ns.db.sisterBankFor[SisterKey()] = GetGuildInfo("player") -- (the guild his question named: Answer)
+	ns.Print(on and (kingOnly and L.BANK_SISTER_KING_KEPT or L.BANK_SISTER_ON) or L.BANK_SISTER_OFF)
 	if on then
 		wipe(sisterNoTold) -- (a later no goes to every viewer again)
+		ns.Treasury.PrunePrivate() -- (whatever still waits for one his yes no longer covers)
 		return Bank.ShareSister()
 	end
+	ns.Treasury.CancelPrivate(function(o) return o.kind == "TS" end)
 	-- His no: taken back from the screens it reached, at once from every viewer whose addon asked
 	-- within NO_WITHIN (they ask every ASK_EVERY: Konig's review of 1.1; AUDIENCE_FRESH, shorter,
 	-- missed one who asked 12 minutes before), those heard before a /reload of ours too (KeptHeard);
@@ -625,19 +1168,42 @@ StaticPopupDialogs["OLYMPUS_SISTER_BANK"] = {
 	noCancelOnEscape = true, -- Escape is no answer: asked again next session
 	preferredIndex = 3,
 }
--- Asked once a session, when he opens his guild's bank, until he answers (never in combat).
+-- 1.2: whoever said yes to 1.1's question is asked this once: the directory's other viewers too?
+-- Its no keeps 1.1's yes (the King, his Stewards and his Hands); /oly bank share off stays the no.
+StaticPopupDialogs["OLYMPUS_SISTER_BANK_WIDER"] = {
+	text = L.BANK_SISTER_WIDER,
+	button1 = L.BANK_SISTER_WIDER_YES,
+	button2 = L.BANK_SISTER_WIDER_NO,
+	OnAccept = function() ns.SafeCall("sister bank", Bank.SetSisterConsent, true) end,
+	OnCancel = function(_, _, reason)
+		if reason == "clicked" then ns.SafeCall("sister bank", Bank.SetSisterConsent, true, true) end
+	end,
+	timeout = 0,
+	whileDead = true,
+	hideOnEscape = true,
+	noCancelOnEscape = true, -- Escape is no answer: asked again next session
+	preferredIndex = 3,
+}
+-- Asked once a session, when he opens his guild's bank, until he answers (never in combat): 1.2's
+-- question if he never answered, whether the others see it too if he said yes to 1.1's.
 function Bank.AskSister()
-	if sisterAsked or not Bank.SisterTreasurer() or Bank.SisterConsent() ~= nil then return false end
+	if sisterAsked or not Bank.SisterTreasurer() then return false end
+	local a = Answer()
+	local which = a == nil and "OLYMPUS_SISTER_BANK" or a == true and "OLYMPUS_SISTER_BANK_WIDER" or nil
+	if not which then return false end
 	if InCombatLockdown and InCombatLockdown() then return false end
 	sisterAsked = true
-	ns.ShowDialog("OLYMPUS_SISTER_BANK", GetGuildInfo("player") or "?")
+	ns.ShowDialog(which, GetGuildInfo("player") or "?")
 	return true
 end
 
--- A sister guild's snapshot (TS), on the King's, a Steward's or a Hand's client: from a Lord or
--- Captain of that guild (our roster or its census), the newest kept, in memory alone.
+-- A sister guild's snapshot (TS), on a client of the directory's audience: from a Lord or Captain
+-- of that guild (the legacy census until enforcement, our roster or the signed manifest
+-- afterwards), the newest kept, in memory alone. 1.2: the one it replaces, the same sender's and
+-- older, is kept with it (prev: one, never a chain), for what left the bank since (Bank.Previous);
+-- the same snapshot heard again (his addon repeats it) changes nothing.
 function Bank.HandleSister(dist, sender, text)
-	if dist ~= "WHISPER" or type(text) ~= "string" or not Bank.SeesSisters() then return end
+	if dist ~= "WHISPER" or type(text) ~= "string" or not Holding() then return end
 	local guild, when, money, rest = text:match("^TS~([^~]*)~(%d+)~(%d+)~?(.*)$")
 	guild = guild and ns.King.CleanGuild(guild)
 	if not guild or ns.IsKingGuild(guild) then return end
@@ -651,11 +1217,19 @@ function Bank.HandleSister(dist, sender, text)
 		ns.Fire("TREASURY_CHANGED")
 		return
 	end
+	local tabs, numbered = ReadTabs(rest, true)
 	local r = { guild = guild, by = ns.FullName(sender), t = math.min(when, now), money = math.min(tonumber(money) or 0, 2147483647),
-		tabs = ReadTabs(rest, true), heard = now }
+		tabs = tabs, heard = now, sister = true, numbered = numbered }
 	if #r.tabs == 0 then return end
 	local kept = sisters[key]
 	if kept and kept.t > r.t then return end
+	local same = kept and ns.Treasury.SameChar(kept.by, r.by)
+	if same and kept.t == r.t and kept.money == r.money and kept.numbered == r.numbered and #kept.tabs == #r.tabs then
+		kept.heard = now
+		return
+	end
+	if same and kept.t < r.t then r.prev = kept elseif same then r.prev = kept.prev end
+	if kept then kept.prev = nil end
 	if not kept then
 		if sisterCount >= Bank.SISTERS_MAX then
 			local oldest
@@ -666,17 +1240,24 @@ function Bank.HandleSister(dist, sender, text)
 	end
 	sisters[key] = r
 	ns.Fire("TREASURY_CHANGED")
-	ns.Fire("DATA_CHANGED") -- (a Hand's tab may appear)
+	ns.Fire("DATA_CHANGED") -- (a viewer's tab may appear)
 end
 ns.Comm.Handle("TS", function(...) Bank.HandleSister(...) end)
-ns.Treasury.OnPrivate("TS", { from = function() return true end, to = function() return Bank.SeesSisters() end,
+ns.Treasury.OnPrivate("TS", { from = function() return true end, to = function() return Holding() end,
+	send = function(to) return Bank.SisterTreasurer() and Serves(to) end, repeatAfter = Bank.SISTER_REPEAT,
 	handle = function(...) Bank.HandleSister(...) end })
 
--- The sister guilds' banks this client holds, by guild name (the King's, a Steward's, a Hand's).
+-- The sister guilds' banks this client holds, by guild name (one of the directory's audience).
+-- Once this character is no longer of it (taken off the High Council, no longer a Hand), what it
+-- held goes.
 function Bank.Sisters()
 	local out = {}
-	if not Bank.SeesSisters() then return out end
-	for _, x in pairs(sisters) do out[#out + 1] = x end
+	if not Holding() then return out end
+	local enforcing = ns.Authority and ns.Authority.Enforced and ns.Authority.Enforced()
+	for key, x in pairs(sisters) do
+		if not enforcing or Bank.LordOrCaptain(x.by, x.guild) then out[#out + 1] = x
+		else sisters[key], sisterCount = nil, sisterCount - 1 end
+	end
 	table.sort(out, function(a, b) return a.guild:lower() < b.guild:lower() end)
 	return out
 end
@@ -756,6 +1337,15 @@ end
 local function Held()
 	ns.rdb.bankRequests = type(ns.rdb.bankRequests) == "table" and ns.rdb.bankRequests or {}
 	return ns.rdb.bankRequests
+end
+
+-- Cross-guild permission remains binding while an answer waits in Comm's queue.  A newer
+-- signed manifest, expiry, net-off or a local roster change cancels the actual send.
+local function RequesterGuard(e)
+	return function()
+		if not (ns.Authority and ns.Authority.Enforced and ns.Authority.Enforced()) then return true end
+		return type(e) == "table" and not Expired(e) and Bank.LordOrCaptain(e.from, e.guild)
+	end
 end
 
 -- Our requests, newest first (the expired dropped).
@@ -932,7 +1522,8 @@ function Bank.HandleRequest(dist, sender, text)
 	local code = CODE[e.state] or "o"
 	if e.told ~= code or (Open(e.state) and now - (tonumber(e.toldAt) or 0) >= Bank.ANSWER_GAP) then
 		e.told, e.toldAt = code, now
-		ns.Comm.Whisper(sender, ("TO~%d~%s"):format(id, code), "bankans " .. key)
+		ns.Comm.Whisper(sender, ("TO~%d~%s"):format(id, code), "bankans " .. key,
+			nil, nil, nil, { owner = e, guard = RequesterGuard(e) })
 	end
 	Fire()
 end
@@ -947,7 +1538,8 @@ function Bank.Answer(key, state)
 	-- (Not marked told: he may have logged off since he was heard, and a closed request he was told
 	-- of is never answered again, HandleRequest. The answer to his own next ask marks it.)
 	if ns.Now() - (e.heard or -math.huge) <= ns.Treasury.AUDIENCE_FRESH then
-		ns.Comm.Whisper(e.from, ("TO~%d~%s"):format(e.id, CODE[state]), "bankans " .. key)
+		ns.Comm.Whisper(e.from, ("TO~%d~%s"):format(e.id, CODE[state]), "bankans " .. key,
+			nil, nil, nil, { owner = e, guard = RequesterGuard(e) })
 	end
 	for _, to in ipairs(ns.Treasury.Online()) do
 		if not ns.Treasury.SameChar(to, e.from) then ns.Comm.Whisper(to, ("TO~%d~%s~%s"):format(e.id, CODE[state], e.from), "bankans " .. to .. key) end
@@ -1039,7 +1631,9 @@ function Bank.SharePublic(force)
 	if #entries == 0 and (lastPublic == nil or lastPublic == "") then return false end
 	if not force and all == lastPublic then return false end
 	lastPublic, lastPublicAt = #entries == 0 and "" or all, now
-	for i, m in ipairs(msgs) do ns.Comm.Send("CHANNEL", m, "banklist" .. i) end
+	for i, m in ipairs(msgs) do
+		ns.Treasury.SendPublic(m, "banklist" .. i, function() return ns.Treasury.PublicShows("book") end)
+	end
 	return true
 end
 
@@ -1179,16 +1773,28 @@ end
 ns.On("LOGIN", function()
 	-- Our open requests again, to the keepers heard since (and every REQUEST_AGAIN).
 	ns.Every(60, "bank requests", function() Bank.SendRequests() end)
+	ns.Every(300, "guild bank", function()
+		GuildGrantSend()
+		Bank.ShareOwnGuild()
+		Bank.OwnGuildSnapshot()
+	end)
 end)
 
 -- Tests start from a clean state.
 function Bank.Reset()
 	open, readPending, lastShare, lastSent = false, false, -math.huge, nil
+	ownGuildGrant, ownGuildReport, ownGuildLastAsk, ownGuildLastGrant = nil, nil, -math.huge, -math.huge
+	ownGuildGrantPending = false
+	wipe(ownGuildReaders)
 	firstChange, lastChange, sharePending, openedAt = 0, 0, false, -math.huge
 	wipe(queried)
 	wipe(sisters); wipe(sisterHeard); wipe(sisterNoTold)
 	if ns.db then ns.db.sisterHeard = nil end
-	sisterCount, sisterAsked = 0, false
+	sisterCount, sisterAsked, sisterSeen, sisterLapsed = 0, false, false, false
+	wipe(indexed); wipe(foldedNames); wipe(nameMiss); wipe(nameAsked)
+	namesSoon = false
+	union = { idx = {}, ids = {}, list = {}, total = {} }
+	Bank.indexBuilds, Bank.unionBuilds = 0, 0
 	wipe(lastAsked); wipe(publicLists)
 	lastPublic, lastPublicAt, publicPending = nil, -math.huge, false
 	if ns.rdb then ns.rdb.bank, ns.rdb.bankReport, ns.rdb.bankPrev, ns.rdb.bankReportPrev = nil, nil, nil, nil end

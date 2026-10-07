@@ -92,6 +92,17 @@ until you turn it on.
   each outcome. A full structural fix would require **signed leadership**: ranks that come
   with a signature every client checks, instead of a count of votes. Meanwhile seal your
   channel with `/oly key`, so that only members of Olympus guilds can take part.
+
+  The 1.2 code contains a deliberately dormant migration reader for such a list. An ordinary
+  signed titles list has exactly the behaviour above. Only an explicit author-signed `enforce`
+  manifest changes a client to signed ranks; once accepted for a faction and realm group, that
+  boundary is kept locally and an expired, malformed, revoked or later absent manifest grants
+  nobody instead of falling back to census votes. The current titles carrier is capped at 3,000
+  bytes and cannot hold a complete leadership snapshot for the live federation, so enforcement
+  is not activated. Older clients ignore the extension and continue using census ranks, so a
+  mixed-version realm would not enforce one authority boundary either. This limitation remains
+  open until a complete, scalable distribution and revocation protocol, plus its client migration,
+  is reviewed and deployed.
 - **Nothing on the channel is encrypted.** Everyone on it receives [Olympus], [Captains] and
   [Lords]; the addon only decides what to show. Don't write anything there that must stay
   secret.

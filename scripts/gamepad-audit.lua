@@ -6,7 +6,8 @@
 --   luajit scripts/gamepad-audit.lua --list   every reach found, with its file, line and ids (review)
 --   luajit scripts/gamepad-audit.lua --write-baseline   rewrites scripts/gamepad-baseline.txt
 --
--- Nothing of the addon runs: each .lua file under Olympus/ is compiled (loadfile) and its bytecode
+-- Nothing of the addon runs: each .lua file under Olympus/ and under the 1.2 companion's folder,
+-- Olympus_Arena/ (Olympus's code too, loaded on demand), is compiled (loadfile) and its bytecode
 -- read with LuaJIT's jit.util, so comments and strings can't fool it and every line is exact. The
 -- one file it runs is the registry, pure data, in an empty environment. (Loaded with the argument
 -- "--module" it returns its lists and its scan instead: tests/gamepad.lua sets its traps from them.)
@@ -82,6 +83,7 @@ A.NAMESPACES = {
 	C_FriendList = { read = { "GetNumWhoResults", "GetWhoInfo", "IsIgnored", "GetNumIgnores", "GetIgnoreName" },
 		reach = { "SendWho", "SetWhoToUi", "AddFriend", "AddIgnore", "DelIgnore", "AddOrDelIgnore" } },
 	C_Map = { read = { "GetBestMapForUnit", "GetMapChildrenInfo", "GetMapGroupID", "GetMapGroupMembersInfo", "GetMapInfo",
+		"GetUserWaypoint", "CanSetUserWaypointOnMap", "GetAreaInfo",
 		"GetMapRectOnMap", "GetMapWorldSize", "GetPlayerMapPosition", "GetWorldPosFromMapPos", "GetMapPosFromWorldPos" },
 		reach = { "SetUserWaypoint", "ClearUserWaypoint" } },
 	C_SuperTrack = { read = {}, reach = { "SetSuperTrackedUserWaypoint" } },
@@ -644,7 +646,7 @@ function A.Audit(root)
 			if not SAFE[e.safe] then Fail("%s: safe must be off or keep.", where) end
 			if type(e.why) ~= "string" or #e.why < 10 then Fail("%s: say why, in a sentence.", where) end
 			if type(e.files) ~= "table" or (#e.files == 0 and not (type(e.vendor) == "table" and #e.vendor > 0)) then
-				Fail("%s: list its files (under Olympus/; a vendored library's in `vendor`).", where)
+				Fail("%s: list its files (under Olympus/, or Olympus_Arena/... for the companion's; a vendored library's in `vendor`).", where)
 			end
 			if e.guard == "exempt" and (type(e.approved) ~= "string" or e.approved == "") then
 				Fail("%s: an exempt entry needs `approved` (who said yes, and when).", where)
@@ -654,21 +656,29 @@ function A.Audit(root)
 			end
 		end
 	end
+	-- A registry file name's path from the repository's root: under Olympus/, or the companion's,
+	-- named with its folder in front (Olympus_Arena/...).
+	local function Rel(f)
+		f = tostring(f)
+		if f:find("^Olympus_Arena/") then return f end
+		return "Olympus/" .. f
+	end
 	-- The game's globals an entry may write, and where: [name] = { [file] = true }.
 	local mayWrite = {}
 	for _, e in pairs(byId) do
 		for _, g in ipairs(type(e.globals) == "table" and e.globals or {}) do
 			mayWrite[g] = mayWrite[g] or {}
-			for _, f in ipairs(type(e.files) == "table" and e.files or {}) do mayWrite[g]["Olympus/" .. f] = true end
-			for _, f in ipairs(type(e.vendor) == "table" and e.vendor or {}) do mayWrite[g]["Olympus/" .. f] = true end
+			for _, f in ipairs(type(e.files) == "table" and e.files or {}) do mayWrite[g][Rel(f)] = true end
+			for _, f in ipairs(type(e.vendor) == "table" and e.vendor or {}) do mayWrite[g][Rel(f)] = true end
 		end
 	end
 
 	local files = LuaFiles(root, "Olympus")
+	for _, rel in ipairs(LuaFiles(root, "Olympus_Arena")) do files[#files + 1] = rel end
 	local all, tagged, taggedIn, hooksIn, counts = {}, {}, {}, {}, {}
 	local vendored = {}
 	for _, e in pairs(byId) do
-		for _, f in ipairs(type(e.vendor) == "table" and e.vendor or {}) do vendored["Olympus/" .. f] = e.id end
+		for _, f in ipairs(type(e.vendor) == "table" and e.vendor or {}) do vendored[Rel(f)] = e.id end
 	end
 	for _, rel in ipairs(files) do
 		local scan, err = A.ScanFile(root, rel)
@@ -743,12 +753,12 @@ function A.Audit(root)
 		local inVendor = false
 		for _, f in ipairs(type(e.vendor) == "table" and e.vendor or {}) do inVendor = true end
 		if not tagged[id] and not inVendor then
-			Fail("Olympus/GamepadRegistry.lua: %s is tagged nowhere (no \"-- gp:%s\" in Olympus/). Tag its sites, or remove the entry.", id, id)
+			Fail("Olympus/GamepadRegistry.lua: %s is tagged nowhere (no \"-- gp:%s\" in Olympus/ or Olympus_Arena/). Tag its sites, or remove the entry.", id, id)
 		end
 		local listed = {}
 		for _, f in ipairs(type(e.files) == "table" and e.files or {}) do listed[f] = true end
 		for f in pairs(taggedIn[id] or {}) do
-			if not listed[f] then Fail("Olympus/%s: tagged gp:%s, but the entry's files don't list %s. Add it there.", f, id, f) end
+			if not listed[f] then Fail("%s: tagged gp:%s, but the entry's files don't list %s. Add it there.", Rel(f), id, f) end
 		end
 		for f in pairs(listed) do
 			if not (taggedIn[id] or {})[f] and not (hooksIn[id] or {})[f] and not inVendor then
@@ -776,10 +786,10 @@ function A.Audit(root)
 		local n, max = counts[k] or 0, baseline[k] or 0
 		local file, kind = k:match("^(%S+) (%S+)$")
 		if n > max then
-			Fail("Olympus/%s: %d %s uses of the game's %s, more than the %d of scripts/gamepad-baseline.txt. Use fewer, or raise its line \"%s %s %d\" in the same change (the review reads it).",
-				file, n, kind, kind == "tooltip" and "GameTooltip" or "chat window", max, file, kind, n)
+			Fail("%s: %d %s uses of the game's %s, more than the %d of scripts/gamepad-baseline.txt. Use fewer, or raise its line \"%s %s %d\" in the same change (the review reads it).",
+				Rel(file), n, kind, kind == "tooltip" and "GameTooltip" or "chat window", max, file, kind, n)
 		elseif n < max then
-			notes[#notes + 1] = ("Olympus/%s: %d %s uses, fewer than the baseline's %d: lower its line to \"%s %s %d\"."):format(file, n, kind, max, file, kind, n)
+			notes[#notes + 1] = ("%s: %d %s uses, fewer than the baseline's %d: lower its line to \"%s %s %d\"."):format(Rel(file), n, kind, max, file, kind, n)
 		end
 	end
 	if not haveBaseline and next(counts) then Fail("scripts/gamepad-baseline.txt is missing: luajit scripts/gamepad-audit.lua --write-baseline makes it.") end

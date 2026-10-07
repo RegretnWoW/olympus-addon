@@ -80,8 +80,9 @@ local L = ns.L
 --
 -- The author's preview (1.0.0): his character holds no Olympus rank, so his own portrait shows
 -- none of the borders he ships. `/oly borders test <tier>` (a tier's name, as /oly status prints
--- it) shows that border round his own portrait, turned round as a holder sees his own, and on his
--- target or focus frame while that is himself; never on a real party member's frame (they show
+-- it) shows that border round his own portrait, turned round as a holder sees his own, on his
+-- target or focus frame while that is himself, and on his Olympus portraits (the Arena's, 1.2)
+-- while it shows round his own (Borders.ShowPreviewOn); never on a real party member's frame (they show
 -- their own borders). Edit Mode's party frames (Esc > Edit Mode > Party Frames, shown with nobody
 -- in their place: Mainline/PartyMemberFrame.lua, UpdateMember) are the one way he can see the party
 -- borders without a party (1.1.5, the author's ask): while Edit Mode forces them shown, each empty
@@ -125,13 +126,16 @@ ns.Borders = Borders
 --            master, and dropped when he stops being it), while the server gives the unit that
 --            very guild (GetGuildInfo): nobody outside it can borrow it; in the King's guild (1.1.5),
 --            a centurion the King or a High Councillor named (the list taken from them alone)
--- In that order when several hold: the King, the High Council, the dev, a guild master, a nominee
+-- The supplied primary federal Treasurer dragon is portrait-only (TreasurerPin == 1, never
+-- the mail alternate); the King takes precedence. Existing chat/nameplate marks stay unchanged.
+-- Portrait order: the King, the primary Treasurer, the High Council, the dev, a guild master, a nominee
 -- (then, on nameplates and in the game's chat, the star).
 -- (1.0.1's Max's second option, ns.BORDERS_COUNCIL_GOLD, the High Council in the King's gold
 -- wings, is gone with 1.1.5: the gold is the King's alone, on the borders, the nameplates and in
 -- the game's chat, and the council's tier is the silver.)
 local WINGED = "UI-HUD-UnitFrame-Target-PortraitOn-Boss-Gold-Winged"
 local PLAIN = "UI-HUD-UnitFrame-Target-PortraitOn-Boss-Gold"
+local PLAIN_SILVER = "ui-hud-unitframe-target-portraiton-boss-rare-silver"
 -- Max's bronze frames, drawn over the winged and the plain gold at twice their size: 256 x 256
 -- TGAs, the art at the top left (scripts/make-borders.py makes them from media/borders/src).
 local MEDIA = "Interface\\AddOns\\Olympus\\media\\borders\\"
@@ -139,20 +143,38 @@ local MEDIA = "Interface\\AddOns\\Olympus\\media\\borders\\"
 -- TargetFrameUtils.lua gives it to a rare elite): the plain gold's size and shape, so at its
 -- offsets (1.0.0's Captains had it). Max's plain bronze (media/borders/bronze-plain), drawn over the
 -- plain gold, at its size and offsets (1.0.0's Veterans had it).
+-- (metal, 1.2: the plain metal under the tier's art, UNDERLAY below.)
 Borders.TIERS = {
-	{ name = "gold-elite", atlas = WINGED, x = 11, y = -4, king = true },
+	{ name = "gold-elite", atlas = WINGED, metal = "gold", x = 11, y = -4, king = true },
+	{ name = "treasurer-dragon", file = MEDIA .. "treasurer-dragon", coords = { 0, 200 / 256, 0, 190 / 256 }, width = 100, height = 95,
+		x = 0, y = 1, fallback = PLAIN, treasurer = true, metal = "none", party = { x = -8, y = -4 } }, -- (its own art whole: no plain dragon under it; party: its ring on the smaller portrait, from the owner's screenshot)
 	{ name = "silver-elite", atlas = "UI-HUD-UnitFrame-Target-PortraitOn-Boss-Rare-Silver-Winged", x = 8, y = -7,
-		council = true },
-	{ name = "silver", atlas = "ui-hud-unitframe-target-portraiton-boss-rare-silver", x = 0, y = 1, dev = true },
+		metal = "silver", council = true },
+	{ name = "silver", atlas = PLAIN_SILVER, metal = "silver", x = 0, y = 1, dev = true },
 	{ name = "bronze-elite", file = MEDIA .. "bronze-winged", coords = { 0, 220 / 256, 0, 180 / 256 }, width = 110, height = 90,
-		x = 11, y = -4, fallback = WINGED, leader = true },
+		metal = "bronze", x = 11, y = -4, fallback = WINGED, leader = true },
 	{ name = "bronze", file = MEDIA .. "bronze-plain", coords = { 0, 200 / 256, 0, 200 / 256 }, width = 100, height = 100,
-		x = 0, y = 1, fallback = PLAIN, nominee = true },
+		metal = "bronze", x = 0, y = 1, fallback = PLAIN, nominee = true },
 }
 -- Kept for borders to come, given to nobody (1.1.5): no texture is made for it, no unit matches it
 -- and the preview leaves it out. The plain gold.
 Borders.RESERVED = {
-	{ name = "gold", atlas = PLAIN, x = 0, y = 1 },
+	{ name = "gold", atlas = PLAIN, metal = "gold", x = 0, y = 1 },
+}
+local TIERS_BY_NAME = {}
+for _, tier in ipairs(Borders.TIERS) do TIERS_BY_NAME[tier.name] = tier end
+
+-- 1.2: the plain metal under a tier's or an honour's art (the target's, focus's and your own
+-- portrait, and the Olympus portraits; not the party's), and the honours' two shapes (Honors.ArtOf).
+local UNDERLAY = {
+	gold = { atlas = PLAIN, color = { 1, 1, 1 } },
+	silver = { atlas = PLAIN_SILVER, color = { 1, 1, 1 } },
+	bronze = { atlas = PLAIN, desaturated = true, color = { 158 / 255, 118 / 255, 86 / 255 } },
+	black = { atlas = PLAIN_SILVER, desaturated = true, color = { 0.24, 0.24, 0.27 } },
+}
+local HONOR_SHAPES = {
+	winged = { coords = { 0, 220 / 256, 0, 180 / 256 }, width = 110, height = 90, x = 11, y = -4 },
+	plain = { coords = { 0, 200 / 256, 0, 200 / 256 }, width = 100, height = 100, x = 0, y = 1 },
 }
 
 -- Where they go: the frame (a global of the game's), its container, and the hook that follows the
@@ -172,7 +194,7 @@ local PARTY_SCALE = PARTY_PORTRAIT / TARGET_PORTRAIT
 local PARTY_SUBLEVEL = -1 -- (ARTWORK: under the member frame's ring and name, ARTWORK 0)
 local TRACKED = { target = true, focus = true, player = true, party1 = true, party2 = true, party3 = true, party4 = true }
 
-local rigs = {}  -- [unit] = { tex = { [tier name] = texture }, shown = tier name or nil }
+local rigs = {}  -- [unit] = { tex = { [tier name] = texture }, honor = { [shape] = texture } (not the party's), shown = key or nil }
 local partyRigs = {} -- [a party member frame of the game's] = its rig, made once (rigs[party<i>]: the one showing party<i>)
 local known = {} -- [unit] = { guid, tier, guild, report, rt, council }: the last worked out
 local installed, waiting = false, false
@@ -228,6 +250,8 @@ local function Facts(unit)
 	f.councillor = ns.IsHighCouncillor(who) == true
 	f.council = f.councillor and not ns.CouncilMasked()
 	f.dev = IsDev(who)
+	local T = ns.Treasury
+	f.treasurer = type(T) == "table" and type(T.TreasurerPin) == "function" and T.TreasurerPin(who) == 1
 	if not f.guild or not ns.IsFederation(f.guild) then return f end
 	f.olympus = true
 	-- A nominee: named by the master of the guild the server gives him (Nominees.RoleOf).
@@ -262,7 +286,7 @@ local function Match(f, marked)
 	if not f or f.off then return nil end
 	for _, t in ipairs(Borders.TIERS) do
 		if ((t.king and f.king) or (t.council and f.council) or (t.dev and f.dev) or (t.leader and f.leader)
-			or (t.nominee and f.nominee)) and not (marked and not Borders.MARK_OF[t.name]) then
+			or (t.nominee and f.nominee) or (t.treasurer and f.treasurer)) and not (marked and not Borders.MARK_OF[t.name]) then
 			return t
 		end
 	end
@@ -295,7 +319,7 @@ local function Inputs(f)
 	if f and f.councillor then masked = ns.CouncilMasked() == true end
 	return { guild = f and f.guild, report = report, rt = row and report.t or nil, vouch = row and report.vouch or nil,
 		council = ns.rdb and ns.rdb.council, roster = f and f.fromRoster and (ns.Roster and ns.Roster.byName or false) or nil,
-		masked = masked, who = f and f.who, off = f and f.off, nominees = NomineesVersion() }
+		masked = masked, who = f and f.who, off = f and f.off, nominees = NomineesVersion(), treasurer = f and f.treasurer }
 end
 
 -- Has anything a unit's border or mark was worked out from (Inputs) changed since? Lookups only:
@@ -309,6 +333,7 @@ function Borders.Changed(k)
 		or (k.masked ~= nil and k.masked ~= (ns.CouncilMasked() == true))
 		or (k.who ~= nil and NetOff(k.who, k.guild) ~= k.off)
 		or k.nominees ~= NomineesVersion()
+		or (k.who ~= nil and k.treasurer ~= (type(ns.Treasury) == "table" and type(ns.Treasury.TreasurerPin) == "function" and ns.Treasury.TreasurerPin(k.who) == 1))
 end
 
 local function Compute(unit, guid)
@@ -368,6 +393,8 @@ function Borders.MarkOfName(who, guild)
 	f.councillor = ns.IsHighCouncillor(who) == true
 	f.council = f.councillor and not ns.CouncilMasked()
 	if f.off then return nil, f end
+	local T = ns.Treasury
+	f.treasurer = type(T) == "table" and type(T.TreasurerPin) == "function" and T.TreasurerPin(who) == 1
 	if guild and ns.IsFederation(guild) then
 		f.olympus = true
 		local rank
@@ -449,15 +476,42 @@ local function Dress(tex, t, mirror, scale)
 	return true
 end
 
--- A rig shows one border (a tier's name) or none (nil): Show and Hide alone, fine in combat.
-local function Show(rig, name)
-	if rig.shown == name then return end
-	if rig.shown and rig.tex[rig.shown] then rig.tex[rig.shown]:Hide() end
-	rig.shown = nil
-	if name and rig.tex[name] then
-		rig.tex[name]:Show()
-		rig.shown = name
+local function DressUnderlay(tex, tier, mirror)
+	local style = tier and UNDERLAY[tier.metal or "gold"] or nil
+	if not style or not AtlasExists(style.atlas) then return false end
+	tex:SetAtlas(style.atlas, true, nil, true)
+	tex:SetDesaturated(style.desaturated == true)
+	tex:SetVertexColor(style.color[1], style.color[2], style.color[3], 1)
+	tex:SetTexCoord(mirror and 1 or 0, mirror and 0 or 1, 0, 1)
+	return true
+end
+
+-- A rig shows one border (a tier's name), an honour's frame (1.2, ShowHonor) or none (nil): Show
+-- and Hide alone on the tier's art, fine in combat; the metal underlay where the rig has one
+-- (Borders.Rig), dressed for what shows.
+local function Present(rig, tex, key, metal)
+	if rig.shownTex ~= tex then
+		if rig.shownTex then rig.shownTex:Hide() end
+		rig.shownTex, rig.shown = nil, nil
+		if tex then
+			tex:Show()
+			rig.shownTex, rig.shown = tex, key
+		end
+	elseif tex then
+		rig.shown = key
 	end
+	if not rig.underlay then return end
+	local tier = key and TIERS_BY_NAME[key] or nil
+	local underlay = metal and { metal = metal } or tier
+	if underlay and DressUnderlay(rig.underlay, underlay, rig.mirror) then
+		rig.underlay:Show()
+	else
+		rig.underlay:Hide()
+	end
+end
+
+local function Show(rig, name)
+	Present(rig, name and rig.tex[name] or nil, name)
 end
 
 -- A frame's textures, one per tier the client has the art of, each hidden and placed by Place:
@@ -479,12 +533,39 @@ local function MakeRig(owner, mirror, scale, Place, sublevel)
 	return rig
 end
 
+-- The art round one portrait (a rig), on `container`: a game frame's container (the target's, the
+-- focus's, your own) or the copy of your own an Olympus portrait is drawn in (Borders.NewPortrait,
+-- 1.2: own). The metal underlay (ARTWORK 2) and one hidden texture per tier (ARTWORK 3), each at
+-- the game's frames' offsets: from the container's TOPRIGHT, or turned round (mirror: your own
+-- portrait's side) from its TOPLEFT. Nothing is called on the container but CreateTexture; an
+-- honour's texture is made later, one per shape (ShowHonor).
+function Borders.Rig(container, mirror, own)
+	local underlay = container:CreateTexture(nil, "ARTWORK", nil, 2)
+	underlay:Hide()
+	if mirror then
+		underlay:SetPoint("TOPLEFT", container, "TOPLEFT", -2, 1)
+	else
+		underlay:SetPoint("TOPRIGHT", container, "TOPRIGHT", 0, 1)
+	end
+	local rig = MakeRig(container, mirror, nil, function(tex, t)
+		if mirror then
+			-- The target's portrait sits 26 px from its frame's right edge, yours 24 px from its left.
+			tex:SetPoint("TOPLEFT", container, "TOPLEFT", -(t.x + 2), t.y)
+		else
+			tex:SetPoint("TOPRIGHT", container, "TOPRIGHT", t.x, t.y)
+		end
+	end)
+	rig.honor, rig.mirror, rig.container, rig.own, rig.underlay = {}, mirror, container, own == true, underlay
+	return rig
+end
+
 -- A party member frame's textures: the target's art and offsets scaled to its portrait about the
 -- portrait's top corner, turned round (from the frame's top left); under its ring and name.
 local function PartyRig(frame)
 	local s = PARTY_SCALE
 	return MakeRig(frame, true, s, function(tex, t)
-		tex:SetPoint("TOPLEFT", frame, "TOPLEFT", PARTY_LEFT - (t.x + TARGET_RIGHT) * s, (t.y + TARGET_TOP) * s - PARTY_TOP)
+		local p = type(t.party) == "table" and t.party or t
+		tex:SetPoint("TOPLEFT", frame, "TOPLEFT", PARTY_LEFT - ((p.x or t.x) + TARGET_RIGHT) * s, ((p.y or t.y) + TARGET_TOP) * s - PARTY_TOP)
 	end, PARTY_SUBLEVEL)
 end
 
@@ -540,14 +621,7 @@ function Borders.Install() -- gp:borders
 		local frame = _G[spec.frame]
 		local container = type(frame) == "table" and frame[spec.container] or nil
 		if type(container) == "table" and type(container.CreateTexture) == "function" then
-			rigs[spec.unit] = MakeRig(container, spec.mirror, nil, function(tex, t)
-				if spec.mirror then
-					-- The target's portrait sits 26 px from its frame's right edge, yours 24 px from its left.
-					tex:SetPoint("TOPLEFT", container, "TOPLEFT", -(t.x + 2), t.y)
-				else
-					tex:SetPoint("TOPRIGHT", container, "TOPRIGHT", t.x, t.y)
-				end
-			end)
+			rigs[spec.unit] = Borders.Rig(container, spec.mirror)
 			if spec.hook and type(frame[spec.hook]) == "function" and type(hooksecurefunc) == "function" then
 				local unit, where = spec.unit, "borders " .. spec.unit
 				hooksecurefunc(frame, spec.hook, function() ns.SafeCall(where, Borders.Refresh, unit) end)
@@ -566,8 +640,229 @@ function Borders.Install() -- gp:borders
 	return true
 end
 
+-- One reusable texture for each geometry, made only out of combat. Every honour of that shape
+-- merely changes its file and coordinates; a missing file is reported to the caller so the
+-- ordinary rank frame can be used instead.
+local function ShowHonor(rig, key, metal)
+	local H = ns.HonorsNet
+	-- (A party member's frame has the rank's borders alone: no honour's texture is made there.)
+	if not rig.honor or type(H) ~= "table" or type(H.FrameTexture) ~= "function" then return false end
+	local ok, file, shape = pcall(H.FrameTexture, key)
+	local spec = ok and HONOR_SHAPES[shape] or nil
+	if type(file) ~= "string" or not spec then return false end
+	local tex = rig.honor[shape]
+	if not tex then
+		-- (A game frame's texture is made out of combat only; an Olympus portrait's frame is ours.)
+		if not rig.own and InCombatLockdown and InCombatLockdown() then waiting = true return false end
+		tex = rig.container:CreateTexture(nil, "ARTWORK", nil, 3)
+		tex:Hide()
+		tex:SetSize(spec.width, spec.height)
+		if rig.mirror then tex:SetPoint("TOPLEFT", rig.container, "TOPLEFT", -(spec.x + 2), spec.y)
+		else tex:SetPoint("TOPRIGHT", rig.container, "TOPRIGHT", spec.x, spec.y) end
+		rig.honor[shape] = tex
+	end
+	local loaded, value = pcall(tex.SetTexture, tex, file)
+	if not loaded or value == false then return false end
+	local c = spec.coords
+	tex:SetTexCoord(rig.mirror and c[2] or c[1], rig.mirror and c[1] or c[2], c[3], c[4])
+	if not metal and type(ns.Honors) == "table" and type(ns.Honors.ArtOf) == "function" then
+		local artOk, _, _, artMetal = pcall(ns.Honors.ArtOf, key)
+		if artOk then metal = artMetal end
+	end
+	Present(rig, tex, key, metal)
+	return true
+end
 local function HideAll()
 	for _, rig in pairs(rigs) do Show(rig, nil) end -- (a party frame showing nobody is hidden already: MapParty)
+end
+
+-- The author's preview on a rig (see the top of the file): a tier's border, an honour's frame (none
+-- where the client has no art for it), or the marks' member star (no border). What shows: "rank",
+-- "honour" or nil.
+local function ShowPreview(rig, chosen)
+	if not TIERS_BY_NAME[chosen] and chosen ~= Borders.MEMBER then
+		if ShowHonor(rig, chosen) then return "honour" end
+		Show(rig, nil)
+		return nil
+	end
+	Show(rig, chosen ~= Borders.MEMBER and chosen or nil)
+	return chosen ~= Borders.MEMBER and "rank" or nil
+end
+
+---------------------------------------------------------------------------
+-- An Olympus portrait drawn as your own (1.2, the owner's ask: the Arena's portraits identical to
+-- the one on your unit frame)
+---------------------------------------------------------------------------
+-- Your own portrait as Forever draws it (Blizzard_UnitFrame/Mainline/PlayerFrame.xml, which its
+-- Camelot family loads): PlayerFrameContainer, 232 x 100, holds the portrait, 60 x 60 at its
+-- TOPLEFT 24, -19 (BACKGROUND, sublevel 1), masked by the atlas UI-HUD-UnitFrame-Player-Portrait-Mask
+-- (CLAMPTOBLACKADDITIVE both ways), and over it the frame's FrameTexture, the atlas
+-- UI-HUD-UnitFrame-Player-PortraitOn at its own size at the container's centre (BACKGROUND 2):
+-- the ring round the portrait and the frame of the bars. Mainline/UnitFrame.lua fills the
+-- portrait with SetPortraitTexture(portrait, unit, true) (the frame's disablePortraitMask: the
+-- square picture, which the mask makes round).
+-- Borders.NewPortrait draws that again on Olympus's own frames: a copy of the container with the
+-- portrait, its mask and the same atlas at the same places, and on it the rig your own portrait
+-- gets (Borders.Rig, turned round), so a tier's or an honour's art is where it is round yours. Of
+-- the frame's atlas only the ring shows, through a round mask 62 across on the portrait's centre
+-- (in the author's screenshots of 2026-10-04 the ring ends about half a unit past the portrait's
+-- square, and the bars start 31 from its centre). The copy is laid out at 60 and scaled as a whole
+-- (Frame:SetScale) to the size a screen asks for, so every part keeps its place and proportion.
+-- A client without that atlas (Classic Era, Anniversary, whose own frame is UI-TargetingFrame
+-- turned round) shows that file's portrait medallion instead, as the Arena did before.
+-- Nothing of the game's is called, hooked or changed: Olympus's own frames, made by the screen
+-- that shows them, with the gamepad UI too.
+Borders.PORTRAIT = { w = 232, h = 100, x = 24, y = -19, size = 60, ring = 62,
+	mask = "UI-HUD-UnitFrame-Player-Portrait-Mask", frame = "UI-HUD-UnitFrame-Player-PortraitOn",
+	round = "Interface\\CharacterFrame\\TempPortraitAlphaMask",
+	-- (the classic sheet's medallion: x 132..233, y 0..103 of its 256 x 128, turned round; 87 high at 60)
+	classic = "Interface\\TargetingFrame\\UI-TargetingFrame", classicCoords = { 233 / 256, 132 / 256, 0, 103 / 128 },
+	classicSize = { 87 * 101 / 103, 87 } }
+local CLAMP = "CLAMPTOBLACKADDITIVE"
+
+-- A mask on `tex`, a MaskTexture of `frame` from an atlas (where the client has it) or a file;
+-- nil where the client has no mask textures.
+local function MaskOn(frame, tex, atlas, file)
+	if type(frame.CreateMaskTexture) ~= "function" or type(tex.AddMaskTexture) ~= "function" then return nil end
+	local ok, mask = pcall(frame.CreateMaskTexture, frame)
+	if not ok or type(mask) ~= "table" then return nil end
+	local set = false
+	if atlas and AtlasExists(atlas) and type(mask.SetAtlas) == "function" then
+		set = pcall(mask.SetAtlas, mask, atlas, false, nil, nil, CLAMP, CLAMP)
+	end
+	if not set and file and type(mask.SetTexture) == "function" then set = pcall(mask.SetTexture, mask, file, CLAMP, CLAMP) end
+	if not set or not pcall(tex.AddMaskTexture, tex, mask) then return nil end
+	return mask
+end
+
+-- A new Olympus portrait on `parent`, `size` across (60: your own frame's): { slot (the square a
+-- screen places and anchors to, as it did its portrait texture), portrait (the picture's texture),
+-- ring, top (a frame over it all, for a screen's own marks), and the rig's own fields }. Its frame
+-- is none until ShowTier or ShowHonour.
+function Borders.NewPortrait(parent, size)
+	local P = Borders.PORTRAIT
+	local slot = CreateFrame("Frame", nil, parent)
+	-- The portrait's square at 60, centred on the slot (no offset, so nothing for the scale to move)...
+	local box = CreateFrame("Frame", nil, slot)
+	box:SetSize(P.size, P.size)
+	box:SetPoint("CENTER", slot, "CENTER", 0, 0)
+	-- ...and round it the copy of your frame's container, its portrait on that square.
+	local container = CreateFrame("Frame", nil, box)
+	container:SetSize(P.w, P.h)
+	container:SetPoint("TOPLEFT", box, "TOPLEFT", -P.x, -P.y)
+	local portrait = container:CreateTexture(nil, "BACKGROUND", nil, 1)
+	portrait:SetSize(P.size, P.size)
+	portrait:SetPoint("TOPLEFT", container, "TOPLEFT", P.x, P.y)
+	local mask = MaskOn(container, portrait, P.mask, P.round)
+	if mask then
+		mask:SetSize(P.size, P.size)
+		mask:SetPoint("TOPLEFT", container, "TOPLEFT", P.x, P.y)
+	elseif type(portrait.SetMask) == "function" then
+		pcall(portrait.SetMask, portrait, P.round)
+	end
+	local ring = container:CreateTexture(nil, "BACKGROUND", nil, 2)
+	local ringMask, ringKind
+	if AtlasExists(P.frame) and type(ring.SetAtlas) == "function" and pcall(ring.SetAtlas, ring, P.frame, true) then
+		ring:SetPoint("CENTER", container, "CENTER", 0, 0)
+		ringMask = MaskOn(container, ring, nil, P.round)
+		if ringMask then
+			ringMask:SetSize(P.ring, P.ring)
+			ringMask:SetPoint("CENTER", portrait, "CENTER", 0, 0)
+			ringKind = "atlas"
+		end
+	end
+	if not ringKind then
+		-- (the frame's whole atlas unmasked would show its bars: the classic medallion, or none)
+		local ok, loaded = pcall(ring.SetTexture, ring, P.classic)
+		if ok and loaded ~= false then
+			ring:SetTexCoord(unpack(P.classicCoords))
+			ring:SetSize(P.classicSize[1], P.classicSize[2])
+			ring:ClearAllPoints()
+			ring:SetPoint("CENTER", portrait, "CENTER", 0, 0)
+			ringKind = "classic"
+		else
+			ring:Hide()
+		end
+	end
+	local top = CreateFrame("Frame", nil, slot)
+	top:SetAllPoints(slot)
+	local okLevel, level = pcall(container.GetFrameLevel, container)
+	if okLevel and type(level) == "number" and type(top.SetFrameLevel) == "function" then top:SetFrameLevel(level + 1) end
+	local rig = Borders.Rig(container, true, true)
+	rig.slot, rig.box, rig.portrait, rig.portraitMask, rig.ring, rig.ringMask, rig.ringKind, rig.top =
+		slot, box, portrait, mask, ring, ringMask, ringKind, top
+	Borders.SizePortrait(rig, size)
+	return rig
+end
+
+-- Its size on screen, `size` across: the whole copy scaled from 60; rig.reach, how far its art
+-- may reach past the slot at that size (Borders.PortraitReach).
+function Borders.SizePortrait(rig, size)
+	local P = Borders.PORTRAIT
+	size = tonumber(size)
+	if not size or size <= 0 then size = P.size end
+	rig.size = size
+	rig.slot:SetSize(size, size)
+	rig.box:SetScale(size / P.size)
+	rig.reach = Borders.PortraitReach(size)
+end
+
+-- What an Olympus portrait wears: a tier's art by its name (nil: none), or an honour's frame by its
+-- key (false: this client has no art for it, and nothing changed; rig.shown, the key worn). A
+-- unit's border's own Show and ShowHonor, the underlay with them. A first place in the Arena's
+-- "-1" spelling (ArenaHome.Family's "arena-champion-1": the podium, the sim's letter) is the
+-- honour itself where that key has no art of its own.
+function Borders.ShowTier(rig, name) Show(rig, name) end
+function Borders.ShowHonour(rig, key, metal)
+	if ShowHonor(rig, key, metal) then return true end
+	local first = type(key) == "string" and key:match("^(.+)%-1$") or nil
+	return first ~= nil and ShowHonor(rig, first, metal)
+end
+
+-- An Olympus portrait of the author himself while his preview is on: the preview, as round his
+-- own portrait (his screen alone, as ever), and only while it shows there (Active: the borders
+-- on, mouse and keyboard, an Olympus member; SetPreview says why not), so the two always match.
+-- True and what shows ("rank", "honour" or nil), or false for anyone else, no preview or not
+-- now, nothing changed.
+function Borders.ShowPreviewOn(rig, who)
+	if not preview or type(who) ~= "string" or who == "" or type(ns.me) ~= "string" or not Active() then return false end
+	if ns.FullName(who):lower() ~= ns.me:lower() then return false end
+	return true, ShowPreview(rig, preview)
+end
+-- His preview changed, or whether it shows (the borders on or off, the gamepad UI): his Olympus
+-- portraits already drawn follow at once, as his unit frame does (the Arena's Kit listens).
+local function PreviewChanged() ns.Fire("BORDERS_PREVIEW") end
+
+-- The tier a name gets on an Olympus portrait (the Arena's, where there is no unit): from the
+-- facts and trust rules of the mark by his name (Borders.MarkOfName); nil for none.
+function Borders.TierOfName(who, guild)
+	local _, f = Borders.MarkOfName(who, guild)
+	-- (The dev's silver too, 1.1.5, as on his unit frame: MarkOfName leaves it out, it has no mark.)
+	if type(f) == "table" and not f.off and type(f.who) == "string" then f.dev = IsDev(f.who) end
+	local t = Match(f)
+	return t and t.name or nil
+end
+
+-- How far the art round an Olympus portrait may reach past the portrait's square, in its own
+-- units (60 across): { left, right, top, bottom }, the most of every shape, turned round as yours
+-- (the winged 37 left, 13 right, 15 up and down; the plain 26 left, 14 right, 20 up and down), so
+-- a screen keeps its words clear of it. With `size`, for a portrait that size across on screen:
+-- whole pixels (times size / 60, rounded up).
+function Borders.PortraitReach(size)
+	local P = Borders.PORTRAIT
+	local r = { left = 0, right = 0, top = 0, bottom = 0 }
+	for _, s in pairs(HONOR_SHAPES) do
+		local dx, dy = -(s.x + 2) - P.x, s.y - P.y -- (its TOPLEFT from the portrait's)
+		r.left = math.max(r.left, -dx)
+		r.right = math.max(r.right, s.width + dx - P.size)
+		r.top = math.max(r.top, dy)
+		r.bottom = math.max(r.bottom, s.height - dy - P.size)
+	end
+	size = tonumber(size)
+	if size and size > 0 then
+		for k, v in pairs(r) do r[k] = math.ceil(v * size / P.size) end
+	end
+	return r
 end
 
 -- The unit is us: our own frame, or the target or focus while it is us (by GUID; by UnitIsUnit
@@ -601,7 +896,21 @@ function Borders.Refresh(unit, fresh)
 	if Secret(guid) then guid = nil end
 	local k = known[unit]
 	if fresh or not k or guid == nil or k.guid ~= guid then k = Compute(unit, guid) end
-	Show(rig, preview and UnitExists(unit) and IsMe(unit, guid) and preview or k.tier)
+	local chosen = preview and UnitExists(unit) and IsMe(unit, guid) and preview or nil
+	if chosen then return ShowPreview(rig, chosen) end
+	if k.off then return Show(rig, nil) end
+	-- 1.2: Most Wanted may only return a frame after an authenticated global snapshot activates its
+	-- fail-closed authority gate. The ordinary local kill ledger can never award one.
+	local wanted = ns.Wanted and ns.Wanted.GlobalBorder and k.who and ns.Wanted.GlobalBorder(k.who, guid)
+	if wanted and ShowHonor(rig, wanted) then return end
+	-- 1.2: a verified honour's frame (HonorsNet.lua), or none where its holder chose none.
+	local H = ns.HonorsNet
+	local v = type(H) == "table" and type(H.Verified) == "function" and k.who and H.Verified(k.who, guid) or nil
+	if type(v) == "table" then
+		if v.frame == "none" then return Show(rig, nil) end
+		if v.frame and v.frame ~= "rank" and ShowHonor(rig, v.frame, v.metal) then return end
+	end
+	Show(rig, k.tier)
 end
 
 -- The author's preview on Edit Mode's party stand-ins (see the top of the file): the previewed tier
@@ -664,6 +973,7 @@ function Borders.SetEnabled(on)
 	ns.db.borders = on and true or false
 	Borders.RefreshAll(true)
 	ns.Nameplates.RefreshAll(true)
+	if preview then PreviewChanged() end
 	Borders.Report()
 end
 
@@ -680,6 +990,13 @@ local function TierNamed(name)
 		if t.name == name then return t end
 	end
 	return nil
+end
+
+local function HonorNamed(name)
+	local H = ns.HonorsNet
+	if type(H) ~= "table" or type(H.FrameTexture) ~= "function" then return false end
+	local ok, file, shape = pcall(H.FrameTexture, name)
+	return ok and type(file) == "string" and HONOR_SHAPES[shape] ~= nil
 end
 
 -- "gold-elite" -> L.BORDERS_WHO_GOLD_ELITE: who holds that border, for the Workshop's lines.
@@ -705,7 +1022,7 @@ function Borders.SetPreview(word)
 	if word == "off" then
 		preview = nil
 		ns.Print(L.BORDERS_PREVIEW_OFF)
-	elseif TierNamed(word) then
+	elseif TierNamed(word) or HonorNamed(word) then
 		preview = word
 		-- (1.1: with the marks off, it says no mark shows with the border.)
 		ns.Print(ns.Nameplates.Enabled() == false and L.BORDERS_PREVIEW_ON_NO_MARK:format(word) or L.BORDERS_PREVIEW_ON:format(word))
@@ -721,6 +1038,7 @@ function Borders.SetPreview(word)
 	end
 	Borders.RefreshAll()
 	ns.Nameplates.RefreshAll()
+	PreviewChanged()
 	-- Why it doesn't show yet, if it doesn't: the same rules as a real border.
 	if preview then
 		if not Borders.Enabled() then ns.Print(L.BORDERS_PREVIEW_WHEN_OFF)
@@ -730,7 +1048,7 @@ function Borders.SetPreview(word)
 			-- (no border: the marks alone, and only while they are on)
 			if ns.Nameplates.Enabled() == false then ns.Print(L.NAMEPLATES_PREVIEW_WHEN_OFF) end
 		elseif not installed then ns.Print(L.BORDERS_PREVIEW_COMBAT) -- (only combat keeps them from being made)
-		elseif not (rigs.player and rigs.player.tex[preview]) then ns.Print(L.BORDERS_PREVIEW_MISSING) end
+		elseif not HonorNamed(preview) and not (rigs.player and rigs.player.tex[preview]) then ns.Print(L.BORDERS_PREVIEW_MISSING) end
 	end
 	ns.Fire("WORKSHOP_CHANGED")
 	return true
@@ -744,11 +1062,18 @@ function Borders.PreviewLines(lines)
 		right = Grey(preview and L.BORDERS_PREVIEW_NOW:format(preview) or L.BORDERS_PREVIEW_NONE) }
 	local names = {}
 	for _, t in ipairs(Borders.TIERS) do names[#names + 1] = t.name end
+	-- (1.2: the honours' frames, one of each kind.)
+	for _, key in ipairs({ "arena-champion", "donor-top-1", "level-race-60", "oracle-1", "guild-top-leader" }) do names[#names + 1] = key end
 	names[#names + 1] = Borders.MEMBER
 	for _, name in ipairs(names) do
 		local on = preview == name
+		local who = Who(name)
+		if not who then
+			local H = ns.HonorsNet
+			who = type(H) == "table" and type(H.TitleText) == "function" and H.TitleText(name) or ""
+		end
 		lines[#lines + 1] = {
-			indent = 1, text = (on and Gold(name) or name) .. "  " .. Grey(Who(name)),
+			indent = 1, text = (on and Gold(name) or name) .. (who ~= "" and ("  " .. Grey(who)) or ""),
 			right = on and Green(L.BORDERS_PREVIEW_SHOWN) or nil,
 			onClick = function() Borders.SetPreview(on and "off" or name) end,
 			tooltip = function(tt)
@@ -988,8 +1313,18 @@ end
 function Borders.ChatFilter(event, name, text, sender)
 	if not chatOn or not CHAT_EVENTS[event] then return nil end
 	local ok, out = pcall(ChatMarkOf, name, sender, CHAT_GUILD_EVENTS[event] == true)
-	if ok then return out end
-	return nil
+	if not ok then return nil end
+	-- The same public Treasury identity badge as the addon chats, through the existing name
+	-- filter only. No frame/hook and no role inferred from a message's labels.
+	if not Secret(name, sender) and type(name) == "string" and type(sender) == "string" then
+		local C = ns.Channels
+		local badge = C and type(C.RoleBadge) == "function" and C.RoleBadge(sender) or ""
+		if badge ~= "" then
+			local shown = out or name
+			return shown:find(badge, 1, true) and shown or badge .. shown
+		end
+	end
+	return out
 end
 
 function Borders.ChatForget() chatMarks, chatKept = {}, 0 end
@@ -1063,6 +1398,8 @@ ns.On("COUNCIL_MASK_CHANGED", function() Borders.ChatForget() end)
 ns.On("DATA_CHANGED", function() Borders.ChatForget() end)
 ns.On("LOGIN", function() Borders.RefreshAll(true) end)
 ns.On("DATA_CHANGED", function() Borders.CensusChanged() end)
+ns.On("HONORS_CHANGED", function() Borders.RefreshAll(true) end) -- (1.2)
+ns.On("WANTED_CHANGED", function() Borders.RefreshAll(true) end) -- (1.2)
 -- The King shows or hides the council's names (the eye in the Realm, ns.SetCouncilNamesShown).
 ns.On("COUNCIL_MASK_CHANGED", function() Borders.CensusChanged() end)
 ns.RegisterEvent("PLAYER_TARGET_CHANGED", function() Borders.Refresh("target") end)
@@ -1081,6 +1418,8 @@ pcall(ns.RegisterEvent, "PLAYER_FOCUS_CHANGED", function() Borders.Refresh("focu
 -- A switch between mouse and keyboard and the gamepad UI (1.1.5: the gamepad gate, Gamepad.lua, on
 -- the next frame): to the gamepad UI every border hides, and the game's chat marks stop; back, the
 -- borders are looked at again and the chat marks come back (registered on the first switch to mouse
--- and keyboard after a gamepad login).
-ns.Gate.Hooks("borders", { park = function() HideAll() end, install = function() Borders.RefreshAll(true) end })
+-- and keyboard after a gamepad login). The author's Olympus portraits follow his preview (1.2).
+ns.Gate.Hooks("borders", {
+	park = function() HideAll(); if preview then PreviewChanged() end end,
+	install = function() Borders.RefreshAll(true); if preview then PreviewChanged() end end })
 ns.Gate.Hooks("chat-marks", { park = function() Borders.ChatRefresh() end, install = function() Borders.ChatRefresh() end })

@@ -21,8 +21,17 @@ local function Interval()
 	return math.max(MIN_INTERVAL, math.floor(ns.Comm.PeerCount() / 3))
 end
 
+-- 1.1.6: a sanctioned player (WatchChat.Barred "locations": a moderator's timeout, a hold, a
+-- net-off word) sees no guildmate's dot while it lasts, sends none of his, and his guildmates'
+-- clients drop his.
+local function Sanctioned(name)
+	local WC = ns.WatchChat
+	return type(WC) == "table" and not WC.missing and type(WC.Barred) == "function" and WC.Barred("locations", name) ~= nil
+end
+Positions.Sanctioned = Sanctioned
+
 local function SendPosition()
-	if not ns.db.sharePosition or not IsInGuild() or IsInInstance() then return end
+	if not ns.db.sharePosition or not IsInGuild() or IsInInstance() or Sanctioned() then return end
 	local mapID = C_Map.GetBestMapForUnit("player")
 	local pos = mapID and C_Map.GetPlayerMapPosition(mapID, "player")
 	if not pos then return end
@@ -71,9 +80,10 @@ local function RefreshNow()
 	-- The world map's dots only with mouse and keyboard (ns.WorldMapIcons); the minimap's always.
 	local world = ns.WorldMapIcons(Pins, Positions) -- gp:worldmap-icons
 	local now = ns.Now()
+	local barred = Sanctioned()
 	for name, p in pairs(pins) do
 		local m = mates[name]
-		if not m or now - m.t > EXPIRE or not ns.db.showMates then
+		if not m or now - m.t > EXPIRE or not ns.db.showMates or barred then
 			if world then Pins:RemoveWorldMapIcon(Positions, p.world) end
 			Pins:RemoveMinimapIcon(Positions, p.mini)
 			p.world:Hide()
@@ -81,7 +91,7 @@ local function RefreshNow()
 			if not m or now - m.t > EXPIRE then mates[name] = nil end
 		end
 	end
-	if not ns.db.showMates then return end
+	if not ns.db.showMates or barred then return end
 	for name, m in pairs(mates) do
 		local p = pins[name]
 		if not p then
@@ -117,7 +127,7 @@ function Positions.SetSharing(on)
 end
 
 ns.Comm.Handle("P1", function(dist, sender, text)
-	if dist ~= "GUILD" then return end
+	if dist ~= "GUILD" or Sanctioned(sender) then return end
 	local p = ns.Codec.DecodePosition(text)
 	if not p then return end
 	p.t = ns.Now()

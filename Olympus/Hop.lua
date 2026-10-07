@@ -55,16 +55,18 @@ Hop.after = function(seconds, where, fn) ns.After(seconds, where, fn) end
 
 local ask             -- our own request in progress
 local lastAsk = -math.huge
+local discoveryHandoff = false -- only consensus/an official layer may bypass its preceding Q gap
 local fails, failedAt = 0, -math.huge -- our asks in a row that found nobody or got no invite
 -- Asks heard on the channel for BRAKE_WINDOW, per layer and asker: { ["mapID:zoneUID"] = { [short] = t } }.
 local heard = {}
 -- Askers are keyed by short name: the channel and whispers may not both carry the realm.
-local offered = {}    -- [id .. asker] = t: offers we sent (a request must match one)
+local offered = {}    -- [id .. asker] = { t, mapID, zoneUID }: bind a request to the layer offered
 local answeredAt = {} -- [asker] = t
 local lastOffer, declines, pausedUntil = -math.huge, 0, -math.huge
 local pending         -- the request on screen: { from, id, t }
 local recent = {}     -- times of our last invites
-local stats = { asks = 0, offers = 0, requests = 0, invites = 0, noes = 0, joins = 0, moves = 0, releases = 0 }
+local stats = { asks = 0, offers = 0, requests = 0, invites = 0, noes = 0, joins = 0, moves = 0, releases = 0,
+	autoBlocked = 0 }
 local guests = {}     -- [short name] = { name, id, t, release }: players we invited for a hop
 local kingMode        -- this session's answer to the King's layer window: auto, manual or no
 -- 1.1.5 (GitHub issue #50): "Always invite" clicked while leading a party or raid of our own also
@@ -107,7 +109,12 @@ local function KingChoice() return kingMode or ns.db.hopKingChoice end
 local function OnKingLayer(strict)
 	local k = Hop.King(strict)
 	local mine = ns.Layers.Mine()
-	return (k and k.zoneUID and mine and mine.mapID == k.mapID and mine.zoneUID == k.zoneUID) and true or false
+	if k and k.zoneUID and mine and mine.mapID == k.mapID and mine.zoneUID == k.zoneUID then return true end
+	-- A private exact-nameplate observation may apply the player's existing King-layer choice
+	-- locally without becoming Hop.King authority or a destination for anyone.
+	local S = ns.HopSightings
+	return (mine and type(S) == "table" and type(S.LocalKingLayer) == "function"
+		and S.LocalKingLayer(mine.mapID, mine.zoneUID)) and true or false
 end
 
 -- The short names of the others in our group.
@@ -153,6 +160,7 @@ function Hop.CanHelp(mapID, zoneUID)
 	if ns.King and ns.King.IsKing and ns.King.IsKing() then return false end
 	local mine = ns.Layers.Mine()
 	if not mine or mine.mapID ~= mapID or mine.zoneUID ~= zoneUID then return false end
+	if ns.Layers.CurrentMap() ~= mapID then return false end
 	if ns.Now() - (mine.t or 0) > Hop.LAYER_FRESH then return false end
 	-- "Can't right now" on the King's layer window.
 	if KingChoice() == "no" and OnKingLayer() then return false end
@@ -161,6 +169,13 @@ function Hop.CanHelp(mapID, zoneUID)
 	if ns.Now() < pausedUntil then return false end
 	local _, room = Hop.GroupState()
 	return room
+end
+
+-- Discovery knows it is specifically asking about the King before Hop.King has an L1 layer.
+-- Preserve the explicit "Can't right now" choice in that interval too.
+function Hop.CanHelpKing(mapID, zoneUID)
+	if KingChoice() == "no" then return false end
+	return Hop.CanHelp(mapID, zoneUID)
 end
 
 -- The chance to answer, so a crowded layer sends about OFFERS offers in all. Layers.lua sees
@@ -192,6 +207,20 @@ function Hop.Chance(mapID, zoneUID)
 	return math.min(1, Hop.OFFERS / math.max(1, crowd))
 end
 
+-- 1.2.0: an Olympus member (our roster, or his guild's claim the channel takes, Channels.VerifiedLevel
+-- 1+), never a stranger on an unsealed channel: only one gets an offer, a window or an invite.
+local function Member(sender)
+	local R = ns.Roster
+	if R and R.RankOf and R.RankOf(sender) ~= nil then return true end
+	local C, M = ns.Channels, ns.Moderation
+	if type(C) ~= "table" or type(C.VerifiedLevel) ~= "function" then return false end
+	local guild = M and M.GuildOf and M.GuildOf(sender)
+	if type(guild) ~= "string" or guild == "" or not (ns.IsFederation and ns.IsFederation(guild)) then return false end
+	local ok, level = pcall(C.VerifiedLevel, sender, guild)
+	return ok and type(level) == "number" and level >= 1
+end
+Hop.Member = Member
+
 function Hop.HandleAsk(dist, sender, text)
 	if dist ~= "CHANNEL" then return end
 	local id, mapID, zoneUID = text:match("^LQ~(%d+)~(%d+)~(%d+)$")
@@ -203,6 +232,7 @@ function Hop.HandleAsk(dist, sender, text)
 	local short = ns.ShortName(sender)
 	local now = ns.Now()
 	Hop.Hear(mapID, zoneUID, short, now)
+	if not Member(sender) then stats.strangers = (stats.strangers or 0) + 1 return end
 	if now - (answeredAt[short] or -math.huge) < Hop.HELP_GAP then return end
 	if now - lastOffer < Hop.OFFER_GAP then return end
 	if not Hop.CanHelp(mapID, zoneUID) then return end
@@ -213,12 +243,16 @@ function Hop.HandleAsk(dist, sender, text)
 	if asking > 1 then chance = math.min(chance, math.max(1 / asking, 0.1)) end
 	if Hop.random() > chance then return end
 	answeredAt[short] = now
-	offered[id .. short] = now
+	local key = id .. short
+	local offer = { t = now, mapID = mapID, zoneUID = zoneUID }
+	offered[key] = offer
 	lastOffer = now
-	local group = Hop.GroupState()
-	local load = Load()
 	-- A random pause spreads the offers of a crowd over a couple of seconds.
 	Hop.after(0.2 + Hop.random() * 2.3, "hop offer", function()
+		-- We may have moved, entered combat or stopped sharing during that pause.
+		if offered[key] ~= offer then return end
+		if not Hop.CanHelp(mapID, zoneUID) then offered[key] = nil; return end
+		local group, load = Hop.GroupState(), Load()
 		ns.Comm.Whisper(sender, ("LO~%d~%d~%d"):format(id, group, load), nil, true)
 		stats.offers = stats.offers + 1
 	end)
@@ -246,20 +280,24 @@ function Hop.HandleRequest(dist, sender, text)
 	local id = tonumber(text:match("^LR~(%d+)$"))
 	sender = ns.FullName(sender)
 	if ns.Moderation.Hides and ns.Moderation.Hides(sender) then return end -- (1.1: net-off)
+	if not Member(sender) then stats.strangers = (stats.strangers or 0) + 1 return end
 	local key = id and (id .. ns.ShortName(sender))
-	local at = key and offered[key]
-	if not at or ns.Now() - at > 120 then return end
+	local offer = key and offered[key]
+	if not offer or ns.Now() - offer.t > 120 then return end
 	offered[key] = nil
 	stats.requests = stats.requests + 1
-	local _, room = Hop.GroupState()
-	if not room or pending or (InCombatLockdown and InCombatLockdown()) then return SayNo(sender, id) end
+	if not Hop.CanHelp(offer.mapID, offer.zoneUID) then return SayNo(sender, id) end
 	-- On its own ("Always invite", or "For Olympus!" on the King's layer): only while we are
 	-- alone or with hop guests; in a group of our own we get the window, until "Always invite"
 	-- is clicked in it (1.1.5, #50: then that group too, GroupAutoActive).
 	-- "For Olympus!" invites on its own only for a King two reports confirm.
 	local auto = ns.db.layerAutoInvite or (KingChoice() == "auto" and OnKingLayer(true))
 	if auto and (OnlyGuests() or GroupAutoActive()) then return Invite(sender, id, true) end
-	pending = { from = sender, id = id, t = ns.Now() }
+	if auto then
+		stats.autoBlocked = stats.autoBlocked + 1
+		ns.Print(L.HOP_AUTO_PAUSED_GROUP)
+	end
+	pending = { from = sender, id = id, t = ns.Now(), mapID = offer.mapID, zoneUID = offer.zoneUID }
 	-- In an instance or on Busy (1.1, ns.Alert): no sound and no window; they come once the player
 	-- is out, while the asker still waits (Hop.WAIT), else the request only lapses.
 	local ask = pending
@@ -272,6 +310,11 @@ end
 local function Answer(data, invite, always)
 	if not data or pending ~= data then return end
 	pending = nil
+	-- A button can be clicked long after its offer. Recheck every eligibility gate.
+	if invite and (ns.Now() - data.t > Hop.WAIT or not Hop.CanHelp(data.mapID, data.zoneUID)) then
+		SayNo(data.from, data.id)
+		return Changed()
+	end
 	if always then
 		ns.db.layerAutoInvite = true
 		-- The kept setting still asks first in a group of our own (OnlyGuests). Clicked in one, the
@@ -319,8 +362,31 @@ local function Finish(message, fromPopup)
 	if not ask then return end
 	if not fromPopup and ask.leaveShown then ns.HideDialog("OLYMPUS_HOP_LEAVE", ask) end
 	ask.phase = "done"
+	ask.result = message
+	ns.Comm.Cancel(ask)
 	if message then ns.Print(message) end
 	Changed()
+end
+
+-- Rechecked when sending a queued ask, choosing a helper and receiving an invite.
+-- These checks do not change the player's group or their sharing preferences.
+local function RequestProblem(allowGroup)
+	if not ns.IsMember() then return L.MEMBERS_ONLY end
+	local off = ns.Moderation.SelfOff and ns.Moderation.SelfOff()
+	if off then return ns.Moderation.YouText(off) end
+	if IsInInstance and IsInInstance() then return L.HOP_INSTANCE end
+	if ask and ns.Layers.CurrentMap() ~= ask.mapID then return L.HOP_CONTEXT_CHANGED end
+	if InCombatLockdown and InCombatLockdown() then return L.HOP_COMBAT end
+	if not allowGroup and IsInGroup and IsInGroup() then return L.HOP_IN_GROUP end
+end
+
+function Hop.Cancel()
+	if (not ask or ask.phase == "done") and ns.HopSightings and ns.HopSightings.CancelRequest
+		and ns.HopSightings.CancelRequest(nil, true) then
+		return ns.Print(L.HOP_CANCELLED)
+	end
+	if not ask or ask.phase == "done" then return ns.Print(L.HOP_IDLE) end
+	Finish(L.HOP_CANCELLED)
 end
 
 -- Seconds before we may ask again: ASK_GAP after an ask, and after asks in a row that found
@@ -332,6 +398,34 @@ function Hop.WaitLeft(now)
 	local left = Hop.ASK_GAP - (now - lastAsk)
 	if fails > 0 then left = math.max(left, Hop.BACKOFF[math.min(fails, #Hop.BACKOFF)] - (now - failedAt)) end
 	return math.max(0, left)
+end
+
+-- King-layer discovery is the first stage of the same hop. A discovery that found no safe
+-- destination shares the ordinary hop backoff instead of broadcasting a new Q forever.
+function Hop.DiscoveryFailed(message)
+	local now = ns.Now()
+	Hop.WaitLeft(now) -- forget an old failure before adding this one
+	fails, failedAt = fails + 1, now
+	local wait = math.ceil(Hop.WaitLeft(now))
+	if message then ns.Print(message .. " " .. L.HOP_WAIT:format(wait)) end
+	Changed()
+	return wait
+end
+
+-- A discovery Q and its eventual LQ are one hop, so the public question consumes the same
+-- channel cooldown as an ordinary ask. Only the causal transition from verified discovery (or
+-- an authoritative L1 arriving during it) may enter the existing Hop machine immediately.
+function Hop.DiscoverySent()
+	lastAsk = ns.Now()
+	Changed()
+end
+
+function Hop.AskDiscovered(mapID, zoneUID, label)
+	local previous = discoveryHandoff
+	discoveryHandoff = true
+	local result = Hop.Ask(mapID, zoneUID, label)
+	discoveryHandoff = previous
+	return result
 end
 
 -- The ask ended with nobody (no offer at all) or no invite: the next one waits longer.
@@ -383,15 +477,45 @@ function Hop.Pick(offers, tried)
 	return pool[#pool].o
 end
 
+-- A queued ask belongs to one guild and one zone. A send-time guard is the final check:
+-- callbacks, guild changes, moderation and group events may race the paced transport.
+local function Current(a)
+	return ask == a and ns.IsMember() and GetGuildInfo("player") == a.guild
+		and ns.Layers.CurrentMap() == a.mapID
+		and not (ns.Moderation.SelfOff and ns.Moderation.SelfOff())
+end
+
+local function CanSend(a)
+	return Current(a) and RequestProblem() == nil
+end
+
 function Hop.Next()
-	if not ask or ask.phase == "done" then return end
-	local o = ask.tries < Hop.TRIES and Hop.Pick(ask.offers, ask.tried)
-	if not o then return Failed(ask.tries == 0) end
-	ask.tried[o.name] = true
-	ask.tries = ask.tries + 1
-	ask.helper, ask.phase, ask.asked = o.name, "requested", ns.Now()
-	ns.Comm.Whisper(o.name, ("LR~%d"):format(ask.id), nil, true)
-	ns.Print(L.HOP_REQUESTED:format(ns.DisplayName(o.name)))
+	if not ask or (ask.phase ~= "asking" and ask.phase ~= "requested" and ask.phase ~= "accepted") then return end
+	local problem = RequestProblem()
+	if problem then return Finish(problem) end
+	local a = ask
+	local o = a.tries < Hop.TRIES and Hop.Pick(a.offers, a.tried)
+	if not o then
+		-- An early decline does not discard slower offers still inside the original window.
+		if a.tries < Hop.TRIES and a.t and ns.Now() - a.t < Hop.NOBODY then
+			a.phase = "asking"
+			return Changed()
+		end
+		return Failed(a.tries == 0)
+	end
+	a.helper, a.phase, a.asked = o.name, "requesting", nil
+	ns.Comm.Whisper(o.name, ("LR~%d"):format(a.id), nil, true, nil, function(sent)
+		if ask ~= a or a.phase ~= "requesting" or a.helper ~= o.name then return end
+		if not sent then
+			Hop.OnRoster()
+			if a.phase == "requesting" then Finish(L.HOP_GAVE_UP) end
+			return
+		end
+		a.tried[o.name], a.tries = true, a.tries + 1
+		a.phase, a.asked = "requested", ns.Now()
+		ns.Print(L.HOP_REQUESTED:format(ns.DisplayName(o.name)))
+		Changed()
+	end, { owner = a, guard = function() return a.phase == "requesting" and a.helper == o.name and CanSend(a) end })
 	Changed()
 end
 
@@ -402,20 +526,28 @@ function Hop.Ask(mapID, zoneUID, label)
 	local off = ns.Moderation.SelfOff and ns.Moderation.SelfOff()
 	if off then return ns.Print(ns.Moderation.YouText(off)) end
 	if not mapID or not zoneUID then return ns.Print(L.HOP_NO_LAYER) end
+	if IsInInstance and IsInInstance() then return ns.Print(L.HOP_INSTANCE) end
+	if InCombatLockdown and InCombatLockdown() then return ns.Print(L.HOP_COMBAT) end
 	-- A zone UID only means something in its zone: the player must be there already.
 	if ns.Layers.CurrentMap() ~= mapID then return ns.Print(L.HOP_OTHER_MAP:format(Hop.ZoneName(mapID))) end
 	local mine = ns.Layers.Mine()
-	if mine and mine.mapID == mapID and mine.zoneUID == zoneUID then return ns.Print(L.HOP_ALREADY) end
+	if mine and mine.mapID == mapID and mine.zoneUID == zoneUID and ns.Now() - (mine.t or 0) <= Hop.LAYER_FRESH then
+		return ns.Print(L.HOP_ALREADY)
+	end
 	if IsInGroup and IsInGroup() then return ns.Print(L.HOP_IN_GROUP) end
 	local now = ns.Now()
 	if ask and ask.phase ~= "done" then return ns.Print(L.HOP_BUSY) end
-	local wait = Hop.WaitLeft(now)
-	if wait > 0 then return ns.Print(L.HOP_WAIT:format(math.ceil(wait))) end
+	if ns.HopSightings and ns.HopSightings.Requesting and ns.HopSightings.Requesting() then
+		return ns.Print(L.HOP_BUSY)
+	end
+	if not discoveryHandoff then
+		local wait = Hop.WaitLeft(now)
+		if wait > 0 then return ns.Print(L.HOP_WAIT:format(math.ceil(wait))) end
+	end
 	if not ns.Comm.ChannelReady() then return ns.Print(L.CHAN_NOT_READY) end
-	lastAsk = now
 	ask = {
 		id = Hop.random(1, 99999), mapID = mapID, zoneUID = zoneUID, label = label or L.LAYER_UNKNOWN,
-		t = now, phase = "asking", offers = {}, count = 0, tried = {}, tries = 0,
+		guild = GetGuildInfo("player"), phase = "queued", sendAt = now, offers = {}, count = 0, tried = {}, tries = 0,
 		from = mine and { mapID = mine.mapID, zoneUID = mine.zoneUID },
 	}
 	stats.asks = stats.asks + 1
@@ -430,29 +562,46 @@ function Hop.Ask(mapID, zoneUID, label)
 end
 
 function Hop.SendAsk()
-	if not ask then return end
-	local now = ns.Now()
-	lastAsk, ask.t, ask.phase = now, now, "asking"
-	-- Ahead of the census traffic: someone waits for an invite (Comm.Send urgent).
-	ns.Comm.Send("CHANNEL", ("LQ~%d~%d~%d"):format(ask.id, ask.mapID, ask.zoneUID), nil, true)
+	if not ask or ask.phase ~= "queued" then return end
+	local a = ask
+	local problem = RequestProblem()
+	if problem then return Finish(problem) end
+	if not ns.Comm.ChannelReady() then return Finish(L.CHAN_NOT_READY) end
+	a.phase = "sending"
 	-- Keeping zone and layer private (Layers.Sharing): the ask still names this zone and the
 	-- layer wanted, and layers are only known from the members who share theirs. Once a session.
 	if not ns.Layers.Sharing() and not privateHinted then
 		privateHinted = true
 		ns.Print(L.HOP_PRIVATE_HINT)
 	end
-	ns.Print(L.HOP_ASKING:format(ask.label))
-	ns.Log("hop: ask %d for map %d zoneUID %d", ask.id, ask.mapID, ask.zoneUID)
+	-- The response clock begins only after LQ reaches the game API, never while the shared
+	-- transport is saturated by older urgent traffic.
+	ns.Comm.Send("CHANNEL", ("LQ~%d~%d~%d"):format(a.id, a.mapID, a.zoneUID), nil, true, nil, function(sent)
+		if ask ~= a or a.phase ~= "sending" then return end
+		if not sent then return Finish(L.HOP_GAVE_UP) end
+		lastAsk, a.t, a.phase = ns.Now(), ns.Now(), "asking"
+		ns.Print(L.HOP_ASKING:format(a.label))
+		ns.Log("hop: ask %d for map %d zoneUID %d", a.id, a.mapID, a.zoneUID)
+		Changed()
+	end, { owner = a, guard = function() return a.phase == "sending" and CanSend(a) end })
 	Changed()
 end
 
--- A helper the addon can vouch for: a guildmate (our roster), or a Lord or Captain the census
--- names. Their invite is accepted for the player; anyone else's is left to the game's invite
+-- A helper the addon can vouch for: a guildmate (our roster), or a Lord or Captain. Until the
+-- author explicitly activates signed enforcement, preserve the documented census rule exactly;
+-- after it, only the manifest (plus the pinned Crown identities) counts. Their invite is accepted
+-- for the player; anyone else's is left to the game's invite
 -- window (one click), so nobody pulls a player into their group just by answering an ask read
 -- on the channel. (A layer announcement is the sender's own word: it proves nothing here.)
 function Hop.Trusted(name)
 	name = ns.FullName(name)
 	if ns.Roster.RankOf(name) then return true end
+	if ns.Authority and ns.Authority.Enforced and ns.Authority.Enforced() then
+		if ns.IsKingCharacter(name) or (ns.King and (ns.King.IsStewardName(name) or ns.King.IsHandName(name))) then return true end
+		local guild, rank = ns.Authority.Role(name)
+		if guild and rank <= ns.CAPTAIN_RANK and not (ns.Data.NetOff and ns.Data.NetOff(guild)) then return true end
+		return false
+	end
 	local short = ns.ShortName(name)
 	for guild, g in pairs(ns.rdb.guilds or {}) do
 		-- (1.1: never a guild the moderators took off the network, Moderation.lua.)
@@ -468,7 +617,7 @@ function Hop.Trusted(name)
 end
 
 function Hop.HandleOffer(dist, sender, text)
-	if dist ~= "WHISPER" or not ask or ask.phase == "done" or ask.phase == "joined" then return end
+	if dist ~= "WHISPER" or not ask or not ask.t or ask.phase == "done" or ask.phase == "joined" then return end
 	local id, group, load = text:match("^LO~(%d+)~(%d+)~(%d+)$")
 	if tonumber(id) ~= ask.id then return end
 	sender = ns.FullName(sender)
@@ -498,9 +647,13 @@ local function AskedHelper(name)
 end
 
 function Hop.OnInvite(name) -- gp:party-invite
-	if not ask or (ask.phase ~= "requested" and ask.phase ~= "accepted") then return end
+	if not ask or (ask.phase ~= "requesting" and ask.phase ~= "requested" and ask.phase ~= "accepted") then return end
 	local helper = AskedHelper(name)
 	if not helper then return end
+	-- The game may already report a group before its roster event arrives.
+	-- OnRoster checks the actual members before treating it as the hop's group.
+	local problem = RequestProblem(true)
+	if problem then return Finish(problem) end
 	-- Not one the addon can vouch for (Hop.Trusted): the game's own window, the player's click.
 	-- With the gamepad UI, always: the addon leaves the game's popups alone there (Dialog.lua),
 	-- and the game's invite window is the one a controller answers.
@@ -510,6 +663,7 @@ function Hop.OnInvite(name) -- gp:party-invite
 		-- join counts as this helper's (OnRoster) even before the game names its members.
 		ask.helper, ask.invitedBy, ask.asked = helper, helper, ns.Now()
 		if ask.phase ~= "requested" then ask.phase = "requested" end
+		ns.Comm.Cancel(ask)
 		if ask.hinted ~= helper then
 			ask.hinted = helper
 			ns.PlayAlert("soft", "hop")
@@ -523,6 +677,7 @@ function Hop.OnInvite(name) -- gp:party-invite
 	if AcceptGroup then AcceptGroup() end
 	if StaticPopup_Hide then StaticPopup_Hide("PARTY_INVITE") end
 	ask.helper, ask.phase, ask.accepted = helper, "accepted", ns.Now()
+	ns.Comm.Cancel(ask)
 	ns.Log("hop: accepted the invite from %s", tostring(name))
 	Changed()
 end
@@ -533,6 +688,8 @@ end
 
 -- Out of the helper's group, the hop done (a layer stays after the group is left).
 local function Leave(message)
+	Hop.OnRoster()
+	if not ask or ask.phase ~= "joined" then return end
 	LeaveGroup()
 	Finish(message)
 end
@@ -552,7 +709,9 @@ StaticPopupDialogs["OLYMPUS_HOP_LEAVE"] = {
 	-- Only for the ask it was shown for (data): an old window never ends a new ask.
 	OnAccept = function(self, data)
 		ns.SafeCall("hop leave", function()
-			if (data or (self and self.data)) ~= ask then return end
+			if not ask or ask.phase ~= "joined" or (data or (self and self.data)) ~= ask then return end
+			Hop.OnRoster()
+			if ask.phase ~= "joined" then return end
 			LeaveGroup()
 			Finish(L.HOP_DONE, true)
 		end)
@@ -573,7 +732,13 @@ function Hop.OnRoster()
 	if not ask or ask.phase == "done" then return end
 	local grouped = IsInGroup and IsInGroup()
 	if ask.phase == "joined" then
-		if not grouped then Finish() end
+		if not grouped then return Finish() end
+		local names = GroupNames()
+		if names[ns.ShortName(ask.helper)] then return end
+		-- A roster replacement after joining is no longer the helper's group.
+		for name in pairs(names) do
+			if name ~= "" and name ~= (UNKNOWNOBJECT or "Unknown") then return Finish() end
+		end
 		return
 	end
 	if not grouped then return end
@@ -591,10 +756,13 @@ function Hop.OnRoster()
 	if not helper and not named and (ask.phase == "accepted" or ask.invitedBy) then helper = ask.invitedBy or ask.helper end
 	if not helper then return Finish() end
 	ask.helper, ask.phase, ask.joined = helper, "joined", ns.Now()
+	ns.Comm.Cancel(ask)
 	fails = 0 -- someone could help: the usual wait again
 	stats.joins = stats.joins + 1
 	ns.Print(L.HOP_JOINED:format(ns.DisplayName(helper)))
 	Changed()
+	-- NPC/nameplate events can arrive before GROUP_ROSTER_UPDATE.
+	Hop.OnLayer()
 end
 
 -- The layer a hop is taking us to, while we wait in the group: Layers takes it at once.
@@ -602,14 +770,18 @@ function Hop.ExpectedLayer()
 	if ask and ask.phase == "joined" then return ask.mapID, ask.zoneUID end
 end
 
--- In the group: the move shows as a new zone UID for our zone, or the one we asked for.
+-- Only the requested zone/layer is success. A third layer may be a border NPC or
+-- an intermediate move; leaving there can strand the player on the wrong layer.
 function Hop.OnLayer()
 	if not ask or ask.phase ~= "joined" then return end
+	Hop.OnRoster()
+	if ask.phase ~= "joined" then return end
+	if (InCombatLockdown and InCombatLockdown()) or (IsInInstance and IsInInstance()) then return end
 	local mine = ns.Layers.Mine()
-	if not mine then return end
+	if not mine or ns.Layers.CurrentMap() ~= ask.mapID or (mine.t or 0) < ask.t then return end
 	local target = mine.mapID == ask.mapID and mine.zoneUID == ask.zoneUID
-	local changed = ask.from and mine.mapID == ask.from.mapID and mine.zoneUID ~= ask.from.zoneUID
-	if target or changed then
+	if target and mine.confirmedAt and mine.confirmedAt >= ask.t
+		and ns.Now() - mine.confirmedAt <= ns.Layers.EVIDENCE_WINDOW then
 		stats.moves = stats.moves + 1
 		Leave(L.HOP_MOVED_LEFT)
 	end
@@ -640,6 +812,8 @@ end
 
 function Hop.Tick()
 	local now = ns.Now()
+	for key, offer in pairs(offered) do if now - offer.t > 120 then offered[key] = nil end end
+	for name, at in pairs(answeredAt) do if now - at > Hop.HELP_GAP then answeredAt[name] = nil end end
 	if pending and now - pending.t > Hop.WAIT + 5 then pending = nil end -- the popup is long gone
 	ReleaseGuests(now)
 	if now - lastPromptCheck >= Hop.PROMPT_EVERY then
@@ -653,20 +827,26 @@ function Hop.Tick()
 		if not next(askers) then heard[key] = nil end
 	end
 	if not ask or ask.phase == "done" then return end
+	if ask.phase ~= "joined" then
+		if not Current(ask) or (IsInInstance and IsInInstance()) then return Finish(L.HOP_CONTEXT_CHANGED) end
+		if IsInGroup and IsInGroup() then Hop.OnRoster() end
+		if ask.phase == "done" then return end
+	end
 	if ask.phase == "queued" then
 		if now >= ask.sendAt then Hop.SendAsk() end
 	elseif ask.phase == "asking" then
 		if now - ask.t >= Hop.WINDOW and ask.count > 0 then
 			Hop.Next()
 		elseif now - ask.t >= Hop.NOBODY then
-			Failed(true)
+			Failed(ask.tries == 0)
 		end
 	elseif ask.phase == "requested" then
 		if now - ask.asked >= Hop.WAIT then Hop.Next() end
 	elseif ask.phase == "accepted" then
 		if now - ask.accepted >= Hop.ACCEPT_WAIT then Hop.Next() end
-	elseif ask.phase == "joined" and now - ask.joined >= Hop.JOIN_WAIT then
-		OfferLeave()
+	elseif ask.phase == "joined" then
+		Hop.OnLayer()
+		if ask.phase == "joined" and now - ask.joined >= Hop.JOIN_WAIT then OfferLeave() end
 	end
 end
 
@@ -697,7 +877,9 @@ end
 -- "For Olympus!", waits for that).
 -- His realm and his layer (1.0.0, Konig's review): where the census names the character pinned
 -- by name, from his own messages alone (Hop.HeardKing), none heard yet: neither is known. Where
--- none is pinned (another realm group), the census's word is all there is.
+-- none is pinned (another realm group), the census's word is all there is. A direct nameplate
+-- sighting is never installed here as authority: HopSightings privately asks, requires two
+-- independent answers and only then starts this module's ordinary Hop.Ask state machine.
 function Hop.King(strict)
 	local now = ns.Now()
 	local pin = ns.KingCharacter()
@@ -740,7 +922,7 @@ end
 -- Why nobody can ask for the King's layer now (1.0.0), instead of "try again in a minute"
 -- whatever the reason: he plays on another realm (Hop.KingOtherRealm), his crown is not on the
 -- map (off, or he is in a dungeon: his layer is only announced while it shows, Layers.Sharing),
--- or it is and his layer is on its way (his addon repeats it every minute, Layers.KING_EVERY).
+-- or it is visible and an explicit click can start private, two-observer discovery.
 function Hop.KingUnknownText(k)
 	if Hop.KingOtherRealm(k) then return L.HOP_KING_OTHER_REALM:format(k.name, k.realm) end
 	if not (ns.King and ns.King.Location and ns.King.Location()) then return L.HOP_KING_HIDDEN:format(k.name) end
@@ -748,28 +930,52 @@ function Hop.KingUnknownText(k)
 end
 
 function Hop.AskKing()
+	local WC = ns.WatchChat
+	local barred = WC and not WC.missing and WC.Barred and WC.Barred("locations")
+	if barred then return WC.TellBarred(barred) end -- (1.1.6: a sanctioned player asks for no King's layer)
 	local k = Hop.King()
 	if not k then return ns.Print(KingUnconfirmed() and L.HOP_KING_CHECKING:format(ns.KingName()) or L.HOP_KING_OFFLINE) end
-	if Hop.KingOtherRealm(k) or not k.zoneUID then return ns.Print(Hop.KingUnknownText(k)) end
+	if Hop.KingOtherRealm(k) then return ns.Print(Hop.KingUnknownText(k)) end
+	-- An exact local nameplate observation can prove only that *this client* is already there.
+	-- Use it to avoid broadcasting a needless discovery Q, without installing it in Hop.King.
+	if OnKingLayer(true) then return ns.Print(L.HOP_ALREADY) end
+	if not k.zoneUID then
+		local at = ns.King and ns.King.Location and ns.King.Location()
+		if not at then return ns.Print(Hop.KingUnknownText(k)) end
+		if ns.Layers.CurrentMap() ~= at.mapID then return ns.Print(L.HOP_KING_ELSEWHERE:format(k.name, Hop.ZoneName(at.mapID))) end
+		if ask and ask.phase ~= "done" then return ns.Print(L.HOP_BUSY) end
+		if ns.HopSightings and ns.HopSightings.Request then
+			return ns.HopSightings.Request({ character = at.from, mapID = at.mapID, label = k.name }, L.LAYER_OF:format(k.name))
+		end
+		return ns.Print(Hop.KingUnknownText(k))
+	end
 	if ns.Layers.CurrentMap() ~= k.mapID then return ns.Print(L.HOP_KING_ELSEWHERE:format(k.name, Hop.ZoneName(k.mapID))) end
+	-- An authoritative L1 may arrive while private discovery is collecting answers. End that
+	-- discovery before entering the ordinary LQ/LO/LR machine; never run the two flows together.
+	local discovering = ns.HopSightings and ns.HopSightings.Requesting and ns.HopSightings.Requesting()
+	if ns.HopSightings and ns.HopSightings.CancelRequest then ns.HopSightings.CancelRequest(nil, true) end
+	if discovering then return Hop.AskDiscovered(k.mapID, k.zoneUID, L.LAYER_OF:format(k.name)) end
 	Hop.Ask(k.mapID, k.zoneUID, L.LAYER_OF:format(k.name))
 end
 
 -- The lines on top of the Census and the Realm while the King is online (Views.lua): the
 -- button, and under it where he is when that is not our zone.
 function Hop.KingLines()
+	-- (1.1.6: a sanctioned player, WatchChat.Barred, is not told when the King is online.)
+	local WC = ns.WatchChat
+	if WC and not WC.missing and WC.Barred and WC.Barred("locations") then return {} end
 	local k = Hop.King()
 	if not k or (ns.King and ns.King.IsKing and ns.King.IsKing()) then return {} end
 	-- The size of a title, with the crown the map shows him with.
 	local crown = "|T" .. ns.CROWN_ICON .. ":0|t "
-	local mine = ns.Layers.Mine()
 	-- (On another realm his layer is not ours to join or be on, whatever reaches us of it.)
 	local away = Hop.KingOtherRealm(k)
-	if not away and k.zoneUID and mine and mine.mapID == k.mapID and mine.zoneUID == k.zoneUID then
+	if not away and OnKingLayer(true) then
 		return Hop.WithAutoLine({ { text = crown .. "|cff40ff40" .. L.HOP_KING_HERE:format(k.name) .. "|r", color = "GameFontNormal", gapAfter = true } }, k)
 	end
 	local elsewhere = not away and k.zoneUID and ns.Layers.CurrentMap() ~= k.mapID
-	local busy = ask and ask.phase ~= "done"
+	local busy = (ask and ask.phase ~= "done")
+		or (ns.HopSightings and ns.HopSightings.Requesting and ns.HopSightings.Requesting())
 	local line = {
 		text = crown .. "|cffffd200" .. (busy and L.HOP_KING_BUSY or L.HOP_KING_LINE):format(k.name) .. "|r",
 		color = "GameFontNormal",
@@ -847,6 +1053,7 @@ function Hop.ChooseKing(choice)
 	elseif choice == "no" then ns.Print(L.HOP_KING_NO)
 	else ns.Print(L.HOP_KING_MANUAL) end
 	Changed()
+	ns.Fire("HOP_HELP_CHANGED", choice)
 end
 
 -- look: "dim" (grey, the way out), "main" (lit, white text: the one we hope for) or nil.
@@ -930,13 +1137,78 @@ end
 function Hop.State() return ask end
 function Hop.Stats() return stats end
 
+function Hop.ProgressText()
+	if not ask or ask.phase == "done" then
+		local S = ns.HopSightings
+		if type(S) == "table" and type(S.Progress) == "function" then
+			local phase, left = S.Progress()
+			if phase == "sending" then return L.HOP_SENDING_REQUEST end
+			if phase then return L.HOP_SIGHTING_PROGRESS:format(math.ceil(left or 0)) end
+		end
+		local text = ask and ask.result or L.HOP_IDLE
+		local wait = math.ceil(Hop.WaitLeft())
+		return wait > 0 and (text .. " " .. L.HOP_WAIT:format(wait)) or text
+	end
+	if ask.phase == "queued" then return L.HOP_CROWDED:format(math.max(0, math.ceil(ask.sendAt - ns.Now()))) end
+	if ask.phase == "sending" then return L.HOP_SENDING_REQUEST end
+	if ask.phase == "asking" then return L.HOP_PROGRESS_OFFERS:format(ask.count, math.max(0, Hop.NOBODY - (ns.Now() - ask.t))) end
+	if ask.phase == "requesting" then return L.HOP_SENDING_HELPER:format(ns.DisplayName(ask.helper)) end
+	if ask.phase == "requested" then return L.HOP_PROGRESS_INVITE:format(ns.DisplayName(ask.helper), ask.tries, Hop.TRIES) end
+	if ask.phase == "accepted" then return L.HOP_PROGRESS_GROUP:format(ns.DisplayName(ask.helper)) end
+	return L.HOP_PROGRESS_LAYER:format(ask.zoneUID, Hop.ZoneName(ask.mapID))
+end
+
+-- Local controls only. Discovery and invitations use the existing LQ/LO/LR messages,
+-- so a helper running the unmodified release can still answer.
+function Hop.Command(rest)
+	rest = (rest or ""):match("^%s*(.-)%s*$"):lower()
+	if rest == "" or rest == "king" then return Hop.AskKing() end
+	if rest == "cancel" then return Hop.Cancel() end
+	if rest == "status" then
+		if ns.LOCAL_BUILD then ns.Print("Olympus " .. ns.VERSION .. " / " .. ns.LOCAL_BUILD) end
+		ns.Print(Hop.ProgressText())
+		local mine = ns.Layers.Mine()
+		if mine and ns.Layers.CurrentMap() == mine.mapID then
+			ns.Print(L.HOP_LOCAL_READING:format(mine.zoneUID, Hop.ZoneName(mine.mapID), math.max(0, ns.Now() - (mine.t or 0))))
+		else ns.Print(L.HOP_NEED_NPC) end
+		return ns.Print(ns.Comm.ChannelReady() and L.HOP_NETWORK_READY or L.CHAN_NOT_READY)
+	end
+	if rest ~= "list" and rest ~= "any" and not rest:match("^#?%d+$") then return ns.Print(L.HELP_HOP) end
+	local mapID = ns.Layers.CurrentMap()
+	local layers = mapID and ns.Layers.ForMap(mapID) or {}
+	if rest == "list" then
+		ns.Print(L.LAYERS_IN:format(Hop.ZoneName(mapID)))
+		for _, layer in ipairs(layers) do
+			ns.Print(L.HOP_LIST_ROW:format(layer.zoneUID, ns.Layers.Name(layer), layer.count,
+				math.max(0, ns.Now() - (layer.lastSeen or 0)), layer.mine and L.LAYER_YOU or ""))
+		end
+		return ns.Print(#layers > 0 and L.HOP_LIST_HINT or L.HOP_NO_ALTERNATIVE)
+	end
+	local uid = tonumber(rest:match("^#?(%d+)$"))
+	local chosen
+	if rest == "any" then
+		local mine = ns.Layers.Mine()
+		if not mine or mine.mapID ~= mapID or ns.Now() - (mine.t or 0) > Hop.LAYER_FRESH then return ns.Print(L.HOP_NEED_NPC) end
+		for _, layer in ipairs(layers) do
+			if layer.zoneUID ~= mine.zoneUID and ns.Now() - (layer.lastSeen or 0) <= Hop.LAYER_FRESH
+				and (not chosen or layer.lastSeen > chosen.lastSeen
+					or (layer.lastSeen == chosen.lastSeen and layer.zoneUID < chosen.zoneUID)) then chosen = layer end
+		end
+	else
+		for _, layer in ipairs(layers) do if layer.zoneUID == uid then chosen = layer; break end end
+	end
+	if not chosen then return ns.Print(L.HOP_NO_ALTERNATIVE) end
+	Hop.Ask(mapID, chosen.zoneUID, ns.Layers.Name(chosen))
+end
+
 function Hop.StatusLine()
 	local s = stats
 	local n = 0
 	for _ in pairs(guests) do n = n + 1 end
-	return ("help=%s auto=%s group-auto=%s king=%s  |  asks=%d offers=%d requests=%d invites=%d noes=%d joins=%d moves=%d releases=%d guests=%d  |  now=%s"):format(
+	return ("help=%s auto=%s group-auto=%s king=%s  |  asks=%d offers=%d requests=%d invites=%d noes=%d joins=%d moves=%d releases=%d guests=%d auto-paused=%d  |  now=%s | %s"):format(
 		tostring(Hop.Helps()), tostring(ns.db.layerAutoInvite == true), tostring(GroupAutoActive()), tostring(KingChoice() or "-"),
-		s.asks, s.offers, s.requests, s.invites, s.noes, s.joins, s.moves, s.releases, n, ask and ask.phase or "-")
+		s.asks, s.offers, s.requests, s.invites, s.noes, s.joins, s.moves, s.releases, n, s.autoBlocked,
+		ask and ask.phase or "-", Hop.ProgressText())
 end
 
 -- What this client knows of the King, for /oly status and /oly bug (1.0.0: "the King's layer
@@ -970,6 +1242,7 @@ function Hop.SetHelp(on)
 		ns.db.hopKingChoice, kingMode, promptShown = nil, nil, false
 	end
 	ns.Print(on and L.HOP_HELP_ON or L.HOP_HELP_OFF)
+	ns.Fire("HOP_HELP_CHANGED", on and true or false)
 end
 
 -- Off also ends "For Olympus!" (the King's layer window's answer).
@@ -981,7 +1254,10 @@ end
 
 -- Tests start from a clean state.
 function Hop.Reset()
-	ask, pending, lastAsk = nil, nil, -math.huge
+	local previous = ask
+	ask, pending, lastAsk, discoveryHandoff = nil, nil, -math.huge, false
+	if previous then ns.Comm.Cancel(previous) end
+	if ns.HopSightings and ns.HopSightings.CancelRequest then ns.HopSightings.CancelRequest(nil, true) end
 	fails, failedAt = 0, -math.huge
 	wipe(heard)
 	kingMode, groupAuto, promptShown, lastPromptCheck, privateHinted = nil, nil, false, -math.huge, false

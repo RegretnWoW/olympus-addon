@@ -914,6 +914,122 @@
       ]
     },
     {
+      "id": "feat-watch",
+      "topic": "features",
+      "status": "current (1.2)",
+      "questions": [
+        "What's The Watch?",
+        "Who can see The Watch?",
+        "Does its ban list reject players automatically?"
+      ],
+      "answer": "The Watch is private to a guild's Lord, Captains and live signed moderators. Warnings escalate, reset with Clear and decay after 30 days. Actions and bounded recovery use logged officer whispers, never broadcasts. Nothing kicks, demotes, ignores or auto-rejects; every manual change is audited.",
+      "in_game": "The Watch is a private guild moderation desk: deliberate warnings, timeouts, Watch or Ban marks, private recovery and an audit trail. It never kicks, demotes, ignores or auto-rejects anyone.",
+      "sources": [
+        "README.md:695-719"
+      ]
+    },
+    {
+      "id": "feat-judgments",
+      "topic": "features",
+      "status": "current (1.2)",
+      "questions": [
+        "How does a case reach the King?",
+        "How does the High Council vote on a case?"
+      ],
+      "answer": "An officer sends a case from its page to the King: the card's facts and his finding, never who reported it. The High Council votes for 24 hours (the majority of those who answered), then the King's word is final. Nothing happens by itself: the officers decide what to do.",
+      "in_game": "A case's page sends it to the King. The High Council votes for 24 hours, then the King's word is final. No sanction comes of it by itself.",
+      "sources": [
+        "README.md: The Watch (1.2), Send it to the King"
+      ]
+    },
+    {
+      "id": "feat-church",
+      "topic": "features",
+      "status": "current (1.1.6)",
+      "questions": [
+        "What's the Missionary Church of Olympus?",
+        "How do I name a missionary?",
+        "Who are the Apostles?"
+      ],
+      "answer": "The Church brings new players in: the Twelve Apostles from the author's signed list (the one it marks is the Head), missionaries each Apostle names (and each missionary may name more), and one correspondent per guild. Name a missionary on the Church tab or with a right-click.",
+      "in_game": "The Church: a Head, the Twelve Apostles and their missionaries, who name more missionaries; one correspondent per guild. Name one on the Church tab or right-click a player.",
+      "sources": [
+        "README.md: The Missionary Church of Olympus (1.1.6)"
+      ]
+    },
+    {
+      "id": "feat-church-count",
+      "topic": "features",
+      "status": "current (1.1.6)",
+      "questions": [
+        "How does the Church count my recruits?",
+        "Why is my recruit still pending?",
+        "How are Church points made?"
+      ],
+      "answer": "Your guild's log shows the invite and the join; another player's addon confirms it (only yours: pending). Only players new to Olympus count. 10 points each, 5 more if he stays 7 days, plus 25%, 10% and 5% of the points of three levels under you. Your own work counts most.",
+      "in_game": "From your guild's log: pending until another player's addon confirms. New to Olympus only. 10 points, +5 after 7 days, plus 25/10/5% of three levels under you.",
+      "sources": [
+        "README.md: The Missionary Church of Olympus (1.1.6)"
+      ]
+    },
+    {
+      "id": "feat-bones-place",
+      "topic": "features",
+      "status": "current (1.1.6)",
+      "questions": [
+        "Where can I play Bones?",
+        "Why won't my Bones table start?",
+        "Can I play Bones at a camp?"
+      ],
+      "answer": "Bones can be played at a tavern or at a camp: both of you in one party, within about 10 yards, at the same inn or by a camp one of you dropped in that zone (/oly camp, with /oly location on). Walk off and the game pauses; gone a minute, you forfeit. Practice works anywhere.",
+      "in_game": "Bones can be played at a tavern or at a camp: in one party, within 10 yards, at the same inn or by a camp one of you dropped here (/oly camp). Practice works anywhere.",
+      "sources": [
+        "README.md: Bones can be played at a tavern or at a camp (1.1.6)"
+      ]
+    },
+    {
+      "id": "feat-no-arbiters",
+      "topic": "features",
+      "status": "current (1.1.6)",
+      "questions": [
+        "Do I need an arbiter for a duel or Bones?",
+        "Where did the arbiters go?"
+      ],
+      "answer": "No. Arbiters are there for the money, and 1.1.6 has no bets: a duel or a Bones game is between the two players, for points. Nothing asks for an arbiter or waits on one, and there is no Arbiter page while there are no bets.",
+      "in_game": "No arbiter needed: with no bets in 1.1.6, a duel or a Bones game is between the two players, for points.",
+      "sources": [
+        "README.md: No arbiters without bets (1.1.6)"
+      ]
+    },
+    {
+      "id": "feat-duel-points",
+      "topic": "features",
+      "status": "current (1.1.6)",
+      "questions": [
+        "How are duel points worked out?",
+        "Does my level matter in the duel ranking?"
+      ],
+      "answer": "Duel points are Elo with your levels in it: each level between you counts as 50 rating points. Beating someone 10 levels up pays about double an even win; beating someone 10 levels down pays 1 point, and 16 levels down nothing. Losing to a much higher level costs little.",
+      "in_game": "Duel points are Elo with levels in it: beat a higher level for more; a much lower one pays little or nothing, and losing to a much higher one costs little.",
+      "sources": [
+        "README.md: Duel points consider the levels (1.1.6)"
+      ]
+    },
+    {
+      "id": "feat-find-player",
+      "topic": "features",
+      "status": "current (1.1.6)",
+      "questions": [
+        "How do I find someone to duel or play Bones?",
+        "Can I search only near my level?"
+      ],
+      "answer": "Open Find in the Arena for a duel, or in the Bones window for Bones. Pick the level (any, within 5 or within 10 of yours) and the reach (your zone or your continent); the nearest players come first. Tick Let others find me to be found yourself.",
+      "in_game": "Find in the Arena (duels) or the Bones window: pick the level (any, within 5 or 10) and the reach (your zone or continent). Let others find me makes you findable.",
+      "sources": [
+        "README.md: Find a player (1.1.6)"
+      ]
+    },
+    {
       "id": "feat-decrees",
       "topic": "features",
       "status": "current (1.1.1)",
@@ -964,10 +1080,10 @@
         "What's net-off?",
         "Can moderators hide spammers?"
       ],
-      "answer": "Moderators (the King, his Steward, his Hands and the High Council) can hide a character or take a guild off the network for everyone. The Decrees tab lists who's hidden, why, by whom and when.",
-      "in_game": "Moderators can hide a character or guild from the network. The Decrees tab says who, why, by whom and when.",
+      "answer": "Moderators can hide a character or take a guild off the network for everyone. Decrees lists who, why, by whom and when for every member, with a red reason line when it is you or your guild; authorized officers also see the section in The Watch.",
+      "in_game": "Moderators can hide a character or guild from the network. Decrees stays member-visible and shows your own reason; authorized officers also see net-off in The Watch.",
       "sources": [
-        "README.md:526-605"
+        "README.md:612-693"
       ]
     },
     {
@@ -992,9 +1108,9 @@
         "How does the tabard patrol work?",
         "What's /oly mark?"
       ],
-      "answer": "Start a patrol on the Tabards tab (or /oly patrol) and walk through the crowd: it checks nearby members level 15 and up for the Olympus tabard. /oly mark flags your target with a note. Hover anyone to see their last check.",
+      "answer": "Start a patrol in The Watch's Tabards (or /oly patrol) and walk through the crowd: it checks nearby members level 15 and up for the Olympus tabard. /oly mark flags your target with a note. Hover anyone to see their last check.",
       "in_game": "Type /oly patrol, then walk around: it checks nearby members (15+) for the tabard. /oly mark flags your target.",
-      "notes": "L.HELP_CMD_TABARD still says 'Heraldry Inspection tab'; the tab is Tabards.",
+      "notes": "1.2: the Tabards are a section of The Watch (no tab of their own); /oly tabard opens it there.",
       "sources": [
         "README.md:1027-1058"
       ]
@@ -1007,7 +1123,7 @@
         "How do officers save someone's gear?",
         "What's Gear seen?"
       ],
-      "answer": "Officers: target someone in range and click Inspect gear on the Tabards tab (or /oly gear). What they wear is kept under Gear seen, to check later. Nothing is scored or sent.",
+      "answer": "Officers: target someone in range and click Inspect gear in The Watch's Tabards (or /oly gear). What they wear is kept under Gear seen, to check later. Nothing is scored or sent.",
       "in_game": "Officers: target someone, /oly gear. It keeps what they wear under Gear seen. Nothing is scored or sent.",
       "sources": [
         "README.md:1032-1038"
@@ -1050,10 +1166,10 @@
         "What can the King do in the addon?",
         "What's the Throne tab?"
       ],
-      "answer": "The King's own tab: his Agenda and week, Hold Court and key rotation. His other tools sit where they belong: Summon the Lords and the gates on the Realm tab, the Royal Inspection on Tabards, writs in Decrees. His Steward and Hands can use some of them.",
-      "in_game": "The King's tab: Agenda, Court, key rotation. Summon the Lords and gates are on the Realm tab, the inspection on Tabards. His Steward and Hands get some tools.",
+      "answer": "The King's own tab holds his Agenda, week, key rotation and Hold Court button. His other tools sit where they belong: the private court queue in The Watch, Summon the Lords and the gates on Realm, the Royal Inspection in The Watch's Tabards, and writs in Decrees.",
+      "in_game": "The King's tab has his Agenda, week, key rotation and Hold Court. Its private queue is in The Watch; Summon the Lords and gates are on Realm, inspection in The Watch's Tabards.",
       "sources": [
-        "README.md:628-721,643-667"
+        "README.md:739-831"
       ]
     },
     {
@@ -1092,10 +1208,10 @@
         "What's Hold Court?",
         "How do I ask the King for an audience?"
       ],
-      "answer": "When the King opens court, everyone in his zone gets a line on the Census and Realm tabs. One click asks for an audience, and he calls players from his queue.",
-      "in_game": "When the King holds court, players in his zone get a line: one click asks for an audience.",
+      "answer": "When the King opens court from the Throne, everyone in his zone gets a line on the Census and Realm tabs. One click asks for an audience, and he calls players from the private queue in The Watch.",
+      "in_game": "The King opens court from the Throne and calls its queue from The Watch. Players in his zone get a line; one click asks for an audience.",
       "sources": [
-        "README.md:643-646"
+        "README.md:757-760"
       ]
     },
     {
@@ -1131,15 +1247,16 @@
     {
       "id": "feat-vox",
       "topic": "features",
-      "status": "current (1.1.1)",
+      "status": "current (1.1.6)",
       "questions": [
         "What's Vox Populi?",
         "How do I vote?"
       ],
-      "answer": "The King's polls: 2 to 6 answers, open for a short time. A window pops up with check boxes and a countdown; your vote goes to the King, and everyone sees the result. /oly vox off keeps questions in chat.",
-      "in_game": "The King's polls: tick your answer before the timer ends. /oly vox off keeps them in chat.",
+      "answer": "Polls from the King, his Steward or a Hand (to the army, the High Council or the guild masters), or from a guild master to his guild. A window shows 2 to 6 answers and a countdown; your vote goes to whoever asked, and those asked see the result. /oly vox off keeps them in chat.",
+      "in_game": "Polls from the King, his Steward or a Hand, or from your guild master: tick your answer before the timer ends. /oly vox off keeps them in chat.",
       "sources": [
-        "README.md:657-662"
+        "README.md:794-799",
+        "Olympus/Vox.lua:1-20"
       ]
     },
     {
@@ -1192,8 +1309,8 @@
         "Can the King see our guild bank?",
         "What's /oly bank share?"
       ],
-      "answer": "Only if your guild master or an officer says yes. /oly bank share on shows your bank's snapshot to the King, his Steward and his Hands, by whisper, never on the channel. /oly bank share off takes it back.",
-      "in_game": "Only with a yes: /oly bank share on shows your bank snapshot to the King's side by whisper. Off takes it back.",
+      "answer": "Only if your guild master or an officer says yes. /oly bank share on shows your bank's snapshot in the Guild treasuries, to the King, the High Council (his Stewards and Hands among them), the Treasurer and the author, by whisper, never on the channel. Off takes it back.",
+      "in_game": "Only with a yes: /oly bank share on shows your bank snapshot in the Guild treasuries, by whisper. Off takes it back.",
       "sources": [
         "README.md:878-891"
       ]
@@ -1330,7 +1447,7 @@
         "Can I search the lists?",
         "How do I find a name on a tab?"
       ],
-      "answer": "The Census, Realm, Tabards, Treasury, Decrees and Chat tabs have a search box: guilds, Lords, players or zones on the Census, members on the Realm, players on Tabards, donors and bank items on the Treasury, the log on Decrees, lines on Chat. It only filters what you see.",
+      "answer": "The Census, Realm, Treasury, Decrees and Chat tabs and The Watch's Tabards have a search box: guilds, Lords, players or zones on the Census, members on the Realm, players on the Tabards, donors and bank items on the Treasury, the log on Decrees, lines on Chat. It only filters.",
       "in_game": "Most tabs have a search box on top. It only filters what you see.",
       "sources": [
         "README.md:1258-1264 (not Throne, Vox or Workshop)"

@@ -14,9 +14,10 @@ local L = ns.L
 --   K3~<epoch>~<key>[~<h1.h2.h3>]
 --                      by whisper from the King (or his Steward) to every Lord and Captain of the
 --                      guilds he picked
---                      the census confirms online (Data.KnownRank) whom his own /who saw in that
---                      guild (Who.SeenGuild, the server's word: two characters on the leaked
---                      channel can name themselves a real guild's Lord and Captain in the census),
+--                      current authority confirms online (the census before explicit signed
+--                      enforcement, the manifest afterwards) whom his own /who saw in that guild
+--                      (Who.SeenGuild, the server's word; before enforcement two characters on the
+--                      leaked channel can name themselves a real guild's Lord and Captain),
 --                      and over GUILD from each of
 --                      them (their officers) to their own guild; K1~<key> with it there, for
 --                      guildmates before 1.1. The hashes: the keys it replaces (at most 3).
@@ -251,11 +252,18 @@ function Keys.HandleAck(dist, sender, text)
 	if not (type(rot.sent) == "table" and rot.sent[sender]) then
 		return ns.Log("realm key: %s's acknowledgement ignored: not whispered the key", sender)
 	end
+	local sentFor = type(rot.sentFor) == "table" and rot.sentFor[sender]
+	if ns.Authority and ns.Authority.Enforced and ns.Authority.Enforced() then
+		local rank = type(sentFor) == "string" and ns.Data.AuthorizedRank(sender, sentFor)
+		if rank == nil or rank > ns.CAPTAIN_RANK then
+			return ns.Log("realm key: %s's acknowledgement ignored: signed authority ended", sender)
+		end
+	end
 	rot.acked = type(rot.acked) == "table" and rot.acked or {}
 	if rot.acked[sender] then return end
 	-- Under the guild his client whispered him for, never the one the K4 names: a Lord whispered
 	-- could name any guild, and the Throne would count it as having the key (1.1 review).
-	rot.acked[sender] = type(rot.sentFor) == "table" and type(rot.sentFor[sender]) == "string" and rot.sentFor[sender] or ""
+	rot.acked[sender] = sentFor
 	stats.acks = stats.acks + 1
 	ns.King.Changed()
 end
@@ -353,15 +361,16 @@ local function Keep(rot, name, guild, at)
 	rot.saw = type(rot.saw) == "table" and rot.saw or {}
 	rot.saw[name] = { guild = guild, at = at }
 end
--- Every player an answer of ours lists (Who.OnSaw): kept when the census names him a Lord or
--- Captain of the guild it shows, or was kept already (seen elsewhere now: that counts too).
+-- Every player an answer of ours lists (Who.OnSaw): kept when current authority names him a Lord
+-- or Captain of the guild it shows, or was kept already (seen elsewhere now: that counts too).
+-- Current authority is the legacy census until explicit signed enforcement.
 function Keys.Saw(name, guild)
 	local rot = Rotation()
 	if not rot or rot.moved or type(name) ~= "string" or not Keys.CanRotate() then return end
 	name = ns.FullName(name)
 	guild = type(guild) == "string" and guild or ""
 	local kept = type(rot.saw) == "table" and rot.saw[name]
-	if kept or (guild ~= "" and (ns.Data.KnownRank(name, guild) or math.huge) <= ns.CAPTAIN_RANK) then
+	if kept or (guild ~= "" and (ns.Data.AuthorizedRank(name, guild) or math.huge) <= ns.CAPTAIN_RANK) then
 		Keep(rot, name, guild, Clock())
 	end
 end
@@ -389,8 +398,8 @@ end
 Keys.WhoSaw = WhoSaw
 
 -- Every guild but ours (ours gets it over GUILD when he moves: an officer's word there; a Steward
--- who is no officer of his guild has it handed like any other) with Lords and Captains the census
--- confirms online (two senders: Data.KnownRank): { guild, names = { Name-Realm } his /who saw
+-- who is no officer of his guild has it handed like any other) with Lords and Captains current
+-- authority confirms online: { guild, names = { Name-Realm } his /who saw
 -- in it (whispered), waiting = { Name-Realm } it did not (not whispered), seen }.
 function Keys.Candidates()
 	local out, now = {}, ns.Now()
@@ -403,7 +412,7 @@ function Keys.Candidates()
 			local function Add(name, online)
 				if type(name) ~= "string" or not online then return end
 				local full = ns.FullName(name, home)
-				local rank = ns.Data.KnownRank(full, e.name)
+				local rank = ns.Data.AuthorizedRank(full, e.name)
 				if rank and rank <= ns.CAPTAIN_RANK then
 					if WhoSaw(full, e.name) then names[#names + 1] = full else waiting[#waiting + 1] = full end
 				end
@@ -541,6 +550,16 @@ function Keys.Hand()
 		if not rot.acked[name] and not (waiting and now - waiting < Keys.QUEUE_WAIT)
 			and now - (tonumber(rot.sent[name]) or -math.huge) >= Keys.RESEND then
 			rot.queued[name] = now
+			local function StillAuthorized()
+				-- Keep the legacy queue byte-for-byte permissive while no boundary exists, but
+				-- notice an activation that arrived after enqueue and before the game send.
+				if not (ns.Authority and ns.Authority.Enforced and ns.Authority.Enforced()) then return true end
+				if Rotation() ~= rot or rot.moved or not Keys.CanRotate() or rot.acked[name] then return false end
+				local rank = ns.Data.AuthorizedRank(name, guild)
+				if rank == nil or rank > ns.CAPTAIN_RANK or not WhoSaw(name, guild) then return false end
+				return Picked(rot, { guild = guild, seen = Seen(guild) })
+			end
+			local guard = { owner = rot, guard = StillAuthorized }
 			ns.Comm.Whisper(name, Message(rot.at, rot.key, rot.retires), "key3:" .. name, nil, nil, function(sent)
 				if Rotation() ~= rot then return end
 				rot.queued[name] = nil
@@ -550,7 +569,7 @@ function Keys.Hand()
 					stats.whispered = stats.whispered + 1
 					ns.King.Changed()
 				end
-			end)
+			end, guard)
 			n = n + 1
 		end
 	end

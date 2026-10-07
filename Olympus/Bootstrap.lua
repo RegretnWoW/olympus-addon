@@ -17,12 +17,15 @@ local others, nOthers = {}, 0 -- the other addons' errors seen, 200 at most
 
 -- Ours: the message names one of our files, or a line of the stack does. Not this handler's
 -- own line, which tops every stack it reads (the culprit comes below it).
+-- 1.2: the Blood Arena's load-on-demand companion (Olympus_Arena) is ours too.
 local OURS = "AddOns[\\/]Olympus[\\/]"
+local OURS_ARENA = "AddOns[\\/]Olympus_Arena[\\/]"
 local HANDLER = "AddOns[\\/]Olympus[\\/]Bootstrap%.lua"
+local function Ours(s) return s:find(OURS) ~= nil or s:find(OURS_ARENA) ~= nil end
 function ns.OwnError(msg, stack)
-	if tostring(msg or ""):find(OURS) then return true end
+	if Ours(tostring(msg or "")) then return true end
 	for line in tostring(stack or ""):gmatch("[^\n]+") do
-		if line:find(OURS) and not line:find(HANDLER) then return true end
+		if Ours(line) and not line:find(HANDLER) then return true end
 	end
 	return false
 end
@@ -62,7 +65,7 @@ local ours = previous and function(err, ...)
 			index[key] = e
 			ns.allErrors[#ns.allErrors + 1] = e
 		end
-		if msg:find(OURS) then
+		if Ours(msg) then
 			if ns.CaptureError and ns.db then
 				ns.CaptureError("global", msg)
 			elseif #ns.earlyErrors < 20 then

@@ -101,9 +101,9 @@ Nameplates.ORDER = { "gold", "silver", "bronze", "member" }
 -- plain silver none.)
 Nameplates.PREVIEW = { ["gold-elite"] = "gold", ["silver-elite"] = "silver", ["bronze-elite"] = "bronze", bronze = "bronze", member = "member" }
 
-local rigs = {}   -- [a plate's unit frame] = { tex, frame, name, unit, friend, shown, dressed, point, x, size }
+local rigs = {}   -- [a plate's unit frame] = { tex, frame, name, unit, friend, shown, dressed, drawn, point, x, size }
 local byUnit = {} -- [nameplate unit] = the rig of the plate showing it
-local known = {}  -- [nameplate unit] = { guid, mark, and what it was worked out from (Borders.MarkOf) }
+local known = {}  -- [nameplate unit] = { guid, mark, rank (its rank's), and what it was worked out from (Borders.MarkOf) }
 local mine        -- his own name's marks (the preview): { tex = { [mark] = texture }, shown }; false: no such frame
 local hooked, waiting = false, false
 local active      -- Active() as last worked out; nil: to work out again (IsActive)
@@ -214,7 +214,13 @@ end
 -- then tinted), or Olympus's star. False when the client has none of it.
 local function Dress(tex, mark)
 	local m = Nameplates.MARKS[mark]
-	if not m then return false end
+	if not m then
+		local H = ns.HonorsNet
+		local ok, file = false, nil
+		if type(H) == "table" and type(H.MarkTexture) == "function" then ok, file = pcall(H.MarkTexture, mark) end
+		if not ok or type(file) ~= "string" then return false end
+		m = { file = file }
+	end
 	if m.file then
 		local ok, loaded = pcall(tex.SetTexture, tex, m.file)
 		if not ok or loaded == false then return false end
@@ -278,12 +284,21 @@ local function NameShown(name)
 	return not Secret(shown) and shown == true
 end
 
--- A mark on a plate (nil: none), left of its name while the name shows.
-local function Show(rig, mark)
+-- A mark on a plate (nil: none), left of its name while the name shows. fallback (1.2): the rank's
+-- mark, drawn when an honour's can't be (a file the client can't load, a key it doesn't know), as
+-- Borders draws the rank's frame. The plate is then dressed for the honour's mark all the same
+-- (drawn: the art it got), so the game's many name updates don't try that file again; another
+-- player's plate with the same honour gets his own rank's, and one with no rank's mark (a player
+-- outside Olympus who holds it) never keeps the last player's.
+local function Show(rig, mark, fallback)
 	if not mark or not NameShown(rig.name) then return Hide(rig) end
-	if rig.dressed ~= mark then
-		if not Dress(rig.tex, mark) then
-			rig.dressed = nil
+	if rig.dressed ~= mark or (rig.drawn ~= mark and rig.drawn ~= fallback) then
+		if Dress(rig.tex, mark) then
+			rig.drawn = mark
+		elseif fallback and fallback ~= mark and Dress(rig.tex, fallback) then
+			rig.drawn = fallback
+		else
+			rig.dressed, rig.drawn = nil, nil
 			return Hide(rig)
 		end
 		rig.dressed = mark
@@ -300,6 +315,12 @@ end
 local function Compute(unit, guid)
 	Nameplates.stats.computed = Nameplates.stats.computed + 1
 	local mark, k = ns.Borders.MarkOf(unit)
+	k.rank = mark -- (an honour's mark falls back to it: 1.2)
+	local H = ns.HonorsNet
+	if not k.off and type(H) == "table" and type(H.Verified) == "function" and k.who then
+		local v = H.Verified(k.who, guid)
+		if type(v) == "table" and v.mark and v.mark ~= "rank" then mark = v.mark end
+	end
 	k.guid, k.mark = guid, mark
 	known[unit] = k
 	return k
@@ -318,8 +339,8 @@ local function Refresh(rig, fresh)
 	local k = known[unit]
 	if fresh or not k or guid == nil or k.guid ~= guid then k = Compute(unit, guid) end
 	local preview = ns.Borders.Preview()
-	if preview then return Show(rig, Nameplates.PREVIEW[preview]) end
-	Show(rig, k.mark)
+	if preview then return Show(rig, Nameplates.PREVIEW[preview] or preview) end
+	Show(rig, k.mark, k.rank)
 end
 
 -- The game wrote the name of the same friendly player again (his health, a mouseover, a target
@@ -328,10 +349,10 @@ end
 local function Again(rig)
 	if not IsActive() then return Hide(rig) end
 	local preview = ns.Borders.Preview()
-	if preview then return Show(rig, Nameplates.PREVIEW[preview]) end
+	if preview then return Show(rig, Nameplates.PREVIEW[preview] or preview) end
 	local k = known[rig.unit]
 	if not k then return Refresh(rig) end
-	Show(rig, k.mark)
+	Show(rig, k.mark, k.rank)
 end
 
 -- Once, with mouse and keyboard: the hook on the game's name updates (it runs for every compact
@@ -425,23 +446,32 @@ local function InstallMine() -- gp:nameplates
 			mine.tex[key] = tex
 		end
 	end
+	local honor = container:CreateTexture(nil, "OVERLAY", nil, 7)
+	honor:Hide()
+	honor:SetSize(Nameplates.SIZE, Nameplates.SIZE)
+	honor:SetPoint("LEFT", name, point, x, 0)
+	mine.honor = honor
 	ns.Log("nameplates: the preview's marks set up on the player frame")
 end
 
 local function ShowMine(key)
 	if not mine or mine.shown == key then return end
-	if mine.shown and mine.tex[mine.shown] then mine.tex[mine.shown]:Hide() end
+	if mine.shownTex then mine.shownTex:Hide() end
 	mine.shown = nil
-	if key and mine.tex[key] then
-		mine.tex[key]:Show()
-		mine.shown = key
+	local tex = key and mine.tex[key] or nil
+	if key and not tex and mine.honor and Dress(mine.honor, key) then tex = mine.honor end
+	if tex then
+		tex:Show()
+		mine.shown, mine.shownTex = key, tex
+	else
+		mine.shownTex = nil
 	end
 end
 
 -- His own name's mark: the preview's while it is on, none otherwise.
 local function RefreshMine()
 	local preview = IsActive() and ns.Borders.Preview() or nil
-	local key = preview and Nameplates.PREVIEW[preview] or nil
+	local key = preview and (Nameplates.PREVIEW[preview] or preview) or nil
 	if key and mine == nil then InstallMine() end
 	ShowMine(key)
 end
@@ -621,6 +651,7 @@ end
 
 ns.On("LOGIN", function() Nameplates.RefreshAll(true) end)
 ns.On("DATA_CHANGED", function() Nameplates.CensusChanged() end)
+ns.On("HONORS_CHANGED", function() Nameplates.RefreshAll(true) end)
 -- The King shows or hides the council's names (the eye in the Realm, ns.SetCouncilNamesShown).
 ns.On("COUNCIL_MASK_CHANGED", function() Nameplates.CensusChanged() end)
 -- Registered where the client has them.

@@ -554,12 +554,33 @@ end
 -- realm hour; the guild's events among them (green); for officers, a click to take it to the
 -- game's calendar; for the King and his Hands, a click to take it off. `q`: that page's search.
 local open = {} -- [entry id] = its actions shown
+-- 1.2: other files' dated rows on the week (the Blood Arena's fights, ArenaFights.lua): each
+-- fn(now) returns a list of { at, title, zone, tip }, read-only: no calendar, no cancel, no signup.
+-- A provider that fails adds nothing.
+Week.providers = {}
+local function Provided(now)
+	local out = {}
+	for _, fn in ipairs(Week.providers) do
+		local ok, rows = pcall(fn, now)
+		if ok and type(rows) == "table" then
+			for _, r in ipairs(rows) do
+				if type(r) == "table" and tonumber(r.at) and type(r.title) == "string" then
+					out[#out + 1] = { at = tonumber(r.at), title = Clean(r.title, 60), zone = r.zone and Clean(r.zone, 40) or nil,
+						tip = type(r.tip) == "string" and r.tip or nil, provided = true }
+				end
+			end
+		end
+	end
+	return out
+end
+Week.Provided = Provided
 function Week.Section(lines, q)
 	local now = ns.Now()
 	Week.AskCalendar(now)
 	local list = {}
 	for _, e in ipairs(Week.Entries(now)) do list[#list + 1] = e end
 	for _, e in ipairs(Week.GuildEvents(now)) do list[#list + 1] = e end
+	for _, e in ipairs(Provided(now)) do list[#list + 1] = e end
 	table.sort(list, function(x, y) return x.at < y.at end)
 	lines[#lines + 1] = { header = true, text = L.WEEK_TITLE,
 		tooltip = function(tt) tt:AddLine(L.WEEK_TITLE, 1, 0.82, 0); tt:AddLine(L.WEEK_TIP, 1, 1, 1, true) end }
@@ -567,7 +588,7 @@ function Week.Section(lines, q)
 	local K = ns.King
 	local mayCancel = K.CanCommand() or K.Preview()
 	for _, e in ipairs(list) do
-		if not q or ns.Holds(q, e.title, e.zone, Week.DayLabel(e.at), not e.guild and Week.Setter(e) or nil) then
+		if not q or ns.Holds(q, e.title, e.zone, Week.DayLabel(e.at), not e.guild and not e.provided and Week.Setter(e) or nil) then
 			shown = shown + 1
 			local day = Week.DayLabel(e.at)
 			if day ~= lastDay then
@@ -582,11 +603,15 @@ function Week.Section(lines, q)
 				tooltip = function(tt)
 					tt:AddLine(e.title, 1, 0.82, 0)
 					tt:AddLine(day .. " " .. Week.TimeLabel(e.at) .. where, 1, 1, 1)
-					tt:AddLine(e.guild and L.WEEK_GUILD_TIP or L.WEEK_SET_BY:format(Week.Setter(e)), 0.8, 0.8, 0.8, true)
+					if e.provided then
+						if e.tip then tt:AddLine(e.tip, 0.8, 0.8, 0.8, true) end
+					else
+						tt:AddLine(e.guild and L.WEEK_GUILD_TIP or L.WEEK_SET_BY:format(Week.Setter(e)), 0.8, 0.8, 0.8, true)
+					end
 				end,
 			}
 			lines[#lines + 1] = row
-			if not e.guild then
+			if not e.guild and not e.provided then
 				local actions = {}
 				if Week.CanOpenCalendar() then
 					actions[#actions + 1] = { indent = 3, text = Gold("> " .. L.WEEK_CAL_BTN),

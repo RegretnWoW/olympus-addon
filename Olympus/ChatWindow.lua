@@ -36,7 +36,8 @@ local L = ns.L
 --   the moment it is made, never focused on opening); the player clicks into it, with the mouse
 --   or the gamepad cursor, or (mouse and keyboard, 1.1.1, the owner's ask) presses the game's
 --   "Open chat" key while the tab shows: an override binding of Olympus's own button, below. Enter
---   sends through Channels.Send and the cursor stays for the next line (an empty Enter, Escape or
+--   sends through Channels.Send for an army chat, or ArenaChat.Send for a fight room, and the
+--   cursor stays for the next line (an empty Enter, Escape or
 --   a plain left-click elsewhere, the client's own, lets the keyboard go back to the game); with
 --   the gamepad UI every Enter lets it go, as the Communities box does. It runs no command: a line
 --   starting with "/" is kept and the player is told the game's chat box is where commands go
@@ -55,8 +56,11 @@ ns.ChatWindow = ChatWindow
 local TAB = "chat"                                    -- its tab in the Olympus window (UI.lua)
 local SEARCH_H = 20                                   -- the top row: the search, the channels' switch, the gear
 local TOP_GAP = 4                                     -- between the top row's parts
+-- (The destinations under Search, Olympus / Guild / Race / Class / Arena: the Realm's in-page tabs,
+-- the same component, Views.DrawNav, in the same place: the first row of the list's box.)
 local GEAR_W = 20
 local ARROW_W = 12                                    -- the switch's arrow
+local ROOM_BUTTON_W = 20                              -- a dynamic room's local pin and remove buttons
 local MENU_ROW, MENU_PAD = 20, 4                      -- the switch's list of channels
 local INDENT = 12                                     -- a setting under its heading
 local PAD = 8                                         -- inside a bubble
@@ -82,15 +86,21 @@ local ARROW_ATLAS, ARROW_FILE = "NPE_ArrowDown", "Interface\\ChatFrame\\UI-ChatI
 -- The gear: the game's own settings icon (Forever's UIPanelIconDropdownButtonTemplate,
 -- SharedUIPanelTemplates.xml), else the gear icon every client carries.
 local GEAR_ATLAS, GEAR_FILE = "questlog-icon-setting", "Interface\\Icons\\INV_Misc_Gear_01"
+local ROOM_COLOUR = { 0.95, 0.42, 0.28 }              -- the Arena's rust, distinct from the three army chats
 
 local panes = {}             -- Olympus window -> its Chat tab (each look's window has its own)
 local frame                  -- the Chat tab in use (a pane of `host`)
 local host                   -- the Olympus window it is in
-local tier                   -- the channel shown
+local tier                   -- the channel or stable dynamic-room key shown
+ChatWindow.globalTier = nil  -- the legacy Olympus tier to return to from a logical room
+local dynamicRooms = {}      -- stable key -> { key, id, spec, pinned, used }; local UI state only
+local dynamicOrder = {}      -- stable keys, once each, in the order first opened/restored
+local lastRoomPrune = -math.huge
 local dirty, dataPending = false, false
 local lastData = -math.huge
 local unread = {}            -- tier -> lines from others since it was last looked at (while open)
 local notes = {}             -- tier -> { { why, text } }: lines that were not sent, this session
+ChatWindow.drafts = {}       -- logical room/tier -> this session's independent unfinished text
 local revealed = setmetatable({}, { __mode = "k" }) -- history entry -> shown despite the block terms
 local stick, newCount = true, 0 -- the view follows the newest line; lines come while it doesn't
 local lastAt = 0             -- the offset the view had last
@@ -107,16 +117,42 @@ local boundKeys              -- the keys our override binding holds now (nil: no
 local keysLater = false      -- a binding change asked in combat, made when the fight ends
 local toldLater = false      -- the key pressed in combat with the tab gone: said, once a fight
 local syncing = false
+local DrawMatchContext       -- built below with the tab's ordinary button helper
+ChatWindow.requestMinute = nil
 
 local function Grey(s) return GREY .. s .. "|r" end
 local function Gold(s) return "|cffffd200" .. s .. "|r" end
 local function Green(s) return "|cff40ff40" .. s .. "|r" end
 local function Trim(s) return (tostring(s or ""):gsub("^%s+", ""):gsub("%s+$", "")) end
+-- Locales.lua deliberately returns a missing key as the key itself.  ChatWindow can be reloaded
+-- into an older running client by the offline/live developer harness, so `L.KEY or fallback`
+-- would show KEY rather than the fallback until the next full game restart.  Keep this on the
+-- module table because this large file is already at Lua 5.1's per-chunk local-variable limit.
+function ChatWindow.Localized(key, fallback)
+	local value = L[key]
+	return type(value) == "string" and value ~= key and value or fallback
+end
+local function Dynamic(t) return type(t) == "string" and dynamicRooms[t] or nil end
+function ChatWindow.Logical(t)
+	local R = ns.ChatRooms
+	return type(t) == "string" and type(R) == "table" and type(R.Info) == "function" and R.Info(t) or nil
+end
 local function Label(t)
+	local r = Dynamic(t)
+	if r then return r.spec.title end
+	local logical = ChatWindow.Logical(t)
+	if logical then return logical.label end
 	local d = ns.Channels.TIERS[t]
 	return d and L[d.label] or "?"
 end
 local function Colour(t)
+	if Dynamic(t) then return ROOM_COLOUR end
+	local logical = ChatWindow.Logical(t)
+	if logical then
+		if logical.scope == "guild" then return { 0.35, 0.82, 0.45 } end
+		if logical.scope == "restricted" then return { 0.72, 0.55, 0.92 } end
+		return { 0.40, 0.72, 0.95 }
+	end
 	local d = ns.Channels.TIERS[t]
 	return d and d.color or { 1, 1, 1 }
 end
@@ -165,8 +201,11 @@ end
 
 ---------------------------------------------------------------------------
 -- The channel last shown, and the Olympus tab's line put away with its x: ns.db.chatWin =
--- { tier, noTabLine }, account-wide (the first 1.1.1 build kept its window's place and size there
--- too; the tab has neither).
+-- { tier, noTabLine, dynamicPins = { ["arena:<id>"] = "<id>" } }, account-wide (the first
+-- 1.1.1 build kept its window's place and size there too; the tab has neither). A dynamic pin is
+-- local UI state, never an Arena or Olympus-channel message. It is restored only when the Arena
+-- publishes the same canonical key/id again, and is discarded when that event is no longer
+-- recoverable.
 ---------------------------------------------------------------------------
 
 local function Saved()
@@ -177,8 +216,35 @@ end
 local function Remember(t)
 	if not ns.db then return end
 	local p = Saved() or {}
-	p.tier = t
+	if ns.Channels.TIERS[t] then
+		p.tier, p.room = t, nil
+	elseif ChatWindow.Logical(t) then
+		p.room = t
+	end
 	ns.db.chatWin = p
+end
+
+local function SavedPins(make)
+	local p = Saved()
+	if not p and make and ns.db then p = {}; ns.db.chatWin = p end
+	if not p then return nil end
+	if type(p.dynamicPins) ~= "table" then
+		if not make then return nil end
+		p.dynamicPins = {}
+	end
+	return p.dynamicPins
+end
+
+local function RememberPin(r, on)
+	if not r then return end
+	local pins = SavedPins(on)
+	if pins then
+		pins[r.key] = on and r.id or nil
+		if next(pins) == nil then
+			local p = Saved()
+			if p then p.dynamicPins = nil end
+		end
+	end
 end
 
 -- The Olympus tab's line, put away for good by its x (the settings and /oly chatwindow tab still
@@ -195,6 +261,39 @@ local function PutTabLineAway()
 end
 
 local function MarkDirty() dirty = true end
+
+function ChatWindow.SaveDraft()
+	if not frame or not tier or not frame.input then return end
+	local text = frame.input:GetText() or ""
+	ChatWindow.drafts[tier] = text ~= "" and text or nil
+end
+
+function ChatWindow.LoadDraft(t)
+	if not frame or not frame.input then return end
+	frame.input:SetText(ChatWindow.drafts[t] or "")
+end
+
+-- The choices in the Chat page's existing switch: its three rank-gated channels, unchanged and
+-- in their old order, then each dynamic room once. A room is never a Channels tier: this list is
+-- presentation only, and reading/sending branches to ArenaChat below.
+local function Choices()
+	local out = {}
+	for _, t in ipairs(Readable()) do out[#out + 1] = { key = t, tier = t } end
+	for _, key in ipairs(dynamicOrder) do
+		local r = dynamicRooms[key]
+		if r then out[#out + 1] = { key = key, room = r } end
+	end
+	return out
+end
+
+local function Choice(key)
+	if ns.Channels.TIERS[key] and ns.Channels.CanUse(key) then return { key = key, tier = key } end
+	local R = ns.ChatRooms
+	if R and type(R.PreviewOnly) == "function" and R.PreviewOnly(key) then return nil end
+	if ChatWindow.Logical(key) and type(R) == "table" and type(R.IsOpen) == "function" and R.IsOpen(key) then return { key = key, logical = ChatWindow.Logical(key) } end
+	local r = Dynamic(key)
+	return r and { key = key, room = r } or nil
+end
 
 function ChatWindow.IsShown()
 	return frame ~= nil and frame:IsShown() and host ~= nil and host:IsShown() and true or false
@@ -318,8 +417,7 @@ local function NameText(e)
 	local guild = e.guild
 	local council = ns.IsHighCouncillor(who) and not ns.CouncilMasked()
 	local name = ns.Codec.Plain(ns.DisplayName(e.sender) or "?")
-	local lead = ""
-	if ns.IsTreasurer(who, guild) then lead = (ns.COIN:gsub(" $", "")) end
+	local lead = ns.Channels.RoleBadge and ns.Channels.RoleBadge(who) or ""
 	if council then
 		name = "|c" .. ns.HIGH_COUNCIL_COLOR .. name .. "|r"
 	else
@@ -397,13 +495,18 @@ local function NewBubble()
 		if self.whisper then ns.SafeCall("chat tab whisper", ns.UI.WhisperWindow, self.whisper) end
 	end)
 	b.header:SetScript("OnEnter", function(self)
+		-- (1.1.6: the moderator's button sits in the header: still shown with the cursor here.)
+		ns.SafeCall("chat tab moderation", ChatWindow.HeaderEnter, b)
 		if not self.whisper then return end
 		Tip(self, function(tt)
 			tt:AddLine(self.full or self.whisper, 1, 0.82, 0)
 			tt:AddLine(L.CHATWIN_WHISPER_TIP:format(self.whisper), 0.6, 0.6, 0.6)
 		end)
 	end)
-	b.header:SetScript("OnLeave", function(self) Untip(self) end)
+	b.header:SetScript("OnLeave", function(self)
+		Untip(self)
+		ns.SafeCall("chat tab moderation", ChatWindow.BubbleLeave, b)
+	end)
 	-- The line itself, whole: the player's chat font, wrapped at any width, never cut.
 	b.body = b:CreateFontString(nil, "OVERLAY", "ChatFontNormal")
 	b.body:SetJustifyH("LEFT")
@@ -418,13 +521,40 @@ local function NewBubble()
 	b:SetScript("OnHyperlinkClick", function(_, _, text)
 		if IsShiftKeyDown and IsShiftKeyDown() then ns.SafeCall("chat tab link", InsertLink, text) end
 	end)
-	-- A line the block terms hide: a click shows it (this session).
-	b:SetScript("OnMouseUp", function(self)
+	-- A line the block terms hide: a click shows it (this session). 1.1.6: a right-click opens a
+	-- moderator's choices on a line he may act on (ChatWindow.ModerateLine, WatchChat.lua).
+	b:SetScript("OnMouseUp", function(self, button)
+		if button == "RightButton" then
+			ns.SafeCall("chat tab moderation", ChatWindow.ModerateLine, self)
+			return
+		end
 		if self.hidden and self.entry then
 			revealed[self.entry] = true
 			ns.SafeCall("chat tab", Render)
 		end
 	end)
+	-- 1.1.6: the moderator's button (WatchChat.lua), Olympus's own and a child of this bubble (the
+	-- gamepad cursor reaches it here too): shown while the bubble is hovered, on a line this client
+	-- may act on; and a deleted line's tooltip (when, by which role).
+	b.mod = CreateFrame("Button", nil, b)
+	b.mod:SetSize(14, 14)
+	b.mod.icon = b.mod:CreateTexture(nil, "ARTWORK")
+	b.mod.icon:SetAllPoints()
+	b.mod.icon:SetTexture("Interface\\Icons\\INV_Misc_Eye_01")
+	b.mod:Hide()
+	b.mod:SetScript("OnClick", function() ns.SafeCall("chat tab moderation", ChatWindow.ModerateLine, b) end)
+	b.mod:SetScript("OnEnter", function(self)
+		Tip(self, function(tt)
+			tt:AddLine(ChatWindow.Localized("WATCHCHAT_MOD_BTN", "Moderate this line"), 1, 0.82, 0)
+			tt:AddLine(ChatWindow.Localized("WATCHCHAT_MOD_BTN_TIP", "Delete it, delete his recent lines, or a timeout."), 1, 1, 1, true)
+		end)
+	end)
+	b.mod:SetScript("OnLeave", function(self)
+		Untip(self)
+		if not (b.IsMouseOver and b:IsMouseOver()) then self:Hide() end
+	end)
+	b:SetScript("OnEnter", function(self) ns.SafeCall("chat tab moderation", ChatWindow.BubbleEnter, self) end)
+	b:SetScript("OnLeave", function(self) ns.SafeCall("chat tab moderation", ChatWindow.BubbleLeave, self) end)
 	return b
 end
 
@@ -506,6 +636,11 @@ local function Bubble(i, e, start, y, maxInner, hides)
 	local veiled = not mine and hides ~= nil and hides(e.text or "") or false
 	local hidden = veiled and not revealed[e]
 	b.entry, b.hidden, b.mine, b.y = e, hidden, mine, y
+	-- 1.1.6: a line a moderator deleted (WatchChat.lua): the name stays, greyed; its words are gone.
+	local deleted = e.del == true and ns.WatchChat ~= nil and not ns.WatchChat.missing
+	b.chat = tier
+	if b.mod then b.mod:Hide() end
+	local modRoom = not mine and not deleted and ChatWindow.modRoom == true
 	local c = Colour(tier)
 	local r, g, bl, a = 0.09, 0.09, 0.11, 0.92
 	if mine then r, g, bl, a = c[1] * 0.28, c[2] * 0.28, c[3] * 0.28, 0.95 end
@@ -518,10 +653,11 @@ local function Bubble(i, e, start, y, maxInner, hides)
 	-- The header, at a group's start.
 	local headerW, timeW = 0, 0
 	if start then
-		b.who:SetText(mine and L.CHATWIN_YOU or NameText(e))
+		b.who:SetText(mine and L.CHATWIN_YOU or deleted and Grey(ns.Codec.Plain(ns.DisplayName(e.sender) or "?") .. " <" .. ns.Codec.Plain(e.guild or "?") .. ">")
+			or NameText(e))
 		b.time:SetText(Grey(date("%H:%M", tonumber(e.t) or 0)))
 		timeW = math.ceil(TextWidth(b.time))
-		headerW = math.ceil(TextWidth(b.who)) + 8 + timeW
+		headerW = math.ceil(TextWidth(b.who)) + 8 + timeW + (modRoom and 18 or 0) -- (room for the moderator's button, 1.1.6)
 		b.header.whisper = not mine and ns.TellName(e.sender) or nil
 		b.header.full = not mine and (ns.Codec.Plain(ns.DisplayName(e.sender) or "?") .. "  <" .. ns.Codec.Plain(e.guild or "?") .. ">") or nil
 		b.header:EnableMouse(not mine)
@@ -530,7 +666,7 @@ local function Bubble(i, e, start, y, maxInner, hides)
 		b.header.whisper, b.header.full = nil, nil
 		b.header:Hide()
 	end
-	b.body:SetText(hidden and Grey(L.CHATWIN_HIDDEN)
+	b.body:SetText(deleted and ns.WatchChat.DeletedBody() or hidden and Grey(L.CHATWIN_HIDDEN)
 		or ((veiled and (Grey(L.FILTER_HIDDEN_MARK) .. " ") or "") .. ns.Codec.SanitizeChat(e.text)))
 	local inner = math.min(maxInner, math.max(math.ceil(TextWidth(b.body)), headerW, 1))
 	b.body:SetWidth(inner)
@@ -538,8 +674,13 @@ local function Bubble(i, e, start, y, maxInner, hides)
 	local top = PAD
 	if start then
 		b.header:SetWidth(inner)
-		b.who:SetWidth(math.max(1, inner - timeW - 8))
+		b.who:SetWidth(math.max(1, inner - timeW - 8 - (modRoom and 18 or 0)))
 		top = top + HEADER_H + 2
+	end
+	-- (The moderator's button, while hovered: left of the time in a header, else the top corner.)
+	if b.mod then
+		b.mod:ClearAllPoints()
+		if start then b.mod:SetPoint("RIGHT", b.time, "LEFT", -4, 0) else b.mod:SetPoint("TOPRIGHT", b, "TOPRIGHT", -3, -3) end
 	end
 	b.body:ClearAllPoints()
 	b.body:SetPoint("TOPLEFT", b, "TOPLEFT", PAD, -top)
@@ -553,6 +694,87 @@ local function Bubble(i, e, start, y, maxInner, hides)
 	end
 	b:Show()
 	return h
+end
+
+---------------------------------------------------------------------------
+-- 1.1.6: moderation from a line (WatchChat.lua): the hover button and a right-click on a bubble
+-- open Olympus's own dialogs (ns.ShowDialog) on a line this client may act on; a deleted line
+-- shows its tooltip. Module functions: this file is at Lua's limit of locals per chunk.
+---------------------------------------------------------------------------
+
+-- WatchChat, when this client has it (a client updated without a restart has a stand-in).
+function ChatWindow.Mod()
+	local WC = ns.WatchChat
+	return type(WC) == "table" and not WC.missing and WC or nil
+end
+
+-- Does this client moderate anyone at all (a Watcher, the author, the King, a councillor, an
+-- Olympus moderator)? The headers keep room for the button then.
+function ChatWindow.ModRoom()
+	local WC = ChatWindow.Mod()
+	return WC ~= nil and type(WC.CanModerateAny) == "function" and WC.CanModerateAny() == true
+end
+
+-- The bubble's line, when this client may act on it: an army chat's or a ChatRooms room's (never
+-- a fight room's: the seam), another player's, not deleted.
+function ChatWindow.ModEntry(b)
+	local WC = ChatWindow.Mod()
+	if not WC or not b or b.mine or type(b.entry) ~= "table" or b.entry.del or Dynamic(b.chat) then return nil end
+	if type(WC.CanModerateEntry) ~= "function" or not WC.CanModerateEntry(b.entry, b.chat) then return nil end
+	return b.entry, WC
+end
+
+function ChatWindow.ModerateLine(b)
+	if b and b.mod then b.mod:Hide() end
+	local e, WC = ChatWindow.ModEntry(b)
+	if not e then return false end
+	ChatWindow.OpenSubMenu({ kind = "moderation", bubble = b, target = e, chat = b.chat }, b)
+	return true
+end
+
+function ChatWindow.ModerationOptions(entry)
+	local e, WC = ChatWindow.ModEntry(entry.bubble)
+	if not e or e ~= entry.target or entry.bubble.chat ~= entry.chat then return {} end
+	local function Action(op)
+		return function()
+			local current, live = ChatWindow.ModEntry(entry.bubble)
+			if current ~= e or entry.bubble.chat ~= entry.chat then return end
+			if op == "delete" then live.AskWhy({ name = e.sender, entry = e, chat = entry.chat }, "D")
+			else live.AskName(e.sender, op) end
+		end
+	end
+	local out = {
+		{ label = L.WATCHCHAT_DELETE_LINE, onClick = Action("delete") },
+		{ label = L.WATCHCHAT_TIMEOUT_BTN, onClick = Action("timeout") },
+		{ label = L.WATCHCHAT_PURGE_BTN, onClick = Action("purge") },
+	}
+	if type(WC.TimeoutOf) == "function" and WC.TimeoutOf(e.sender) then
+		out[#out + 1] = { label = L.WATCHCHAT_LIFT_BTN, onClick = Action("lift") }
+	end
+	return out
+end
+
+function ChatWindow.BubbleEnter(b)
+	local e = b and b.entry
+	local WC = ChatWindow.Mod()
+	if type(e) == "table" and e.del and WC and type(WC.DeletedTip) == "function" then
+		Tip(b, function(tt) WC.DeletedTip(tt, e) end)
+		return
+	end
+	if b.mod and ChatWindow.ModEntry(b) then b.mod:Show() end
+end
+
+-- The cursor went from the bubble onto its header (the name row, where a first line's button
+-- is): the game calls the bubble's OnLeave then, the header being a frame of its own; the button
+-- stays while the cursor is anywhere over the bubble (its header and the button are inside it).
+function ChatWindow.HeaderEnter(b)
+	if b and b.mod and ChatWindow.ModEntry(b) then b.mod:Show() end
+end
+
+function ChatWindow.Over(f) return f ~= nil and f.IsMouseOver ~= nil and f:IsMouseOver() == true end
+function ChatWindow.BubbleLeave(b)
+	Untip(b)
+	if b.mod and b.mod:IsShown() and not ChatWindow.Over(b.mod) and not ChatWindow.Over(b) then b.mod:Hide() end
 end
 
 local function ContentWidth()
@@ -570,7 +792,8 @@ local function Searched(list, q, hides)
 	local Plain = ns.Codec.Plain
 	for _, e in ipairs(list) do
 		local hidden = hides ~= nil and not Own(e) and not revealed[e] and hides(e.text or "")
-		local words = not hidden and ns.Codec.SanitizeChat(e.text) or nil
+		-- (1.1.6: a line a moderator deleted is found by its writer and guild alone: no words left.)
+		local words = not hidden and not e.del and ns.Codec.SanitizeChat(e.text) or nil
 		if ns.Holds(q, ns.DisplayName(e.sender) or "?", Plain(e.guild or ""), words) then out[#out + 1] = e end
 	end
 	return out
@@ -592,7 +815,7 @@ local function HiddenLines(all)
 	local hides, out = Hides(), {}
 	if not hides then return out end
 	for _, e in ipairs(all) do
-		if not Own(e) and hides(e.text or "") then out[#out + 1] = e end
+		if not Own(e) and not e.del and hides(e.text or "") then out[#out + 1] = e end -- (1.1.6: never a deleted line)
 	end
 	return out
 end
@@ -600,6 +823,7 @@ end
 -- The lines of `all`, the channel's history (Render reads it once for the strips and the lines).
 local function DrawLines(all)
 	local C = ns.Channels
+	ChatWindow.modRoom = ChatWindow.ModRoom() -- (1.1.6: this client moderates someone: room for the button)
 	local width = ContentWidth()
 	frame.content:SetWidth(width)
 	local hides = Hides()
@@ -661,15 +885,15 @@ end
 -- The lines that came in on the channels not shown (unread[t] counts only those, CHAT_LINE).
 local function OthersUnread()
 	local n = 0
-	for t, c in pairs(unread) do
-		if t ~= tier and ns.Channels.CanUse(t) then n = n + c end
+	for _, choice in ipairs(Choices()) do
+		if choice.key ~= tier then n = n + (unread[choice.key] or 0) end
 	end
 	return n
 end
 
 -- The switch: the channel shown, in its colour, then "+N" for the lines new in the others, and
 -- its arrow. As wide as that.
-local function PaintSwitch()
+local function PaintSwitch(maxWidth)
 	local b = frame.switch
 	local c = Colour(tier)
 	b.text:SetText(Label(tier))
@@ -677,17 +901,23 @@ local function PaintSwitch()
 	local n = OthersUnread()
 	b.count:SetText(n > 0 and ("+" .. n) or "")
 	b.count:SetShown(n > 0)
-	local w = 8 + math.ceil(TextWidth(b.text)) + (n > 0 and (4 + math.ceil(TextWidth(b.count))) or 0) + 4 + ARROW_W + 4
+	-- Event titles are not tab labels: cap the switch so a long fight name never consumes the
+	-- search box. The full title is in its tooltip and menu row.
+	local extra = 8 + (n > 0 and (4 + math.ceil(TextWidth(b.count))) or 0) + 4 + ARROW_W + 4
+	local textW = math.max(1, math.min(190, math.ceil(TextWidth(b.text)), (maxWidth or 214) - extra))
+	b.text:SetWidth(textW)
+	local w = textW + extra
 	b:SetSize(w, SEARCH_H)
 end
 
 -- A channel in the switch's list: its colour for the one shown, grey for the others (white under
 -- the mouse), and the lines new in it.
 local function PaintChoice(r)
-	local c = Colour(r.tier)
-	local n = unread[r.tier] or 0
-	r.text:SetText(Label(r.tier) .. (n > 0 and (" (" .. n .. ")") or ""))
-	if r.tier == tier then
+	local key = r.choiceKey
+	local c = Colour(key)
+	local n = unread[key] or 0
+	r.text:SetText(Label(key) .. (n > 0 and (" (" .. n .. ")") or ""))
+	if key == tier then
 		r.text:SetTextColor(c[1], c[2], c[3])
 		r.mark:SetColorTexture(c[1], c[2], c[3], 1)
 		r.mark:Show()
@@ -701,23 +931,22 @@ end
 -- The switch's list, under it on its right: the channels this rank reads, in their order.
 local function PaintMenu()
 	local m = frame.menu
-	local C = ns.Channels
 	local y, w = -MENU_PAD, 0
-	for _, t in ipairs(C.ORDER) do
-		local r = m.rows[t]
-		if C.CanUse(t) then
-			PaintChoice(r)
-			r:ClearAllPoints()
-			r:SetPoint("TOPLEFT", m, "TOPLEFT", MENU_PAD, y)
-			r:SetPoint("TOPRIGHT", m, "TOPRIGHT", -MENU_PAD, y)
-			r:SetHeight(MENU_ROW)
-			y = y - MENU_ROW
-			w = math.max(w, math.ceil(TextWidth(r.text)))
-			r:Show()
-		else
-			r:Hide()
-		end
+	local shown = {}
+	for _, choice in ipairs(Choices()) do
+		local key = choice.key
+		local r = m.rows[key] or m:AddChoice(key)
+		shown[key] = true
+		PaintChoice(r)
+		r:ClearAllPoints()
+		r:SetPoint("TOPLEFT", m, "TOPLEFT", MENU_PAD, y)
+		r:SetPoint("TOPRIGHT", m, "TOPRIGHT", -MENU_PAD, y)
+		r:SetHeight(MENU_ROW)
+		y = y - MENU_ROW
+		w = math.max(w, math.ceil(TextWidth(r.text)))
+		r:Show()
 	end
+	for key, r in pairs(m.rows) do if not shown[key] then r:Hide() end end
 	m:SetSize(math.max(frame.switch:GetWidth(), w + 2 * MENU_PAD + 20), -y + MENU_PAD)
 	m:ClearAllPoints()
 	m:SetPoint("TOPRIGHT", frame.switch, "BOTTOMRIGHT", 0, -2)
@@ -742,6 +971,215 @@ local function PaintGear()
 	if settings then g:LockHighlight() else g:UnlockHighlight() end
 end
 
+function ChatWindow.SubtabEntries()
+	local out = { { kind = "global", label = L.CHATROOM_GLOBAL or "Olympus" } }
+	local R = ns.ChatRooms
+	local arena = { kind = "arena", label = ChatWindow.Localized("ARENA_CHAT_TAB", "Arena"), dropdown = true,
+		tip = ChatWindow.Localized("ARENA_CHAT_TAB_TIP", "Fight, event and matched-duel chats you opened or pinned.") }
+	local inserted = false
+	if type(R) == "table" and type(R.Tabs) == "function" then
+		for _, e in ipairs(R.Tabs()) do
+			out[#out + 1] = e
+			if e.kind == "class" then out[#out + 1], inserted = arena, true end
+		end
+	end
+	if not inserted then out[#out + 1] = arena end
+	return out
+end
+
+function ChatWindow.OpenArenaFromChat()
+	local H = ns.ArenaHome
+	if type(H) ~= "table" or type(H.Open) ~= "function" then return false end
+	return H.Open("events") ~= false
+end
+
+-- The Arena subtab indexes only rooms this client already admitted through the canonical Arena
+-- contracts. It discovers no events, participants or stakes of its own. Pinned rooms come first,
+-- then active and most recently used retained rooms; the list stays bounded to the menu's rows.
+function ChatWindow.ArenaOptions(includeEmpty)
+	if ChatWindow.PruneDynamicRooms then ChatWindow.PruneDynamicRooms() end
+	local rooms = ChatWindow.DynamicRooms and ChatWindow.DynamicRooms() or {}
+	table.sort(rooms, function(a, b)
+		local ap, bp = a.pinned and 1 or 0, b.pinned and 1 or 0
+		if ap ~= bp then return ap > bp end
+		local aa, ba = a.spec and a.spec.active and 1 or 0, b.spec and b.spec.active and 1 or 0
+		if aa ~= ba then return aa > ba end
+		if (a.used or 0) ~= (b.used or 0) then return (a.used or 0) > (b.used or 0) end
+		return tostring(a.key) < tostring(b.key)
+	end)
+	local out, cap = {}, 10
+	local shown = math.min(#rooms, #rooms > cap and cap - 1 or cap)
+	for i = 1, shown do
+		local room = rooms[i]
+		local title = room.spec and room.spec.title or room.id or "?"
+		if room.pinned then title = ChatWindow.Localized("ARENA_CHAT_MENU_PINNED", "Pinned: %s"):format(title)
+		elseif room.spec and room.spec.active then title = ChatWindow.Localized("ARENA_CHAT_MENU_ACTIVE", "Live: %s"):format(title) end
+		out[#out + 1] = { id = room.key, label = title, dynamic = true }
+	end
+	if #rooms > cap then
+		out[#out + 1] = { label = ChatWindow.Localized("ARENA_CHAT_MENU_MORE", "More fights - open the Arena"), onClick = ChatWindow.OpenArenaFromChat }
+	elseif #out == 0 and includeEmpty then
+		out[1] = { label = ChatWindow.Localized("ARENA_CHAT_MENU_EMPTY", "No fight chat open - open the Arena"), onClick = ChatWindow.OpenArenaFromChat }
+	end
+	return out
+end
+
+function ChatWindow.CloseSubMenu()
+	if not frame or not frame.subMenu then return end
+	frame.subMenu:Hide()
+	frame.subCatcher:Hide()
+	frame.subEntry, frame.subSignature = nil, nil
+end
+
+function ChatWindow.SubMenuOptions(entry)
+	if entry.kind == "moderation" then return ChatWindow.ModerationOptions(entry) end
+	local R = ns.ChatRooms
+	return entry.kind == "arena" and ChatWindow.ArenaOptions(true)
+		or (type(R) == "table" and type(R.Options) == "function" and R.Options(entry.kind) or {})
+end
+function ChatWindow.SubMenuSignature(entry, options)
+	local V = ns.ViewAs
+	local out = { entry.kind, tostring(V and V.Previewing and V.Previewing() and V.Role and V.Role() or false) }
+	for _, option in ipairs(options) do
+		out[#out + 1] = table.concat({ tostring(option.id), tostring(option.label), tostring(option.disabled), tostring(option.dynamic) }, "\031")
+	end
+	return table.concat(out, "\030")
+end
+
+-- A destination as the shared strip draws it (Views.DrawNav): its words and unread count, lit
+-- while it is the one shown, a picker's arrow (Race, Class, Arena: a list of rooms opens from it).
+function ChatWindow.SubtabItem(entry)
+	local logical = ChatWindow.Logical(tier)
+	local selected = entry.kind == "global" and ns.Channels.TIERS[tier] ~= nil
+		or entry.kind == "arena" and Dynamic(tier) ~= nil
+		or entry.kind == "role" and logical ~= nil and logical.scope == "restricted"
+		or logical ~= nil and (entry.id == tier or entry.kind == logical.kind)
+	local n = 0
+	if entry.kind == "global" then
+		for _, choice in ipairs(Choices()) do n = n + (unread[choice.key] or 0) end
+	elseif entry.id then
+		n = unread[entry.id] or 0
+	else
+		local R = ns.ChatRooms
+		local options = entry.kind == "arena" and ChatWindow.ArenaOptions(false)
+			or (type(R) == "table" and type(R.Options) == "function" and R.Options(entry.kind) or {})
+		for _, option in ipairs(options) do
+			if not option.disabled then n = n + (unread[option.id] or 0) end
+		end
+	end
+	return {
+		entry = entry, selected = selected == true, picker = entry.dropdown == true,
+		text = entry.label .. (n > 0 and (" (" .. n .. ")") or ""),
+		onClick = function(button) ChatWindow.ClickSubtab(entry, button) end,
+		tooltip = entry.dropdown and function(tt)
+			tt:AddLine(entry.label, 1, 0.82, 0)
+			tt:AddLine(entry.tip or L.CHATROOM_DROPDOWN_TIP or "Choose a topic room.", 1, 1, 1, true)
+		end or nil,
+	}
+end
+
+-- A destination clicked: Olympus (the army chat last shown), a picker's list of rooms (from its
+-- button), or the room itself.
+function ChatWindow.ClickSubtab(entry, button)
+	if entry.kind == "global" then
+		ChatWindow.CloseSubMenu()
+		local want = ChatWindow.globalTier
+		if not want or not ns.Channels.CanUse(want) then want = Readable()[1] end
+		if want then ns.SafeCall("chat subtab", ChatWindow.SelectLegacy, want) end
+	elseif entry.dropdown then
+		ns.SafeCall("chat subtab menu", ChatWindow.OpenSubMenu, entry, button)
+	elseif entry.id then
+		ns.SafeCall("chat subtab", ChatWindow.SelectLogical, entry.id)
+	end
+end
+
+function ChatWindow.OpenSubMenu(entry, owner)
+	if not frame then return end
+	local options = ChatWindow.SubMenuOptions(entry)
+	if #options == 0 then return end
+	CloseMenu()
+	local menu, y, width = frame.subMenu, -MENU_PAD, 80
+	for i, option in ipairs(options) do
+		local row = menu.rows[i]
+		row.roomId, row.dynamic, row.onClick, row.previewOnly = option.id, option.dynamic == true, option.onClick, option.disabled == true
+		row.text:SetText(option.label)
+		row.mark:SetShown(tier == option.id)
+		row.text:SetTextColor(tier == option.id and 1 or 0.82, tier == option.id and 0.82 or 0.82, tier == option.id and 0 or 0.82)
+		row:SetAlpha(row.previewOnly and 0.5 or 1)
+		row:ClearAllPoints()
+		row:SetPoint("TOPLEFT", menu, "TOPLEFT", MENU_PAD, y)
+		row:SetPoint("TOPRIGHT", menu, "TOPRIGHT", -MENU_PAD, y)
+		row:SetHeight(MENU_ROW)
+		row:Show()
+		y = y - MENU_ROW
+		width = math.max(width, math.ceil(TextWidth(row.text)) + 22)
+	end
+	for i = #options + 1, #menu.rows do
+		menu.rows[i].roomId, menu.rows[i].dynamic, menu.rows[i].onClick = nil, nil, nil
+		menu.rows[i]:Hide()
+	end
+	local menuWidth = math.min(width + MENU_PAD * 2, math.max(80, frame:GetWidth() - 24))
+	menu:SetSize(menuWidth, -y + MENU_PAD)
+	for i = 1, #options do
+		menu.rows[i].text:SetWidth(math.max(1, menuWidth - MENU_PAD * 2 - 22))
+		menu.rows[i].text:SetWordWrap(false)
+	end
+	menu:ClearAllPoints()
+	if entry.kind == "moderation" then
+		menu:SetPoint("TOPLEFT", owner, "BOTTOMLEFT", 0, -2)
+	else
+	local top = owner:GetBottom() - frame:GetTop() - 2
+	if entry.kind == "race" or entry.kind == "class" then
+		-- These lists open under the destination clicked, moving left only as far as needed
+		-- to keep long labels inside the pane. Arena and role menus keep their existing placement.
+		local left = math.max(12, math.min(owner:GetLeft() - frame:GetLeft(), frame:GetWidth() - menuWidth - 12))
+		menu:SetPoint("TOPLEFT", frame, "TOPLEFT", left, top)
+	else
+		menu:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -12, top)
+	end
+	end
+	frame.subCatcher:Show()
+	frame.subEntry, frame.subSignature = entry, ChatWindow.SubMenuSignature(entry, options)
+	menu:Show()
+end
+
+-- The destinations, drawn by the Realm's own in-page tabs (Views.DrawNav) where the Realm draws
+-- its list's first row: in the list's box, at the list's left and as wide as its rows (UI.lua's
+-- places.nav, the list's numbers). They stay there whatever shows under them (the review of
+-- test33: anchored to a box that the strips over the lines pushed down, they moved under the
+-- pointer from one destination to the next, the pinned line showing on Olympus and not on Guild;
+-- the Realm's tabs never move): the box stays where the list's box is, and the strips (the pinned
+-- line, the Olympus tab's line, a topic's status, a match's card, the hidden lines' count) and the
+-- lines start under the tabs, in that box (ChatWindow.PlaceLines). Hidden with the settings.
+-- Returns where the room under them starts, from the window's top (the box's top without them).
+function ChatWindow.DrawSubtabs(show)
+	local bar = frame and frame.subtabs
+	if not bar then return frame and frame.places.box.top or 0 end
+	local V, box, nav = ns.Views, frame.places.box, frame.places.nav
+	if show and nav and type(V) == "table" and type(V.DrawNav) == "function" then
+		local items = {}
+		for _, entry in ipairs(ChatWindow.SubtabEntries()) do items[#items + 1] = ChatWindow.SubtabItem(entry) end
+		local width = math.max(1, (frame:GetWidth() or 338) - nav.left + nav.right)
+		local h = V.DrawNav(bar, items, width)
+		bar:ClearAllPoints()
+		bar:SetPoint("TOPLEFT", frame.box, "TOPLEFT", nav.left - box.left, nav.top - box.top)
+		bar:SetSize(width, h)
+		bar:Show()
+		return nav.top - h
+	end
+	bar:Hide()
+	ChatWindow.CloseSubMenu()
+	return box.top
+end
+
+-- The lines, and the chats-off page, from `y` (from the window's top) down, in the box: under the
+-- tabs and the strips over the lines (Draw).
+function ChatWindow.PlaceLines(y)
+	local top = y - frame.places.box.top
+	frame.scroll:SetPoint("TOPLEFT", frame.box, "TOPLEFT", 4, math.min(-4, top))
+	frame.off:SetPoint("TOPLEFT", frame.box, "TOPLEFT", 0, top)
+end
+
 -- The box to write in, across the bottom row; 1.1.2: the Answers button (the author, the High
 -- Council and the Stewards) at that row's end while it shows, the box ending before it. Never on
 -- the top row (1.1.2's review: next to the switch, the search box there shrank to nothing for a
@@ -762,23 +1200,46 @@ end
 -- The row: the gear at its end; the switch left of it while the lines show and the rank reads more
 -- than one channel (never a row of its own; one channel, nothing); the search box in the rest.
 -- The settings: their title there instead.
-local function DrawTop(tiers, on)
+local function DrawTop(choices, on)
 	local s = frame.places.search
+	if settings then s = { left = s.left, right = s.right, top = -30 } end
 	local lines = on and not settings
-	frame.gear:ClearAllPoints()
-	frame.gear:SetPoint("TOPRIGHT", frame, "TOPRIGHT", s.right, s.top)
-	PaintGear()
-	local right = s.right - GEAR_W - TOP_GAP
+	local room = Dynamic(tier)
+	local right = s.right
+	if room then
+		frame.gear:Hide()
+		frame.roomPin:ClearAllPoints()
+		frame.roomPin:SetPoint("TOPRIGHT", frame, "TOPRIGHT", right, s.top)
+		frame.roomPin.pinned = room.pinned and true or false
+		frame.roomPin.label:SetText(room.pinned and "P" or "p")
+		frame.roomPin:Show()
+		right = right - ROOM_BUTTON_W - TOP_GAP
+		frame.roomClose:SetShown(not room.pinned)
+		if not room.pinned then
+			frame.roomClose:ClearAllPoints()
+			frame.roomClose:SetPoint("TOPRIGHT", frame, "TOPRIGHT", right, s.top)
+			right = right - ROOM_BUTTON_W - TOP_GAP
+		end
+	else
+		frame.roomPin:Hide()
+		frame.roomClose:Hide()
+		frame.gear:ClearAllPoints()
+		frame.gear:SetPoint("TOPRIGHT", frame, "TOPRIGHT", s.right, s.top)
+		frame.gear:Show()
+		PaintGear()
+		right = s.right - GEAR_W - TOP_GAP
+	end
 	-- 1.1.5: no "?" of the tab's own on this row (1.1.2 had one left of the gear, the owner's ask: it
 	-- doubled the window's help "i" just above it, left of the X). The Answers of the author, the
 	-- High Council and the Stewards: at the end of the box they fill, while the lines and that box
 	-- show (PlaceInput).
 	local A = ns.Answers
-	frame.answers:SetShown(lines and A ~= nil and type(A.Allowed) == "function" and A.Allowed() == true)
+	frame.answers:SetShown(not room and lines and A ~= nil and type(A.Allowed) == "function" and A.Allowed() == true)
 	PlaceInput(frame)
 	local sw = frame.switch
-	if lines and #tiers > 1 then
-		PaintSwitch()
+	if lines and (ns.Channels.TIERS[tier] or Dynamic(tier)) and #choices > 1 then
+		local searchLeft = s.left + math.ceil(TextWidth(frame.searchLabel)) + 12
+		PaintSwitch(frame:GetWidth() + right - searchLeft - TOP_GAP - 60)
 		sw:ClearAllPoints()
 		sw:SetPoint("TOPRIGHT", frame, "TOPRIGHT", right, s.top)
 		sw:Show()
@@ -789,12 +1250,16 @@ local function DrawTop(tiers, on)
 		CloseMenu()
 	end
 	local lw = math.ceil(TextWidth(frame.searchLabel))
+	frame.searchLabel:SetPoint("TOPLEFT", frame, "TOPLEFT", s.left, s.top - 4)
+	frame.setTitle:SetPoint("TOPLEFT", frame, "TOPLEFT", s.left, s.top - 3)
 	frame.search:ClearAllPoints()
 	frame.search:SetPoint("TOPLEFT", frame, "TOPLEFT", s.left + lw + 12, s.top)
 	frame.search:SetPoint("TOPRIGHT", frame, "TOPRIGHT", right, s.top)
 	frame.search:SetShown(lines)
 	frame.searchLabel:SetShown(lines)
-	frame.setTitle:SetShown(settings)
+	frame.setTitle:SetShown(not room and settings)
+	frame.navBottom = ChatWindow.DrawSubtabs(not settings)
+	frame.underTabs = settings and frame.navBottom or math.min(frame.navBottom - 4, s.top - SEARCH_H - 4)
 end
 
 -- The room between the box's sides (a strip over it: the pinned line, the Olympus tab's line, the
@@ -809,6 +1274,41 @@ local function Strip(s, y)
 	s:ClearAllPoints()
 	s:SetPoint("TOPLEFT", frame, "TOPLEFT", box.left + 6, y - 3)
 	s:SetPoint("TOPRIGHT", frame, "TOPRIGHT", box.right - 6, y - 3)
+end
+
+-- Race/class outsiders keep this warning in sight, not only in the send popup. It also states
+-- which of the two independent gates (30 minutes and a member reply) is still closed.
+function ChatWindow.DrawTopicStatus(y)
+	local R = ns.ChatRooms
+	local logical = ChatWindow.Logical(tier)
+	local s = frame.topicStatus
+	local text = logical and logical.scope == "topic" and type(R) == "table" and type(R.StatusText) == "function" and R.StatusText(tier) or nil
+	if not text then s:Hide(); return 0 end
+	s.text:SetText(Gold(text))
+	local width = StripWidth()
+	s.text:SetWidth(width)
+	local h = math.min(TextHeight(s.text, width), 3 * LINE_H)
+	s:SetHeight(h)
+	Strip(s, y)
+	s:Show()
+	return h + 6
+end
+
+-- The strip over the lines while this character is in a timeout: until when, by which role.
+function ChatWindow.DrawModStatus(y)
+	local s = frame.modStatus
+	if not s then return 0 end
+	local WC = ChatWindow.Mod()
+	local text = WC and type(WC.StripText) == "function" and WC.StripText() or nil
+	if not text then s:Hide(); return 0 end
+	s.text:SetText("|cffff6060" .. text .. "|r")
+	local width = StripWidth()
+	s.text:SetWidth(width)
+	local h = math.min(TextHeight(s.text, width), 2 * LINE_H)
+	s:SetHeight(h)
+	Strip(s, y)
+	s:Show()
+	return h + 6
 end
 
 -- The pinned line (Channels.Pin), as the Realm tab shows it (Views.PinLine): its words veiled
@@ -1288,6 +1788,10 @@ function ChatWindow.SettingsLines()
 				tt:AddLine(guildOnly and L.PIN_ADD_GUILD_TIP or L.PIN_ADD_TIP, 1, 1, 1, true)
 			end, gap = true })
 	end
+	-- 1.1.6: "Your moderation record" (WatchChat.lua): what moderators did about this player's
+	-- lines, by role only, with an appeal to the High Council a click away.
+	local WC = ChatWindow.Mod()
+	for _, l in ipairs(WC and type(WC.RecordLines) == "function" and WC.RecordLines() or {}) do Add(l) end
 	return out
 end
 
@@ -1348,7 +1852,10 @@ end
 -- they took us off).
 local function DrawInput()
 	local eb = frame.input
-	eb.label:SetText("|c" .. Hex(Colour(tier)) .. "[" .. Label(tier) .. "]:|r")
+	local room = Dynamic(tier)
+	local short = room and (room.spec.kind == "match" and (L.MATCH_ROOM_LABEL or "Match")
+		or (L.ARENA_CHAT_ROOM_LABEL or "Fight")) or Label(tier)
+	eb.label:SetText("|c" .. Hex(Colour(tier)) .. "[" .. short .. "]:|r")
 	local lw = math.ceil(TextWidth(eb.label))
 	eb:SetTextInsets(lw + 6, 6, 0, 0)
 	local M = ns.Moderation
@@ -1356,8 +1863,14 @@ local function DrawInput()
 	local hint
 	if off and type(M.YouText) == "function" then
 		hint = M.YouText(off)
+	elseif not room and ChatWindow.Mod() and ChatWindow.Mod().StripText() then
+		hint = ChatWindow.Mod().StripText() -- (1.1.6: a moderator's timeout, WatchChat.lua)
 	else
-		local public = ns.Comm and type(ns.Comm.IsPublic) == "function" and ns.Comm.IsPublic()
+		-- A fight room has its own ArenaChat route (the private ones are logged whispers to their
+		-- participants); the Olympus channel's public warning never describes it.
+		local logical = ChatWindow.Logical(tier)
+		local public = logical and logical.scope == "topic"
+			or not room and not logical and ns.Comm and type(ns.Comm.IsPublic) == "function" and ns.Comm.IsPublic()
 		hint = L.CHATWIN_PLACEHOLDER:format(Label(tier)) .. (public and L.CHATWIN_PUBLIC or "")
 	end
 	eb.hint:SetText(hint)
@@ -1444,7 +1957,9 @@ local function KeysWanted(gamepad)
 	if gamepad == nil then gamepad = ns.GamepadUI() end
 	if gamepad or not Shown() then return false end
 	if frame.IsVisible and not frame:IsVisible() then return false end
-	return ns.Channels.ChatOn() and true or false
+	local R = ns.ChatRooms
+	return (Dynamic(tier) ~= nil or ChatWindow.Logical(tier) and type(R) == "table" and type(R.ChatOn) == "function" and R.ChatOn(tier)
+		or not ChatWindow.Logical(tier) and ns.Channels.ChatOn()) and true or false
 end
 
 -- The key pressed (our binding's click, on the press): the keyboard to the tab's box, its lines in
@@ -1525,12 +2040,16 @@ local function ShowParts(mode)
 		frame.newPill:Hide()
 		frame.guide:Hide()
 		frame.hiddenCount:Hide()
+		if frame.matchContext then frame.matchContext:Hide() end
+		frame.topicStatus:Hide()
+		if frame.modStatus then frame.modStatus:Hide() end
 	end
 	if mode == "settings" then frame.pin:Hide() end
 end
 
 local function Draw()
 	if not frame or not frame.places then return end
+	if ChatWindow.PruneDynamicRooms then ChatWindow.PruneDynamicRooms() end
 	local C = ns.Channels
 	local tiers = Readable()
 	-- A rank that reads none of the channels any more (out of Olympus): the tab goes, and the
@@ -1540,34 +2059,75 @@ local function Draw()
 		if ns.UI and type(ns.UI.Refresh) == "function" then ns.SafeCall("chat tab", ns.UI.Refresh) end
 		return
 	end
-	if not tier or not C.CanUse(tier) then
-		tier = tiers[1]
+	if not tier or not Choice(tier) then
+		tier, ChatWindow.globalTier = tiers[1], tiers[1]
 		Remember(tier)
+		ChatWindow.LoadDraft(tier)
 	end
-	local on = C.ChatOn()
-	DrawTop(tiers, on)
+	local room = Dynamic(tier)
+	if room then settings = false; room.used = GetTime and GetTime() or 0 end
+	local logical = ChatWindow.Logical(tier)
+	local R = ns.ChatRooms
+	local on
+	if room then
+		on = true
+	elseif logical then
+		-- (A provider's private room answers for its own consent: ChatRooms.ChatOn by the room.)
+		on = type(R) == "table" and type(R.ChatOn) == "function" and R.ChatOn(tier) == true
+	else
+		on = C.ChatOn()
+	end
+	DrawTop(Choices(), on)
 	local box = frame.places.box
-	local y = box.top
+	-- The box where the list's box is, whatever shows in it (the destinations' tabs fixed in it,
+	-- ChatWindow.DrawSubtabs).
+	frame.box:SetPoint("TOPLEFT", frame, "TOPLEFT", box.left, box.top)
+	-- Keep the destinations on the window's light ground. The logical box still anchors
+	-- the scroll and status rows; only the dark inset begins below the navigation.
+	if frame.bodyInset then
+		frame.bodyInset:SetPoint("TOPLEFT", frame, "TOPLEFT", box.left,
+			settings and box.top or (frame.navBottom or box.top) - 3)
+	end
 	-- The settings: from the top row down, no strip over them.
 	if settings then
-		frame.box:SetPoint("TOPLEFT", frame, "TOPLEFT", box.left, y)
 		ShowParts("settings")
 		DrawSettings()
 		return
 	end
-	-- The strips over the lines, each taking room only while it shows: the pinned line, the way to
-	-- the Olympus tab, the count of the lines the block terms hide (nearest the lines it counts).
-	y = y - DrawPin(y)
-	local all = on and C.History(tier) or nil -- (read once, for the count and the lines)
+	local y = frame.underTabs or box.top
+	-- The strips over the lines, under the tabs, each taking room only while it shows: the pinned
+	-- line, the way to the Olympus tab, the count of the lines the block terms hide (nearest the
+	-- lines it counts).
+	if room or logical then
+		frame.pin:Hide()
+		frame.guide:Hide()
+	else
+		y = y - DrawPin(y)
+	end
+	if room and DrawMatchContext then y = y - DrawMatchContext(y, room)
+	elseif frame.matchContext then frame.matchContext:Hide() end
+	local all
+	if room then
+		local A = ns.ArenaChat
+		all = type(A) == "table" and type(A.Lines) == "function" and A.Lines(room.id) or {}
+	elseif logical then
+		all = type(R) == "table" and type(R.History) == "function" and R.History(tier) or {}
+	elseif on then
+		all = C.History(tier) -- (read once, for the count and the lines)
+	end
 	if on then
-		y = y - DrawGuide(y)
+		if logical then y = y - ChatWindow.DrawTopicStatus(y) else frame.topicStatus:Hide() end
+		-- (1.1.6: this character's timeout, WatchChat.lua, over every chat it covers; not a fight room's.)
+		if not room then y = y - ChatWindow.DrawModStatus(y) elseif frame.modStatus then frame.modStatus:Hide() end
+		if not room and not logical then y = y - DrawGuide(y) end
 		y = y - DrawHiddenCount(y, all)
 	end
-	frame.box:SetPoint("TOPLEFT", frame, "TOPLEFT", box.left, y)
+	ChatWindow.PlaceLines(y)
 	ShowParts(on and "lines" or "off")
 	if not on then
 		-- The consent page's explanation, with the choice a click away.
-		frame.off.text:SetText(L.CHATWIN_OFF .. "\n\n" .. L.CONSENT_CHAT_TEXT)
+		frame.off.text:SetText(logical and ((L.CHATROOMS_OFF_PAGE or "Chat rooms are off.") .. "\n\n" .. (L.CONSENT_CHATROOMS_TEXT or ""))
+			or (L.CHATWIN_OFF .. "\n\n" .. L.CONSENT_CHAT_TEXT))
 		return
 	end
 	DrawSearch()
@@ -1596,6 +2156,7 @@ end
 function ChatWindow.ShowSettings(on)
 	settings = on and true or false
 	CloseMenu()
+	ChatWindow.CloseSubMenu()
 	if not frame then return end
 	if settings then
 		frame.input:ClearFocus()
@@ -1608,10 +2169,11 @@ end
 function ChatWindow.SettingsShown() return settings end
 
 ---------------------------------------------------------------------------
--- Writing: Olympus's own box, through Channels.Send (every check and refusal is Send's).
+-- Writing: Olympus's own box, through the selected chat owner's send API (every check and refusal
+-- remains Channels' or ArenaChat's).
 ---------------------------------------------------------------------------
 
-local function Select(t)
+function ChatWindow.SelectLegacy(t)
 	local C = ns.Channels
 	local d = C.TIERS[t]
 	if not d then return end
@@ -1619,11 +2181,14 @@ local function Select(t)
 		ns.Print(L[d.deny]:format(L[d.label]))
 		return
 	end
-	tier = t
+	ChatWindow.SaveDraft()
+	tier, ChatWindow.globalTier = t, t
 	unread[t] = nil
 	Remember(t)
 	CloseMenu()
+	ChatWindow.CloseSubMenu()
 	settings = false -- (a channel picked: its lines, not the settings)
+	ChatWindow.LoadDraft(t)
 	if Shown() then
 		stick, newCount = true, 0
 		Render()
@@ -1631,14 +2196,73 @@ local function Select(t)
 	end
 end
 
-local function NextTier()
-	local tiers = Readable()
-	if #tiers < 2 then return end
-	local at = 1
-	for i, t in ipairs(tiers) do
-		if t == tier then at = i end
+function ChatWindow.SelectLogical(id)
+	local R = ns.ChatRooms
+	if type(R) ~= "table" or type(R.Select) ~= "function" then return false end
+	if type(R.PreviewOnly) == "function" and R.PreviewOnly(id) then
+		ns.Print(ChatWindow.Localized("CHATROOM_ROLE_PREVIEW", "Preview only - switch back to your own view to use role chats."))
+		return false
 	end
-	Select(tiers[at % #tiers + 1])
+	local ok = R.Select(id)
+	if not ok then
+		ns.Print(L.CHATROOM_NO_ACCESS or "You no longer have access to that room.")
+		return false
+	end
+	ChatWindow.SaveDraft()
+	tier = id
+	unread[id] = nil
+	Remember(id)
+	CloseMenu()
+	ChatWindow.CloseSubMenu()
+	settings = false
+	ChatWindow.LoadDraft(id)
+	if Shown() then
+		stick, newCount = true, 0
+		Render()
+		ScrollToBottom()
+	end
+	return true
+end
+
+local function SelectRoom(key)
+	local r = Dynamic(key)
+	if not r then return false end
+	ChatWindow.SaveDraft()
+	tier = key
+	unread[key] = nil
+	r.used = GetTime and GetTime() or 0
+	CloseMenu()
+	ChatWindow.CloseSubMenu()
+	settings = false
+	ChatWindow.LoadDraft(key)
+	if Shown() then
+		stick, newCount = true, 0
+		Render()
+		ScrollToBottom()
+	end
+	return true
+end
+ChatWindow.SelectDynamicRoom = SelectRoom
+
+local function SelectChoice(key)
+	if ns.Channels.TIERS[key] then return ChatWindow.SelectLegacy(key) end
+	return SelectRoom(key)
+end
+
+local function NextTier()
+	if ChatWindow.Logical(tier) then
+		local first = ChatWindow.globalTier
+		if not first or not ns.Channels.CanUse(first) then first = Readable()[1] end
+		if first then ChatWindow.SelectLegacy(first) end
+		return
+	end
+	local choices = Choices()
+	if #choices < 2 then return end
+	local at = 1
+	for i, choice in ipairs(choices) do
+		if choice.key == tier then at = i end
+	end
+	SelectChoice(choices[at % #choices + 1].key)
 end
 
 local function Submit()
@@ -1661,13 +2285,26 @@ local function Submit()
 		if keep then said = WithSlashKey(said, L.CHATWIN_SLASH_WAY) end
 		ns.Print(said)
 	else
-		-- keepMute: a channel muted in chat stays muted there (this tab shows it all the same).
-		local ok, why = ns.Channels.Send(tier, text, nil, true)
+		-- A dynamic room never goes through Channels.Send: its public/event lane or exclusive
+		-- participant whispers, rules, mutes and slow mode stay ArenaChat's one authority. Standard
+		-- channels retain their old keepMute behaviour.
+		local room = Dynamic(tier)
+		local logical = ChatWindow.Logical(tier)
+		local ok, why
+		if room then
+			local A = ns.ArenaChat
+			if type(A) == "table" and type(A.Send) == "function" then ok, why = A.Send(room.id, text) else ok, why = false, "room" end
+		elseif logical then
+			local R = ns.ChatRooms
+			if type(R) == "table" and type(R.Send) == "function" then ok, why = R.Send(tier, text) else ok, why = false, "room" end
+		else
+			ok, why = ns.Channels.Send(tier, text, nil, true)
+		end
 		-- Sent, or held by the privacy warning (it sends the line on the player's OK): the box
 		-- empties. Refused: the text stays (Send said why).
 		if ok or why == "confirm" then
 			eb:SetText("")
-			if ok then notes[tier] = nil end
+			if ok and not room then notes[tier] = nil end
 			ScrollToBottom()
 			MarkDirty()
 		end
@@ -1708,8 +2345,15 @@ local function OnUpdate(_, elapsed)
 	if dataPending and GetTime() - lastData >= DATA_GAP then
 		dataPending, lastData, dirty = false, GetTime(), true
 	end
-	-- A rank that no longer reads this channel (a demotion, out of the guild): drawn again at once.
-	if tier and not ns.Channels.CanUse(tier) then dirty = true end
+	-- A rank that no longer reads this channel (a demotion, out of the guild), or a room whose
+	-- retention ended: drawn again at once.
+	if ChatWindow.PruneDynamicRooms and GetTime() - lastRoomPrune >= LOOK_GAP then ChatWindow.PruneDynamicRooms() end
+	if tier and not Choice(tier) then dirty = true end
+	local R = ns.ChatRooms
+	local logical = ChatWindow.Logical(tier)
+	local status = logical and logical.scope == "topic" and type(R) == "table" and type(R.RequestStatus) == "function" and R.RequestStatus(tier) or nil
+	local minute = status and status.wait and status.wait > 0 and math.ceil(status.wait / 60) or nil
+	if minute ~= ChatWindow.requestMinute then ChatWindow.requestMinute, dirty = minute, true end
 	if dirty then ns.SafeCall("chat tab", Render) end
 end
 
@@ -1764,11 +2408,11 @@ local function MakeSwitch(p)
 	b:SetScript("OnClick", function() ns.SafeCall("chat tab channels", ToggleMenu) end)
 	b:SetScript("OnEnter", function(self)
 		Tip(self, function(tt)
-			tt:AddLine("[" .. Label(tier) .. "]", 1, 0.82, 0)
+			tt:AddLine(Dynamic(tier) and Label(tier) or ("[" .. Label(tier) .. "]"), 1, 0.82, 0)
 			tt:AddLine(L.CHATSET_SWITCH_TIP, 1, 1, 1, true)
-			for _, t in ipairs(Readable()) do
-				local n = unread[t] or 0
-				if t ~= tier and n > 0 then tt:AddLine(L.CHATWIN_NEW_IN:format(Label(t), n), 0.7, 0.7, 0.7) end
+			for _, choice in ipairs(Choices()) do
+				local n = unread[choice.key] or 0
+				if choice.key ~= tier and n > 0 then tt:AddLine(L.CHATWIN_NEW_IN:format(Label(choice.key), n), 0.7, 0.7, 0.7) end
 			end
 		end)
 	end)
@@ -1787,9 +2431,9 @@ local function MakeSwitch(p)
 	m:SetFrameLevel((p:GetFrameLevel() or 1) + 40)
 	m:EnableMouse(true)
 	m.rows = {}
-	for _, t in ipairs(ns.Channels.ORDER) do
+	function m:AddChoice(key)
 		local r = CreateFrame("Button", nil, m)
-		r.tier = t
+		r.choiceKey = key
 		r.text = r:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 		r.text:SetPoint("LEFT", r, "LEFT", 10, 0)
 		-- (The one shown: a bar in its colour at its left.)
@@ -1797,14 +2441,22 @@ local function MakeSwitch(p)
 		r.mark:SetWidth(2)
 		r.mark:SetPoint("TOPLEFT", r, "TOPLEFT", 2, -4)
 		r.mark:SetPoint("BOTTOMLEFT", r, "BOTTOMLEFT", 2, 4)
-		r:SetScript("OnClick", function(self) ns.SafeCall("chat tab channel", Select, self.tier) end)
+		r:SetScript("OnClick", function(self) ns.SafeCall("chat tab choice", SelectChoice, self.choiceKey) end)
 		r:SetScript("OnEnter", function(self)
 			self.hover = true
 			PaintChoice(self)
 			Tip(self, function(tt)
-				tt:AddLine("[" .. Label(self.tier) .. "]", 1, 0.82, 0)
+				local room = Dynamic(self.choiceKey)
+				tt:AddLine(room and Label(self.choiceKey) or ("[" .. Label(self.choiceKey) .. "]"), 1, 0.82, 0)
+				if room then
+					local access = room.spec.access == "participants" and (L.ARENA_CHAT_ROOM_PRIVATE or "Fighters and arbiter only")
+						or (L.ARENA_CHAT_ROOM_MEMBERS or "Olympus members")
+					tt:AddLine(access, 0.7, 0.7, 0.7, true)
+					if room.pinned then tt:AddLine(L.ARENA_CHAT_ROOM_PINNED or "Pinned locally", 1, 0.82, 0, true) end
 				-- The tab shows a channel muted in chat (/oly mute is about the chat frame).
-				if MutedInChat(self.tier) then tt:AddLine(L.CHATWIN_MUTED_TIP, 0.7, 0.7, 0.7, true) end
+				elseif MutedInChat(self.choiceKey) then
+					tt:AddLine(L.CHATWIN_MUTED_TIP, 0.7, 0.7, 0.7, true)
+				end
 			end)
 		end)
 		r:SetScript("OnLeave", function(self)
@@ -1812,8 +2464,10 @@ local function MakeSwitch(p)
 			PaintChoice(self)
 			Untip(self)
 		end)
-		m.rows[t] = r
+		m.rows[key] = r
+		return r
 	end
+	for _, t in ipairs(ns.Channels.ORDER) do m:AddChoice(t) end
 	m:Hide()
 	p.menu = m
 end
@@ -1842,6 +2496,53 @@ local function MakeGear(p)
 	p.setTitle:Hide()
 end
 
+-- A dynamic room is a local choice inside the existing Chat page, not a fourth Olympus channel.
+-- Its pin and x therefore replace the global page's help/settings controls only while that room
+-- is selected. Neither button sends anything: the x closes ArenaChat locally; the pin is saved on
+-- this account until the canonical event says the room is no longer recoverable.
+local function MakeRoomButtons(p)
+	local function Small(label)
+		local b = CreateFrame("Button", nil, p)
+		b:SetSize(ROOM_BUTTON_W, ROOM_BUTTON_W)
+		b.label = b:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+		b.label:SetPoint("CENTER", b, "CENTER", 0, 1)
+		b.label:SetText(label)
+		b:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
+		b:Hide()
+		return b
+	end
+	local pin = Small("p")
+	pin:SetScript("OnClick", function(self)
+		local r = Dynamic(tier)
+		if r then ns.SafeCall("chat room pin", ChatWindow.PinDynamicRoom, r.key, not r.pinned) end
+	end)
+	pin:SetScript("OnEnter", function(self)
+		local r = Dynamic(tier)
+		if not r then return end
+		Tip(self, function(tt)
+			local title = r.pinned and (L.ARENA_CHAT_ROOM_UNPIN or "Unpin fight chat") or (L.ARENA_CHAT_ROOM_PIN or "Pin fight chat")
+			tt:AddLine(title, 1, 0.82, 0)
+			tt:AddLine(L.ARENA_CHAT_ROOM_PIN_TIP or "A local pin keeps this room until the fight expires.", 1, 1, 1, true)
+		end)
+	end)
+	pin:SetScript("OnLeave", function(self) Untip(self) end)
+	p.roomPin = pin
+
+	local close = Small("x")
+	close:SetScript("OnClick", function()
+		local r = Dynamic(tier)
+		if r then ns.SafeCall("chat room remove", ChatWindow.CloseDynamicRoom, r.key) end
+	end)
+	close:SetScript("OnEnter", function(self)
+		Tip(self, function(tt)
+			tt:AddLine(L.ARENA_CHAT_ROOM_REMOVE or "Remove fight chat", 1, 0.82, 0)
+			tt:AddLine(L.ARENA_CHAT_ROOM_REMOVE_TIP or "Removes this room from your Chat page. You can open it from the fight again.", 1, 1, 1, true)
+		end)
+	end)
+	close:SetScript("OnLeave", function(self) Untip(self) end)
+	p.roomClose = close
+end
+
 local function Button(parent, text, width)
 	local ok, b = pcall(CreateFrame, "Button", nil, parent, "UIPanelButtonTemplate")
 	if not ok or not b then
@@ -1851,6 +2552,84 @@ local function Button(parent, text, width)
 	b:SetSize(width, 22)
 	b:SetText(text)
 	return b
+end
+
+-- The accepted match keeps its location/readiness controls beside its private conversation. The
+-- buttons call ArenaMatch's existing actions; this panel owns no match state and sends no word by
+-- merely opening or redrawing. More involved place selection deliberately opens the existing card.
+local function MakeMatchContext(p)
+	local c = CreateFrame("Frame", nil, p)
+	c.bg = c:CreateTexture(nil, "BACKGROUND")
+	c.bg:SetAllPoints()
+	c.bg:SetColorTexture(0.12, 0.07, 0.04, 0.72)
+	c.text = c:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	c.text:SetJustifyH("LEFT")
+	c.text:SetJustifyV("TOP")
+	c.text:SetWordWrap(true)
+	c.buttons = {}
+	-- The live card can expose every supported readiness/location action plus Details at once.
+	for i = 1, 12 do
+		local b = Button(c, "", 90)
+		b:SetHeight(22)
+		b:SetScript("OnClick", function(self)
+			local M = ns.ArenaMatch
+			if not (M and M.RoomAction) then return end
+			local ok, why = M.RoomAction(self.roomId, self.actionKey)
+			if ok == false and why then
+				local line = M.RoomWhyText and M.RoomWhyText(why) or tostring(why)
+				ns.Print(line)
+			end
+			MarkDirty()
+		end)
+		b:Hide()
+		c.buttons[i] = b
+	end
+	c:Hide()
+	p.matchContext = c
+end
+
+DrawMatchContext = function(y, room)
+	local c = frame.matchContext
+	local M = ns.ArenaMatch
+	if not c or room.spec.kind ~= "match" or type(M) ~= "table" or type(M.RoomView) ~= "function" then
+		if c then c:Hide() end
+		return 0
+	end
+	local ok, view = pcall(M.RoomView, room.id)
+	if not ok or type(view) ~= "table" then c:Hide() return 0 end
+	-- (In the box, under the destinations' tabs, clear of its border as the lines are.)
+	local box = frame.places.box
+	local width = math.max(140, (frame:GetWidth() or 338) - box.left + box.right - 8)
+	c:ClearAllPoints()
+	c:SetPoint("TOPLEFT", frame, "TOPLEFT", box.left + 4, y - 3)
+	c:SetWidth(width)
+	c.text:ClearAllPoints()
+	c.text:SetPoint("TOPLEFT", c, "TOPLEFT", 8, -6)
+	c.text:SetWidth(width - 16)
+	c.text:SetText(table.concat(view.lines or {}, "\n"))
+	local textH = TextHeight(c.text, width - 16)
+	local x, rowY, rows = 8, -(textH + 10), 0
+	for i, action in ipairs(view.actions or {}) do
+		local b = c.buttons[i]
+		if not b then break end
+		b.actionKey, b.roomId = action.key, room.id
+		b:SetText(action.label or action.key or "")
+		local fs = b.GetFontString and b:GetFontString()
+		local bw = math.max(78, math.min(width - 16, math.ceil(fs and TextWidth(fs) or 60) + 24))
+		if x > 8 and x + bw > width - 8 then x, rowY, rows = 8, rowY - 26, rows + 1 end
+		b:ClearAllPoints()
+		b:SetPoint("TOPLEFT", c, "TOPLEFT", x, rowY)
+		b:SetWidth(bw)
+		b:Show()
+		x = x + bw + 6
+	end
+	for i = #(view.actions or {}) + 1, #c.buttons do c.buttons[i]:Hide() end
+	local hasActions = #(view.actions or {}) > 0
+	local height = textH + 12 + (hasActions and ((rows + 1) * 26 + 4) or 0)
+	c:SetHeight(height)
+	c.view = view
+	c:Show()
+	return height + 6
 end
 
 -- 1.1.2: the Answers button (the author, the High Council and the Stewards: a ready answer into
@@ -1872,6 +2651,54 @@ local function MakeAnswers(p)
 	a:SetScript("OnLeave", function(self) Untip(self) end)
 	a:Hide()
 	p.answers = a
+end
+
+function ChatWindow.MakeSubtabs(p)
+	-- (Its buttons are the shared strip's, made as it draws them: Views.DrawNav.)
+	local bar = CreateFrame("Frame", nil, p)
+	bar:Hide()
+	p.subtabs = bar
+
+	local catcher = CreateFrame("Button", nil, p)
+	catcher:SetAllPoints(p)
+	catcher:SetFrameLevel((p:GetFrameLevel() or 1) + 30)
+	catcher:SetFrameStrata("DIALOG")
+	catcher:SetScript("OnClick", ChatWindow.CloseSubMenu)
+	catcher:Hide()
+	p.subCatcher = catcher
+	local menu = Framed("Frame", p)
+	menu:SetFrameLevel((p:GetFrameLevel() or 1) + 40)
+	menu:SetFrameStrata("DIALOG")
+	menu:EnableMouse(true)
+	menu.rows = {}
+	for i = 1, 10 do
+		local row = CreateFrame("Button", nil, menu)
+		row.text = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+		row.text:SetPoint("LEFT", row, "LEFT", 10, 0)
+		row.mark = row:CreateTexture(nil, "ARTWORK")
+		row.mark:SetWidth(2)
+		row.mark:SetPoint("TOPLEFT", row, "TOPLEFT", 2, -4)
+		row.mark:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", 2, 4)
+		row.mark:SetColorTexture(1, 0.82, 0, 1)
+		row:SetScript("OnEnter", function(self)
+			Tip(self, function(tt) tt:AddLine(self.text:GetText(), 1, 1, 1, true) end)
+		end)
+		row:SetScript("OnLeave", function(self) Untip(self) end)
+		row:SetScript("OnClick", function(self)
+			if self.previewOnly then
+				ns.Print(ChatWindow.Localized("CHATROOM_ROLE_PREVIEW", "Preview only - switch back to your own view to use role chats."))
+				return
+			end
+			local id, dynamic, onClick = self.roomId, self.dynamic, self.onClick
+			ChatWindow.CloseSubMenu()
+			if type(onClick) == "function" then ns.SafeCall("chat room choice", onClick)
+			elseif dynamic and id then ns.SafeCall("chat arena choice", ChatWindow.SelectDynamicRoom, id)
+			elseif id then ns.SafeCall("chat room choice", ChatWindow.SelectLogical, id) end
+		end)
+		menu.rows[i] = row
+	end
+	menu:Hide()
+	p.subMenu = menu
 end
 
 -- A strip over the lines (the pinned line, the Olympus tab's line, the count of the hidden lines): a
@@ -1924,10 +2751,12 @@ local function Build(h)
 	p.bubbles, p.rows, p.setRows = {}, {}, {}
 
 	-- The search, where the other tabs show the army's counts.
-	p.searchLabel = p:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+	p.topRow = CreateFrame("Frame", nil, p)
+	p.topRow:SetAllPoints(p)
+	p.searchLabel = p.topRow:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 	p.searchLabel:SetText(L.SEARCH)
-	local okSearch, sb = pcall(CreateFrame, "EditBox", nil, p, "InputBoxTemplate")
-	if not okSearch or not sb then sb = CreateFrame("EditBox", nil, p) end
+	local okSearch, sb = pcall(CreateFrame, "EditBox", nil, p.topRow, "InputBoxTemplate")
+	if not okSearch or not sb then sb = CreateFrame("EditBox", nil, p.topRow) end
 	sb:SetAutoFocus(false)
 	sb.olympusBox = true
 	sb:SetHeight(SEARCH_H)
@@ -1951,11 +2780,20 @@ local function Build(h)
 	-- On the same row, right of the search: the channels' switch, and the gear at the row's end.
 	MakeSwitch(p)
 	MakeGear(p)
+	MakeRoomButtons(p)
+	MakeMatchContext(p)
 	MakeAnswers(p)
+	ChatWindow.MakeSubtabs(p)
 
 	-- The pinned line.
 	p.pin = StripButton(p, PIN_LINES)
 	p.pin:SetScript("OnClick", function(self) if self.onClick then ns.SafeCall("chat tab pin", self.onClick) end end)
+
+	-- A persistent race/class outsider notice, including the two-gate request state.
+	p.topicStatus = StripButton(p, 3)
+	p.topicStatus:EnableMouse(false)
+	p.modStatus = StripButton(p, 2) -- (1.1.6: a timeout's strip, WatchChat.lua)
+	p.modStatus:EnableMouse(false)
 
 	-- The count of the lines the block terms hide.
 	p.hiddenCount = StripButton(p, COUNT_LINES)
@@ -2004,14 +2842,28 @@ local function Build(h)
 
 	-- The box of lines (the Communities chat pane's inset), its scroll frame and its lines: over
 	-- the list's and the detail box's room.
-	local okBox, box = pcall(CreateFrame, "Frame", nil, p, "InsetFrameTemplate")
-	if not okBox or not box then
-		box = CreateFrame("Frame", nil, p)
-		local bg = box:CreateTexture(nil, "BACKGROUND")
+	local box = CreateFrame("Frame", nil, p)
+	local okInset, inset = pcall(CreateFrame, "Frame", nil, box, "InsetFrameTemplate")
+	if not okInset or not inset then
+		inset = CreateFrame("Frame", nil, box)
+		local bg = inset:CreateTexture(nil, "BACKGROUND")
 		bg:SetAllPoints()
 		bg:SetColorTexture(0, 0, 0, 0.4)
 	end
+	inset:SetPoint("BOTTOMRIGHT", box, "BOTTOMRIGHT", 0, 0)
+	p.bodyInset = inset
 	p.box = box
+	-- Keep the search row above the conversation background.
+	p.topRow:SetFrameLevel((inset:GetFrameLevel() or 1) + 2)
+	for _, control in ipairs({ p.search, p.gear, p.switch, p.roomPin, p.roomClose }) do
+		control:SetParent(p.topRow)
+		control:SetFrameLevel(p.topRow:GetFrameLevel() + 1)
+	end
+	-- (The destinations' strip sits in the box, and the strips over the lines under it: drawn over
+	-- it, as the list's rows over the Realm's.)
+	for _, s in ipairs({ p.subtabs, p.pin, p.topicStatus, p.hiddenCount, p.guide, p.matchContext }) do
+		s:SetFrameLevel((box:GetFrameLevel() or 1) + 2)
+	end
 	-- (Blizzard's thin scroll bar, else the older one where a client has no ScrollFrameTemplate.)
 	local function Scroll(name)
 		local okScroll, s = pcall(CreateFrame, "ScrollFrame", name, box, "ScrollFrameTemplate")
@@ -2091,7 +2943,13 @@ local function Build(h)
 	eb:SetScript("OnEnterPressed", function() ns.SafeCall("chat tab send", Submit) end)
 	eb:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
 	eb:SetScript("OnTabPressed", function() ns.SafeCall("chat tab channel", NextTier) end)
-	eb:SetScript("OnTextChanged", function() ns.SafeCall("chat tab box", Hint) end)
+	eb:SetScript("OnTextChanged", function(self)
+		if tier then
+			local text = self:GetText() or ""
+			ChatWindow.drafts[tier] = text ~= "" and text or nil
+		end
+		ns.SafeCall("chat tab box", Hint)
+	end)
 	eb:SetScript("OnEditFocusGained", function() ns.SafeCall("chat tab box", Hint) end)
 	eb:SetScript("OnEditFocusLost", function() ns.SafeCall("chat tab box", Hint) end)
 	eb:SetScript("OnHide", function(self) self:ClearFocus() end)
@@ -2102,6 +2960,8 @@ local function Build(h)
 		sb:ClearFocus()
 		p.menu:Hide()
 		p.catcher:Hide()
+		p.subMenu:Hide()
+		p.subCatcher:Hide()
 		Untip(tipOwner)
 		-- (The "Open chat" key back to the game: another tab, the window closed, the UI hidden.)
 		ns.SafeCall("chat tab key", SyncKeys)
@@ -2141,11 +3001,224 @@ end
 -- The tab in its window (UI.lua), and the ways to it
 ---------------------------------------------------------------------------
 
+-- Dynamic-room contract. Only the Arena's canonical, stable identity is accepted: a host must
+-- never turn a translated title (or arbitrary addon data) into routing. The shallow copy prevents
+-- a caller from changing the tab's identity after it was admitted; the Arena remains authoritative
+-- for participants, delivery lane, mute/rank checks and every line.
+local function RoomSpec(spec)
+	if type(spec) ~= "table" then return nil end
+	local id, key = spec.id, spec.key
+	if type(id) ~= "string" or id == "" or #id > 80 or id:find("[%s~|%c]") then return nil end
+	if type(key) ~= "string" or key ~= "arena:" .. id then return nil end
+	if spec.kind ~= "fight" and spec.kind ~= "event" and spec.kind ~= "match" then return nil end
+	if spec.audience ~= "duel" and spec.audience ~= "event" then return nil end
+	if spec.access ~= "members" and spec.access ~= "participants" then return nil end
+	if type(spec.title) ~= "string" or Trim(spec.title) == "" then return nil end
+	if spec.supportsComments ~= true then return nil end
+	if type(spec.active) ~= "boolean" or type(spec.recoverable) ~= "boolean" then return nil end
+	local out = {}
+	for k, v in pairs(spec) do out[k] = v end
+	out.title = Trim(ns.Codec.Plain(spec.title))
+	if out.title == "" then return nil end
+	return out
+end
+
+local function RoomNow() return ns.Now and ns.Now() or time() end
+local function RoomAlive(spec, now)
+	if type(spec) ~= "table" then return false end
+	if spec.active == true then return true end
+	local untilAt = tonumber(spec.retainUntil)
+	if untilAt then return (now or RoomNow()) < untilAt end
+	return spec.recoverable == true
+end
+
+local function RemoveRoom(key, clearPin)
+	local r = dynamicRooms[key]
+	if not r then return false end
+	if clearPin then RememberPin(r, false) end
+	local A = ns.ArenaChat
+	if type(A) == "table" and type(A.Close) == "function" then pcall(A.Close, r.id) end
+	dynamicRooms[key] = nil
+	for i = #dynamicOrder, 1, -1 do if dynamicOrder[i] == key then table.remove(dynamicOrder, i) end end
+	unread[key], notes[key] = nil, nil
+	if tier == key then
+		tier = Readable()[1]
+		if tier then Remember(tier) end
+		settings, stick, newCount, want = false, true, 0, nil
+	end
+	MarkDirty()
+	return true
+end
+
+-- Called from the page's ticker as well as before a draw: even a pinned room ends locally once the
+-- canonical retention ends. A pin keeps a live/recoverable fight through window closes and reloads;
+-- it is not a permanent bookmark to an event that no longer exists.
+function ChatWindow.PruneDynamicRooms(now)
+	lastRoomPrune = GetTime and GetTime() or 0
+	now = now or RoomNow()
+	local gone = {}
+	for key, r in pairs(dynamicRooms) do if not RoomAlive(r.spec, now) then gone[#gone + 1] = key end end
+	for _, key in ipairs(gone) do RemoveRoom(key, true) end
+	return #gone
+end
+
+local function RoomBy(key)
+	local r = Dynamic(key)
+	if r then return r end
+	if type(key) == "string" then
+		for _, one in pairs(dynamicRooms) do if one.id == key then return one end end
+	end
+end
+
+function ChatWindow.DynamicRoom(key) return RoomBy(key) end
+function ChatWindow.DynamicRooms()
+	local out = {}
+	for _, key in ipairs(dynamicOrder) do
+		local r = dynamicRooms[key]
+		if r then out[#out + 1] = { key = r.key, id = r.id, spec = r.spec, pinned = r.pinned and true or false,
+			selected = tier == key, used = tonumber(r.used) or 0 } end
+	end
+	return out
+end
+
+-- Every pin and unpin is told (CHAT_DYNAMIC_PIN): ChatRooms.OpenMatter keeps a pin it made only
+-- until the player's own pin button changes it.
+function ChatWindow.PinDynamicRoom(key, on)
+	local r = RoomBy(key)
+	if not r then return false, "room" end
+	on = on and true or false
+	if on and not RoomAlive(r.spec) then return false, "expired" end
+	r.pinned = on or nil
+	RememberPin(r, on)
+	ns.Fire("CHAT_DYNAMIC_PIN", r.key, on)
+	MarkDirty()
+	if Shown() then Render() end
+	return true
+end
+
+-- Removes only an unpinned local tab. It sends no cancellation and changes no Arena event; opening
+-- the same fight again recreates the one stable key safely.
+function ChatWindow.CloseDynamicRoom(key)
+	local r = RoomBy(key)
+	if not r then return false, "room" end
+	if r.pinned then return false, "pinned" end
+	local removed = RemoveRoom(r.key, false)
+	if removed and Shown() then Render(); ScrollToBottom() end
+	return removed
+end
+
+local function RoomConflict(spec)
+	local r = dynamicRooms[spec.key]
+	if r and r.id ~= spec.id then return true end
+	-- One event id cannot acquire a second key: a malformed re-open must not duplicate its tab or
+	-- redirect the already-open transport.
+	for key, one in pairs(dynamicRooms) do if one.id == spec.id and key ~= spec.key then return true end end
+	return false
+end
+
+local function UpsertRoom(spec, pinned)
+	if RoomConflict(spec) then return nil end
+	local r = dynamicRooms[spec.key]
+	if not r then
+		r = { key = spec.key, id = spec.id, used = GetTime and GetTime() or 0 }
+		dynamicRooms[spec.key] = r
+		dynamicOrder[#dynamicOrder + 1] = spec.key
+	end
+	r.spec = spec
+	if pinned then r.pinned = true end
+	return r
+end
+
+-- The Arena deep-link's host. Opening transport first is deliberate: ArenaChat knows whether the
+-- event exists and owns all routing/permission checks. The main Chat page only adds/selects one
+-- stable local choice; no line is copied into Channels history and no global pin is touched.
+function ChatWindow.OpenDynamicRoom(spec)
+	spec = RoomSpec(spec)
+	if not spec or not RoomAlive(spec) or RoomConflict(spec) then return false end
+	local A = ns.ArenaChat
+	if type(A) ~= "table" or A.missing or type(A.Open) ~= "function" then return false end
+	local ok, opened = pcall(A.Open, spec.id)
+	if not ok or not opened then return false end
+	local pins = SavedPins(false)
+	local pinned = pins and pins[spec.key] == spec.id or false
+	local r = UpsertRoom(spec, pinned)
+	if not r then return false end
+	settings = false
+	local pane = ChatWindow.Open()
+	if not pane then
+		if not r.pinned then RemoveRoom(r.key, false) end
+		return false
+	end
+	SelectRoom(r.key)
+	return pane
+end
+
+-- A lifecycle update never opens the window. It refreshes a room already present, or restores a
+-- locally pinned room once the Arena has republished that exact key/id after a reload.
+function ChatWindow.UpdateDynamicRoom(spec)
+	spec = RoomSpec(spec)
+	if not spec or RoomConflict(spec) then return false end
+	local r = dynamicRooms[spec.key]
+	local pins = SavedPins(false)
+	local pinned = pins and pins[spec.key] == spec.id or false
+	if not RoomAlive(spec) then
+		if r then RemoveRoom(spec.key, true) elseif pinned then pins[spec.key] = nil end
+		return false
+	end
+	if not r and not pinned then return false end
+	if not r then
+		local A = ns.ArenaChat
+		if type(A) ~= "table" or type(A.Open) ~= "function" then return false end
+		local ok, opened = pcall(A.Open, spec.id)
+		if not ok or not opened then return false end
+	end
+	r = UpsertRoom(spec, pinned)
+	if not r then return false end
+	MarkDirty()
+	return true
+end
+
+-- On a reload, ask the Arena for each locally pinned identity after every core file has loaded.
+-- A room the client does not know yet stays only as a dormant saved pin: a later canonical
+-- ARENA_CHAT_ROOM word can restore it. Match rooms are the exception: their private metadata is
+-- session-only, so an unknown M id is forgotten. A known expired room is discarded by
+-- UpdateDynamicRoom.
+function ChatWindow.RestoreDynamicRooms()
+	local pins = SavedPins(false)
+	local A = ns.Arena
+	if not pins then return 0 end
+	local pending = {}
+	for key, id in pairs(pins) do pending[#pending + 1] = { key, id } end
+	table.sort(pending, function(a, b) return a[1] < b[1] end)
+	local restored = 0
+	for _, one in ipairs(pending) do
+		local provider = one[2]:sub(1, 1) == "M" and ns.ArenaMatch or A
+		local get = provider and provider.ChatRoom
+		local ok, spec = false, nil
+		if type(get) == "function" then ok, spec = pcall(get, one[2]) end
+		if ok and type(spec) == "table" and spec.key == one[1] and spec.id == one[2]
+			and ChatWindow.UpdateDynamicRoom(spec) then restored = restored + 1 end
+		-- Match metadata is intentionally session-only. Unlike a published fight which may arrive
+		-- later from the Arena lane, an unknown M id after reload cannot become known again.
+		if one[2]:sub(1, 1) == "M" and (not ok or type(spec) ~= "table") then pins[one[1]] = nil end
+	end
+	if next(pins) == nil then
+		local p = Saved()
+		if p then p.dynamicPins = nil end
+	end
+	return restored
+end
+
 -- The channel it opens on: the one it showed, else the one last shown, else the first readable.
 local function Pick()
 	local C = ns.Channels
+	if Dynamic(tier) then return tier end
+	if ChatWindow.Logical(tier) and Choice(tier) then return tier end
 	if tier and C.TIERS[tier] and C.CanUse(tier) then return tier end
 	local p = Saved()
+	local room = p and p.room
+	local R = ns.ChatRooms
+	if ChatWindow.Logical(room) and type(R) == "table" and type(R.Select) == "function" and R.Select(room) then return room end
 	local last = p and p.tier
 	if C.TIERS[last] and C.CanUse(last) then return last end
 	return Readable()[1]
@@ -2161,11 +3234,12 @@ function ChatWindow.Attach(h, places)
 	Place(p, places)
 	if not p:IsShown() then
 		tier = Pick()
-		if tier then Remember(tier) end
+		if tier and ns.Channels.TIERS[tier] then ChatWindow.globalTier = tier; Remember(tier) end
 		unread = {}
 		settings = false
 		stick, newCount, want, acc = true, 0, nil, 0
 		p:Show()
+		ChatWindow.LoadDraft(tier)
 		Render()
 		ScrollToBottom()
 	end
@@ -2196,7 +3270,7 @@ function ChatWindow.Open(want)
 		return nil
 	end
 	if Shown() then
-		if d and want ~= tier then Select(want) end
+		if d and want ~= tier then ChatWindow.SelectLegacy(want) end
 		return frame
 	end
 	if d then
@@ -2224,13 +3298,14 @@ function ChatWindow.Toggle(want)
 			host:Hide()
 			return nil
 		end
-		Select(want)
+		ChatWindow.SelectLegacy(want)
 		return frame
 	end
 	return ChatWindow.Open(want)
 end
 
 function ChatWindow.Tier() return tier end
+function ChatWindow.CurrentDynamicRoom() return Dynamic(tier) end
 function ChatWindow.Frame() return frame end -- (the tab, in its window)
 function ChatWindow.Window() return host end -- (the Olympus window it is in)
 
@@ -2239,8 +3314,10 @@ function ChatWindow.Reset()
 	for _, p in pairs(panes) do p:Hide() end
 	panes = {}
 	frame, host, tier, tipOwner = nil, nil, nil, nil
+	ChatWindow.globalTier = nil
+	dynamicRooms, dynamicOrder, lastRoomPrune = {}, {}, -math.huge
 	dirty, dataPending, lastData = false, false, -math.huge
-	unread, notes = {}, {}
+	unread, notes, ChatWindow.drafts = {}, {}, {}
 	revealed = setmetatable({}, { __mode = "k" })
 	stick, newCount, lastAt, quiet, acc, want = true, 0, 0, false, 0, nil
 	settings = false
@@ -2265,17 +3342,63 @@ ns.On("CHAT_LINE", function(t)
 	end
 	MarkDirty()
 end)
+ns.On("CHAT_ROOM_LINE", function(id)
+	if not Shown() or not ChatWindow.Logical(id) then return end
+	if id ~= tier then
+		unread[id] = (unread[id] or 0) + 1
+	elseif not stick then
+		newCount = newCount + 1
+	end
+	MarkDirty()
+end)
+ns.On("CHAT_ROOM_CHANGED", function(id)
+	if id == tier then MarkDirty() end
+end)
+ns.On("CHAT_ROOM_SELECTED", MarkDirty)
+ns.On("CHAT_ROOMS_CHANGED", MarkDirty)
+-- ArenaChat keeps and admits the line; the host only tracks which local room needs repainting.
+-- Nothing here fires CHAT_LINE or writes Channels history, so an exclusive room cannot leak into
+-- an army/global tab through the presentation adapter.
+ns.On("ARENA_CHAT", function(id)
+	if type(id) ~= "string" then return end
+	local key = "arena:" .. id
+	if not dynamicRooms[key] or not Shown() then return end
+	if key ~= tier then
+		unread[key] = (unread[key] or 0) + 1
+	elseif not stick then
+		newCount = newCount + 1
+	end
+	MarkDirty()
+end)
+ns.On("ARENA_CHAT_ROOM", function(spec)
+	ns.SafeCall("chat room lifecycle", ChatWindow.UpdateDynamicRoom, spec)
+end)
+ns.On("LOGIN", function()
+	ns.SafeCall("chat room restore", ChatWindow.RestoreDynamicRooms)
+end)
 -- (CHAT_SETTINGS_CHANGED, Channels.lua: a channel muted or shown in the game's chat, or sent to
 -- another chat window, by /oly mute, /oly chatwindow, a line typed with /ol or the settings' own
 -- clicks. The review of the page's removal: the settings stayed as they were drawn, and a stale
 -- "shows in your chat" unmuted a channel /oly mute had muted.)
 for _, event in ipairs({ "PIN_CHANGED", "FILTER_CHANGED", "NETOFF_CHANGED", "COUNCIL_MASK_CHANGED", "CONSENT_CHANGED",
-	"CHAT_SETTINGS_CHANGED" }) do
+	"CHAT_SETTINGS_CHANGED", "WATCHCHAT_CHANGED" }) do -- (1.1.6: a timeout, a lift, a deletion: WatchChat.lua)
 	ns.On(event, MarkDirty)
 end
 -- The marks follow the census, at most once every DATA_GAP seconds.
 ns.On("DATA_CHANGED", function()
+	if frame and frame.subEntry then
+		local entry, available = frame.subEntry, false
+		if entry.kind == "moderation" then available = #ChatWindow.ModerationOptions(entry) > 0 end
+		for _, current in ipairs(ChatWindow.SubtabEntries()) do if current.kind == entry.kind then available = true; break end end
+		if not available or frame.subSignature ~= ChatWindow.SubMenuSignature(entry, ChatWindow.SubMenuOptions(entry)) then ChatWindow.CloseSubMenu() end
+	end
 	if Shown() then dataPending = true end
+end)
+ns.On("WATCHCHAT_CHANGED", function()
+	if frame and frame.subEntry and frame.subEntry.kind == "moderation" then
+		local entry = frame.subEntry
+		if frame.subSignature ~= ChatWindow.SubMenuSignature(entry, ChatWindow.ModerationOptions(entry)) then ChatWindow.CloseSubMenu() end
+	end
 end)
 -- A line of ours that did not leave (Channels.lua: the channel changed before it went, it waited
 -- too long, the game refused it, we left Olympus): a note in its channel, to put it back.
@@ -2283,6 +3406,14 @@ ns.On("CHAT_SEND_FAILED", function(t, why, text)
 	if not ns.Channels.TIERS[t] or type(text) ~= "string" or text == "" then return end
 	local list = notes[t] or {}
 	notes[t] = list
+	list[#list + 1] = { why = WHY[why] and why or "failed", text = text }
+	while #list > MAX_NOTES do table.remove(list, 1) end
+	MarkDirty()
+end)
+ns.On("CHAT_ROOM_SEND_FAILED", function(id, why, text)
+	if not ChatWindow.Logical(id) or type(text) ~= "string" or text == "" then return end
+	local list = notes[id] or {}
+	notes[id] = list
 	list[#list + 1] = { why = WHY[why] and why or "failed", text = text }
 	while #list > MAX_NOTES do table.remove(list, 1) end
 	MarkDirty()
@@ -2313,7 +3444,20 @@ ns.On("INIT", function()
 	if type(p) == "table" then
 		local t = p.tier
 		if type(t) == "string" and ns.Channels.TIERS[t] then kept.tier = t end
+		local room = p.room
+		if type(room) == "string" and #room <= 80 and room:match("^[%l%d:]+$") then kept.room = room end
 		if p.noTabLine == true then kept.noTabLine = true end
+		if type(p.dynamicPins) == "table" then
+			local keys = {}
+			for key, id in pairs(p.dynamicPins) do
+				if type(key) == "string" and type(id) == "string" and key == "arena:" .. id
+					and id ~= "" and #id <= 80 and not id:find("[%s~|%c]") then keys[#keys + 1] = key end
+			end
+			table.sort(keys)
+			local pins = {}
+			for i = 1, math.min(#keys, 10) do pins[keys[i]] = p.dynamicPins[keys[i]] end
+			if next(pins) then kept.dynamicPins = pins end
+		end
 	end
 	ns.db.chatWin = next(kept) ~= nil and kept or nil
 end)

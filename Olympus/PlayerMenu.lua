@@ -4,9 +4,9 @@ local L = ns.L
 -- Olympus's lines in the game's right-click menus for a player (1.1.2): the target frame, party
 -- and raid frames, a name in chat, the Who list, the friends list, the guild roster and the chat
 -- channel roster. One place for every feature that adds a line there: Versions.lua (the player's
--- Olympus version, Ask to update, Check version, Tell them about Olympus) and Workshop.lua (the
--- author's Ask for a bug report). Any later addition uses PlayerMenu.Add too, with no feature
--- hooking a menu of its own.
+-- Olympus version, Ask to update, Check version, Tell them about Olympus), Workshop.lua (the
+-- author's Ask for a bug report) and (1.1.6) Watch.lua (Report to Olympus: to this guild's
+-- officers). Any later addition uses PlayerMenu.Add too, with no feature hooking a menu of its own.
 --
 -- How, and what it never does:
 -- - Blizzard's own way for addons (Blizzard_Menu, 11.0's menus: Forever and the Classic clients
@@ -45,7 +45,7 @@ local hooked = false -- Menu.ModifyMenu called for every menu above
 -- A feature's lines: build(target, menu) adds them to `menu` (below) for `target` = { name (the
 -- whole "Name-Realm" as the server writes it), which (the menu), unit (when it came from a unit
 -- frame), locked (the game holds addon messages now: a line that sends is shown greyed) }.
--- `order`: lower first (Versions.lua 10, the author's lines 50, later additions after them). The same key again
+-- `order`: lower first (Versions.lua 10, the Watch's report 30, the author's lines 50, later additions after them). The same key again
 -- replaces its entry (a file loaded twice); no build takes it off.
 function PlayerMenu.Add(key, build, order)
 	if type(key) ~= "string" then return false end
@@ -164,6 +164,23 @@ function PlayerMenu.Build(which, root, ctx)
 		ns.SafeCall("player menu " .. e.key, e.build, target, menu)
 	end
 	return menu.count
+end
+
+-- The Olympus window's own rows (the census, the Realm, the crafters, the arena's lists): a
+-- right-click on a row that names a player opens a small menu of the same lines (the owner's
+-- call, 2026-09-30: Check version and Ask to update from the guild's rows), the client's own
+-- context menu (MenuUtil.CreateContextMenu) where it has one. offline: nothing that sends shows.
+PlayerMenu.ROW = "OLYMPUS_ROW"
+function PlayerMenu.OpenFor(owner, name, offline)
+	if not ns.Gate.Allowed("player-menu") then return false end
+	if type(name) ~= "string" or name == "" then return false end
+	local MU = rawget(_G, "MenuUtil") -- gp:player-menu
+	if not (MU and type(MU.CreateContextMenu) == "function") then return false end
+	local ok = pcall(MU.CreateContextMenu, owner, function(_, root)
+		if root.CreateTitle then root:CreateTitle(ns.DisplayName(name) or name) end
+		ns.SafeCall("player row menu", PlayerMenu.Build, PlayerMenu.ROW, root, { name = name, isOffline = offline == true })
+	end)
+	return ok
 end
 
 -- Every menu above, once (at login: Blizzard_Menu loads before any addon).

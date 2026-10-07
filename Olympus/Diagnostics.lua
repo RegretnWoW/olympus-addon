@@ -9,6 +9,10 @@ local L = ns.L
 local MAX_ERRORS = 50
 local warnedThisSession = false
 
+-- 1.2: lines other files add to /oly status and /oly bug (ns.StatusText), each a fn(lines) that
+-- appends its own strings: the Blood Arena's (ArenaNet.lua) without the arena editing this file.
+ns.statusLines = ns.statusLines or {}
+
 local function ClientInfo()
 	local version, build, _, toc = GetBuildInfo()
 	return ("%s (%s) toc %s, locale %s"):format(tostring(version), tostring(build), tostring(toc), tostring(GetLocale()))
@@ -441,6 +445,16 @@ function ns.StatusText()
 	if ns.GamepadUI() or blocked > 0 then
 		local ok, line = pcall(ns.TaintProbe)
 		add("%s", ok and line or ("taint: probe failed: " .. tostring(line)))
+	end
+	-- 1.2: other files' lines (the Blood Arena's, ArenaNet.lua), each fn(lines) adding its own; one
+	-- that fails leaves a line saying so. /oly bug carries them too (ns.BuildBugReport reads this).
+	for _, fn in ipairs(ns.statusLines) do
+		local n = #lines
+		local ok, err = pcall(fn, lines)
+		if not ok then
+			for i = #lines, n + 1, -1 do lines[i] = nil end
+			add("status line failed: %s", tostring(err))
+		end
 	end
 	return table.concat(lines, "\n")
 end

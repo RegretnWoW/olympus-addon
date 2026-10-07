@@ -40,12 +40,23 @@ local MAX_HURT = 20      -- banned or muted names kept per channel to let back i
 local LOCKED_RETRY = { 60, 120, 300, 600 } -- a channel locked against us is tried again after these, then every 10 min
 
 local peers = {}
-local queue = {}
+-- Two priorities, each with single messages and whole transfers. Intrusive lists keep
+-- the pump, keyed replacement and removal O(1); capacity still counts unsent messages.
+local lanes = { {}, {}, {}, {} } -- urgent single/batch, ordinary single/batch
+local keyed, owned = {}, {}
+local queueSize, ordinarySize, sequence = 0, 0, 0
+local active, batchSlot
+local SyncGuild
+-- Five fragments, two chat opportunities and one urgent opportunity in eight slots:
+-- 30 pieces finish within 55.2 s; six waiting chat pieces within 28.8 s at 1.2 s/slot.
+local BATCH_SLOTS = { "part", "part", "chat", "part", "chat", "part", "part", "urgent" }
 local chatQueue = {}  -- chat lines (Channels.lua): { msg, done, t, channel } (channel: the one it was written for, GitHub #34)
 local lastWasChat = false
 local asm = Codec.NewAssembler()
 local guildAsm = Codec.NewAssembler() -- pieces over GUILD (1.0.0)...
-local GUILD_PIECES = { HS = true, HT = true, XB = true } -- ...put together for these types alone: the High Council's lists, a guild's loot notes (1.1)
+local outsiderAsm = Codec.NewAssembler()
+local whisperAsm = Codec.NewAssembler() -- private signed-authority answers (1.2)
+local GUILD_PIECES = { HS = true, HT = true, XB = true, WZ = true, WU = true } -- ...put together for these types alone: signed lists, loot, War recovery and bounded squad assignments
 local msgId = 0
 local lastBroadcast = 0
 local early -- { every, due }: the report due then went out early, as a census answer (see Q1)
@@ -63,6 +74,7 @@ local peerRealm = {} -- guild peer -> realm from its hello, "old" for versions t
 local peerVersion = {} -- guild peer -> the addon version its hello named
 local peerSealed = {} -- guild peer -> "s" (on the sealed channel) or "p" (public), from its hello
 local peerZone = {} -- guild peer -> true when its hello says it shares its zone (0.9.1, Comm.SharesZone)
+local peerBank = {} -- guild peer -> true while its hello says it is an arena bank on duty (1.2, Electable)
 -- Short name -> last time we heard it report our guild on the channel. Short: the server may
 -- send a name with its realm over GUILD and without it over CHANNEL (names are region-unique
 -- on the realmless client).
@@ -73,6 +85,9 @@ local lastKeyAsk     -- when MaybeBroadcast last asked our guild for the key
 -- 1.0.0: when our channel last carried our guild's report from a guildmate whose hello named
 -- another realm (Comm.ElectsAcrossRealms). This session's alone, never saved.
 local crossedAt = -math.huge
+local peerGuild = GetGuildInfo("player")
+local guildChangedAt = 0
+local guildSession, lastHello = 0, 0
 
 -- count[key] + 1, with at most MAX_KEYS distinct keys (senders choose some of them).
 local function Count(t, key)
@@ -160,7 +175,7 @@ function Comm.Stats()
 		channelName = joinedName, sealed = ns.rdb and ns.rdb.realmKey ~= nil,
 		channel = channelIndex, peers = Comm.PeerCount(), reporter = Comm.reporterName,
 		isReporter = Comm.isReporter, sent = stats.sent, recv = stats.recv, reports = stats.reports,
-		fails = stats.fails, bad = stats.bad, queue = #queue, chatQueue = #chatQueue, chatMoved = stats.chatMoved, lastFail = stats.lastFail,
+		fails = stats.fails, bad = stats.bad, queue = queueSize, chatQueue = #chatQueue, chatMoved = stats.chatMoved, lastFail = stats.lastFail,
 		partial = stats.partial, echo = stats.echo, byType = stats.byType, otherChannel = stats.otherChannel,
 		chanArgs = stats.chanArgs, asked = stats.asked, answered = stats.answered, runnerUp = Comm.isRunnerUp, pending = (function() local n = 0 for _ in pairs(asm.buf) do n = n + 1 end return n end)(),
 		raw = stats.raw, rawSample = stats.rawSample, reportRealms = stats.reportRealms, shared = ns.rdb and ns.rdb.shared,
@@ -173,39 +188,153 @@ function Comm.Stats()
 	}
 end
 
--- urgent: ahead of everything waiting (a player waits for the answer: a layer ask, an offer,
--- a vote), behind the other urgent ones. done (1.1, Keys.lua): called once the message left
--- (true) or was dropped from the queue (false).
-local function Done(item, sent)
-	local done = item[7]
-	if done then ns.SafeCall("send done", done, sent) end
+local function Unlink(job)
+	local lane = job.lane
+	if not lane then return end
+	if not job.urgent then ordinarySize = ordinarySize - (#job.parts - job.i + 1) end
+	if job.prev then job.prev.next = job.next else lane.first = job.next end
+	if job.next then job.next.prev = job.prev else lane.last = job.prev end
+	job.lane, job.prev, job.next = nil, nil, nil
 end
-local function Enqueue(dist, msg, key, target, urgent, logged, done)
-	if key then
-		for _, item in ipairs(queue) do
-			if item[3] == key then
-				item[2], item[4], item[6] = msg, target, logged or nil
-				if done then item[7] = done end
-				return
-			end
+
+local function Detach(job)
+	if job.finished then return end
+	Unlink(job)
+	if active == job then active, batchSlot = nil, nil end
+	queueSize = queueSize - (#job.parts - job.i + 1)
+	if job.key and keyed[job.key] == job then keyed[job.key] = nil end
+	if job.owner then
+		local jobs = owned[job.owner]
+		if jobs then jobs[job] = nil; if not next(jobs) then owned[job.owner] = nil end end
+	end
+	job.finished = true
+end
+
+-- Always detach before notifying: callbacks may cancel or enqueue other jobs.
+local function Done(job, sent, why)
+	local done = job.done
+	job.done = nil
+	if done then ns.SafeCall("send done", done, sent, why) end
+end
+local function Finish(job, sent, why)
+	if job.finished then return end
+	Detach(job)
+	Done(job, sent, why)
+end
+local function Earlier(a, b)
+	if not a then return b end
+	if not b then return a end
+	return a.seq < b.seq and a or b
+end
+
+-- Cancel one bounded owner set. Snapshot and detach before callbacks: a callback may enqueue
+-- replacement work without becoming part of the cancellation that triggered it.
+local function CancelWhere(owner, guardKey, exact, why)
+	local jobs = owner ~= nil and owned[owner]
+	if not jobs then return 0 end
+	local dropped, count = {}, 0
+	for job in pairs(jobs) do
+		if not exact or job.guardKey == guardKey then
+			dropped[#dropped + 1] = job
+			count = count + #job.parts - job.i + 1
 		end
 	end
-	if #queue >= MAX_QUEUE then
-		-- Full: the oldest ordinary message goes (never an urgent one).
-		local drop = 1
-		for i, item in ipairs(queue) do
-			if not item[5] then drop = i break end
+	-- `owned` is a set, so its iteration order changes as unrelated modules allocate tables.
+	-- Cancellation callbacks keep the queue's observable admission order.
+	table.sort(dropped, function(a, b) return a.seq < b.seq end)
+	for _, job in ipairs(dropped) do Detach(job) end
+	for _, job in ipairs(dropped) do Done(job, false, why or "cancelled") end
+	return count
+end
+function Comm.Cancel(owner)
+	return CancelWhere(owner, nil, false, "cancelled")
+end
+-- Compatibility with v1.2's guarded queue: cancel exactly one owner/key capability while
+-- preserving other work from the same owner, including an active whole transfer.
+function Comm.CancelQueued(owner, guardKey, why)
+	if owner == nil or guardKey == nil then return 0 end
+	return CancelWhere(owner, guardKey, true, why or "cancelled")
+end
+local function DropQueue(why)
+	local dropped = {}
+	if active then dropped[#dropped + 1] = active end
+	for _, lane in ipairs(lanes) do
+		local job = lane.first
+		while job do dropped[#dropped + 1] = job; job = job.next end
+	end
+	for _, job in ipairs(dropped) do Detach(job) end
+	for _, job in ipairs(dropped) do Done(job, false, why) end
+end
+
+-- Accept both the transport lifecycle's owner/guard options and v1.2's capability guard:
+-- { owner, key, permit(owner, key, dist, target, msg) }. Malformed capabilities fail closed.
+local function NormalizeOptions(options)
+	if options == nil then return nil end
+	if type(options) ~= "table" then return false end
+	local capability = options.key ~= nil or options.permit ~= nil
+	if capability and (options.owner == nil or options.key == nil or type(options.permit) ~= "function") then return false end
+	if options.guard ~= nil and type(options.guard) ~= "function" then return false end
+	if not capability and options.owner == nil and options.guard == nil then return false end
+	return {
+		owner = options.owner, guard = options.guard,
+		guardKey = capability and options.key or options.guardKey,
+		permit = options.permit,
+	}
+end
+
+local function Enqueue(dist, parts, key, target, urgent, logged, done, options)
+	SyncGuild()
+	local job = { dist = dist, parts = parts, i = 1, key = key, target = target,
+		urgent = urgent and true or false, logged = logged == true, done = done,
+		owner = options and options.owner, guard = options and options.guard,
+		guardKey = options and options.guardKey, permit = options and options.permit,
+		guild = GetGuildInfo("player") }
+	local dropped = {}
+	local previous = key and keyed[key]
+	-- A transfer already in flight remains whole. A waiting keyed job keeps the legacy
+	-- coalescing contract: the newest payload/options replace it, a supplied callback replaces
+	-- the old callback, and no callback keeps the one already waiting.
+	local replace = previous and previous ~= active and not previous.started
+	local replaced = replace and (#previous.parts - previous.i + 1) or 0
+	-- Preflight without dropping anyone: an impossible large admission must leave
+	-- unrelated queued work intact. Pending ordinary jobs are the only evictable ones.
+	if queueSize - ordinarySize - replaced + #parts > MAX_QUEUE then
+		Done(job, false, "full")
+		return false
+	end
+	if replace then
+		if job.done == nil then job.done = previous.done end
+		previous.done = nil
+		Detach(previous)
+	end
+	while queueSize + #parts > MAX_QUEUE do
+		-- Never discard an urgent job or a transfer that has already begun.
+		local old = Earlier(lanes[3].first, lanes[4].first)
+		if not old then break end
+		Detach(old)
+		dropped[#dropped + 1] = old
+	end
+	local accepted = queueSize + #parts <= MAX_QUEUE
+	if accepted then
+		sequence = sequence + 1
+		job.seq = sequence
+		local lane = lanes[(job.urgent and 1 or 3) + (#parts > 1 and 1 or 0)]
+		job.lane, job.prev = lane, lane.last
+		if lane.last then lane.last.next = job else lane.first = job end
+		lane.last = job
+		queueSize = queueSize + #parts
+		if not job.urgent then ordinarySize = ordinarySize + #parts end
+		if key then keyed[key] = job end
+		if job.owner then
+			local jobs = owned[job.owner] or {}
+			owned[job.owner], jobs[job] = jobs, true
 		end
-		Done(table.remove(queue, drop), false)
 	end
-	local item = { dist, msg, key, target, urgent or nil, logged or nil, done }
-	if urgent then
-		local at = 1
-		while queue[at] and queue[at][5] do at = at + 1 end
-		table.insert(queue, at, item)
-	else
-		queue[#queue + 1] = item
-	end
+	-- Capacity eviction remains a terminal drop. Keyed coalescing above deliberately transfers
+	-- only the currently registered callback, matching the queue's existing public contract.
+	for _, old in ipairs(dropped) do Done(old, false, "dropped") end
+	if not accepted then Done(job, false, "full") end
+	return accepted
 end
 
 -- Other modules send small messages through here and register a handler per type.
@@ -220,34 +349,98 @@ end
 -- fails on a type two files register, or one missing here.
 --   Before any handler, here: K0 K1 (the realm key), H1 (hello), R1 R2 (census reports), and
 --   C<id>:<n>:<of>: (pieces)
---   Comm.lua Q1 | Positions P1 | Layers L0 L1 | Hop LN LO LQ LR LX | Decree D1 | Channels M1
---   Inspect S1 U0 U1 | King T1 T2 T3 | Court T4 T5 | Acts T6 | Treasury T8 TB TE TQ TR TX
---   Bank T9 | Vox Y1 | Loot X1 XQ XB | Crafters W0 W1 WA WL WQ WR
+--   Comm.lua Q1 | Positions P1 | Layers L0 L1 | Hop LN LO LQ LR LX | HopSightings LY | Decree D1 | Channels M1 | ChatRooms M2
+--   Inspect S1 U0 U1 | TabardsV2 U2 U3 U4 | King T1 T2 T3 | Court T4 T5 | Acts T6 | Treasury T8 TB TE TQ TR TX
+--   Bank T9 | Vox Y1 Y3 | Loot X1 XQ XB | Crafters W0 W1 WA WL WQ WR
 --   Workshop HA HI HK HQ HR HS HT V1 V2 V3 V4 V5 V6 | Link DA DB DC DE DK DR DV DW
+--   Authority H2 H3
 --   Other 1.1 work: Recruit J1 J3 | Alts AL | Filter BW | Dues FA FB FC FD FQ FS FU
---   Board G0 G1 GQ | Keys K3 K4 K5 | Channels N1 | Moderation O1 | Treasury TA TD TW
---   Bank TL TN TO TS | Week Y2. Reserved: J2 (#20's route answer),
+--   Board G0 G1 GQ | Keys K3 K4 K5 | Channels N1 | Moderation O1 | The Watch MW | Treasury TA TD TW
+--   Bank TL TN TO TS | Week Y2 | Wanted WS WX WY. Reserved: J2 (#20's route answer),
 --   FK (a 1.1 build's copy of the dues' amount from the Treasurer's client, read by nobody now).
+--   Bank UP UQ UG (the guild keeper's grant, reader's ask and own-guild snapshot).
+--   1.2 guild operations: War WZ (GUILD only; its bounded recovery snapshot may be chunked).
+--   1.2, the King's minimap arrow: KingArrow K6 (the switch's lease, logged).
+--   1.2, crafting requests: CraftRequests CQ (the board card, logged) CR (a claim and the parties'
+--   words) CJ (the request's private chat) CK (the mediated rail, the review and the guild's fees
+--   on direct sales: the parties' words to the fee desk, its answers, the debtors for the King),
+--   all logged.
+--   1.2, the Blood Arena (each one enveloped, <type>~<mode>1~<body>, and registered through
+--   Arena.Handle): ArenaNet EP | ArenaChat EC EM | ArenaTest ER EH | Wallet ZH ZE ZN ZG ZD ZK ZC
+--   ZW ZS ZQ ZL ZJ | Debts ZT ZX ZY ZR ZF | Stakes ZA ZV | Markets BM BO BS BK BV | MarketBank BF |
+--   ArenaFights AF AG AC AW AR AS AN | ArenaLedger AE AB AQ AV AH AY | ArenaTourney AT AD |
+--   ArenaProfile AP | HonorsNet IL ID IO | FarkleTable KI KA KO KP KG KY KH KK KT KE KQ KR KS KN KD |
+--   ArenaMatch AM | Lottery LW | ArenaRoles AU.
+--   (The Lottery's: a day's bank publishes that day's winners for the Games tab's rankings.)
+--   FarkleTable also registers KL at runtime (the design: the arbiter's floor under a drunk level),
+--   without extending this legacy inventory.
+--   (ArenaLedger's last one, 1.1.6: a finished game's record, any game, from its players to the auditors, the games' ledger.)
+--   (The King's arena words are kinds of the King's type, King.Register in ArenaRoles.lua.)
 --   1.1.2, the right-click menus: Versions V7 V8 V9 | Workshop VR (the author asks for a bug report).
 --   1.1.5, the guild masters' centurions and correspondents: Nominees NM (a list in parts, never chunked;
 --   the King's guild's centurions too, from the King or a High Councillor).
+--   1.1.6, moderation: Moderation O2 (a guild's word with notice) | The Watch MR (the players' reports).
+--   1.2, The Watch's judgments: Judgment MJ (a case to the King, the High Council's votes, his final
+--   word; logged whispers between an officer's or a councillor's client and the King's).
+--   1.1.6, the Missionary Church: Church NB NK | ChurchCount NV NS NL NR (whole messages, version 1).
+--   1.1.6, chat moderation: WatchChat MD (lines deleted, recent lines deleted, timeouts and their
+--   lifts, a guild master's Watchers, the Olympus moderators, a target's own word, appeals and their
+--   answers, a case's decision told to its player; logged, over GUILD or the channel).
+--   1.1.6, the War Room's squads: WarSquads WU (a guild's squad assignments, over GUILD) SC (a squad's chat, logged whispers).
 local handlers = {}
 -- 1.1 (Moderation.lua): a client the moderators took off (net-off) sends none of what they hide.
 local function Held(msg)
 	local M = ns.Moderation
 	return M ~= nil and not M.missing and M.Blocks(msg) == true
 end
-function Comm.Send(dist, msg, key, urgent, logged)
-	if dist == "GUILD" and not IsInGuild() then return end
-	if Held(msg) then return end
-	Enqueue(dist, msg, key, nil, urgent, logged)
+local function Refuse(done, why)
+	if done then ns.SafeCall("send done", done, false, why) end
+	return false
+end
+local SEND_DISTS = { GUILD = true, CHANNEL = true, PARTY = true, RAID = true }
+-- done runs exactly once, including rejection. options.owner permits cancellation;
+-- options.guard, or options.permit for a capability guard, is rechecked before each game send.
+function Comm.Send(dist, msg, key, urgent, logged, done, options)
+	options = NormalizeOptions(options)
+	if options == false then return Refuse(done, "guard") end
+	if not SEND_DISTS[dist] then return Refuse(done, "target") end
+	if type(msg) ~= "string" or #msg > 255 then return Refuse(done, "size") end
+	-- Keep the public completion contract: GUILD without a game guild is "guild"; a
+	-- non-Olympus character on another distribution is "left".
+	if dist == "GUILD" and not IsInGuild() then return Refuse(done, "guild") end
+	if not ns.IsMember() then return Refuse(done, "left") end
+	if Held(msg) then return Refuse(done, "held") end
+	return Enqueue(dist, { msg }, key, nil, urgent, logged, done, options)
 end
 -- An addon message to one player only (answers to the King, Throne tab). logged (1.1): a
 -- player's own words (a Board note), with the logged API, as Comm.Send. done: see Enqueue.
-function Comm.Whisper(target, msg, key, urgent, logged, done)
-	if type(target) ~= "string" or target == "" then return end
-	if Held(msg) then return end
-	Enqueue("WHISPER", msg, key, target, urgent, logged, done)
+function Comm.Whisper(target, msg, key, urgent, logged, done, options)
+	options = NormalizeOptions(options)
+	if options == false then return Refuse(done, "guard") end
+	if type(target) ~= "string" or target == "" then return Refuse(done, "target") end
+	if type(msg) ~= "string" or #msg > 255 then return Refuse(done, "size") end
+	if not ns.IsMember() then return Refuse(done, "left") end
+	if Held(msg) then return Refuse(done, "held") end
+	return Enqueue("WHISPER", { msg }, key, target, urgent, logged, done, options)
+end
+-- A bounded whole transfer: accept all pieces or none, finish once after their send
+-- APIs succeed (not a remote receipt). A failed piece cancels its unsent tail.
+function Comm.SendBatch(dist, pieces, key, target, urgent, done, options)
+	options = NormalizeOptions(options)
+	if options == false then return Refuse(done, "guard") end
+	if dist == "GUILD" and not IsInGuild() then return Refuse(done, "guild") end
+	if not ns.IsMember() then return Refuse(done, "left") end
+	if not SEND_DISTS[dist] and dist ~= "WHISPER" then return Refuse(done, "target") end
+	if dist == "WHISPER" and (type(target) ~= "string" or target == "") then return Refuse(done, "target") end
+	if type(pieces) ~= "table" or #pieces < 1 or #pieces > Codec.MAX_CHUNKS then return Refuse(done, "size") end
+	local copy = {}
+	for i = 1, #pieces do
+		local msg = pieces[i]
+		if type(msg) ~= "string" or #msg > 255 then return Refuse(done, "size") end
+		if Held(msg) then return Refuse(done, "held") end
+		copy[i] = msg
+	end
+	return Enqueue(dist, copy, key, target, urgent, false, done, options)
 end
 function Comm.Handle(msgType, fn)
 	handlers[msgType] = fn
@@ -257,23 +450,34 @@ Comm.pieceHooks = {}
 -- Long payloads (> 255 bytes) go through the same chunking as reports; urgent ones (a
 -- question to the army) ahead of the census, their pieces still in order. On the channel, or
 -- over GUILD (1.0.0), where only the types in GUILD_PIECES are put together again.
-function Comm.SendChunked(payload, urgent, dist)
+function Comm.SendChunked(payload, urgent, dist, done, options)
 	dist = dist == "GUILD" and "GUILD" or "CHANNEL"
-	if dist == "GUILD" and not IsInGuild() then return end
+	if type(payload) ~= "string" then return Refuse(done, "size") end
+	if Held(payload) then return Refuse(done, "held") end
+	if options ~= nil and type(options) ~= "table" then return Refuse(done, "guard") end
 	msgId = (msgId + 1) % 1000
-	for _, c in ipairs(Codec.Chunk(payload, tostring(msgId))) do Enqueue(dist, c, nil, nil, urgent) end
+	local guard = options and options.guard
+	local guarded = {
+		owner = options and options.owner,
+		key = options and options.key,
+		permit = options and options.permit,
+		guardKey = options and options.guardKey,
+		guard = function()
+		return not Held(payload) and (not guard or guard() == true)
+	end }
+	return Comm.SendBatch(dist, Codec.Chunk(payload, tostring(msgId)), nil, nil, urgent, done, guarded)
 end
 function Comm.ChannelReady()
 	return channelIndex > 0
 end
 -- Messages waiting to go out, one each SEND_INTERVAL (chat lines apart).
 function Comm.QueueSize()
-	return #queue
+	return queueSize
 end
 -- How many more fit before the oldest waiting message is dropped (1.1: the King's key rotation
 -- hands out no more than that, Keys.lua).
 function Comm.QueueRoom()
-	return MAX_QUEUE - #queue
+	return MAX_QUEUE - queueSize
 end
 
 -- Chat lines wait in a short lane of their own: they never go through Enqueue, so they can
@@ -282,11 +486,17 @@ end
 -- key), "late" it waited CHAT_TTL, "failed" the game refused it, "left" we are out of an Olympus
 -- guild. Each part carries the channel it was written for, and never goes out on another one
 -- (GitHub #34: a line typed for one channel's audience is not sent to the next). line (1.1.1):
--- any value the parts of one line share, for Comm.DropLine. Returns false when the lane is full,
--- or while we are on no channel.
-function Comm.SendChat(msg, done, line)
+-- any value the parts of one line share, for Comm.DropLine. guard is checked now and again at
+-- the actual game send, like Comm.Send's options.guard. Returns false when the lane is full,
+-- guard refuses, or while we are on no channel.
+function Comm.SendChat(msg, done, line, guard)
 	if not joinedName or #chatQueue >= CHAT_QUEUE or Held(msg) then return false end
-	chatQueue[#chatQueue + 1] = { msg = msg, done = done, t = GetTime(), channel = joinedName, line = line }
+	if guard ~= nil then
+		if type(guard) ~= "function" then return false end
+		local ok, valid = pcall(guard)
+		if not ok or valid ~= true then return false end
+	end
+	chatQueue[#chatQueue + 1] = { msg = msg, done = done, t = GetTime(), channel = joinedName, line = line, guard = guard }
 	return true
 end
 function Comm.ChatRoom()
@@ -318,8 +528,8 @@ end
 -- Player text goes through the logged API, Blizzard's function for plain text payloads
 -- (receivers get CHAT_MSG_ADDON_LOGGED). Clients without it use the usual one.
 local function SendNow(dist, msg, logged, whisperTo)
-	-- (A whisper goes to the name the server finds: ns.TellName.)
-	local target = dist == "CHANNEL" and channelIndex or ns.TellName(whisperTo)
+	-- (A whisper goes to the name the server finds: ns.TellName. Group distributions have no target.)
+	local target = dist == "CHANNEL" and channelIndex or (dist == "WHISPER" and ns.TellName(whisperTo) or nil)
 	local send = logged and C_ChatInfo.SendAddonMessageLogged or C_ChatInfo.SendAddonMessage
 	local ok, res = pcall(send, ns.PREFIX, msg, dist, target)
 	if ok and IsSuccess(res) then
@@ -329,7 +539,10 @@ local function SendNow(dist, msg, logged, whisperTo)
 	stats.fails = stats.fails + 1
 	stats.lastFail = ("%s %s"):format(dist, tostring(res))
 	ns.Log("send failed on %s: %s", dist, tostring(res))
-	return false
+	-- Preserve newer clients' numeric result for Arena retry policy. Older clients return
+	-- false on refusal; that remains a normal "failed" outcome, while a thrown call is "error".
+	if ok then return false, res end
+	return false, "error"
 end
 
 -- The Join screen's own addon whispers (1.1, Fern's #20, Recruit.lua): outside an Olympus guild
@@ -359,6 +572,29 @@ local function DropChat(why)
 	end
 end
 
+-- Peer elections, delayed reports and queued work belong to one guild session.
+-- An Olympus-to-Olympus move keeps the channel, but must not keep that session.
+SyncGuild = function()
+	local guild = GetGuildInfo("player")
+	if guild == peerGuild then return end
+	peerGuild = guild
+	guildSession = guildSession + 1
+	guildAsm, outsiderAsm, whisperAsm = Codec.NewAssembler(), Codec.NewAssembler(), Codec.NewAssembler()
+	wipe(peers); wipe(peerRealm); wipe(peerVersion); wipe(peerSealed); wipe(peerZone); wipe(peerBank)
+	wipe(heardOwn); wipe(benched)
+	watch, lastKeyAsk, early = nil, nil, nil
+	crossedAt, lastBroadcast, lastAnswer = -math.huge, 0, -math.huge
+	Comm.isReporter, Comm.isRunnerUp, Comm.reporterName, Comm.lastReport = nil, nil, nil, nil
+	guildChangedAt = ns.Now()
+	lastHello, Comm.lastKeyAnswer = 0, nil
+	askTries, heardAsk, askedAgain = 0, -math.huge, false
+	stats.asked, stats.askSkipped = 0, 0
+	-- Moving between Olympus guilds invalidates the old guild session; leaving the
+	-- federation keeps the established public completion reason, "left".
+	DropQueue(ns.IsMember() and "guild" or "left")
+	DropChat("left")
+end
+
 -- GitHub #34: the chat parts written for another channel than the one we are on now are dropped
 -- ("moved"), the others keep their place. Comm.JoinChannel drops the lane when the channel
 -- changes; this second guard holds whatever path changed joinedName. The same channel given
@@ -377,19 +613,95 @@ local function DropMoved()
 	end
 end
 
+-- The common path reads lane heads directly; only a missing channel needs to
+-- walk past its blocked messages to find guild traffic or a whisper.
+local function Ready(lane)
+	local job = lane.first
+	while job and job.dist == "CHANNEL" and channelIndex <= 0 do job = job.next end
+	return job
+end
+local function NextJob(singles)
+	if singles then return Ready(lanes[1]) or Ready(lanes[3]) end
+	local urgent = Earlier(Ready(lanes[1]), Ready(lanes[2]))
+	if urgent then return urgent end
+	return Earlier(Ready(lanes[3]), Ready(lanes[4]))
+end
+local function Valid(job, now)
+	if job.guild ~= GetGuildInfo("player") then return false, "guild" end
+	if job.started then
+		if now - job.started >= (#job.parts > 30 and 70 or 60) then return false, "late" end
+		if job.dist == "CHANNEL" and (job.channel ~= joinedName or channelIndex <= 0) then return false, "moved" end
+	end
+	if job.guard then
+		local ok, valid, why = pcall(job.guard)
+		if not ok then
+			if ns.CaptureError then pcall(ns.CaptureError, "send guard", valid) end
+			return false, "guard-error"
+		end
+		if valid ~= true then return false, why or "invalid" end
+	end
+	if job.permit then
+		local ok, valid, why = pcall(job.permit, job.owner, job.guardKey, job.dist, job.target, job.parts[job.i])
+		if not ok then
+			if ns.CaptureError then pcall(ns.CaptureError, "send permit", valid) end
+			return false, "guard-error"
+		end
+		if valid ~= true then return false, why or "cancelled" end
+	end
+	if Held(job.parts[job.i]) then return false, "held" end
+	return true
+end
+local function SendJob(job, now)
+	local valid, why = Valid(job, now)
+	if job.finished then return false end
+	if not valid then Finish(job, false, why); return false end
+	if #job.parts > 1 and not job.started then
+		Unlink(job)
+		job.started, job.channel = now, joinedName
+		active, batchSlot = job, 2 -- this send is the first fragment slot
+	end
+	local sent, why = SendNow(job.dist, job.parts[job.i], job.logged, job.target)
+	if not sent then
+		Finish(job, false, why or "failed")
+		return true -- a game API was called: do not spend another slot this tick
+	end
+	if job.lane and not job.urgent then ordinarySize = ordinarySize - 1 end
+	job.i = job.i + 1
+	queueSize = queueSize - 1
+	if job.i > #job.parts then Finish(job, true) end
+	return true
+end
+local function SendChatPart()
+	lastWasChat = true
+	local item = table.remove(chatQueue, 1)
+	if item.guard then
+		local ok, valid, why = pcall(item.guard)
+		if not ok then
+			if ns.CaptureError then pcall(ns.CaptureError, "chat send guard", valid) end
+			why = "guard-error"
+		elseif valid ~= true then
+			why = why or "invalid"
+		else
+			why = nil
+		end
+		if why then
+			if item.done then ns.SafeCall("chat sent", item.done, false, why) end
+			return
+		end
+	end
+	local sent = SendNow("CHANNEL", item.msg, true)
+	if item.done then ns.SafeCall("chat sent", item.done, sent, (not sent) and "failed" or nil) end
+end
+
 local function Pump()
-	if not queue[1] and not chatQueue[1] then return end
+	SyncGuild()
+	if queueSize == 0 and not chatQueue[1] then return end
 	if not ns.IsMember() then
-		-- Outside an Olympus guild the addon sends nothing.
-		local dropped = {}
-		for i, item in ipairs(queue) do dropped[i] = item end
-		wipe(queue)
-		for _, item in ipairs(dropped) do Done(item, false) end
+		DropQueue("left")
 		DropChat("left")
 		return
 	end
-	-- The channel may have been left (the Chat Channels panel) and its number given to another
-	-- one: check before sending, or [Lords] text would go to that other channel.
+	-- The game can reuse a departed channel's numeric ID for a different audience.
 	if channelIndex > 0 and joinedName and GetChannelName then
 		local id = GetChannelName(joinedName) or 0
 		if id ~= channelIndex then
@@ -403,30 +715,31 @@ local function Pump()
 		local item = table.remove(chatQueue, 1)
 		if item.done then ns.SafeCall("chat drop", item.done, false, "late") end
 	end
-	-- Chat goes first, but while reports wait it takes at most every other slot: an idle lane
-	-- sends a line within 1.2 s, and the total rate stays one message per SEND_INTERVAL.
-	-- (The regular queue is not stamped with a channel: the census, hellos, decrees, pins and
-	-- Board notes address the army's channel, whichever it is when they leave, and a pin repeats
-	-- itself anyway. Only a player's chat line is written for one channel's audience.)
-	if chatQueue[1] and channelIndex > 0 and not (lastWasChat and queue[1]) then
-		lastWasChat = true
-		local item = table.remove(chatQueue, 1)
-		local sent = SendNow("CHANNEL", item.msg, true)
-		if item.done then ns.SafeCall("chat sent", item.done, sent, (not sent) and "failed" or nil) end
-		return
-	end
-	lastWasChat = false
-	-- Channel messages wait until we joined; guild messages behind them go out meanwhile.
-	local index
-	for i, item in ipairs(queue) do
-		if item[1] ~= "CHANNEL" or channelIndex > 0 then
-			index = i
-			break
+	-- Invalid jobs consume no network slot. Bound the pass even if a callback adds work.
+	for _ = 1, MAX_QUEUE do
+		if active then
+			local current = active
+			local valid, why = Valid(current, now)
+			if not valid then Finish(current, false, why) end
 		end
+		local chat = chatQueue[1] and channelIndex > 0
+		local job
+		if active then
+			local slot = BATCH_SLOTS[batchSlot]
+			batchSlot = batchSlot % #BATCH_SLOTS + 1
+			if slot == "chat" and chat then SendChatPart(); return end
+			if slot ~= "part" then job = NextJob(true) end
+			if not job and slot ~= "part" and chat then SendChatPart(); return end
+			job = job or active
+		else
+			job = NextJob(false)
+			-- Outside a transfer, retain the existing chat/report alternation.
+			if chat and not (lastWasChat and job) then SendChatPart(); return end
+		end
+		if not job then return end
+		lastWasChat = false
+		if SendJob(job, now) then return end
 	end
-	if not index then return end
-	local item = table.remove(queue, index)
-	Done(item, SendNow(item[1], item[2], item[6] == true, item[4]))
 end
 Comm.Pump = Pump -- for tests
 
@@ -853,7 +1166,7 @@ end
 
 -- No key? Ask our guild (officers who have it answer, over GUILD).
 function Comm.RequestKey()
-	if ns.IsMember() and ns.rdb and not ns.rdb.realmKey then Enqueue("GUILD", "K0~", "keyreq") end
+	if ns.IsMember() and ns.rdb and not ns.rdb.realmKey then Enqueue("GUILD", { "K0~" }, "keyreq") end
 end
 
 -- /oly key <secret>: officers seal the channel; guildmates receive the key automatically.
@@ -869,7 +1182,7 @@ function Comm.SetRealmKey(secret)
 	end
 	local was = ns.rdb.realmKey
 	ns.rdb.realmKey = secret
-	Enqueue("GUILD", "K1~" .. secret, "key")
+	Enqueue("GUILD", { "K1~" .. secret }, "key")
 	-- 1.1 (Keys.lua): dated now, so our guild's 1.1 clients take it over a key the King rotated
 	-- before; the key it replaces named with it (a plain K1 of that one no longer pulls them back).
 	if ns.Keys.Typed then ns.Keys.Typed(secret, was) end
@@ -969,9 +1282,9 @@ function Comm.QuietAfter(now)
 	return math.max(QUIET_MIN, math.ceil(QUIET_TOTAL / #Comm.PresenceRealms(now)))
 end
 
-local lastHello = 0
 -- force: now, whatever the above (the player changed what the hello says).
 function Comm.Hello(force)
+	SyncGuild()
 	if not IsInGuild() then return end
 	local now, before = ns.Now(), 0
 	for name, t in pairs(Comm.Electable(now)) do
@@ -985,7 +1298,16 @@ function Comm.Hello(force)
 	-- otherwise. Older versions read the fields before it and ignore the rest.
 	local sealed = ns.rdb and ns.rdb.realmKey and "s" or "p"
 	local zone = ns.Layers and ns.Layers.Sharing and ns.Layers.Sharing() and "~z" or ""
-	Enqueue("GUILD", "H1~" .. ns.VERSION .. "~" .. tostring(ns.realm) .. "~" .. sealed .. zone, "hello")
+	-- A sixth "b" field marks an arena bank on duty. Older clients ignore it.
+	if Comm.BankOnDuty() then zone = (zone ~= "" and zone or "~") .. "~b" end
+	Enqueue("GUILD", { "H1~" .. ns.VERSION .. "~" .. tostring(ns.realm) .. "~" .. sealed .. zone }, "hello")
+end
+
+-- An arena bank on duty leaves census reporting to a guildmate so event traffic and
+-- thirty-piece census transfers do not contend for the same sender.
+function Comm.BankOnDuty()
+	local A = ns.Arena
+	return type(A) == "table" and type(A.OnDuty) == "function" and A.OnDuty("bank") == true
 end
 
 -- Does this guildmate share their zone (their hello says so, or it is us and we do)? By the
@@ -1019,7 +1341,7 @@ local function Electable(now)
 	for name, t in pairs(peers) do
 		local realm, stamped = peerRealm[name], ns.RealmOf(name)
 		local ours = (realm == nil or realm == "old" or realm == ns.realm) and (stamped == nil or stamped == ns.realm)
-		if (benched[name] or 0) <= now and (all or ours) then pool[name] = t end
+		if (benched[name] or 0) <= now and (all or ours) and not peerBank[name] then pool[name] = t end
 	end
 	return pool
 end
@@ -1034,7 +1356,13 @@ local function LastReport(every)
 end
 
 function Comm.MaybeBroadcast(report)
+	SyncGuild()
 	local now = ns.Now()
+	if Comm.BankOnDuty() then
+		Comm.isReporter, Comm.isRunnerUp, watch = false, false, nil
+		Comm.lastReport = report
+		return
+	end
 	-- Peers are keyed "Name-Realm" like ns.me, so every client compares the same strings.
 	local pool = Electable(now)
 	local best = Codec.PickReporter(ns.me, pool, now, PEER_WINDOW)
@@ -1086,7 +1414,7 @@ function Comm.MaybeBroadcast(report)
 	if not every or now - LastReport(every) < every then return end
 	-- Right after login we don't know our guildmates yet and would wrongly think we are the
 	-- reporter: wait one hello round first.
-	if now - (Comm.loginAt or 0) < HELLO_EVERY + 10 then return end
+	if now - math.max(Comm.loginAt or 0, guildChangedAt) < HELLO_EVERY + 10 then return end
 	Comm.Broadcast(report)
 end
 
@@ -1107,7 +1435,11 @@ function Comm.Broadcast(report)
 	local sharing = ns.Layers and ns.Layers.Sharing and ns.Layers.Sharing()
 	local payload = Codec.EncodeReport(Codec.Shareable(report, sharing, sharing and Comm.SharesZone or nil))
 	local chunks = Codec.Chunk(payload, tostring(msgId))
-	for _, c in ipairs(chunks) do Enqueue("CHANNEL", c) end
+	Comm.SendBatch("CHANNEL", chunks, nil, nil, false, nil, { guard = function()
+		local current = ns.Moderation
+		if current and not current.missing and current.OwnGuildOff() then return false end
+		return not sharing or (ns.Layers and ns.Layers.Sharing and ns.Layers.Sharing()) == true
+	end })
 	ns.Log("broadcast %s: %d bytes in %d chunks", report.guild, #payload, #chunks)
 end
 
@@ -1139,7 +1471,7 @@ function Comm.AskCensus()
 		stats.askSkipped = stats.askSkipped + 1
 	else
 		stats.asked = stats.asked + 1
-		Enqueue("CHANNEL", "Q1~", "censusreq")
+		Enqueue("CHANNEL", { "Q1~" }, "censusreq")
 	end
 	if not askedAgain then
 		askedAgain = true
@@ -1210,7 +1542,7 @@ end
 -- Right after login we may think we are the reporter only because we have not heard our
 -- guildmates yet (see MaybeBroadcast): no answers then.
 local function Settled(now)
-	return now - (Comm.loginAt or 0) >= HELLO_EVERY + 10
+	return now - math.max(Comm.loginAt or 0, guildChangedAt) >= HELLO_EVERY + 10
 end
 
 -- The reporter answers, and the runner-up too (a little later): a client that just logged in
@@ -1230,7 +1562,10 @@ Comm.Handle("Q1", function(dist, sender, text)
 	stats.answered = stats.answered + 1
 	-- A short random delay spreads the answers of every guild.
 	local delay = Comm.isReporter and math.random(1, 8) or math.random(9, 16)
+	local session = guildSession
 	ns.After(delay, "census answer", function()
+		SyncGuild()
+		if session ~= guildSession then return end
 		local later = ns.Now()
 		if not (Comm.isReporter or Comm.isRunnerUp) or not Comm.lastReport or not Settled(later) then return end
 		local period = Comm.isReporter and BROADCAST_EVERY or WITNESS_EVERY
@@ -1249,20 +1584,37 @@ Comm.ADMIT_BURST = 60
 Comm.ADMIT_RATE = 2
 Comm.ADMIT_SENDERS = 3000
 local admit, admitCount = {}, 0
+local admitFirst, admitLast -- oldest/latest activity, including throttled messages
+local function TouchAdmission(b)
+	if admitLast == b then return end
+	if b.prev then b.prev.next = b.next elseif admitFirst == b then admitFirst = b.next end
+	if b.next then b.next.prev = b.prev end
+	b.prev, b.next = admitLast, nil
+	if admitLast then admitLast.next = b else admitFirst = b end
+	admitLast = b
+end
+-- now is the monotonic GetTime clock, shared by all admission calls.
 function Comm.Admit(sender, now)
 	local b = admit[sender]
 	if not b then
 		if admitCount >= Comm.ADMIT_SENDERS then
-			for name, x in pairs(admit) do
-				if now - x.t > 60 then admit[name], admitCount = nil, admitCount - 1 end
-			end
-			if admitCount >= Comm.ADMIT_SENDERS then stats.admitted = (stats.admitted or 0) + 1 return false end
+			-- Calls use a monotonic clock, so the head alone decides whether any sender
+			-- is idle. Reuse one expired slot; never scan the whole table on a miss.
+			b = admitFirst
+			if not b or now - b.t <= 60 then stats.admitted = (stats.admitted or 0) + 1 return false end
+			admitFirst = b.next
+			if admitFirst then admitFirst.prev = nil else admitLast = nil end
+			admit[b.name], admitCount = nil, admitCount - 1
+			b.prev, b.next = nil, nil
+		else
+			b = {}
 		end
-		b = { tokens = Comm.ADMIT_BURST, t = now }
+		b.name, b.tokens, b.t = sender, Comm.ADMIT_BURST, now
 		admit[sender], admitCount = b, admitCount + 1
 	end
 	b.tokens = math.min(Comm.ADMIT_BURST, b.tokens + (now - b.t) * Comm.ADMIT_RATE)
 	b.t = now
+	TouchAdmission(b)
 	if b.tokens < 1 then
 		stats.throttled = (stats.throttled or 0) + 1
 		return false
@@ -1270,17 +1622,17 @@ function Comm.Admit(sender, now)
 	b.tokens = b.tokens - 1
 	return true
 end
-function Comm.ResetAdmission() wipe(admit); admitCount = 0 end
+function Comm.ResetAdmission() wipe(admit); admitCount, admitFirst, admitLast = 0, nil, nil end
 
 -- A client outside any Olympus guild (1.1): over its own guild it puts together the pieces of the
 -- author's signed titles list alone (HT), which names the approved guilds (ns.IsApprovedGuild):
 -- the members of such a guild have nothing else to learn it from. Nothing else is read, kept or
 -- answered; a blocked sender, and one past the admission budget, are dropped as ever, and the list
 -- is checked like any other (Workshop.TakeTitles: the signature, the budgets of checks).
-local outsiderAsm = Codec.NewAssembler()
 function Comm.Outsider(sender, text)
+	SyncGuild()
 	if not IsInGuild() or type(text) ~= "string" or not text:match("^C%w+:") then return end
-	if ns.db.blocked[sender:lower()] or not Comm.Admit(sender, ns.Now()) then return end
+	if ns.db.blocked[sender:lower()] or not Comm.Admit(sender, GetTime()) then return end
 	stats.outsider = (stats.outsider or 0) + 1
 	local full = Codec.Feed(outsiderAsm, sender, text, ns.Now())
 	if full and full:sub(1, 3) == "HT~" and handlers.HT then handlers.HT("GUILD", sender, full) end
@@ -1290,13 +1642,14 @@ function Comm.ResetOutsider() outsiderAsm = Codec.NewAssembler() end -- (tests)
 local function OnAddonMessage(prefix, text, dist, sender, target, zoneChannelID, localID, channelName)
 	if prefix ~= ns.PREFIX then return end
 	if type(sender) ~= "string" or sender == "" or type(text) ~= "string" then return end
+	SyncGuild()
 	-- Nothing another player sends reaches a screen, a tooltip, the map, a popup or a copy box
 	-- with an escape code in it (0.9.2): every message but a chat line loses its "|" and its
 	-- control bytes here, before the pieces are put together or any handler reads it (a census
 	-- report, a layer, a decree, the King's word, a hello...). No message of ours needs either
 	-- (a bug report travels with its pipes as "!" and its line breaks as "\n"). A chat line
 	-- keeps the links Codec.SanitizeChat allows, and nothing else (Channels.lua).
-	if text:sub(1, 3) ~= "M1~" then text = Codec.Plain(text) end
+	if text:sub(1, 3) ~= "M1~" and text:sub(1, 3) ~= "M2~" then text = Codec.Plain(text) end
 	-- Only our channel counts: an outsider in any other channel we sit in could otherwise
 	-- reach us there, past the sealed channel. Clients that don't give the number pass.
 	if dist == "CHANNEL" then
@@ -1332,14 +1685,14 @@ local function OnAddonMessage(prefix, text, dist, sender, target, zoneChannelID,
 		-- author's signed titles list over its own guild, which may make that guild an Olympus guild
 		-- (Comm.Outsider).
 		if dist == "WHISPER" and text:sub(1, 3) == "J2~" and outsideHandler and not ns.db.blocked[sender:lower()]
-			and Comm.Admit(sender, ns.Now()) then
+			and Comm.Admit(sender, GetTime()) then
 			ns.SafeCall("join route", outsideHandler, sender, text)
 		end
 		if dist == "GUILD" then Comm.Outsider(sender, text) end
 		return
 	end
 	if ns.db.blocked[sender:lower()] then return end
-	if not Comm.Admit(sender, ns.Now()) then return end
+	if not Comm.Admit(sender, GetTime()) then return end
 	stats.recv = stats.recv + 1
 	-- Olympus Link (0.9.10): a High Councillor's addon waiting to hear the author (Link.HeardFrom)
 	-- sees who speaks; only while it waits: otherwise nil, and no message pays for it.
@@ -1371,12 +1724,17 @@ local function OnAddonMessage(prefix, text, dist, sender, target, zoneChannelID,
 		-- A guildmate asks for the key: officers who have it answer (at most once a minute).
 		if ns.rdb.realmKey and ns.Roster.IsOfficer() and now - (Comm.lastKeyAnswer or 0) > 60 then
 			Comm.lastKeyAnswer = now
+			local session = guildSession
+			local function MayAnswer()
+				return session == guildSession and ns.IsMember() and ns.Roster.IsOfficer() and ns.rdb.realmKey ~= nil
+			end
 			ns.After(math.random(1, 5), "key answer", function()
-				if not ns.rdb.realmKey then return end
-				Enqueue("GUILD", "K1~" .. ns.rdb.realmKey, "key")
+				SyncGuild()
+				if not MayAnswer() then return end
+				Enqueue("GUILD", { "K1~" .. ns.rdb.realmKey }, "key", nil, nil, nil, nil, { guard = MayAnswer })
 				-- 1.1 (Keys.lua): with its epoch too (and the keys it replaced), for 1.1 guildmates.
 				local k3 = ns.Keys.HandOutMessage and ns.Keys.HandOutMessage()
-				if type(k3) == "string" then Enqueue("GUILD", k3, "key3") end
+				if type(k3) == "string" then Enqueue("GUILD", { k3 }, "key3", nil, nil, nil, nil, { guard = MayAnswer }) end
 			end)
 		end
 		return
@@ -1394,6 +1752,7 @@ local function OnAddonMessage(prefix, text, dist, sender, target, zoneChannelID,
 		local sealed = text:match("^H1~[^~]*~[^~]*~([^~]*)")
 		peerSealed[sender] = (sealed == "s" or sealed == "p") and sealed or nil
 		peerZone[sender] = text:match("^H1~[^~]*~[^~]*~[^~]*~([^~]*)") == "z" or nil
+		peerBank[sender] = text:match("^H1~[^~]*~[^~]*~[^~]*~[^~]*~([^~]*)") == "b" or nil
 		return
 	end
 	local handler = handlers[text:sub(1, 2)]
@@ -1415,6 +1774,13 @@ local function OnAddonMessage(prefix, text, dist, sender, target, zoneChannelID,
 		local full = Codec.Feed(guildAsm, sender, text, now)
 		local whole = full and full:sub(1, 2)
 		if whole and GUILD_PIECES[whole] and full:sub(3, 3) == "~" and handlers[whole] then handlers[whole](dist, sender, full) end
+		return
+	end
+	if dist == "WHISPER" then
+		-- H2 is the only long private payload. It carries an independently signed authority part;
+		-- Authority.lua still checks the route, signature, complete-set digest and replay boundary.
+		local full = Codec.Feed(whisperAsm, sender, text, now)
+		if full and full:sub(1, 3) == "H2~" and handlers.H2 then handlers.H2(dist, sender, full) end
 		return
 	end
 	if dist == "CHANNEL" then
@@ -1462,6 +1828,7 @@ end
 -- Outside an Olympus guild the addon stays out of the channel (called when the guild changes).
 -- Joining is left to the housekeeping ticker, so we never jump ahead of General/Trade at login.
 function Comm.CheckMembership()
+	SyncGuild()
 	if ns.IsMember() then
 		-- Joined an Olympus guild after login: ask for the census once we are on the channel.
 		if stats.asked + stats.askSkipped == 0 then
@@ -1474,9 +1841,9 @@ function Comm.CheckMembership()
 		LeaveChannelByName(joinedName) -- gp:chat-channels
 		ns.Log("left channel %s: not in an Olympus guild", joinedName)
 		joinedName, channelIndex = nil, 0
-		wipe(queue)
-		DropChat("left")
 	end
+	DropQueue("left")
+	DropChat("left")
 end
 
 ns.On("LOGIN", function()
@@ -1506,6 +1873,7 @@ ns.On("LOGIN", function()
 		local dropped, sample = Codec.Gc(asm, ns.Now())
 		Codec.Gc(guildAsm, ns.Now())
 		Codec.Gc(outsiderAsm, ns.Now())
+		Codec.Gc(whisperAsm, ns.Now())
 		if dropped > 0 then
 			stats.partial = stats.partial + dropped
 			ns.Log("incomplete report dropped: %s", tostring(sample))

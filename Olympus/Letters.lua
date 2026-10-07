@@ -36,7 +36,7 @@ local Letters = {}
 ns.Letters = Letters
 
 -- Every version with a letter, newest first.
-Letters.LIST = { "1.1.5", "1.1.4", "1.1.3", "1.1.2", "1.1.1", "1.1.0" }
+Letters.LIST = { "1.2.0", "1.1.5", "1.1.4", "1.1.3", "1.1.2", "1.1.1", "1.1.0" }
 Letters.LOGIN_WAIT = 60 -- after login (the privacy page asks at 45 s: Consent.LOGIN_WAIT)
 Letters.WIDTH, Letters.HEIGHT = 440, 470
 

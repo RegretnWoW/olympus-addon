@@ -18,6 +18,9 @@ local ADDON, ns = ...
 -- game's restricted functions only from the player's click on an Olympus button. The entries
 -- whose guard is not "gate" are the written exceptions.
 --
+-- Files. A name is under Olympus/ (Core.lua), or under the 1.2 companion's folder with that folder
+-- in front (Olympus_Arena/Window.lua): the companion is Olympus's code too, audited the same way.
+--
 -- Fields of an entry:
 --   id      its name; the code passes it to ns.Gate.Allowed, Gate.Use and Gate.Hooks.
 --   kind    what kind of reach it is (a slash command, a button in a game frame, a hook...).
@@ -59,9 +62,12 @@ ns.GAMEPAD_CHECKED_BUILD = 70205
 local APPROVED = "the author, 2026-10-04"
 
 ns.GAMEPAD = {
+	{ id = "innkeeper-gossip", kind = "frame-child", files = { "InnkeeperGossip.lua" },
+		guard = "gate", toPad = "park", toMouse = "install", safe = "off",
+		why = "An opt-in Bones row and local dialogue inside a capability-checked unprotected NPC panel; mouse only, restored and hidden on a gamepad switch. Missing native capabilities retain the Olympus dialogue." },
 	-- P0: confirmed in Forever's source to reach the refused call in a session played with the gamepad alone.
 	{ id = "slash", kind = "slash", files = { "Core.lua", "Channels.lua" },
-		globals = { "SLASH_OLYMPUS1", "SLASH_OLYMPUS2", "SLASH_OLYMPUSALL1", "SLASH_OLYMPUSCAPTAINS1", "SLASH_OLYMPUSLORDS1" },
+		globals = { "SLASH_OLYMPUS1", "SLASH_OLYMPUS2", "SLASH_OLYMPUSARENA1", "SLASH_OLYMPUSALL1", "SLASH_OLYMPUSCAPTAINS1", "SLASH_OLYMPUSLORDS1" },
 		guard = "gate", toPad = "reload", toMouse = "install", safe = "off",
 		why = "The chat box calls a slash command's function directly, then closes itself (ClearChat, its focus lost, ClearGamepadFocus) in that function's taint: nothing the function does can prevent it, so none is registered at a gamepad login.",
 		pins = { "Blizzard_ChatFrameBase/Shared/ChatFrameEditBox.lua:267 hash_SlashCmdList[command](strtrim(msg), self);",
@@ -79,7 +85,7 @@ ns.GAMEPAD = {
 	{ id = "error-handler", kind = "global-handler", files = { "Bootstrap.lua", "Diagnostics.lua" },
 		guard = "gate", toPad = "park", toMouse = "nothing", safe = "off",
 		why = "Every error would pass through Olympus's handler, which opens the game's error window in Olympus's taint; at a switch to the gamepad UI the game's own handler is put back, and never replaced again that session." },
-	{ id = "escape-list", kind = "table-write", files = { "Core.lua" },
+	{ id = "escape-list", kind = "table-write", files = { "Core.lua", "Workshop.lua", "Olympus_Arena/Games/Games.lua" },
 		guard = "gate", toPad = "park", toMouse = "on", safe = "off",
 		why = "The gamepad menus close every window on UISpecialFrames and read it unprotected: Olympus writes no name there, and at a switch takes off its names at the end of the list (a name before another addon's stays until a /reload, so nothing moves)." },
 	{ id = "worldmap-icons", kind = "map-pins", files = { "Core.lua", "Map.lua", "Decree.lua", "King.lua", "Positions.lua", "Board.lua" },
@@ -113,9 +119,9 @@ ns.GAMEPAD = {
 		why = "The Chat tab's override of the Open chat key: never set with the gamepad UI, and the one Olympus holds goes back to the game in the switch itself (the only step taken in the switch's own event), so the gamepad UI rebinds on a clean key." },
 
 	-- P3: already through the gate, or allowed for the reason given.
-	{ id = "player-menu", kind = "menu", files = { "PlayerMenu.lua" },
+	{ id = "player-menu", kind = "menu", files = { "PlayerMenu.lua", "ArenaHome.lua", "Olympus_Arena/Window.lua" },
 		guard = "gate", toPad = "inert", toMouse = "install", safe = "off",
-		why = "Olympus's lines in the game's right-click player menus (Menu.ModifyMenu): the gamepad's player menu runs its interact target state while the menu is built; not registered at a gamepad login, and a callback registered before does nothing." },
+		why = "Olympus's lines in the game's right-click player menus (Menu.ModifyMenu; 1.2: the Arena's lines, through PlayerMenu.lua's list, and a row's own context menu, MenuUtil.CreateContextMenu, and the Arena window's button menus, ArenaUI.Menu, Olympus's own pop-up in their place with the gamepad UI): the gamepad's player menu runs its interact target state while the menu is built; not registered at a gamepad login, and a callback registered before does nothing." },
 	{ id = "borders", kind = "unit-frame-art", files = { "Borders.lua" },
 		guard = "gate", toPad = "park", toMouse = "install", safe = "off",
 		why = "Olympus's border textures and hooks on the target, focus, player and party frames (CheckClassification on TargetFrame/FocusFrame; InitializePartyMemberFrames on PartyFrame, whose member frames get textures)." },
@@ -134,33 +140,34 @@ ns.GAMEPAD = {
 	{ id = "raid-notice", kind = "frame-output", files = { "Core.lua" },
 		guard = "exempt", toPad = "stays", toMouse = "nothing", safe = "off", approved = APPROVED,
 		why = "The alerts in the raid warning frame, which the gamepad UI does not manage." },
-	{ id = "minimap", kind = "frame-child", files = { "UI.lua", "Positions.lua", "King.lua" },
+	{ id = "minimap", kind = "frame-child", files = { "UI.lua", "Positions.lua", "King.lua", "KingArrow.lua", "InnkeeperArrow.lua" },
 		guard = "exempt", toPad = "stays", toMouse = "nothing", safe = "keep", approved = APPROVED,
-		why = "The minimap button and pins: Forever's minimap has no gamepad binding group, and it is how gamepad players open Olympus." },
+		why = "The minimap button and pins, including local King and innkeeper guidance: Forever's minimap has no gamepad binding group, and it is how gamepad players open Olympus." },
 	{ id = "party-invite", kind = "restricted", files = { "Hop.lua" },
 		guard = "gate", toPad = "stays", toMouse = "on", safe = "off",
 		why = "Accepting a vouched layer invite for the player (AcceptGroup, the game's invite popup): never with the gamepad UI, where the player clicks the game's own invite window." },
-	{ id = "mail-trade-fill", kind = "frame-fill", files = { "Dues.lua" },
+	{ id = "mail-trade-fill", kind = "frame-fill", files = { "Dues.lua", "ArenaMoney.lua" },
 		guard = "gate", toPad = "stays", toMouse = "on", safe = "off",
-		why = "Filling the game's mail and trade windows for the dues: with the gamepad UI a line saying what to send instead." },
-	{ id = "roster-actions", kind = "restricted", files = { "Members.lua", "Dues.lua", "Recruit.lua", "UI.lua" },
+		why = "Filling the game's mail and trade windows for the dues (1.2: and the Arena's gold, ArenaMoney.lua): with the gamepad UI a line saying what to send instead." },
+	{ id = "roster-actions", kind = "restricted", files = { "Members.lua", "Dues.lua", "Recruit.lua", "UI.lua", "ChatRooms.lua" },
 		guard = "click", toPad = "stays", toMouse = "nothing", safe = "off",
 		why = "Invites, whispers sent and guild actions: only from the player's click on an Olympus button." },
 	{ id = "inspect-patrol", kind = "inspect", files = { "Inspect.lua" },
 		guard = "exempt", toPad = "stays", toMouse = "nothing", safe = "off", approved = APPROVED,
 		why = "NotifyInspect and ClearInspectPlayer for the tabard patrol: not protected, and no gamepad path reads them." },
-	{ id = "mail-hooks", kind = "hook", files = { "Treasury.lua" },
+	{ id = "mail-hooks", kind = "hook", files = { "Treasury.lua", "ArenaMoney.lua", "CraftRequests.lua" },
 		guard = "exempt", toPad = "stays", toMouse = "nothing", safe = "keep", approved = APPROVED,
-		why = "Post-hooks on the mail functions (hooksecurefunc keeps them the game's own) that only read what was sent and taken." },
+		why = "Post-hooks on the mail functions (hooksecurefunc keeps them the game's own) that only read what was sent and taken (1.2: the Arena's gold and the crafting requests' items too)." },
 	{ id = "popup-focus", kind = "focus", files = { "Dialog.lua", "Core.lua" },
 		guard = "own", toPad = "stays", toMouse = "nothing", safe = "keep",
 		why = "Edit boxes of Olympus's own dialogs take the keyboard only through ns.Focus, never from the chat's box under the gamepad UI." },
 	{ id = "calendar", kind = "panel", files = { "Week.lua" },
 		guard = "gate", toPad = "stays", toMouse = "on", safe = "off",
 		why = "Opening the game's calendar for the King's week: with the gamepad UI it only says how to open it." },
-	{ id = "photo", kind = "frame-write", files = { "UI.lua" },
+	{ id = "photo", kind = "frame-write", files = { "UI.lua", "Olympus_Arena/Games/Hookup.lua", "Olympus_Arena/Sim.lua" },
+		globals = { "RandomRoll" },
 		guard = "gate", toPad = "stays", toMouse = "on", safe = "off",
-		why = "The author's photo mode hides the game's frames: refused with the gamepad UI." },
+		why = "The author's photo mode hides the game's frames; the companion's photo tours (the games' and the sim's) take the game's Screenshot() of each step, and the games' tour puts scripted rolls in RandomRoll's place until it ends: each refused with the gamepad UI, and a tour running at a switch takes no more shots." },
 	{ id = "lib-partial", kind = "library", files = { "Map.lua" },
 		guard = "own", toPad = "stays", toMouse = "nothing", safe = "keep",
 		why = "A half-loaded map library's own update frame stopped: the library's, not the game's." },
@@ -172,18 +179,32 @@ ns.GAMEPAD = {
 		why = "Reads only (taint probe, stacks), and the notices in Olympus's own windows." },
 
 	-- Found by the audit (scripts/gamepad-audit.lua), registered with it.
-	{ id = "lookups", kind = "reads", files = { "Borders.lua", "Channels.lua", "ChatWindow.lua", "Dialog.lua", "GuildFrame.lua", "Treasury.lua", "UI.lua", "Views.lua", "Who.lua", "Workshop.lua" },
+	{ id = "lookups", kind = "reads", files = { "ArenaMatch.lua", "ArenaParse.lua", "Borders.lua", "Channels.lua", "ChatWindow.lua", "Dialog.lua", "GuildFrame.lua", "Treasury.lua", "UI.lua", "Views.lua", "Who.lua", "Workshop.lua" },
 		guard = "own", toPad = "stays", toMouse = "nothing", safe = "keep",
 		why = "Looked up by name and only read: Olympus's own frames' parts, the game's fonts and strings, where the game's popups and main chat tab are (Olympus's own windows go under or point at them), whether the who windows are open, the client's icon lists." },
 	{ id = "own-templates", kind = "frame-helper", files = { "UI.lua" },
 		guard = "own", toPad = "stays", toMouse = "nothing", safe = "keep",
 		why = "The who list's column helper (WhoFrameColumn_SetWidth) sizing Olympus's own column headers, made from the game's template in the old guild window's look: nothing of the game's own frames." },
-	{ id = "reload-button", kind = "restricted", files = { "Gamepad.lua" },
+	{ id = "reload-button", kind = "restricted", files = { "Gamepad.lua", "Wallet.lua" },
 		guard = "click", toPad = "stays", toMouse = "nothing", safe = "keep",
-		why = "ReloadUI, from the Reload button of Olympus's own gamepad notice: the player's click." },
-	{ id = "hop-group", kind = "restricted", files = { "Hop.lua" },
+		why = "ReloadUI, from the Reload button of Olympus's own gamepad notice (1.2: and the Arena bank's Save, Wallet.lua): the player's click." },
+	{ id = "hop-group", kind = "restricted", files = { "Hop.lua", "ArenaMatch.lua" },
 		guard = "exempt", toPad = "stays", toMouse = "nothing", safe = "off", approved = APPROVED,
-		why = "The layer hop's group: the helper's addon invites a vouched guest (InviteUnit) and either side leaves after the hop (LeaveParty), from Olympus's own messages and timers; neither is protected, and the game's group frames follow from its own events." },
+		why = "The layer hop's group: the helper's addon invites a vouched guest (InviteUnit) and either side leaves after the hop (LeaveParty), from Olympus's own messages and timers; neither is protected, and the game's group frames follow from its own events. (1.2: a match's group the same way, ArenaMatch.lua: the invite inside the player's click, the leave at the match's end.)" },
+
+	-- 1.2 (the Blood Arena and its boards), registered with the audit at the 1.1.6 merge.
+	{ id = "arena-clicks", kind = "restricted", files = { "ArenaMatch.lua", "ArenaTourney.lua", "Core.lua", "FarkleTable.lua", "Lottery.lua", "Olympus_Arena/Games/Farkle.lua", "Olympus_Arena/Games/Bicho.lua" },
+		guard = "click", toPad = "stays", toMouse = "nothing", safe = "off",
+		why = "The Arena's restricted calls, each from the player's click on an Olympus button or his typed command: the dice, the draws and the Lottery's prize (RandomRoll), a table's sit (DoEmote), a table's party invite (InviteUnit), a player blocked (C_FriendList.AddIgnore), a whisper he wrote or a fixed matchmaking line (ns.SayTo: SendChatMessage, restricted to a hardware event). The companion's practice games roll the same way (RandomRoll, not restricted): Bones's throw from its button, and the practice Lottery's five prizes in turn from its Draw button's click." },
+	{ id = "map-waypoint", kind = "map-state", files = { "ArenaMatch.lua" },
+		guard = "gate", toPad = "stays", toMouse = "on", safe = "off",
+		why = "A match's [Show on map]: the player's own waypoint at the meeting place, super-tracked (C_Map.SetUserWaypoint, C_SuperTrack), and that waypoint cleared when the match ends: never with the gamepad UI, where the card names the place instead." },
+	{ id = "system-filters", kind = "chat-filter", files = { "FarkleTable.lua", "Wanted.lua" },
+		guard = "gate", toPad = "inert", toMouse = "on", safe = "off",
+		why = "Chat filters on the game's system lines (ChatFrame_AddMessageEventFilter): a Farkle table's rolls when its players hide them (/oly farkle chatrolls off), and the server's no-such-player line for a sighting's whisper; registered only where the gate allows, never removed, and doing nothing from their first line with the gamepad UI." },
+	{ id = "load-companion", kind = "load", files = { "ArenaNet.lua" },
+		guard = "own", toPad = "stays", toMouse = "nothing", safe = "keep",
+		why = "Loading Olympus's own load-on-demand companion, Olympus_Arena (C_AddOns.LoadAddOn), when the player opens the Arena. The load itself touches nothing of the game's UI; what the companion's files reach of it is tagged and registered here like Olympus's own (the audit scans Olympus_Arena/ too)." },
 	{ id = "lib-stub", kind = "library", files = {}, vendor = { "libs/LibStub/LibStub.lua" }, globals = { "LibStub" },
 		guard = "own", toPad = "stays", toMouse = "nothing", safe = "keep",
 		why = "LibStub, the libraries' shared registry: it keeps itself in its own global, as in every addon that carries it." },
