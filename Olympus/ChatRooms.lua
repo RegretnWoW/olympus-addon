@@ -34,8 +34,9 @@ local RACES = {
 	{ id = "race:6", label = "Tauren", race = 6 },
 	{ id = "race:7", label = "Gnome", race = 7 },
 	{ id = "race:8", label = "Troll", race = 8 },
+	{ id = "race:95", label = "Skyborn", race = 95 }, -- (1.2.1: Forever's Skyborn, an Alliance race)
 }
-local HORDE_RACE = { [1] = false, [2] = true, [3] = false, [4] = false, [5] = true, [6] = true, [7] = false, [8] = true }
+local HORDE_RACE = { [1] = false, [2] = true, [3] = false, [4] = false, [5] = true, [6] = true, [7] = false, [8] = true, [95] = false }
 local CLASSES = {
 	{ id = "class:WA", file = "WARRIOR", label = "Warrior" },
 	{ id = "class:PA", file = "PALADIN", label = "Paladin" },
