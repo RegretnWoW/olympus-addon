@@ -2111,3 +2111,13 @@ test("watch: judgment: one guild's officers keep at most J.MAX_OPEN_GUILD cases 
 		eq(how, "new", "another guild's case still reaches the King")
 	end)
 end)
+
+test("1.2.0 watch: a target written in another case is the same member of the roster (a Captain cannot pass the guild master off as a stranger)", function()
+	WithWatch(function(w, W, c)
+		w.setRank("Grandmaster-Realm", 0)
+		eq(W.RosterRank("Grandmaster-Realm"), 0, "the guild master")
+		eq(W.RosterRank("grandmaster-realm"), 0, "in lower case")
+		eq(W.RosterRank("GRANDMASTER"), 0, "in upper case")
+		eq(W.RosterRank("Nobodyhere-Realm"), nil)
+	end)
+end)

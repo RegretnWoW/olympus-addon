@@ -134,7 +134,13 @@ local function RosterRank(name)
 	if ns.me and Same(name, ns.me) then return LiveRank() end
 	local R = FreshRoster()
 	if not (R and R.RankOf) then return nil end
-	return R.RankOf(name)
+	local rank = R.RankOf(name)
+	-- (1.2.0: a target written in another case is the same member, never a stranger to warn.)
+	if rank == nil and type(R.byName) == "table" then
+		local key = ns.Fold(name)
+		for n, r in pairs(R.byName) do if ns.Fold(n) == key then return r end end
+	end
+	return rank
 end
 Watch.RosterRank = RosterRank -- (1.1.6: WatchChat.lua)
 

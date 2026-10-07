@@ -229,10 +229,10 @@ function Hop.HandleAsk(dist, sender, text)
 	sender = ns.FullName(sender)
 	-- 1.1: a name the moderators took off (net-off, Moderation.lua) gets no offer.
 	if ns.Moderation.Hides and ns.Moderation.Hides(sender) then return end
-	if not Member(sender) then stats.strangers = (stats.strangers or 0) + 1 return end
 	local short = ns.ShortName(sender)
 	local now = ns.Now()
 	Hop.Hear(mapID, zoneUID, short, now)
+	if not Member(sender) then stats.strangers = (stats.strangers or 0) + 1 return end
 	if now - (answeredAt[short] or -math.huge) < Hop.HELP_GAP then return end
 	if now - lastOffer < Hop.OFFER_GAP then return end
 	if not Hop.CanHelp(mapID, zoneUID) then return end
