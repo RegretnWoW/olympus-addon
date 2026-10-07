@@ -226,7 +226,11 @@ local function Zuid(mapID)
 	end
 	return 0
 end
-local function Level() return UnitLevel and tonumber(UnitLevel("player")) or 0 end
+local function Level()
+	local level = UnitLevel and UnitLevel("player")
+	if issecretvalue and issecretvalue(level) then return 0 end -- (1.2.0: never compared while secret)
+	return tonumber(level) or 0
+end
 local function ClassID()
 	if not UnitClass then return 0 end
 	local _, _, id = UnitClass("player")

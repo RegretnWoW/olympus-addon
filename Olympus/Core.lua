@@ -184,8 +184,11 @@ end
 function ns.UnitFullName(unit)
 	local name, realm
 	if UnitFullName then name, realm = UnitFullName(unit) end
+	-- (1.2.0: a secret value is checked before anything compares it.)
+	if issecretvalue and (issecretvalue(name) or issecretvalue(realm)) then return nil end
 	if not name or name == "" then
 		local n = GetUnitName and GetUnitName(unit, true)
+		if issecretvalue and issecretvalue(n) then return nil end
 		return n and ns.FullName(ns.Normal(n)) or nil
 	end
 	if realm and realm ~= "" and ns.splitNames and not ns.IsRealmName(realm) then name, realm = name .. " " .. realm, nil end

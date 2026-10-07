@@ -3276,3 +3276,33 @@ test("1.2.0 backup: a bank ledger whose seq is past the bound is refused at once
 	v.seq = 3
 	eq(w:As(a, W.CheckBackup, v), v, "a seq within the bound is checked as before")
 end)
+
+test("1.2.0 secret values: the arena's own level, class, race and sex read while the game hides them are unknown, never an error (ArenaMatch's level check, ArenaProfile's facts)", function()
+	local w = World.New()
+	local a = w:Client("Lida Fenn")
+	local SECRET = setmetatable({}, { __tostring = function() return "<secret>" end, __lt = function() error("compared a secret") end,
+		__le = function() error("compared a secret") end, __index = function() error("indexed a secret") end })
+	a.globals.issecretvalue = function(v) return v == SECRET end
+	a.globals.UnitLevel = function() return SECRET end
+	a.globals.UnitClass = function() return SECRET, SECRET end
+	a.globals.UnitRace = function() return SECRET, SECRET, SECRET end
+	a.globals.UnitSex = function() return SECRET end
+	local body = w:As(a, a.ns.ArenaProfile.Body)
+	eq(type(body), "string")
+	local ok, why = w:As(a, a.ns.ArenaMatch.CanSearch, { game = "b", share = true })
+	eq(ok, false); eq(type(why), "string")
+end)
+
+test("1.2.0 backup: a keeper's name with a pipe or a control byte in a pasted text is left out, never shown raw", function()
+	local w = World.New()
+	local a = w:Client("Lida Fenn")
+	w:As(a, function() assert(loadfile(H.ADDON_DIR .. "Backup.lua"))("Olympus", a.ns) end)
+	local B = a.ns.Backup
+	local d = w:As(a, function()
+		local payload = B.Write({ v = 1, t = a.ns.Now(), char = a.ns.me, group = a.ns.group, faction = a.ns.faction, settings = {},
+			word = { keepers = { "Good Keeper-Realm", "Bad|cffff0000Keeper|r-Realm", "Bell\aKeeper-Realm" } } })
+		return B.Read(("OLYB1:%d:%s:%s"):format(#payload, B.Sum(payload), payload))
+	end)
+	assert(type(d) == "table" and type(d.word) == "table", "read")
+	eq(table.concat(d.word.keepers, ","), "Good Keeper-Realm")
+end)

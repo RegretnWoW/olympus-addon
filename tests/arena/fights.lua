@@ -1214,3 +1214,22 @@ test("1.2.0 the fights part: the writer's repeated calls (AC C) raise one alert 
 	eq(called, 2, "a call 20 s later alerts again")
 	W3.NoErrors(w)
 end)
+
+test("1.2.0 the fights part: a season word cannot jump the season past what time allows (one word cannot pin it at 999)", function()
+	local w, cast = W3.New()
+	local sp = cast.spectator
+	W3.Companion(w, sp)
+	local LG = sp.ns.ArenaLedger
+	local B = sp.ns.Arena.B36
+	local WEEK = 7 * 86400
+	local function Word(n, start)
+		w:As(sp, function()
+			sp.ns.Arena.Inject("CHANNEL", N.arbiter, "AH~L1~" .. table.concat({ B(n), B(start), B(start + 8 * WEEK), B(6), B(4), B(0), B(w.clock) }, "~"))
+		end)
+	end
+	local first = w:As(sp, LG.Season).n
+	Word(999, w.clock - 86400)
+	eq(w:As(sp, LG.Season).n, first, "999: refused")
+	Word(first + 1, w.clock - 86400)
+	eq(w:As(sp, LG.Season).n, first + 1, "the next one: taken")
+end)

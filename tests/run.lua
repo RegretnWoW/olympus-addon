@@ -375,6 +375,18 @@ test("roster scan of 1000 members", function()
 	eq(sum, 300, "level bands")
 end)
 
+test("1.2.0 secret values: ns.UnitFullName gives nil for a secret name or realm, before comparing it", function()
+	local savedFull, savedSecret = UnitFullName, issecretvalue
+	local SECRET = {}
+	issecretvalue = function(v) return v == SECRET end
+	UnitFullName = function() return SECRET, "Realm" end
+	local ok, a = pcall(ns.UnitFullName, "target")
+	UnitFullName = function() return "Aldric", SECRET end
+	local ok2, b = pcall(ns.UnitFullName, "target")
+	UnitFullName, issecretvalue = savedFull, savedSecret
+	eq(ok, true); eq(a, nil); eq(ok2, true); eq(b, nil)
+end)
+
 test("1.2.0 roster: a name written in another case is the same member (a Captain cannot pass the guild master off as a stranger)", function()
 	ns.Roster.Scan()
 	eq(ns.Roster.RankOf("Member1"), 0, "the leader")

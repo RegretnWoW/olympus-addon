@@ -194,6 +194,10 @@ function LG.TakeSeason(sender, mode, n, start, stop, vac, def, brackets, t)
 		if kept.at and (t < kept.at or (t == kept.at and not R.IsKing(sender))) then return Count("older") end
 	elseif n < kept.n then
 		return Count("older")
+	elseif n > kept.n + 1 + math.floor(math.max(0, Now() - (tonumber(kept.start) or Now())) / (4 * LG.WEEK)) then
+		-- (1.2.0: no more seasons than could have passed since the one held began, 4 weeks being the
+		-- shortest: one word cannot pin the season at 999 for good.)
+		return Count("jump")
 	elseif kept ~= LG.DEFAULT and start < (kept.stop or 0) - LG.WEEK then
 		return Count("start")
 	end

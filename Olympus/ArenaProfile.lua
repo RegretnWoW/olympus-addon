@@ -219,14 +219,17 @@ end
 -- The wire: AP
 ---------------------------------------------------------------------------
 
+-- (1.2.0: a secret value counts as unknown, never a table key or a number.)
+local function Plain(v) if issecretvalue and issecretvalue(v) then return nil end return v end
 local function Facts()
 	local classFile
-	if UnitClass then classFile = select(2, UnitClass("player")) end
+	if UnitClass then classFile = Plain(select(2, UnitClass("player"))) end
 	local raceID
-	if UnitRace then raceID = select(3, UnitRace("player")) end
+	if UnitRace then raceID = Plain(select(3, UnitRace("player"))) end
 	local R = ns.Roster
-	return (classFile and R and R.ClassCode and R.ClassCode(classFile)) or "-", tonumber(raceID), UnitSex and Gender(UnitSex("player")) or nil,
-		UnitLevel and tonumber(UnitLevel("player")) or nil
+	local sex = UnitSex and Plain(UnitSex("player"))
+	return (type(classFile) == "string" and R and R.ClassCode and R.ClassCode(classFile)) or "-", tonumber(raceID), sex and Gender(sex) or nil,
+		UnitLevel and tonumber(Plain(UnitLevel("player"))) or nil
 end
 
 function P.Body()

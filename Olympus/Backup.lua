@@ -431,7 +431,8 @@ function Backup.Read(text)
 		if type(d.word.flags) == "table" then w.flags = { balance = d.word.flags.balance == true, ranking = d.word.flags.ranking == true, book = d.word.flags.book == true } end
 		if type(d.word.keepers) == "table" then
 			w.keepers = {}
-			for _, n in ipairs(d.word.keepers) do if type(n) == "string" and #n <= 80 and #w.keepers < 10 then w.keepers[#w.keepers + 1] = n end end
+			-- (1.2.0: a name with "|" or a control byte is left out, never shown raw in the confirm.)
+			for _, n in ipairs(d.word.keepers) do if type(n) == "string" and #n <= 80 and not n:find("[|%c]") and #w.keepers < 10 then w.keepers[#w.keepers + 1] = n end end
 		end
 		out.word = w
 	end
