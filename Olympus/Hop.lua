@@ -207,6 +207,20 @@ function Hop.Chance(mapID, zoneUID)
 	return math.min(1, Hop.OFFERS / math.max(1, crowd))
 end
 
+-- 1.2.0: an Olympus member (our roster, or his guild's claim the channel takes, Channels.VerifiedLevel
+-- 1+), never a stranger on an unsealed channel: only one gets an offer, a window or an invite.
+local function Member(sender)
+	local R = ns.Roster
+	if R and R.RankOf and R.RankOf(sender) ~= nil then return true end
+	local C, M = ns.Channels, ns.Moderation
+	if type(C) ~= "table" or type(C.VerifiedLevel) ~= "function" then return false end
+	local guild = M and M.GuildOf and M.GuildOf(sender)
+	if type(guild) ~= "string" or guild == "" or not (ns.IsFederation and ns.IsFederation(guild)) then return false end
+	local ok, level = pcall(C.VerifiedLevel, sender, guild)
+	return ok and type(level) == "number" and level >= 1
+end
+Hop.Member = Member
+
 function Hop.HandleAsk(dist, sender, text)
 	if dist ~= "CHANNEL" then return end
 	local id, mapID, zoneUID = text:match("^LQ~(%d+)~(%d+)~(%d+)$")
@@ -215,6 +229,7 @@ function Hop.HandleAsk(dist, sender, text)
 	sender = ns.FullName(sender)
 	-- 1.1: a name the moderators took off (net-off, Moderation.lua) gets no offer.
 	if ns.Moderation.Hides and ns.Moderation.Hides(sender) then return end
+	if not Member(sender) then stats.strangers = (stats.strangers or 0) + 1 return end
 	local short = ns.ShortName(sender)
 	local now = ns.Now()
 	Hop.Hear(mapID, zoneUID, short, now)
@@ -265,6 +280,7 @@ function Hop.HandleRequest(dist, sender, text)
 	local id = tonumber(text:match("^LR~(%d+)$"))
 	sender = ns.FullName(sender)
 	if ns.Moderation.Hides and ns.Moderation.Hides(sender) then return end -- (1.1: net-off)
+	if not Member(sender) then stats.strangers = (stats.strangers or 0) + 1 return end
 	local key = id and (id .. ns.ShortName(sender))
 	local offer = key and offered[key]
 	if not offer or ns.Now() - offer.t > 120 then return end

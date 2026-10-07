@@ -6564,8 +6564,15 @@ local function WithHop(fn)
 		ns.Comm.ChannelReady, ns.Comm.ChannelName, ns.Now
 	local savedRandom, savedAfter, savedMap, savedGap = H.random, H.after, C_Map.GetBestMapForUnit, H.OFFER_GAP
 	local savedTrusted = H.Trusted
+	-- (1.2.0: only members get offers and invites; the players these tests meet are guildmates
+	-- unless named in w.strangers.)
+	local savedRankOf = ns.Roster.RankOf
 	local w = { sent = {}, whispered = {}, popups = {}, invited = {}, accepted = 0, left = 0, hidden = {}, clock = 1000000,
-		group = 0, lead = false, npc = 7, map = 1453, party = {} }
+		group = 0, lead = false, npc = 7, map = 1453, party = {}, strangers = {} }
+	ns.Roster.RankOf = function(name)
+		if type(name) ~= "string" or w.strangers[ns.FullName(name)] then return nil end
+		return 3
+	end
 	local ok, err = pcall(function()
 		H.Reset()
 		ns.db.layerHelp, ns.db.layerAutoInvite = true, nil -- (1.1: layer help is a yes of its own, #11)
@@ -6620,6 +6627,7 @@ local function WithHop(fn)
 		fn(w, H)
 	end)
 	ns.db.shareLocation = nil
+	ns.Roster.RankOf = savedRankOf
 	for _, n in ipairs(names) do _G[n] = saved[n] end
 	ns.Comm.Send, ns.Comm.Whisper, ns.Comm.ChannelReady, ns.Comm.ChannelName, ns.Now =
 		savedSend, savedWhisper, savedReady, savedChannel, savedNow

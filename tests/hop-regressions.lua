@@ -316,3 +316,29 @@ test("issue 50: Always invite is automatic alone and with hop guests, manual in 
 		end)
 	end
 end)
+
+test("hop adversarial (1.2.0): a stranger on the channel gets no offer, and his request no window or invite, even with Always invite", function()
+	WithHop(function(w, H)
+		w.see(7)
+		ns.db.layerAutoInvite = true
+		w.strangers["Stranger-Realm"] = true
+		H.HandleAsk("CHANNEL", "Stranger-Realm", "LQ~42~1453~7")
+		eq(#w.whispered, 0, "no offer to a stranger")
+		H.HandleRequest("WHISPER", "Stranger-Realm", "LR~42")
+		eq(#w.invited, 0); eq(#w.popups, 0)
+		-- A member of another federation guild, whose guild claim the channel takes: helped.
+		w.strangers["Ally-Realm"] = true
+		local guildOf, level = ns.Moderation.GuildOf, ns.Channels.VerifiedLevel
+		ns.Moderation.GuildOf = function(n) return ns.FullName(n) == "Ally-Realm" and "Olympus III" or guildOf(n) end
+		ns.Channels.VerifiedLevel = function(n, g) if ns.FullName(n) == "Ally-Realm" then return 1, false end return level(n, g) end
+		local ok, err = pcall(function()
+			H.HandleAsk("CHANNEL", "Ally-Realm", "LQ~43~1453~7")
+			eq(w.whispered[1], "Ally-Realm LO~43~0~0")
+			H.HandleRequest("WHISPER", "Ally-Realm", "LR~43")
+			eq(w.invited[1], "Ally", "Always invite: invited")
+		end)
+		ns.Moderation.GuildOf, ns.Channels.VerifiedLevel = guildOf, level
+		ns.db.layerAutoInvite = nil
+		if not ok then error(err, 0) end
+	end)
+end)

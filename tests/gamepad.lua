@@ -2487,8 +2487,11 @@ test("gamepad pass 5: the rest of the list with the gamepad UI on: the Issue Rep
 	Hh.units.target = { name = "Mob", realm = "Realm", guid = "Creature-0-4619-0-7-68-0000AAA1" }
 	Hh.ns.Layers.HOLD = 0
 	for k = 1, 2 do Hh.units.target.guid = ("Creature-0-4619-0-7-68-0000AAA%d"):format(k); Hh.ns.Layers.Observe("target") end
+	local rankOf = Hh.ns.Roster.RankOf -- (1.2.0: only a member is invited; the asker is a guildmate)
+	Hh.ns.Roster.RankOf = function(n) if type(n) == "string" and n:find("^Asker") then return 3 end return rankOf(n) end
 	hop.HandleAsk("CHANNEL", "Asker-Realm", "LQ~42~1429~7")
 	hop.HandleRequest("WHISPER", "Asker-Realm", "LR~42")
+	Hh.ns.Roster.RankOf = rankOf
 	eq(Hh.invited, "Asker", "the helper's invite, on its own")
 	GP.Covers("hop-group")
 	hop.Reset()
