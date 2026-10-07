@@ -21,6 +21,9 @@ local NOT_FOUND = "No player named '%s' is currently playing."
 local SECRET = setmetatable({}, { __tostring = function() return "<secret>" end })
 
 local GROM, THRALL, REXXAR, GARROSH = "Player-1-0A000001", "Player-1-0A000002", "Player-1-0A000003", "Player-1-0A000004"
+-- On every client's Wanted list (world:Client, unless o.wanted == false): only the wanted are sighted.
+local WANTED = { { "Grom-Realm", GROM }, { "Thrall-Realm", THRALL }, { "Rexxar-Realm", REXXAR }, { "Garrosh-Realm", GARROSH },
+	{ "Stale-Realm", "Player-1-0A000019" } }
 
 -- A Horde player as this client's unit functions see him: hostile and flagged for PvP unless told.
 local function Horde(name, guid, o)
@@ -231,14 +234,24 @@ local function WithSightings(fn)
 				for _, item in ipairs(c.Consent.Items()) do if item.key == "wantedsightings" then cl.consent = item end end
 			end
 			c.me = cl.name
+			-- 1.2.0: only the wanted are sighted; the Horde players these tests see are on each list.
+			if cl.wanted ~= false then for _, h in ipairs(WANTED) do world:List(cl, h[1], h[2]) end end
 			if cl.listeners.LOGIN then world:As(cl, cl.listeners.LOGIN) end
 			return cl
+		end
+		-- A Horde player put on a client's Wanted list (as its manager would).
+		function world:List(cl, name, guid)
+			local W = cl.W
+			local can = W.CanManage
+			W.CanManage = function() return true end
+			pcall(world.As, world, cl, W.AddTarget, name, guid)
+			W.CanManage = can
 		end
 		function world:Client(name, guid, o)
 			o = o or {}
 			name = ns.FullName(name)
 			local cl = { name = name, guid = guid, member = o.member ~= false, manager = o.manager, db = o.db or {}, rdb = {}, prints = {},
-				realComm = o.realComm, realConsent = o.realConsent, realBackup = o.realBackup, crown = o.crown,
+				realComm = o.realComm, realConsent = o.realConsent, realBackup = o.realBackup, crown = o.crown, wanted = o.wanted,
 				units = { player = { name = name, guid = guid, faction = "Alliance", guild = o.guild or "Olympus II" } },
 				map = 1429, x = 0.4123, y = 0.6789, online = true }
 			world.olympians[Fold(name)] = true
@@ -480,7 +493,7 @@ test("wanted sightings on the real privacy page (Consent.lua): it opens by itsel
 	end)
 end)
 
-test("wanted sightings: a listed Horde player, or a hostile one flagged for PvP, as the game gives him, where this player stands (rounded) and his layer; never an Olympus guild's, a friendly one, a pet, ourselves, a secret value, nor in an instance, net-off or off a zone's map", function()
+test("wanted sightings: only a listed Horde player (1.2.0: never just a hostile one flagged for PvP), as the game gives him, where this player stands (rounded) and his layer; never an Olympus guild's, a friendly one, a pet, ourselves, a secret value, nor in an instance, net-off or off a zone's map", function()
 	WithSightings(function(world)
 		local o = world:Client("Aldric-Realm", "Player-1-AB000001", { manager = true })
 		o.layer = { mapID = 1429, zoneUID = 4242, t = world.epoch - 30 }
@@ -489,19 +502,21 @@ test("wanted sightings: a listed Horde player, or a hostile one flagged for PvP,
 		eq(e.name, "Grom-Realm"); eq(e.guid, GROM); eq(e.mapID, 1429)
 		eq(e.x, 410, "0.4123 of the map: its nearest half percent"); eq(e.y, 680)
 		eq(e.layer, 4242, "this player's layer, Layers saw it 30 seconds ago")
-		eq(e.observer, "Aldric-Realm"); eq(e.own, true); eq(e.listed, false); eq(e.at, world.epoch)
+		eq(e.observer, "Aldric-Realm"); eq(e.own, true); eq(e.listed, true); eq(e.at, world.epoch)
 		eq(#e.id, 16)
 		local cases = {
 			{ "unlisted", Horde("Calm-Realm", "Player-1-0A000011", { pvp = false }) },
 			{ "unlisted", Horde("Friendly-Realm", "Player-1-0A000012", { hostile = false }) },
-			{ "olympus", Horde("Hordeolympian-Realm", "Player-1-0A000013", { guild = "Olympus Horde" }) },
+			{ "unlisted", Horde("Hordeolympian-Realm", "Player-1-0A000013", { guild = "Olympus Horde" }) },
+			-- 1.2.0: hostile and flagged for PvP is not enough; only the wanted are sighted.
+			{ "unlisted", Horde("Flagged-Realm", "Player-1-0A00001A", { guild = "Bloodfang" }) },
 			{ "faction", Horde("Ally-Realm", "Player-1-0A000014", { faction = "Alliance" }) },
 			{ "faction", Horde("Masked-Realm", "Player-1-0A000015", { faction = SECRET }) },
 			{ "player", Horde("Wolf", "Creature-0-1-2-3-4-0000000001", { player = false }) },
 			{ "identity", Horde(SECRET, "Player-1-0A000016") },
 			{ "identity", Horde("Hidden-Realm", SECRET) },
 			{ "identity", Horde("Noguid-Realm", nil) },
-			{ "guild", Horde("Veiled-Realm", "Player-1-0A000017", { guild = SECRET }) },
+			{ "unlisted", Horde("Veiled-Realm", "Player-1-0A000017", { guild = SECRET }) },
 			{ "self", Horde("Aldric-Realm", "Player-1-AB000001") },
 		}
 		for i, case in ipairs(cases) do
@@ -518,6 +533,7 @@ test("wanted sightings: a listed Horde player, or a hostile one flagged for PvP,
 		eq(stale.layer, 0)
 		-- Where nothing is collected.
 		local function Not(why, unit, guid)
+			world:List(o, "Nobody-Realm", guid)
 			local okNot, said = world:See(o, unit, Horde("Nobody-Realm", guid))
 			eq(okNot, false, why); eq(said, why, why)
 		end
@@ -606,6 +622,7 @@ test("wanted sightings: each Horde player once per gap on one map (nothing more 
 			world:Advance(o.W.SIGHT_WINDOW + 1)
 			for i = 1, 3 do
 				local n = (window - 1) * 3 + i
+				world:List(o, "Waitone" .. n .. "-Realm", ("Player-1-0B0000%02d"):format(n))
 				local _, w = world:See(o, "nameplate1" .. n, Horde("Waitone" .. n .. "-Realm", ("Player-1-0B0000%02d"):format(n)))
 				sent[#sent + 1] = w.sent
 			end
@@ -639,6 +656,7 @@ test("wanted sightings: the No cancels every sighting still waiting in Comm at o
 		-- What Comm checks when each one's turn comes.
 		local function Next(name, guid)
 			world:Advance(o.W.SIGHT_WINDOW + 1)
+			for _, cl in ipairs(world.clients) do world:List(cl, name, guid) end
 			local ok, e = world:See(o, "nameplate1", Horde(name, guid))
 			assert(ok, e); eq(e.sent, 1, name)
 		end
@@ -736,6 +754,7 @@ test("wanted sightings: a reviewer takes a sighting only by whisper, fresh, from
 		eq(e.observer, "Watcher-Realm"); eq(e.guid, GROM); eq(e.name, "Grom-Realm"); eq(e.guild, "Olympus II"); eq(e.own, false)
 		eq(Why("Watcher-Realm", Body({ id = "00000000000000aa" })), "replay", "once")
 		eq(Why("Stranger-Realm", Body()), "olympus", "nobody the Olympus chats would take")
+		eq(Why("Watcher-Realm", Body({ guid = "1.0a00001a", name = "Flagged-Realm" })), "unlisted", "1.2.0: only the wanted")
 		world.olympians[world.Fold("Hiddenone-Realm")] = true
 		world.hidden[world.Fold("Hiddenone-Realm")] = { by = "Moderator-Realm" }
 		eq(Why("Hiddenone-Realm", Body()), "olympus", "a name the moderators took off")
@@ -766,6 +785,7 @@ test("wanted sightings: a reviewer takes a sighting only by whisper, fresh, from
 		for i = 1, king.W.SIGHT_INTAKE_MAX do
 			local name = "Watcher" .. i .. "-Realm"
 			world.olympians[world.Fold(name)] = true
+			world:List(king, "Horde" .. i .. "-Realm", ("Player-1-0C%06X"):format(i))
 			assert(Take(name, Body({ guid = ("1.0c%06x"):format(i), name = "Horde" .. i .. "-Realm" })), name)
 		end
 		world.olympians[world.Fold("Watcher99-Realm")] = true
@@ -796,7 +816,7 @@ test("wanted sightings: a pin per Horde player where he was seen last, on the mi
 		local king = world:Client("Kingly-Realm", "Player-1-AB0000F1", { role = "king", manager = true })
 		-- The King's ledger: Grom killed two Olympians.
 		world:As(king, function()
-			assert(king.W.AddTarget("Grom-Realm", GROM))
+			king.W.AddTarget("Grom-Realm", GROM) -- (already listed: world:Client)
 			assert(king.W.CaptureCombatLog(1, "PARTY_KILL", false, GROM, "Grom-Realm", 0, 0, o.guid, o.name))
 		end)
 		world:Advance(6)
@@ -818,8 +838,9 @@ test("wanted sightings: a pin per Horde player where he was seen last, on the mi
 			L.WANTED_SIGHT_YOUR_LAYER, L.WANTED_SIGHT_NEARBY }, "\n"))
 		eq(world:Hover(king, f.mini), tip, "the minimap's says the same")
 		local mine = world:As(o, o.W.PinFrames)[GROM]
-		eq(world:Hover(o, mine.world.badge), table.concat({ "Grom", L.WANTED_SIGHT_UNLISTED, L.WANTED_SIGHT_SEEN:format("0s", L.WANTED_SIGHT_BY_YOU),
-			L.WANTED_SIGHT_YOUR_LAYER, L.WANTED_SIGHT_NEARBY }, "\n"), "on the observer's own: no list of his, his own sighting")
+		-- (1.2.0: only the wanted are sighted, so he is on the observer's own list too, no kills counted there.)
+		eq(world:Hover(o, mine.world.badge), table.concat({ "Grom", L.WANTED_LIFETIME:format(0), L.WANTED_BOUNTY:format(0), L.WANTED_SIGHT_SEEN:format("0s", L.WANTED_SIGHT_BY_YOU),
+			L.WANTED_SIGHT_YOUR_LAYER, L.WANTED_SIGHT_NEARBY }, "\n"), "on the observer's own: his list, his own sighting")
 		-- Two minutes later another Olympian sees him elsewhere, on another layer: the one pin moves there.
 		world:Advance(120)
 		o2.x, o2.y = 0.2, 0.3
@@ -856,6 +877,7 @@ test("wanted sightings: a pin per Horde player where he was seen last, on the mi
 		-- 48 at most: the oldest go first.
 		local o3 = world:Client("Cedric-Realm", "Player-1-AB000003")
 		for i = 1, o3.W.SIGHT_PINS + 1 do
+			world:List(o3, "Many" .. i .. "-Realm", ("Player-1-0D%06x"):format(i))
 			assert(world:See(o3, "nameplate1", Horde("Many" .. i .. "-Realm", ("Player-1-0D%06x"):format(i))))
 			world:Advance(1)
 		end

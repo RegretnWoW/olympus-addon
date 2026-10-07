@@ -2449,8 +2449,9 @@ function Sight.MyLayer(mapID)
 	return m.zoneUID
 end
 
--- The unit, when it is a sighting: a Horde player (not us), listed here (true), or hostile and
--- flagged for PvP and of no Olympus guild (false). nil, why otherwise.
+-- The unit, when it is a sighting: a Horde player (not us) listed here (true). Only the wanted:
+-- nobody else is recorded, sent or pinned. nil, why otherwise (and, for a hostile one flagged for
+-- PvP of no Olympus guild, his identity: remembered here as Horde, for one's own death recap).
 local function SightedUnit(unit)
 	if Ask(UnitIsPlayer, unit) ~= true then return nil, "player" end
 	if Ask(UnitFactionGroup, unit) ~= "Horde" then return nil, "faction" end
@@ -2464,10 +2465,9 @@ local function SightedUnit(unit)
 	if Ask(UnitCanAttack, "player", unit) ~= true or Ask(UnitIsPVP, unit) ~= true then return nil, "unlisted" end
 	if type(GetGuildInfo) == "function" then
 		local ok, guild = pcall(GetGuildInfo, unit)
-		if not ok or Secret(guild) then return nil, "guild" end
-		if type(guild) == "string" and ns.IsFederation and ns.IsFederation(guild) then return nil, "olympus" end
+		if not ok or Secret(guild) or (type(guild) == "string" and ns.IsFederation and ns.IsFederation(guild)) then return nil, "unlisted" end
 	end
-	return ident, false
+	return nil, "unlisted", ident
 end
 
 local function SightLive(e, now)
@@ -2667,7 +2667,8 @@ function Wanted.ObserveUnit(unit)
 		stats.sightRepeat = stats.sightRepeat + 1
 		return false, "repeat"
 	end
-	local ident, listed = SightedUnit(unit)
+	local ident, listed, horde = SightedUnit(unit)
+	if horde then RememberHorde(horde) end
 	if not ident then return false, listed end
 	RememberHorde(ident)
 	local mapID, x, y = Sight.Spot()
@@ -2776,8 +2777,8 @@ end
 local function FromOlympian(sender, guild)
 	local Ch = ns.Channels
 	if type(Ch) ~= "table" or Ch.missing or type(Ch.VerifiedLevel) ~= "function" then return false end
-	local ok, level = pcall(Ch.VerifiedLevel, sender, guild)
-	if not ok or type(level) ~= "number" or level < 1 then return false end
+	local ok, level, verified = pcall(Ch.VerifiedLevel, sender, guild)
+	if not ok or type(level) ~= "number" or level < 1 or verified ~= true then return false end
 	local M = ns.Moderation
 	if type(M) == "table" and not M.missing and type(M.Hides) == "function" then
 		local okHides, hidden = pcall(M.Hides, sender, guild)
@@ -2846,6 +2847,9 @@ local function TakeSighting(dist, sender, text)
 	sender = CleanName(sender)
 	if not sender or SameName(sender, ns.me) then return Refuse("sender") end
 	if not FromOlympian(sender, guild) then return Refuse("olympus") end
+	local listed = Store(false)
+	listed = listed and ResolveTarget(listed, ident, false)
+	if not (listed and listed.active) then return Refuse("unlisted") end
 	local key = ns.Fold(sender) .. "#" .. id
 	if sightSeen[key] then stats.sightReplay = stats.sightReplay + 1 return false, "replay" end
 	if not SightAdmit(sender, now) then stats.sightRate = stats.sightRate + 1 return false, "rate" end
