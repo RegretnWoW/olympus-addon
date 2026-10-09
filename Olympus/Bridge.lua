@@ -1,12 +1,22 @@
 local ADDON, ns = ...
 
--- A read-only door for a companion addon the mods run (OfficerSpy). It answers "is this a High
--- Councillor?" from the signed list, hands out a copy of that list, and passes along each chat
--- line this client has already accepted. Nothing here sends, writes or changes anything in
+-- A read-only door for companion addons (including OfficerSpy). It answers whether the current
+-- character is an Olympus member or a name is a High Councillor, copies the signed list, and
+-- passes each chat line this client has already accepted. Nothing here sends, writes or changes anything in
 -- Olympus: a companion only reads, and Olympus never learns what it does with what it read.
 
 OlympusBridge = OlympusBridge or {}
 OlympusBridge.API_VERSION = 1
+
+-- Current character only: use Olympus's own membership policy, including approved and
+-- removed guilds. False also covers unavailable guild data or a failed check. Companions
+-- should query after PLAYER_LOGIN and again on PLAYER_GUILD_UPDATE, rather than cache it
+-- forever. Feature-detect this additive API; API_VERSION remains 1.
+function OlympusBridge.IsMember()
+	if type(ns.IsMember) ~= "function" then return false end
+	local ok, yes = pcall(ns.IsMember)
+	return ok and yes == true
+end
 
 local COUNCIL_MAX = 64  -- a copy never grows past this (the signed list itself stops at 30)
 local OBSERVERS_MAX = 8 -- one companion listens, realistically

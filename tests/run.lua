@@ -28613,6 +28613,46 @@ end
 -- OfficerSpy's bridge (Bridge.lua): what a companion addon the mods run may read, and that it
 -- can change nothing. The signed list is the 0.9.7 test's, checked by the real signature code.
 ---------------------------------------------------------------------------
+test("membership bridge: current character follows the real Olympus policy and contains failures", function()
+	local savedGuild, savedInGuild, savedMember = GetGuildInfo, IsInGuild, ns.IsMember
+	local savedFaction, savedRemoved = ns.faction, ns.REMOVED_BUILTIN
+	local ok, err = pcall(function()
+		ns.faction = "Alliance"
+		IsInGuild = function() return true end
+		for _, guild in ipairs({ "Olympus II", "KOLYMPUS XXI", "Unrelated Guild", "Anti Olympus", "OLYMPIAN" }) do
+			GetGuildInfo = function(unit) eq(unit, "player"); return guild end
+			eq(OlympusBridge.IsMember(), ns.IsMember(), guild .. ": canonical decision")
+		end
+		GetGuildInfo = function() return "Unrelated Guild" end
+		eq(OlympusBridge.IsMember(), false, "nonmember")
+		GetGuildInfo = function() return "OLYMPIAN" end
+		eq(OlympusBridge.IsMember(), true, "built-in approval overrides the name matcher")
+		GetGuildInfo = function() return "Olympus II" end
+		eq(OlympusBridge.IsMember(), true, "member")
+		ns.REMOVED_BUILTIN = { Alliance = { "Olympus II" } }
+		eq(OlympusBridge.IsMember(), false, "removed guild overrides the name matcher")
+		ns.REMOVED_BUILTIN = savedRemoved
+		eq(OlympusBridge.IsMember(), true, "policy refreshed without a guild change")
+		IsInGuild = function() return false end
+		eq(OlympusBridge.IsMember(), false, "left guild: no stale cached result")
+		IsInGuild = function() return true end
+		GetGuildInfo = function() return nil end
+		eq(OlympusBridge.IsMember(), false, "guild data unavailable")
+		-- Resolve the current implementation each time, so policy updates are inherited.
+		ns.IsMember = function() return true end
+		eq(OlympusBridge.IsMember(), true)
+		ns.IsMember = function() return false end
+		eq(OlympusBridge.IsMember(), false)
+		ns.IsMember = function() error("membership unavailable") end
+		eq(OlympusBridge.IsMember(), false, "errors stay inside the bridge")
+		ns.IsMember = nil
+		eq(OlympusBridge.IsMember(), false, "missing implementation")
+	end)
+	GetGuildInfo, IsInGuild, ns.IsMember = savedGuild, savedInGuild, savedMember
+	ns.faction, ns.REMOVED_BUILTIN = savedFaction, savedRemoved
+	if not ok then error(err, 0) end
+end)
+
 local BRIDGE_LIST = "HS1~1790000000~Realm~Test Councillor,Other Mod~5c8eac0d271a53cc73bb79e40ad0b9390f81c0d90fc0c3bd9e3ba804f15a59dea651a95e6221c7e6e9c53cf0067fc2f6a990ccb59ab39df6ad6a7f2a40a6be7680b6133cfa5ae6261d9925a545b0ec180b0edf899040bf0ceb973f0db455187d954d4ce8340364335397dc0cb928fe0d5dd5e7add436ed5984a8e1d0db470f46c77f8ffff98f6e32c287c15032f97b7b2f5bc70d4164bad8e8beccb02a1cb78ba2511487c423b62d18c0e8b47ab26a0dfe6144fae7b0b2e311d756b64b93c9f3914c82a51202a295215c0da66afa515417d305e19f31c065d084d222c00b45294849db4d4910732c49b7bf79fbd6197fe04c0db8a803265ab6d64b3566252ab7"
 
 test("1.0.0 OfficerSpy's bridge: the council it hands out is a copy of the signed list, sorted, with its realm group", function()

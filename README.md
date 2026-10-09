@@ -2546,6 +2546,19 @@ bot's keeper decides then whether to set `LINK_CA_PUBLIC`. When he takes a counc
 signed list, the bot's keeper revokes that character at the bot too. `web/WORKER.md` (step 1b)
 says the rest, rotation included.
 
+### Companion membership API
+
+Companion addons can feature-detect `OlympusBridge.IsMember` and call it without
+opening the Olympus window. It returns a boolean for the current character using
+Olympus's own membership policy, including approved and removed guilds. It exposes
+no player names or roster and sends nothing. This is an additive API; `API_VERSION`
+remains 1.
+
+Call on demand after `PLAYER_LOGIN`. If caching the answer, refresh it regularly
+and on `PLAYER_GUILD_UPDATE`; a signed approval can change without a guild change.
+Missing guild data or a failed check returns `false`, so
+this result alone cannot distinguish a nonmember from temporarily unavailable data.
+
 ### The High Council's signed lists (the author)
 
 The council's names, its departments and titles, and since 1.0.0 the King's Steward are signed
